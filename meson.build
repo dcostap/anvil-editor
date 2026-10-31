@@ -530,6 +530,20 @@ if not get_option('source-only')
         timeout : 180,
     )
     if host_machine.system() == 'windows'
+        test('release-update', find_program('powershell.exe'),
+            args : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                    anvil_source_root / 'tests/tools/release-update-test.ps1'],
+            env : anvil_test_env,
+            suite : 'anvil',
+            timeout : 120,
+        )
+        test('release-update-launch', find_program('powershell.exe'),
+            args : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                    anvil_source_root / 'tests/tools/dev-update-launch-test.ps1', '-LauncherKind', 'release'],
+            env : anvil_test_env,
+            suite : 'anvil',
+            timeout : 120,
+        )
         test('dev-update-launch', find_program('powershell.exe'),
             args : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                     anvil_source_root / 'tests/tools/dev-update-launch-test.ps1'],

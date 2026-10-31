@@ -505,6 +505,9 @@ _Avoid_: Project Paths View, external folder manager
 The Dialog that lists the file types that Anvil can open from Windows. A checked type opens with this Anvil from "Open with" and from Windows Settings, where the user makes Anvil the default app.
 _Avoid_: file associations, default app settings
 
+**Release Update**:
+A change from the running Anvil release to a newer published release. The user chooses when to install it and restart Anvil.
+
 **Dialog**:
 A modal card over the app for a task that needs more than a prompt, such as managing a list of settings. It holds keyboard focus until it closes. Each change applies at once.
 _Avoid_: popup window, modal window

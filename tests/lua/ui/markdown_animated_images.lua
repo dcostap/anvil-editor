@@ -20,6 +20,10 @@ end
 
 test.describe("Markdown Live Preview animated images", function()
   test.it("plays an embedded GIF while its line is drawn", function()
+    local old_time = system.get_time
+    local real_time = old_time
+    local now = 0
+    system.get_time = function() return now end
     local gif_path = USERDIR .. PATHSEP .. "markdown-animated-" .. system.get_process_id() .. ".gif"
     local file = test.not_nil(io.open(gif_path, "wb"))
     file:write(test.not_nil(images.decode_data_image("data:image/gif;base64," .. THREE_FRAME_GIF_BASE64)))
@@ -45,8 +49,8 @@ test.describe("Markdown Live Preview animated images", function()
       buffer:set_selection(2, 1)
       markdown.live_render.refresh_view(view)
       local instance = test.not_nil(markdown_model.peek(buffer))
-      local deadline = system.get_time() + 5
-      while instance.status ~= "ready" and system.get_time() < deadline do
+      local deadline = real_time() + 5
+      while instance.status ~= "ready" and real_time() < deadline do
         local pool = worker_pool.current_system()
         if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
         if instance.status ~= "ready" then system.sleep(0.001) end
@@ -56,8 +60,7 @@ test.describe("Markdown Live Preview animated images", function()
       local x, y = view:get_line_screen_position(1)
       view:draw_line_text(1, x, y)
       test.equal(drawn, "red")
-      -- The first frame lasts 50 ms.
-      system.sleep(0.08)
+      now = 0.06
       view:draw_line_text(1, x, y)
       test.equal(drawn, "green")
     end)
@@ -67,6 +70,7 @@ test.describe("Markdown Live Preview animated images", function()
     renderer.draw_rect = old_draw_rect
     image_animation.close_all()
     os.remove(gif_path)
+    system.get_time = old_time
     if not ok then error(err, 0) end
   end)
 end)

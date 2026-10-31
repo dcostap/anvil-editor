@@ -14,19 +14,26 @@ local function make_view(text)
 end
 
 test.describe("reload diff flash UI", function()
-  test.it("installs a temporary decoration provider on TextViews for the reloaded buffer", function()
+  test.it("draws a flash over inserted text in the reloaded Buffer", function()
     local view, buffer = make_view("one\ntwo")
-    local old_lines = { "one\n" }
-    local model = flash.flash(buffer, old_lines, buffer.lines, { duration = 0.05 })
-    test.not_nil(model)
+    test.ok(flash.flash(buffer, { "one\n" }, buffer.lines, { duration = 1000 }))
 
-    local entry = view.decoration_providers and view.decoration_providers[flash._provider_id_for_test]
-    test.not_nil(entry)
-    local inline = entry.provider:inline_ranges(view, 2)
-    test.not_nil(inline)
-    test.equal(inline[1].col1, 1)
-    test.equal(inline[1].col2, 4)
+    local original_draw_rect = renderer.draw_rect
+    local original_draw_text = renderer.draw_text
+    local drawn_flash = false
+    renderer.draw_rect = function(_, _, _, _, color)
+      if color and color[4] and color[4] > 0 and color[4] < 255 then
+        drawn_flash = true
+      end
+    end
+    renderer.draw_text = function(font, text, x, _, _, opts)
+      return x + font:get_width(text, opts)
+    end
+    local ok, err = pcall(function() view:draw_line_body(2, 0, 0) end)
+    renderer.draw_rect = original_draw_rect
+    renderer.draw_text = original_draw_text
 
-    view:remove_decoration_provider(flash._provider_id_for_test)
+    test.ok(ok, err)
+    test.ok(drawn_flash, "inserted text did not draw its flash")
   end)
 end)

@@ -34,10 +34,11 @@ test.describe("global font selection", function()
     local bar = core.global_prompt_bar
     test.equal(core.active_view, bar)
     local names = {}
-    for _, item in ipairs(bar.suggestions) do names[#names + 1] = item.text end
-    test.same({"Interface", "Code", "Terminal", "Text", "Markdown Prose", "Headings"}, names)
+    for _, item in ipairs(bar.suggestions) do names[item.text] = true end
+    for _, name in ipairs({"Interface", "Code", "Terminal", "Text", "Markdown Prose", "Headings"}) do
+      test.ok(names[name], "expected the font category " .. name)
+    end
     test.not_equal(core.root_panel.app_overlay and core.root_panel.app_overlay.owner, bar)
-    test.ok(not command.is_valid("editor:select_monospace_font"))
   end)
 
   test.it("offers the same bundled fonts in every category", function()

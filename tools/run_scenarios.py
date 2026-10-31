@@ -46,6 +46,7 @@ REPO_MEDIUM = RepoSpec("repo-medium", files=6000, commits=20, modified=120, stag
 REPO_HUGE = RepoSpec("repo-huge", files=100000, commits=40, modified=800, staged=60,
                      deleted=40, untracked=200, ignored=30000)
 FOLDER_MEDIUM = FolderSpec("folder-medium", files=6000)
+RUNTIME_WORKLOADS = FolderSpec("runtime-workloads", files=1, min_lines=4, max_lines=4)
 # Long source files for editor scrolling. Other fixtures keep files short.
 REPO_LONG = RepoSpec("repo-long", files=200, min_lines=3000, max_lines=6000, modified=10, untracked=4)
 # A folder that holds several repositories, like a directory of checkouts.
@@ -95,9 +96,60 @@ class Scenario:
 
 
 SCENARIOS: dict[str, Scenario] = {
+    "benchmark-idle-setup": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("harness",),
+        settings={"workload": "idle_setup"}, targets=1, timeout_seconds=45),
     "terminal-autoscroll-history": Scenario(
         "terminal_autoscroll", FolderSpec("terminal-scroll", files=1), actions=80,
         suites=("terminal",)),
+    # This shutdown-only API waits once for one second across every blocked host.
+    "terminal-close-drain": Scenario(
+        "terminal_close", FolderSpec("terminal-close-drain", files=1), actions=1,
+        suites=("terminal",), frame_budget_ms=1500.0, frame_spike_ms=1500.0,
+        action_budget_ms=2000.0),
+    # Keep removed runtime timing workloads in the scenario runner, not correctness tests.
+    # The fixture deliberately spends 200 ms in one slice. Yielding must not add that delay again.
+    "scheduler-yield-after-work": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
+        settings={"workload": "scheduler_yield"}, targets=1,
+        frame_budget_ms=250.0, frame_spike_ms=350.0, action_budget_ms=350.0),
+    "process-finalize-handles": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
+        settings={"workload": "process_finalize"}, targets=1),
+    "process-finalize-gc-control": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
+        settings={"workload": "process_finalize", "process_count": 0}, targets=1),
+    "process-read-lines": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
+        settings={"workload": "process_read_lines"}, targets=1),
+    "text-poi-long-field": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
+        settings={"workload": "poi_long_field"}, targets=1),
+    "text-poi-many-locations": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
+        settings={"workload": "poi_many_locations"}, targets=1),
+    "text-poi-limited-locations": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
+        settings={"workload": "poi_many_locations", "limit": 32}, targets=1),
+    "quick-command-output": Scenario(
+        "quick_command_output", RUNTIME_WORKLOADS, actions=1, suites=("smoke",), targets=1),
+    "quick-command-response": Scenario(
+        "quick_command_output", RUNTIME_WORKLOADS, actions=1, suites=("response",), targets=1,
+        settings={"cadence": "normal"}),
+    "quick-command-hosted": Scenario(
+        "quick_command_output", RUNTIME_WORKLOADS, actions=1, suites=("response",), targets=1,
+        settings={"cadence": "normal"}, launch="shell"),
+    "quick-command-valid": Scenario(
+        "quick_command_output", RUNTIME_WORKLOADS, actions=1, suites=("response",), targets=1,
+        settings={"cadence": "normal", "valid_locations": True}, launch="shell"),
+    "editor-file-locations": Scenario(
+        "editor_file_locations", RUNTIME_WORKLOADS, actions=1, suites=("smoke",), targets=1),
+    "trimwhitespace-long-line": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
+        settings={"workload": "trimwhitespace_long_line"}, targets=1),
+    "markdown-vault-long-padding": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("markdown",),
+        settings={"workload": "markdown_vault_long_padding"}, targets=1),
     # Response latency uses normal pacing and only producer-owned redraw requests.
     "autocomplete-navigation-latency": Scenario(
         "autocomplete_navigation", FolderSpec("response-small", files=1), actions=40,

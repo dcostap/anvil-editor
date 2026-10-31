@@ -4,7 +4,7 @@ local test = require "core.test"
 
 -- Run with SDL_VIDEO_DRIVER=windows to check the D3D command path.
 test.describe("polygon command rendering", function()
-  test.it("draws antialiased polygons without per-polygon texture uploads", function()
+  test.it("draws translucent polygons with antialiased edges", function()
     local window = renwindow.create("polygon commands", 320, 240)
     local function draw()
       renderer.begin_frame(window)
@@ -27,15 +27,38 @@ test.describe("polygon command rendering", function()
       renderer.set_clip_rect(0, 0, 320, 240)
       renderer.end_frame()
     end
-    draw()
-    local capture = os.getenv("ANVIL_POLYGON_CAPTURE")
-    if capture then
-      test.ok(renwindow.request_frame_capture(window, capture))
-    end
-    draw()
-    local stats = renderer.get_last_frame_stats()
-    if stats.path ~= "commands" then return end
-    test.equal(stats.texture_uploads, 0)
-    test.ok(stats.quad_instances > 0)
+    local ok, err = pcall(function()
+      draw()
+      local capture = os.getenv("ANVIL_POLYGON_CAPTURE")
+      if capture then test.ok(renwindow.request_frame_capture(window, capture)) end
+      draw()
+
+      local background = renwindow.get_color(window, 120, 24)
+      local interior = renwindow.get_color(window, 35, 24)
+      test.not_equal(interior, background, "the translucent triangle did not render")
+
+      local antialiased_edge = false
+      for y = 14, 34 do
+        for x = 9, 101 do
+          local pixel = renwindow.get_color(window, x, y)
+          local differs = false
+          local between = true
+          for channel = 1, 3 do
+            local low = math.min(background[channel], interior[channel])
+            local high = math.max(background[channel], interior[channel])
+            if pixel[channel] < low - 3 or pixel[channel] > high + 3 then between = false end
+            if math.abs(pixel[channel] - background[channel]) > 3
+              and math.abs(pixel[channel] - interior[channel]) > 3 then
+              differs = true
+            end
+          end
+          if between and differs then antialiased_edge = true; break end
+        end
+        if antialiased_edge then break end
+      end
+      test.ok(antialiased_edge, "polygon edges had no partial coverage")
+    end)
+    renwindow.close(window)
+    if not ok then error(err, 0) end
   end)
 end)

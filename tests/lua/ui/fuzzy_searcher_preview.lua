@@ -88,6 +88,23 @@ local function visible_render_text(view, line)
   return table.concat(text)
 end
 
+local function drawn_line_text(view, line)
+  local x, y = view:get_line_screen_position(line)
+  local drawn, old_draw_text = {}, renderer.draw_text
+  renderer.draw_text = function(font, text, ...)
+    drawn[#drawn + 1] = text
+    return old_draw_text(font, text, ...)
+  end
+  local ok, err = pcall(function()
+    renderer.begin_frame(core.window)
+    view:draw_line_text(line, x, y)
+    renderer.end_frame()
+  end)
+  renderer.draw_text = old_draw_text
+  if not ok then error(err, 0) end
+  return table.concat(drawn)
+end
+
 local function press_command_binding(name)
   local bindings = keymap.get_bindings(name)
   test.ok(bindings and bindings[1], "expected command to have an input binding: " .. name)
@@ -129,14 +146,23 @@ test.describe("Fuzzy Searcher preview", function()
   test.after_each(function(context)
     config.plugins.linewrapping.enable_by_default = context.linewrapping_enable_by_default
     config.fuzzy_searcher_markdown_preview = context.fuzzy_searcher_markdown_preview
+    if context.original_buffer_load_async then
+      Buffer.load_async = context.original_buffer_load_async
+    end
     if context.open_project_in_same_window then
       core.open_project_in_same_window = context.open_project_in_same_window
     end
     if context.open_project_in_new_window then
       core.open_project_in_new_window = context.open_project_in_new_window
     end
+    local active_preview_buffer = core.fuzzy_searcher_active_view
+      and core.fuzzy_searcher_active_view.preview_view
+      and core.fuzzy_searcher_active_view.preview_view.buffer
     if core.fuzzy_searcher_active_view then
       core.fuzzy_searcher_active_view:close()
+    end
+    if context.stale_preview_buffer and context.stale_preview_buffer ~= active_preview_buffer then
+      context.stale_preview_buffer:on_close()
     end
     panes.reset_for_tests()
     for _, buffer in ipairs(context.buffers or {}) do buffer:on_close() end
@@ -323,18 +349,35 @@ test.describe("Fuzzy Searcher preview", function()
     write_file(first, "first\n")
     write_file(second, "second\n")
 
+    local pending = {}
+    context.original_buffer_load_async = Buffer.load_async
+    Buffer.load_async = function(buffer, path, on_finish)
+      pending[#pending + 1] = { buffer = buffer, path = path, on_finish = on_finish }
+    end
+
     fuzzy_searcher.open_static_results("Files", {
       { kind = "file", file = first, text = first },
       { kind = "file", file = second, text = second },
     })
     local picker = core.fuzzy_searcher_active_view
-    picker:update_preview_view()
+    picker:update()
+    test.equal(#pending, 1, "expected the first preview read to start")
     picker.selected = 2
+    picker:update()
+    test.equal(#pending, 2, "expected selection to start the second preview read")
 
-    local preview = test.not_nil(load_preview(picker))
-    for _ = 1, 10 do coroutine.yield(0.001) end
-    test.equal(picker.preview_view, preview)
-    test.equal(table.concat(preview.buffer.lines), "second\n")
+    pending[1].buffer:replace_snapshot("first\n")
+    pending[1].on_finish(true, nil, { total_ms = 0 })
+    context.stale_preview_buffer = pending[1].buffer
+    test.is_nil(picker.preview_view, "the late first read must not replace the selected preview")
+
+    pending[2].buffer:replace_snapshot("second\n")
+    pending[2].on_finish(true, nil, { total_ms = 0 })
+    local preview = test.not_nil(picker.preview_view)
+    picker:update()
+    preview:update()
+    test.ok(drawn_line_text(preview, 1):find("second", 1, true),
+      "the visible preview must match the selected file")
   end)
 
   test.it("does not offer to restore a save backup for a previewed file", function(context)
@@ -353,33 +396,7 @@ test.describe("Fuzzy Searcher preview", function()
     test.not_equal(core.nag_view:get_title(), "Save Backup Found")
   end)
 
-  test.it("keeps preview Buffers lightweight and unwrapped", function(context)
-    config.plugins.linewrapping.enable_by_default = true
-    local path = temp_file_path("fuzzy-preview-lightweight-buffer-test.txt")
-    context.files = { path }
-    write_file(path, "preview only\n")
-
-    fuzzy_searcher.open("")
-    local picker = core.fuzzy_searcher_active_view
-    picker.results = {
-      {
-        kind = "file",
-        file = path,
-        text = path,
-      }
-    }
-    picker.selected = 1
-
-    local preview = load_preview(picker)
-
-    test.ok(preview and preview.buffer, "expected a TextView preview")
-    test.equal(preview.buffer.disable_language_services, true)
-    test.equal(preview.buffer.disable_treesitter, true)
-    test.equal(preview.buffer.disable_gitdiff_highlight, true)
-    test.equal(preview:is_wrapping_enabled(), false)
-  end)
-
-  test.it("keeps Markdown previews as raw text when live rendering is disabled", function(context)
+  test.it("keeps Markdown previews raw, read-only, and unwrapped when Live Preview is disabled", function(context)
     config.fuzzy_searcher_markdown_preview = false
     local path = temp_file_path("fuzzy-preview-markdown-raw-test.md")
     context.files = { path }
@@ -394,8 +411,10 @@ test.describe("Fuzzy Searcher preview", function()
     test.ok(not markdown.live_render.is_live_mode(preview),
       "expected raw Markdown preview text")
     test.equal(preview:is_wrapping_enabled(), false)
-    test.equal(table.concat(preview.buffer.lines),
-      "# Preview heading\n\nPlain **strong** text.\n")
+    local original_text = table.concat(preview.buffer.lines)
+    preview:on_text_input("changed ")
+    test.equal(table.concat(preview.buffer.lines), original_text,
+      "preview input must not edit the source Buffer")
   end)
 
   test.it("presents Markdown files with the same live formatting as Editors", function(context)
@@ -463,23 +482,28 @@ test.describe("Fuzzy Searcher preview", function()
   end)
 
   test.it("updates the selected file preview before drawing", function(context)
-    local path = temp_file_path("fuzzy-preview-update-phase-test.txt")
-    context.files = { path }
-    write_file(path, "preview only\n")
+    local first = temp_file_path("fuzzy-preview-update-first-test.txt")
+    local second = temp_file_path("fuzzy-preview-update-second-test.txt")
+    context.files = { first, second }
+    write_file(first, "first preview\n")
+    write_file(second, "CURRENT_PREVIEW_SENTINEL\n")
 
-    fuzzy_searcher.open("#")
+    fuzzy_searcher.open_static_results("Files", {
+      { kind = "file", file = first, text = first },
+      { kind = "file", file = second, text = second },
+    })
     local picker = core.fuzzy_searcher_active_view
-    picker.results = { { kind = "file", file = path } }
     picker.selected = 1
-    picker.refresh = function() end
 
     picker:update()
+    test.ok(load_preview(picker))
+    picker.selected = 2
+    picker:update()
+
     local preview = test.not_nil(load_preview(picker))
-    local updates = 0
-    preview.update = function() updates = updates + 1 end
-
-    picker:update()
-    test.equal(updates, 1)
+    preview:update()
+    test.ok(drawn_line_text(preview, 1):find("CURRENT_PREVIEW_SENTINEL", 1, true),
+      "the selected file's content must appear in the next draw")
   end)
 
   test.it("does not reopen an unchanged selected file while its preview remains loaded", function(context)

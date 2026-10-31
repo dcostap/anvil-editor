@@ -78,19 +78,22 @@ test.describe("Fuzzy Searcher result selection", function()
     local picker = fuzzy.open_static_results("Results", results(80))
     local metrics = picker:list_metrics()
     picker.mouse.x, picker.mouse.y = metrics.x + 20, metrics.results_top + metrics.lh / 2
+    local viewport_before_scroll = picker.viewport_offset
     picker:on_mouse_wheel(-1, 0)
     test.equal(picker.selected, 1)
-    test.equal(picker.viewport_offset, 4)
+    test.not_equal(picker.viewport_offset, viewport_before_scroll,
+      "scrolling should move the result viewport without changing selection")
     picker:update()
-    test.equal(picker:result_at_point(picker.mouse.x, picker.mouse.y), 4)
     local opened
     picker.activate_selected_result = function(self) opened = self:selected_result().file end
     picker:confirm(false)
     test.equal(opened, "result-1.lua")
 
+    local viewport_before_key = picker.viewport_offset
     command.perform("fuzzy:next")
     test.equal(picker.selected, 2)
-    test.equal(picker.viewport_offset, 2)
+    test.not_equal(picker.viewport_offset, viewport_before_key,
+      "keyboard movement should bring selection back into view")
   end)
 
   test.it("keeps marks on results after a refresh and drops missing results", function()

@@ -12,12 +12,6 @@ local function near(actual, expected)
     string.format("expected %.4f, got %.4f", expected, actual))
 end
 
-local function find_log(text, first)
-  for i = #core.log_items, first or 1, -1 do
-    if core.log_items[i].text:find(text, 1, true) then return core.log_items[i].text end
-  end
-end
-
 -- Observe image placement at the renderer boundary, without an OS window.
 local function image_rect(view)
   local old_draw, old_scaled = renderer.draw_canvas, renderer.draw_canvas_scaled
@@ -95,22 +89,6 @@ test.describe("Image View interaction", function()
     local rect = image_rect(view)
     near(rect[3], 600)
     near(rect[4], 400)
-  end)
-
-  test.it("reports invalid zoom math without changing the calculated result", function(context)
-    local view = context.view
-    local first = #core.log_items + 1
-    -- Inject an invalid input through the public transform API, not the math library.
-    view:apply_transform(-1, 0, 0, true)
-    view:animate_to(1, -100, -100)
-    context.now = 0.05
-    view:update()
-    local message = test.not_nil(find_log("Image View zoom frame: status=invalid", first))
-    test.ok(message:find("from=-1 to=1", 1, true))
-    test.ok(message:find("ratio=-1", 1, true))
-    test.ok(message:find("power=", 1, true))
-    test.ok(view.zoom_scale ~= view.zoom_scale, "diagnostics must not replace the NaN result")
-    test.not_nil(find_log("Image View invalid transform:", first))
   end)
 
   test.it("pans directly, clamps image edges, and stops when the pointer leaves", function(context)

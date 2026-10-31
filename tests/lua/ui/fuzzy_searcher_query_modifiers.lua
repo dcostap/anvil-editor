@@ -16,8 +16,8 @@ local function write_file(root, name, text)
   return path
 end
 
-local function wait_until(predicate)
-  local deadline = system.get_time() + 10
+local function wait_until(predicate, timeout_seconds)
+  local deadline = system.get_time() + (timeout_seconds or 10)
   while not predicate() and system.get_time() < deadline do coroutine.yield(0.01) end
   return predicate()
 end
@@ -88,7 +88,7 @@ test.describe("Fuzzy Searcher query modifiers", function()
     write_file(context.root, "a-large.txt", "alpha beta\nother alpha beta\n" .. string.rep("x", 1024))
     fuzzy.open('size:>=1k #alpha beta sort:name')
     local picker = assert(core.fuzzy_searcher_active_view)
-    test.ok(wait_until(function() return picker.status == "3 matches" end), tostring(picker.status))
+    test.ok(wait_until(function() return #picker.results == 3 end, 30), tostring(picker.status))
     test.same({ picker.results[1].file, picker.results[2].file, picker.results[3].file },
       { "a-large.txt", "a-large.txt", "b-large.txt" })
     test.equal(picker.results[2].line, 2)
@@ -179,7 +179,10 @@ test.describe("Fuzzy Searcher query modifiers", function()
     write_file(context.root, "file.txt", "contents\n")
     fuzzy.open("sort:name")
     local picker = assert(core.fuzzy_searcher_active_view)
-    test.ok(wait_until(function() return picker.status == "1 match" end))
+    test.ok(wait_until(function()
+      return #picker.results == 1 and picker.results[1].file == "file.txt"
+    end, 30), tostring(picker.status))
+    test.equal(picker.results[1].file, "file.txt")
     picker.input:set_text("sort:unknown")
     test.equal(#picker.results, 0)
     test.equal(picker.status, "Sort must be name, size, or date")

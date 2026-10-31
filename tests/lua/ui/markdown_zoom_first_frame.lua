@@ -7,9 +7,23 @@ local model = require "core.markdown.model"
 local wrapping = require "core.linewrapping"
 local pool = require "core.worker_pool"
 local scale = require "plugins.scale"
+local zoom = require "core.zoom"
 local test = require "core.test"
 
 local identity = 0
+local initial_scale, initial_code_scale = scale.get(), scale.get_code()
+
+local function wait_for_startup_zoom()
+  local interface, code = zoom.load()
+  local expected_scale, expected_code = initial_scale * interface, initial_code_scale * code
+  local deadline = system.get_time() + 5
+  while (scale.get() ~= expected_scale or scale.get_code() ~= expected_code)
+      and system.get_time() < deadline do
+    coroutine.yield(0.01)
+  end
+  test.same({ scale.get(), scale.get_code() }, { expected_scale, expected_code })
+end
+
 local function make_view(text)
   identity = identity + 1
   local buffer = Buffer(nil, nil, true)
@@ -80,7 +94,7 @@ end
 test.describe("Markdown zoom first redraw", function()
   for _, first_line in ipairs { 1, 1001 } do
     test.it("updates visible fonts, heights, and wrapping without waiting at line " .. first_line, function()
-      coroutine.yield(0.05)
+      wait_for_startup_zoom()
       local old_live, old_active = config.markdown_live_editor, core.active_view
       local old_scale, old_code = scale.get(), scale.get_code()
       local views = {}

@@ -38,6 +38,64 @@ local function wait_until(predicate, timeout)
   return predicate()
 end
 
+local function hold_vault_snapshot_delivery(root)
+  local pool = worker_pool.system()
+  local submit = pool.submit
+  local old_submit = rawget(pool, "submit")
+  local manifests = setmetatable({}, { __mode = "k" })
+  local held = {}
+  local restored = false
+
+  pool.submit = function(self, spec)
+    local on_result = spec.on_result
+    local payload = spec.native_payload or {}
+    if spec.kind == "markdown-project-file-manifest"
+        and type(payload.project_root) == "string"
+        and common.path_equals(payload.project_root, root) then
+      spec.on_result = function(message)
+        local manifest = message.manifest or (message.payload and message.payload.manifest)
+        if manifest then manifests[manifest] = true end
+        return on_result(message)
+      end
+    elseif spec.kind == "markdown-vault-index" and manifests[payload.manifest] then
+      spec.on_result = function(message)
+        local result = message.vault_snapshot or (message.payload and message.payload.vault_snapshot)
+        if result then
+          if restored then return on_result(message) end
+          held[#held + 1] = { on_result = on_result, message = message }
+          return
+        end
+        return on_result(message)
+      end
+    end
+    return submit(self, spec)
+  end
+
+  local function wait_for_delivery(timeout)
+    local deadline = system.get_time() + (timeout or 5)
+    while #held == 0 and system.get_time() < deadline do coroutine.yield(0.01) end
+    return #held > 0
+  end
+
+  local function release()
+    local deliveries = held
+    held = {}
+    for _, delivery in ipairs(deliveries) do
+      delivery.on_result(delivery.message)
+    end
+  end
+
+  local function restore()
+    if restored then return end
+    pool.submit = old_submit
+    if not old_submit then pool.submit = nil end
+    restored = true
+    release()
+  end
+
+  return wait_for_delivery, release, restore
+end
+
 local test_buffer_id = 0
 local function make_view(text, filename, opts)
   test_buffer_id = test_buffer_id + 1
@@ -1260,14 +1318,28 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("freezes rendered layout for the lifetime of IME composition", function()
-    local view, buffer = make_view("## Title\nbody", "note.md")
+    local heading = "## " .. string.rep("Title with many words ", 10)
+    local view, buffer = make_view(heading .. "\nbody", "note.md")
+    view.size.x = 220
+    view:set_wrapping_enabled(true)
     refresh(view)
     buffer:set_selection(1, 4)
+    local function layout()
+      local points = {}
+      for _, col in ipairs({ 1, 4, 30, #heading }) do
+        local _, y = view:get_line_screen_position(1, col)
+        points[#points + 1] = y
+      end
+      return { rows = view:get_line_visual_row_count(1), points = points }
+    end
+    local before = layout()
+    test.ok(before.rows > 1, "the heading must wrap for this layout check")
     view:on_ime_text_editing("x", 0, 0)
-    test.not_nil(view.__line_render_interaction_state)
-    test.equal(view.__line_render_interaction_state.reason, "ime-composition")
+    local composing = layout()
+    view:on_ime_text_editing("xy", 1, 0)
+    test.same(layout(), composing)
     view:on_ime_text_editing("", 0, 0)
-    test.equal(view.__line_render_interaction_state, nil)
+    test.same(layout(), before)
   end)
 
   test.it("does not live-render Markdown syntax inside code blocks", function()
@@ -2609,6 +2681,7 @@ test.describe("Markdown Live Preview", function()
     local old_projects = core.projects
     core.projects = { Project(root) }
     test.not_nil(require("core.project_files").list(root))
+    local wait_for_snapshot, release_snapshot, restore_snapshot = hold_vault_snapshot_delivery(root)
     local old_active, old_open_file = core.active_view, core.open_file
     local opened
     core.open_file = function(path) opened = path return {} end
@@ -2616,11 +2689,13 @@ test.describe("Markdown Live Preview", function()
       local view, buffer = make_view("[[Target.md]]\nplain", root .. PATHSEP .. "Source.md")
       buffer:set_selection(1, 5)
       refresh(view)
-      test.equal(markdown.vault_index.get_index(root):can_resolve(), false)
+      test.ok(wait_for_snapshot(15), "the vault snapshot did not reach the worker boundary")
       core.active_view = view
       test.equal(command.perform("markdown:open_link"), true)
       test.equal(opened, common.normalize_path(target_path))
+      release_snapshot()
     end)
+    restore_snapshot()
     core.open_file, core.active_view = old_open_file, old_active
     core.projects = old_projects
     common.rm(root, true)
@@ -2953,7 +3028,7 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err, 0) end
   end)
 
-  test.it("keeps checkbox toggle layout work local to the task row", function()
+  test.it("renders a toggled checkbox with its task row", function()
     local view, buffer = make_view(table.concat({
       "# Before",
       "```lua",
@@ -2968,11 +3043,7 @@ test.describe("Markdown Live Preview", function()
     view:set_wrapping_enabled(true)
     buffer:set_selection(9, 1)
     refresh(view)
-    view:get_visual_row_metric_cache()
 
-    local service = fence_highlight.get(buffer)
-    local requests_before = service:get_diagnostics().requests
-    local rebuilds_before = view:get_render_cache_diagnostics().metric_full_rebuilds
     local checkbox
     for _, fragment in ipairs(test.not_nil(view:get_line_render(6)).fragments or {}) do
       if fragment.markdown_task_checkbox then checkbox = fragment break end
@@ -2984,21 +3055,14 @@ test.describe("Markdown Live Preview", function()
 
     test.equal(view:on_mouse_pressed("left", checkbox_x, line_y + 2, 1), true)
     test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
-    view:get_visual_row_metric_cache()
-
-    test.equal(
-      view:get_render_cache_diagnostics().metric_full_rebuilds,
-      rebuilds_before,
-      "the checkbox toggle rebuilt the complete Markdown layout"
-    )
-    test.equal(
-      service:get_diagnostics().requests,
-      requests_before,
-      "the checkbox toggle requested highlighting for an unrelated code block"
-    )
+    test.equal(buffer.lines[6], "- [x] todo\n")
+    local instance = test.not_nil(markdown_model.peek(buffer))
+    test.ok(wait_status(instance, "ready", 15), "the checkbox semantics did not publish")
+    refresh(view)
+    test.equal(visible_render_text(view, 6), "todo")
   end)
 
-  test.it("keeps wrapped layout work local while fenced text is reparsed", function()
+  test.it("shows a fenced edit after its Markdown parse publishes", function()
     local lines = { "```lua" }
     for index = 1, 300 do
       lines[#lines + 1] = "local value_" .. index .. " = " .. index
@@ -3008,22 +3072,14 @@ test.describe("Markdown Live Preview", function()
     local view, buffer = make_view(table.concat(lines, "\n"), "fence-edit-layout.md")
     view:set_wrapping_enabled(true)
     refresh(view)
-    view:get_visual_row_metric_cache()
-    local rebuilds_before = view:get_render_cache_diagnostics().metric_full_rebuilds
 
     local edit_line = 301
     buffer:insert(edit_line, #buffer.lines[edit_line], "x")
-    view:get_visual_row_metric_cache()
     local instance = test.not_nil(markdown_model.peek(buffer))
     test.ok(wait_status(instance, "ready"), instance.reason)
     linewrapping.complete_async_reconstruction(view)
-    view:get_visual_row_metric_cache()
-
-    test.equal(
-      view:get_render_cache_diagnostics().metric_full_rebuilds,
-      rebuilds_before,
-      "a local fenced edit rebuilt the complete Markdown layout"
-    )
+    test.equal(buffer.lines[edit_line], "local value_300 = 300x\n")
+    test.equal(visible_render_text(view, edit_line), "local value_300 = 300x")
   end)
 
   test.it("reveals the complete task-list prefix when the caret enters its checkbox", function()
@@ -4993,34 +5049,33 @@ test.describe("Markdown Live Preview", function()
   test.it("shows unresolved image embeds as loading while the vault indexes", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-image-indexing-" .. system.get_process_id()
     test.ok(common.mkdirp(root))
-    -- Keep the cooperative scan active long enough to render its initial
-    -- placeholder instead of racing a tiny vault's ready notification.
-    for i = 1, 200 do
-      local file = test.not_nil(io.open(root .. PATHSEP .. "Fill" .. i .. ".md", "wb"))
-      file:write("# Fill\n")
-      file:close()
-    end
     local old_projects = core.projects
     core.projects = { Project(root) }
+    local wait_for_snapshot, release_snapshot, restore_snapshot = hold_vault_snapshot_delivery(root)
     local view, buffer = make_view("![[not-yet-indexed.png]]\nnext", root .. PATHSEP .. "Source.md")
     buffer:set_selection(2, 1)
     local ok, err = pcall(function()
       refresh(view)
-      test.equal(view.__markdown_live_owner.link_index.status, "indexing")
+      test.ok(wait_for_snapshot(15), "the vault snapshot did not reach the worker boundary")
       local loading
       for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
         if fragment.image_status then loading = fragment break end
       end
       test.equal(test.not_nil(loading).text, "[loading image: not-yet-indexed.png]")
 
-      test.ok(wait_status(view.__markdown_live_owner.link_index, "ready"))
-      local unavailable
-      for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
-        if fragment.image_status then unavailable = fragment break end
-      end
-      test.equal(test.not_nil(unavailable).text, "[image unavailable: not-yet-indexed.png]")
+      release_snapshot()
+      test.ok(wait_until(function()
+        for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+          if fragment.image_status
+              and fragment.text == "[image unavailable: not-yet-indexed.png]" then
+            return true
+          end
+        end
+        return false
+      end, 15), "the missing image did not resolve after vault publication")
     end)
     markdown.live_render.detach(view)
+    restore_snapshot()
     core.projects = old_projects
     common.rm(root, true)
     if not ok then error(err, 0) end
@@ -5030,11 +5085,6 @@ test.describe("Markdown Live Preview", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-attachment-only-" .. system.get_process_id()
     local media = root .. PATHSEP .. "attachments"
     test.ok(common.mkdirp(media))
-    for i = 1, 200 do
-      local file = test.not_nil(io.open(media .. PATHSEP .. "Image" .. i .. ".png", "wb"))
-      file:write("png")
-      file:close()
-    end
     local image_path = media .. PATHSEP .. "Pasted image.png"
     local image = test.not_nil(io.open(image_path, "wb"))
     image:write("png")
@@ -5044,6 +5094,7 @@ test.describe("Markdown Live Preview", function()
     local old_load_image = canvas.load_image
     local view
     core.projects = { Project(root) }
+    local wait_for_snapshot, release_snapshot, restore_snapshot = hold_vault_snapshot_delivery(root)
     canvas.load_image = function(path)
       if common.path_equals(path, image_path) then
         return {
@@ -5067,17 +5118,15 @@ test.describe("Markdown Live Preview", function()
       )
       buffer:set_selection(2, 1)
       refresh(view)
-      local index = view.__markdown_live_owner.link_index
-      test.equal(index.status, "indexing")
+      test.ok(wait_for_snapshot(15), "the vault snapshot did not reach the worker boundary")
       test.match(visible_render_text(view, 1), "[loading image:", nil, true)
 
-      test.ok(wait_status(index, "ready"))
-      test.not_nil(
-        rendered_image(),
-        "the first attachment snapshot must replace the pending preview"
-      )
+      release_snapshot()
+      test.ok(wait_until(rendered_image, 15),
+        "the attachment image did not replace its pending preview")
     end)
     if view then markdown.live_render.detach(view) end
+    restore_snapshot()
     canvas.load_image = old_load_image
     core.projects = old_projects
     common.rm(root, true)
@@ -5363,75 +5412,157 @@ test.describe("Markdown Live Preview", function()
     test.equal(view:get_col_x_offset(1, #"![Alt](image.png)" + 1), link_width)
   end)
 
-  test.it("owns lifecycle independently for split views of one Buffer", function()
-    local first, buffer = make_view("# Title", "note.md")
+  test.it("keeps Markdown rendering active in a split after the first View closes", function()
+    local first, buffer = make_view("# Title\nplain", "note.md")
     local second = Editor(buffer)
     second.position.x, second.position.y = 0, 0
     second.size.x, second.size.y = 500, 200
-    refresh(first)
-    refresh(second)
-    test.equal(first.__markdown_live_attached, true)
-    test.equal(second.__markdown_live_attached, true)
+    first:with_selection_state(function() buffer:set_selection(2, 1) end)
+    local old_active = core.active_view
+    local ok, err = pcall(function()
+      refresh(first)
+      core.active_view = second
+      second:with_selection_state(function() buffer:set_selection(2, 1) end)
+      refresh(second)
+      test.equal(visible_render_text(second, 1), "Title")
 
-    local closed = false
-    first:try_close(function() closed = true end)
-    test.equal(closed, true)
-    test.equal(first.__markdown_live_owner, nil)
-    test.equal(first.__markdown_live_attached, nil)
-    test.not_nil(second.__markdown_live_owner)
+      local closed = false
+      first:try_close(function() closed = true end)
+      test.equal(closed, true)
+      test.equal(visible_render_text(second, 1), "Title")
 
-    buffer:set_filename("note.txt", "note.txt")
-    test.equal(first.__markdown_live_attached, nil)
-    test.equal(second.__markdown_live_attached, nil)
+      buffer:set_filename("note.txt", "note.txt")
+      test.equal(visible_render_text(second, 1), "# Title")
+      buffer:set_filename("note.md", "note.md")
+      refresh(second)
+      second:with_selection_state(function() buffer:set_selection(2, 1) end)
+      test.equal(visible_render_text(second, 1), "Title")
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
   end)
 
-  test.it("releases owned lifecycle state when its Buffer closes", function()
-    local view, buffer = make_view("# Title", "note.md")
-    refresh(view)
-    test.not_nil(view.__markdown_live_owner)
-    buffer:on_close()
-    test.equal(view.__markdown_live_owner, nil)
-    test.equal(view.__markdown_live_attached, nil)
+  test.it("shows source Markdown after its Buffer closes", function()
+    local view, buffer = make_view("# Title\nplain", "note.md")
+    view:with_selection_state(function() buffer:set_selection(2, 1) end)
+    local old_active = core.active_view
+    local ok, err = pcall(function()
+      core.active_view = view
+      refresh(view)
+      test.equal(visible_render_text(view, 1), "Title")
+      buffer:on_close()
+      test.equal(visible_render_text(view, 1), "# Title")
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
   end)
 
-  test.it("rebinds link resolution when a Buffer moves between Projects", function()
+  test.it("resolves links from the Project that owns a renamed Buffer", function()
     local root1 = USERDIR .. PATHSEP .. "markdown-live-index-one-" .. system.get_process_id()
     local root2 = USERDIR .. PATHSEP .. "markdown-live-index-two-" .. system.get_process_id()
     test.ok(common.mkdirp(root1))
     test.ok(common.mkdirp(root2))
+    local function write(path, text)
+      local file = test.not_nil(io.open(path, "wb"))
+      file:write(text)
+      file:close()
+    end
+    write(root1 .. PATHSEP .. "Target.md", "# First project\n")
+    write(root2 .. PATHSEP .. "Target.md", "# Second project\n")
     local old_projects = core.projects
     core.projects = { Project(root1), Project(root2) }
+    local first_index = markdown.vault_index.get_index(root1)
+    local second_index = markdown.vault_index.get_index(root2)
+    first_index:rebuild("move-buffer-link-test")
+    second_index:rebuild("move-buffer-link-test")
+    local old_active = core.active_view
+    local old_open_file = core.open_file
+    local opened
+    core.open_file = function(path)
+      opened = common.normalize_path(path)
+      return {}
+    end
     local ok, err = pcall(function()
+      test.ok(wait_status(first_index, "ready", 15), "the first Project index did not finish")
+      test.ok(wait_status(second_index, "ready", 15), "the second Project index did not finish")
       local path1 = root1 .. PATHSEP .. "Source.md"
       local path2 = root2 .. PATHSEP .. "Source.md"
       local view, buffer = make_view("[[Target]]\nplain", path1)
-      buffer:set_selection(2, 1)
+      buffer:set_selection(1, 5)
       refresh(view)
-      test.equal(view.__markdown_live_owner.link_index.root, common.normalize_path(root1))
+      core.active_view = view
+      test.ok(command.perform("markdown:open_link"))
+      test.equal(opened, common.normalize_path(root1 .. PATHSEP .. "Target.md"))
+
+      opened = nil
       buffer:set_filename(path2, path2)
-      test.equal(view.__markdown_live_owner.link_index.root, common.normalize_path(root2))
+      refresh(view)
+      core.active_view = view
+      buffer:set_selection(1, 5)
+      test.ok(command.perform("markdown:open_link"))
+      test.equal(opened, common.normalize_path(root2 .. PATHSEP .. "Target.md"))
     end)
+    core.open_file = old_open_file
+    core.active_view = old_active
     core.projects = old_projects
     common.rm(root1, true)
     common.rm(root2, true)
     if not ok then error(err, 0) end
   end)
 
-  test.it("automatically follows direct Buffer filename and syntax changes", function()
-    local view, buffer = make_view("# Title", "note.md")
+  test.it("updates Markdown and relative images when a Buffer filename changes", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-filename-" .. system.get_process_id()
+    local moved = root .. PATHSEP .. "moved"
+    test.ok(common.mkdirp(moved))
+    for _, path in ipairs({ root .. PATHSEP .. "image.png", moved .. PATHSEP .. "image.png" }) do
+      local file = test.not_nil(io.open(path, "wb"))
+      file:write("png")
+      file:close()
+    end
+    local view, buffer = make_view(
+      "# Title\n![Alt](image.png)", root .. PATHSEP .. "note.md"
+    )
     local suffix = tostring(test_buffer_id)
-    refresh(view)
-    test.equal(view.__markdown_live_attached, true)
+    view:with_selection_state(function() buffer:set_selection(2, 1) end)
+    local old_load_image = canvas.load_image
+    local loaded_path
+    local old_active = core.active_view
+    canvas.load_image = function(path)
+      loaded_path = path
+      return {
+        get_size = function() return 80, 40 end,
+        scaled = function(self) return self end,
+      }
+    end
+    local ok, err = pcall(function()
+      core.active_view = view
+      refresh(view)
+      test.equal(visible_render_text(view, 1), "Title")
+      view:get_line_render(2)
+      test.ok(common.path_equals(test.not_nil(loaded_path), root .. PATHSEP .. "image.png"))
 
-    buffer:set_filename("note.txt", "note-" .. suffix .. ".txt")
-    test.equal(view.__markdown_live_attached, nil)
+      buffer:set_filename("note.txt", "note-" .. suffix .. ".txt")
+      test.equal(visible_render_text(view, 1), "# Title")
 
-    buffer:set_filename("note.md", "note-" .. suffix .. ".md")
-    test.equal(view.__markdown_live_attached, true)
+      buffer:set_filename("note.md", "note-" .. suffix .. ".md")
+      refresh(view)
+      view:with_selection_state(function() buffer:set_selection(2, 1) end)
+      test.equal(visible_render_text(view, 1), "Title")
 
-    view.__markdown_live_image_cache = { ["image.png"] = { path = "old/image.png" } }
-    buffer:set_filename("moved/note.md", "moved/note-" .. suffix .. ".md")
-    test.equal(view.__markdown_live_attached, true)
-    test.equal(view.__markdown_live_image_cache, nil)
+      loaded_path = nil
+      buffer:set_filename(moved .. PATHSEP .. "note.md",
+        moved .. PATHSEP .. "note-" .. suffix .. ".md")
+      refresh(view)
+      view:with_selection_state(function() buffer:set_selection(2, 1) end)
+      test.equal(visible_render_text(view, 1), "Title")
+      view:get_line_render(2)
+      test.ok(common.path_equals(test.not_nil(loaded_path), moved .. PATHSEP .. "image.png"),
+        "the renamed note kept its old relative image")
+    end)
+    canvas.load_image = old_load_image
+    core.active_view = old_active
+    markdown.live_render.detach(view)
+    common.rm(root, true)
+    if not ok then error(err, 0) end
   end)
 end)

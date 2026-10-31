@@ -32,6 +32,18 @@ test.describe("core scheduler threads", function()
       coroutine.yield(0)
       slices[#slices + 1] = "after"
     end)
+    test.ok(wait_until(function() return #slices == 2 end, 30),
+      "the thread did not continue after its zero-delay yield")
+    test.same(slices, { "before", "after" })
+  end)
+
+  test.it("continues a thread after a zero-delay yield", function()
+    local slices = {}
+    core.add_thread(function()
+      slices[#slices + 1] = "before"
+      coroutine.yield(0)
+      slices[#slices + 1] = "after"
+    end)
     test.ok(wait_until(function() return #slices == 2 end, 5),
       "the thread did not continue after its zero-delay yield")
     test.same(slices, { "before", "after" })

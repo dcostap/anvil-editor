@@ -1108,6 +1108,19 @@ local function scenario_is_ready()
     require("plugins.project_paths").open({ select = DATADIR .. PATHSEP .. "colors" })
     return false
   end
+  if benchmark.scenario == "update-dialog" then
+    -- A fixed release offer. This scene makes no network request and cannot install anything.
+    if require("core.ui.dialog").current() then return true end
+    config.transitions = false
+    local updater = require "plugins.updater"
+    config.plugins.updater.check_automatically = false
+    updater.supported = function() return true end
+    updater.install = function() error("The render scene cannot install updates") end
+    updater.state, updater.message = "available", "Anvil 1.2.0 is available."
+    updater.release = { version = "1.2.0", page = "https://github.com/dcostap/anvil-editor/releases/tag/v1.2.0" }
+    updater.open()
+    return false
+  end
   if benchmark.scenario == "file-types-dialog" then
     -- The File Types Dialog with checked, clear and Another Anvil rows. The rows are fixed, so the scene
     -- does not read or change this machine's registry.
@@ -1976,7 +1989,9 @@ function perf.on_frame(snapshot)
   if not ok then fail(err) end
 end
 
-core.add_thread(function()
+-- Setup can wait without redrawing. Keep it scheduled while the private
+-- Window is idle and unfocused, as with the benchmark's background work.
+core.add_background_thread(function()
   local ok, err = xpcall(setup_scenario, debug.traceback)
   if not ok then
     fail(err)

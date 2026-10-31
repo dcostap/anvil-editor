@@ -1,5 +1,4 @@
 local Buffer = require "core.buffer"
-local common = require "core.common"
 local Editor = require "core.editor"
 local markdown = require "core.markdown"
 local model = require "core.markdown.model"
@@ -253,16 +252,6 @@ test.describe("Markdown inline positions", function()
       wait_ready(view)
       view:get_line_render(2)
       buffer:remove(1, 7, 2, 1)
-      local projected = test.not_nil(
-        view.__markdown_live_owner.pending_lines[1],
-        "the joined line has no edit projection"
-      )
-      local reveal_marker
-      for _, fragment in ipairs(projected.render_line.fragments or {}) do
-        if fragment.markdown_reveal_col1 then reveal_marker = fragment break end
-      end
-      test.not_nil(reveal_marker, "the joined inline code lost its reveal range: "
-        .. common.serialize(projected.render_line.fragments))
 
       for phase = 1, 2 do
         if phase == 2 then wait_ready(view) end

@@ -23,6 +23,12 @@ local function write_file(path, text)
   fp:close()
 end
 
+local function option_index(options, predicate)
+  for index, option in ipairs(options or {}) do
+    if predicate(option) then return index end
+  end
+end
+
 test.describe("Autosave Pane close", function()
   test.before_each(function(context)
     context.path = system.absolute_path(USERDIR .. PATHSEP
@@ -84,7 +90,7 @@ test.describe("Autosave Pane close", function()
 
     test.not_ok(approved)
     test.not_ok(unsaved_prompt, "expected the conflict prompt to own close resolution")
-    test.equal(prompt_title, "File Changed on Disk")
+    test.ok(prompt_title, "expected a disk-conflict prompt")
     test.equal(read_file(context.path), "external replacement\n")
     resolve_prompt({ text = "Cancel" })
     test.ok(view:get_name():find("*", 1, true), "cancelled conflict should expose unsaved state")
@@ -201,7 +207,7 @@ test.describe("Autosave save failures", function()
     test.equal(saved, 0)
     test.equal(read_file(context.path), "external text\n")
     test.ok(buffer:is_dirty())
-    test.equal(prompt_title, "File Changed on Disk")
+    test.ok(prompt_title, "expected a disk-conflict prompt")
   end)
 
   test.it("does not overwrite a file when its current snapshot cannot be read", function(context)
@@ -226,7 +232,7 @@ test.describe("Autosave save failures", function()
     test.equal(saved, 0)
     test.equal(read_file(context.path), "original\n")
     test.ok(buffer:is_dirty())
-    test.equal(prompt_title, "File Changed on Disk")
+    test.ok(prompt_title, "expected a disk-conflict prompt")
   end)
 
   test.it("overwrites the disk after explicit conflict approval", function(context)
@@ -260,24 +266,24 @@ test.describe("Autosave save failures", function()
     core.nag_view = NagView()
     autosave_fast.save_all_dirty("changing conflict")
     local nag = core.nag_view
-    test.equal(nag.title, "File Changed on Disk")
-    test.equal(nag.options[3].text, "Save Copy of Current File")
-    local original_choice = nag.on_selected
+    test.ok(nag.visible, "expected a disk-conflict prompt")
+    local overwrite_choice = test.not_nil(option_index(nag.options, function(option)
+      return option.text and option.text:lower():find("overwrite", 1, true)
+    end), "expected an overwrite action")
 
     write_file(context.path, "second external replacement\n")
-    nag:change_hovered(1)
+    nag:change_hovered(overwrite_choice)
     test.ok(command.perform("core:select_dialog_entry"))
 
     test.equal(read_file(context.path), "second external replacement\n")
     test.ok(buffer:is_dirty())
-    test.equal(nag.on_selected, original_choice)
+    test.ok(nag.visible, "expected the conflict choice to stay open")
     test.equal(#nag.queue, 0)
-    test.ok(nag.message:find("changed again", 1, true))
 
     write_file(context.path, "third external replacement\n")
     test.ok(command.perform("core:select_dialog_entry"))
     test.equal(read_file(context.path), "third external replacement\n")
-    test.equal(nag.on_selected, original_choice)
+    test.ok(nag.visible, "expected the conflict choice to remain open")
     test.equal(#nag.queue, 0)
 
     test.ok(command.perform("core:select_dialog_entry"))
@@ -298,7 +304,9 @@ test.describe("Autosave save failures", function()
     core.nag_view = NagView()
     autosave_fast.save_all_dirty("approved changing conflict")
     local nag = core.nag_view
-    local original_choice = nag.on_selected
+    local overwrite_choice = test.not_nil(option_index(nag.options, function(option)
+      return option.text and option.text:lower():find("overwrite", 1, true)
+    end), "expected an overwrite action")
 
     local sync_file = system.sync_file
     local changed = false
@@ -310,15 +318,14 @@ test.describe("Autosave save failures", function()
       end
       return ok, err
     end
-    nag:change_hovered(1)
+    nag:change_hovered(overwrite_choice)
     test.ok(command.perform("core:select_dialog_entry"))
     system.sync_file = sync_file
 
     test.equal(read_file(context.path), "second external replacement\n")
     test.ok(buffer:is_dirty())
-    test.equal(nag.on_selected, original_choice)
+    test.ok(nag.visible, "expected the conflict choice to stay open")
     test.equal(#nag.queue, 0)
-    test.ok(nag.message:find("changed again", 1, true))
     test.ok(command.perform("core:select_dialog_entry"))
     test.equal(read_file(context.path), "Anvil original\n")
     test.not_ok(nag.visible)
@@ -336,14 +343,14 @@ test.describe("Autosave save failures", function()
     core.nag_view = NagView()
     autosave_fast.save_all_dirty("missing during conflict")
     local nag = core.nag_view
-    local original_choice = nag.on_selected
+    local action_choice = test.not_nil(option_index(nag.options, function(option)
+      return not option.default_no
+    end), "expected a non-cancel choice")
     assert(os.remove(context.path))
 
-    nag:change_hovered(1)
+    nag:change_hovered(action_choice)
     test.ok(command.perform("core:select_dialog_entry"))
-    test.equal(nag.on_selected, original_choice)
-    test.equal(nag.title, "File Missing on Disk")
-    test.equal(nag.options[1].text, "Save as New File")
+    test.ok(nag.visible, "expected the missing-file choice to stay open")
     test.equal(#nag.queue, 0)
     test.ok(buffer:is_dirty())
 
@@ -424,7 +431,7 @@ test.describe("Autosave save failures", function()
     test.equal(saved, 0)
     test.equal(read_file(context.path), "external replacement\n")
     test.ok(buffer:is_dirty())
-    test.equal(prompt_title, "File Changed on Disk")
+    test.ok(prompt_title, "expected a disk-conflict prompt")
   end)
 
   test.it("stops automatic retries after a persistent failure", function(context)

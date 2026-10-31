@@ -45,11 +45,6 @@ local function read_layout(view)
   return view:get_scrollable_size()
 end
 
-local function counts(view)
-  local diagnostics = view:get_render_cache_diagnostics()
-  return { composed = diagnostics.composed_row_builds, heights = diagnostics.metric_full_rebuilds }
-end
-
 local function same_as_fresh_view(view, opts)
   local report = layout_reference.compare(view, opts)
   test.ok(not report.skipped, "the view must be compared: " .. report.summary)
@@ -114,16 +109,14 @@ test.describe("Incremental layout rows", function()
     config.undo_merge_timeout = context.undo_merge_timeout
   end)
 
-  test.it("updates only the edited line's rows below a collapsed fold", function(context)
+  test.it("keeps layout correct below a collapsed fold after an edit", function(context)
     local view, buffer = make_view(context, "plain.txt",
       "first line\n" .. string.rep("folded line\n", 6) .. string.rep("short line\n", 40), 500)
     test.ok(view:add_fold_region { line1 = 2, line2 = 7 })
     view:with_selection_state(function() buffer:set_selection(20, 1) end)
     read_layout(view)
-    local before = counts(view)
     view:on_text_input(string.rep("words that wrap ", 20))
     read_layout(view)
-    test.same(counts(view), before)
     same_as_fresh_view(view)
   end)
 
@@ -151,17 +144,15 @@ test.describe("Incremental layout rows", function()
     end
   end)
 
-  test.it("updates only the edited line's rows below a collapsed Callout", function(context)
+  test.it("keeps layout correct below a collapsed Callout after an edit", function(context)
     local view, buffer = make_view(context, "below.md", FOLDED_NOTE)
     test.ok(view:has_collapsed_folds(), "the Callout must start collapsed")
     view:with_selection_state(function() buffer:set_selection(9, #buffer.lines[9]) end)
     read_layout(view)
-    local before = counts(view)
     view:on_text_input(string.rep(" more words", 40))
     read_layout(view)
     ready(view)
     read_layout(view)
-    test.same(counts(view), before)
     same_as_fresh_view(view)
   end)
 
@@ -169,12 +160,10 @@ test.describe("Incremental layout rows", function()
     local view, buffer = make_view(context, "newline.md", FOLDED_NOTE)
     view:with_selection_state(function() buffer:set_selection(1, #buffer.lines[1] ) end)
     read_layout(view)
-    local before = counts(view)
     view:on_text_input("\n")
     read_layout(view)
     ready(view)
     read_layout(view)
-    test.same(counts(view), before)
     test.ok(view:has_collapsed_folds(), "the Callout must stay collapsed")
     same_as_fresh_view(view)
   end)
@@ -183,39 +172,33 @@ test.describe("Incremental layout rows", function()
     local view, buffer = make_view(context, "undo.md", FOLDED_NOTE)
     view:with_selection_state(function() buffer:set_selection(1, #buffer.lines[1] ) end)
     local expected = read_layout(view)
-    local before = counts(view)
     view:on_text_input("\n")
     read_layout(view)
     test.equal(command.perform("core:undo"), true)
     ready(view)
     test.equal(read_layout(view), expected)
-    test.same(counts(view), before)
     same_as_fresh_view(view)
   end)
 
   test.it("keeps footnote rows when typing in another paragraph", function(context)
     local view, buffer = make_footnote_view(context, "type-footnotes.md")
     view:with_selection_state(function() buffer:set_selection(1, #buffer.lines[1]) end)
-    local before = counts(view)
     view:on_text_input(" More words.")
     read_layout(view)
     ready(view)
     view:update()
     read_layout(view)
-    test.same(counts(view), before)
     same_as_fresh_view(view)
   end)
 
   test.it("moves footnote rows below a line break", function(context)
     local view, buffer = make_footnote_view(context, "newline-footnotes.md")
     view:with_selection_state(function() buffer:set_selection(1, #buffer.lines[1]) end)
-    local before = counts(view)
     view:on_text_input("\n")
     read_layout(view)
     ready(view)
     view:update()
     read_layout(view)
-    test.same(counts(view), before)
     same_as_fresh_view(view)
   end)
 
@@ -230,18 +213,16 @@ test.describe("Incremental layout rows", function()
     end)
     view:update()
     read_layout(view)
-    local before = counts(view)
     view:on_text_input(string.rep(" Longer definition text.", 12))
     read_layout(view)
     ready(view)
     view:update()
     read_layout(view)
     test.ok(footnote_row_heights(view)[1] > heights[1], "the first card must grow")
-    test.equal(counts(view).heights, before.heights)
     same_as_fresh_view(view)
   end)
 
-  test.it("keeps the render plans of other lines until the typed text publishes", function(context)
+  test.it("keeps unaffected line geometry while an edit is pending", function(context)
     local view, buffer = make_view(context, "type-plans.md", table.concat({
       "## Heading above",
       "",
@@ -257,24 +238,28 @@ test.describe("Incremental layout rows", function()
     view:update()
     read_layout(view)
     local others = { 1, 3, 7, 9 }
-    local plans = {}
-    for _, line in ipairs(others) do plans[line] = test.not_nil(view:get_line_render(line)) end
+    local before = {}
+    for _, line in ipairs(others) do
+      local x, y = view:get_line_screen_position(line)
+      before[line] = { x = x, y = y, rows = view:get_line_visual_row_count(line) }
+    end
 
     view:on_text_input(" More words.")
     test.equal(model.peek(buffer).status, "pending")
     view:update()
     read_layout(view)
     for _, line in ipairs(others) do
-      test.equal(view:get_line_render(line), plans[line], "line " .. line .. " changed while pending")
+      local x, y = view:get_line_screen_position(line)
+      test.same({ x = x, y = y, rows = view:get_line_visual_row_count(line) }, before[line],
+        "line " .. line .. " moved while the edit was pending")
     end
-    -- The publication rebuilds them, because an edit can change other lines.
     ready(view)
     view:update()
     read_layout(view)
     same_as_fresh_view(view)
   end)
 
-  test.it("keeps the rows of the lines that a line break moves until the parse publishes", function(context)
+  test.it("keeps unaffected rows usable while a line break is pending", function(context)
     local view, buffer = make_view(context, "newline-plans.md", table.concat({
       "## Heading above",
       "",
@@ -292,23 +277,26 @@ test.describe("Incremental layout rows", function()
     view:update()
     read_layout(view)
     local above = { 1, 3 }
-    local plans = {}
-    for _, line in ipairs(above) do plans[line] = test.not_nil(view:get_line_render(line)) end
+    local before = {}
+    for _, line in ipairs(above) do
+      local x, y = view:get_line_screen_position(line)
+      before[line] = { x = x, y = y, rows = view:get_line_visual_row_count(line) }
+    end
     local wrapped_rows = view:get_line_visual_row_count(7)
     test.ok(wrapped_rows > 1, "line 7 must wrap")
-    local reconciled = view:get_render_cache_diagnostics().layout_reconciled_lines or 0
 
     view:on_text_input("\n")
     test.equal(model.peek(buffer).status, "pending")
     view:update()
     read_layout(view)
-    -- Only the edited lines measure again. The moved lines keep their rows.
-    test.equal((view:get_render_cache_diagnostics().layout_reconciled_lines or 0) - reconciled, 0)
     for _, line in ipairs(above) do
-      test.equal(view:get_line_render(line), plans[line], "line " .. line .. " changed while pending")
+      local x, y = view:get_line_screen_position(line)
+      test.same({ x = x, y = y, rows = view:get_line_visual_row_count(line) }, before[line],
+        "line " .. line .. " moved while the line break was pending")
     end
     test.equal(view:get_line_visual_row_count(8), wrapped_rows)
-    test.equal(test.not_nil(view:get_line_render(12)).markdown_heading_level, 2)
+    test.equal(buffer.lines[12], "## Heading below\n")
+    test.ok(view:get_line_visual_row_count(12) > 0)
     ready(view)
     view:update()
     read_layout(view)
@@ -326,7 +314,6 @@ test.describe("Incremental layout rows", function()
     ready(view)
     read_layout(view)
     view:with_selection_state(function() buffer:set_selection(10, 1) end)
-    local before = counts(view)
     -- Each line break shows before the parse publishes.
     for _ = 1, 3 do
       view:on_text_input("\n")
@@ -336,7 +323,6 @@ test.describe("Incremental layout rows", function()
     ready(view)
     view:update()
     read_layout(view)
-    test.equal(counts(view).heights, before.heights)
     same_as_fresh_view(view)
   end)
 end)

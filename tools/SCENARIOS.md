@@ -51,6 +51,26 @@ A scenario can also set `churn_interval`. A background thread then edits
 modified files in the fixture during the run, as a build or a coding agent
 does. File watchers and Git status refreshes stay busy during measurement.
 
+## Focused runtime workloads
+
+`text-poi-long-field` parses a 16,000-byte field followed by a file location. `text-poi-many-locations` parses 22,000 locations. `text-poi-limited-locations` uses the same input but requests only 32 results. Keep the limited case: limiting returned rows must also stop unnecessary scanning.
+
+`process-finalize-handles` drops eight process wrappers and requests two large GC steps. It measures GC and finalization together. Run `process-finalize-gc-control` beside it to measure the same GC requests without process wrappers. Separate runs do not give an exact native-finalizer subtraction.
+
+These cases measure one action per process. Their frame p95 describes that heavy frame, not sustained editing.
+
+`quick-command-output` navigates from a Terminal capture with 22,000 missing-file references to one valid target. `editor-file-locations` edits a line with 2,000 missing-file references and checks the new target. These cases include path resolution and result publication, not only parsing. Worker results can span several frames. Compare completed-action latency and maximum frame work as well as p95.
+
+The Quick Command fixture supplies a fixed capture at the Terminal API boundary. It does not measure shell execution or native screen extraction.
+
+`benchmark-idle-setup` checks that setup continues while its private Window is idle and unfocused. It models loss of focus at the system API boundary; it does not change desktop focus. Run it after benchmark scheduling changes:
+
+```sh
+python tools/run_scenarios.py --scenario benchmark-idle-setup --runs 1 --no-build
+```
+
+Setup uses a background coroutine so it can continue while the Window is unfocused. This is still the UI thread. Setup must yield while waiting and use workers for expensive work.
+
 ## Fixtures
 
 Fixtures are deterministic. The first build of a spec is cached under
@@ -84,6 +104,12 @@ Reports label cadence explicitly. Response scenes score completed-redraw latency
 Their raw metrics can include a presentation wait, so uncapped frame-work budgets do not apply.
 Existing scenarios keep their uncapped rendering-cost measurements.
 Latency excludes native input delivery, shell composition, and physical display scanout.
+
+`quick-command-response` repeats the output-navigation case with normal cadence. Keep its score separate from the uncapped case. A private-desktop presentation wait can dominate this result. Inspect `renderer_end_ms` and `present_ms` before attributing that wait to Lua. Disabling vsync is a diagnostic control, not a passing result for normal cadence.
+
+`quick-command-hosted` runs that case in a hosted Project, as the normal Windows app does. It measures completion of the Project's redraw, not the shell's presentation. Compare it with a hosted baseline, not a direct-window baseline. Keep both cases: direct-window presentation waits must not hide a slow Project or suggest that every hosted redraw blocks there.
+
+`quick-command-valid` uses 22,000 valid references. It checks result transfer and navigation when every reference resolves. These scenes check the complete location count after scoring. They do not include that full-list request in navigation latency.
 
 The harness guards use the private desktop launcher:
 

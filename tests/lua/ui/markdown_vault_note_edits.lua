@@ -31,6 +31,15 @@ local function link_resolution(view, line)
   end
 end
 
+local function visible_text(view, line)
+  local render_line = test.not_nil(view:get_line_render(line))
+  local text = {}
+  for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
+    if not fragment.hidden then text[#text + 1] = fragment.text or "" end
+  end
+  return table.concat(text)
+end
+
 test.describe("Markdown notes open beside an edited note", function()
   test.before_each(function(c)
     c.projects, c.active_view = core.projects, core.active_view
@@ -75,12 +84,14 @@ test.describe("Markdown notes open beside an edited note", function()
   end
 
   test.it("keeps an unrelated note's rendered lines while another note is edited", function(c)
-    local plan = c.plans:get_line_render(3)
-    test.not_nil(plan)
+    local text = visible_text(c.plans, 3)
+    local x, y = c.plans:get_line_screen_position(3)
+    test.equal(text, "Draft the Budget outline")
     -- Typing before the link moves it in the edited note. No other note depends on that.
     edit_tasks(c, 3, 16, "x")
-    test.ok(rawequal(c.plans:peek_line_render(3), plan),
-      "an edit in another note rebuilt a line that does not link to it")
+    test.equal(visible_text(c.plans, 3), text)
+    local after_x, after_y = c.plans:get_line_screen_position(3)
+    test.same({ after_x, after_y }, { x, y }, "an unrelated note moved the rendered line")
   end)
 
   test.it("resolves a link to the edited note once the note gains its target heading", function(c)

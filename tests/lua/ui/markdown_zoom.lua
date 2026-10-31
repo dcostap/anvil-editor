@@ -8,9 +8,24 @@ local model = require "core.markdown.model"
 local wrapping = require "core.linewrapping"
 local worker_pool = require "core.worker_pool"
 local scale = require "plugins.scale"
+local zoom = require "core.zoom"
 local test = require "core.test"
 
 local identity = 0
+local initial_scale, initial_code_scale = scale.get(), scale.get_code()
+local startup_zoom, startup_code_zoom = zoom.load()
+local startup_scale = initial_scale * startup_zoom
+local startup_code_scale = initial_code_scale * startup_code_zoom
+
+local function wait_for_startup_zoom()
+  local deadline = system.get_time() + 5
+  while (scale.get() ~= startup_scale or scale.get_code() ~= startup_code_scale)
+      and system.get_time() < deadline do
+    coroutine.yield(0.01)
+  end
+  test.same({ scale.get(), scale.get_code() }, { startup_scale, startup_code_scale })
+end
+
 local function make_view(text, wrapped)
   identity = identity + 1
   local buffer = Buffer(nil, nil, true)
@@ -60,7 +75,7 @@ end
 
 test.describe("Markdown zoom", function()
   test.it("draws larger row spacing when zooming an unchanged Markdown Editor", function()
-    coroutine.yield(0.05)
+    wait_for_startup_zoom()
     local old_live, old_active = config.markdown_live_editor, core.active_view
     local old_scale, old_code = scale.get(), scale.get_code()
     local centered = config.plugins.centered_editor
@@ -105,7 +120,6 @@ test.describe("Markdown zoom", function()
       for _ = 1, 12 do
         test.ok(command.perform("editor:zoom_in"))
         core.root_panel:update()
-        coroutine.yield(0.01)
       end
       local after = draw_positions()
       for _, pair in ipairs { { "Heading one", "Heading two" }, { "Paragraph one", "Paragraph two" } } do
@@ -129,8 +143,7 @@ test.describe("Markdown zoom", function()
     for _, edited_line in ipairs { 1, 3, 6 } do
       test.it("resizes pending formatted rows, wrapping=" .. tostring(wrapped)
         .. " edited line=" .. edited_line, function()
-        -- Let the deferred startup zoom run before this test changes it.
-        coroutine.yield(0.05)
+        wait_for_startup_zoom()
         local old_live = config.markdown_live_editor
         local old_scale, old_code = scale.get(), scale.get_code()
         config.markdown_live_editor = true
@@ -191,7 +204,7 @@ test.describe("Markdown zoom", function()
   end
 
   test.it("keeps the caret centered when zoom changes pending rows", function()
-    coroutine.yield(0.05)
+    wait_for_startup_zoom()
     local old_live, old_past_end = config.markdown_live_editor, config.scroll_past_end
     local old_active = core.active_view
     local old_scale, old_code = scale.get(), scale.get_code()

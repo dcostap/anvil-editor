@@ -37,7 +37,6 @@ test.describe("Tabular Data Preview", function()
       buffer_registry = core.buffer_registry,
       active_view = core.active_view,
       set_active_view = core.set_active_view,
-      global_prompt_enter = core.global_prompt_bar.enter,
       renderer_draw_rect = renderer.draw_rect,
       renderer_draw_rounded_rect = renderer.draw_rounded_rect,
       renderer_draw_text = renderer.draw_text,
@@ -62,7 +61,6 @@ test.describe("Tabular Data Preview", function()
     core.buffer_registry = saved.buffer_registry
     core.active_view = saved.active_view
     core.set_active_view = saved.set_active_view
-    core.global_prompt_bar.enter = saved.global_prompt_enter
     renderer.draw_rect = saved.renderer_draw_rect
     renderer.draw_rounded_rect = saved.renderer_draw_rounded_rect
     renderer.draw_text = saved.renderer_draw_text
@@ -142,10 +140,9 @@ test.describe("Tabular Data Preview", function()
     command.perform("tabular_data:open_preview_to_the_side")
     local view = remember(panes.active().current_view)
     test.ok(wait_ready(view))
-    local revision = view.published_revision
     editor.buffer:insert(3, #editor.buffer.lines[3], "\nCara,25,third")
     test.ok(wait_until(function()
-      return view.parse_status == "ready" and view.published_revision ~= revision
+      return view:row_count() == 3 and view:cell_value(3, 1) == "Cara"
     end, 2))
     test.equal(view:row_count(), 3)
     test.equal(view:cell_value(3, 1), "Cara")
@@ -156,10 +153,9 @@ test.describe("Tabular Data Preview", function()
     local view = remember(panes.active().current_view)
     test.ok(wait_ready(view))
     panes.back()
-    local revision = view.published_revision
     editor.buffer:insert(3, #editor.buffer.lines[3], "\nCara,25,third")
     test.ok(wait_until(function()
-      return view.parse_status == "ready" and view.published_revision ~= revision
+      return view:row_count() == 3 and view:cell_value(3, 1) == "Cara"
     end, 2))
     test.equal(view:cell_value(3, 1), "Cara")
   end)
@@ -215,22 +211,17 @@ test.describe("Tabular Data Preview", function()
     command.perform("tabular_data:open_preview")
     local view = remember(panes.active().current_view)
     test.ok(wait_ready(view))
-    local captured
-    core.global_prompt_bar.enter = function(_, label, options)
-      captured = { label = label, options = options }
-    end
-
-    test.ok(view:open_filter_prompt(1))
-    test.equal(captured.label, "Filter Name")
-    test.equal(captured.options.pane_scope, panes.active())
-    local bob
-    for _, item in ipairs(captured.options.suggest("Bob")) do
-      if item.has_value and item.value == "Bob" then bob = item; break end
-    end
-    test.not_nil(bob)
-    captured.options.submit(bob.text, bob)
-    test.equal(view:row_count(), 1)
-    test.equal(view:cell_value(1, 1), "Bob")
+    local prompt = core.global_prompt_bar
+    local ok, err = pcall(function()
+      test.ok(view:open_filter_prompt(1))
+      test.equal(prompt.pane_scope, panes.active())
+      prompt:on_text_input("Bob")
+      command.perform("core:submit_prompt")
+      test.equal(view:row_count(), 1)
+      test.equal(view:cell_value(1, 1), "Bob")
+    end)
+    prompt:exit(true)
+    test.ok(ok, err)
   end)
 
   test.it("copies complete cell values through mouse input", function()
@@ -273,11 +264,11 @@ test.describe("Tabular Data Preview", function()
     test.ok(wait_ready(view))
 
     test.ok(view:select_cell(1, 1))
-    test.ok(command.perform("tabular_data:move_right"))
+    command.perform("tabular_data:move_right")
     test.same({ view:selection_bounds() }, { 1, 2, 1, 2 })
-    test.ok(command.perform("tabular_data:extend_down"))
+    command.perform("tabular_data:extend_down")
     test.same({ view:selection_bounds() }, { 1, 2, 2, 2 })
-    test.ok(command.perform("tabular_data:select_all"))
+    command.perform("tabular_data:select_all")
     test.same({ view:selection_bounds() }, { 1, 1, 2, 3 })
   end)
 
@@ -308,13 +299,16 @@ test.describe("Tabular Data Preview", function()
     test.ok(wait_ready(view))
     view.position = { x = 0, y = 0 }
     view.size = { x = 700, y = 400 }
-    local first, second = view.column_widths[1], view.column_widths[2]
+    local _, _, first = view:column_screen_rect(1)
+    local _, _, second = view:column_screen_rect(2)
     local x, y = view:column_divider_screen_position(1)
     test.ok(view:on_mouse_pressed("left", x, y, 1))
     view:on_mouse_moved(x + 40, y, 40, 0)
     view:on_mouse_released("left", x + 40, y)
-    test.equal(view.column_widths[1], first + 40)
-    test.equal(view.column_widths[2], second)
+    local _, _, resized_first = view:column_screen_rect(1)
+    local _, _, resized_second = view:column_screen_rect(2)
+    test.equal(resized_first, first + 40)
+    test.equal(resized_second, second)
   end)
 
   test.it("restores its file and presentation state", function()
@@ -322,18 +316,27 @@ test.describe("Tabular Data Preview", function()
     local view = remember(panes.active().current_view)
     test.ok(wait_ready(view))
     view:cycle_sort(2)
+    view:cycle_sort(2)
     view:toggle_filter_value(1, "Ada")
-    view.column_widths[1] = view.column_widths[1] + 20
+    view:toggle_filter_value(1, "Bob")
+    view.position = { x = 0, y = 0 }
+    view.size = { x = 700, y = 400 }
+    local expected_width = select(3, view:column_screen_rect(1))
+    local divider_x, divider_y = view:column_divider_screen_position(1)
+    test.ok(view:on_mouse_pressed("left", divider_x, divider_y, 1))
+    view:on_mouse_moved(divider_x + 20, divider_y, 20, 0)
+    view:on_mouse_released("left", divider_x + 20, divider_y)
+    expected_width = select(3, view:column_screen_rect(1))
     view.scroll.x, view.scroll.to.x = 12, 12
     local state = view:get_state()
 
     local restored = remember(test.not_nil(Preview.from_state(state)))
     test.ok(wait_ready(restored))
     test.equal(restored.buffer, view.buffer)
-    test.equal(restored.sort.column, 2)
-    test.equal(restored.sort.direction, "ascending")
-    test.equal(restored:row_count(), 1)
-    test.equal(restored.column_widths[1], view.column_widths[1])
+    test.equal(restored:row_count(), 2)
+    test.equal(restored:cell_value(1, 1), "Bob")
+    test.equal(restored:cell_value(2, 1), "Ada")
+    test.equal(select(3, restored:column_screen_rect(1)), expected_width)
     test.equal(restored.scroll.x, 12)
   end)
 

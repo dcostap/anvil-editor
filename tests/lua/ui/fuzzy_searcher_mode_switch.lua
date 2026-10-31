@@ -63,15 +63,14 @@ test.describe("Fuzzy Searcher mode switching", function()
     fuzzy_searcher._test.clear_prompt_history()
   end)
 
-  test.it("recognizes command mode prefixes in prompt text", function()
-    local split = fuzzy_searcher._test.split_mode_prefix
-    test.same({ split(">commands") }, { ">", "commands" })
-    test.same({ split("@projects") }, { "@", "projects" })
-    test.same({ split("@@files") }, { "@", "@files" })
-    test.same({ split("#grep") }, { "#", "grep" })
-    test.same({ split("$symbols") }, { "$", "symbols" })
-    test.same({ split("$$buffer symbols") }, { "$$", "buffer symbols" })
-    test.same({ split("files") }, { "", "files" })
+  test.it("uses a command prefix typed into the prompt", function()
+    fuzzy_searcher.open(">editor:toggle_line_wrapping")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function()
+      for _, result in ipairs(picker.results or {}) do
+        if result.kind == "command" and result.command == "editor:toggle_line_wrapping" then return true end
+      end
+    end), "expected the typed command prefix to search commands")
   end)
 
   test.it("keeps the search prompt input on one visual row", function()

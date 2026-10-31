@@ -69,19 +69,26 @@ local function guide_count(view, line)
 end
 
 test.describe("indent guide drawing", function()
-  test.it("batches visible guide rects with draw_rect_grid", function()
+  test.it("draws guides at indentation columns", function()
     local buffer, view = new_view(string.rep(" ", 1000) .. "x")
-    local rect_grid_calls = 0
-    local guide_rect_calls = 0
+    local guides = {}
     local old_draw_rect = renderer.draw_rect
     local old_draw_rect_grid = renderer.draw_rect_grid
     local old_draw_text = renderer.draw_text
 
-    renderer.draw_rect = function(_, _, _, _, color)
-      if color == style.indent_guide then guide_rect_calls = guide_rect_calls + 1 end
+    renderer.draw_rect = function(x, y, width, height, color)
+      if color == style.indent_guide then
+        guides[#guides + 1] = { x = x, y = y, width = width, height = height }
+      end
     end
-    renderer.draw_rect_grid = function(_, _, _, _, _, count, color)
-      if color == style.indent_guide then rect_grid_calls = rect_grid_calls + 1 end
+    renderer.draw_rect_grid = function(x, y, step, width, height, count, color)
+      if color == style.indent_guide then
+        for index = 0, count - 1 do
+          guides[#guides + 1] = {
+            x = x + step * index, y = y, width = width, height = height,
+          }
+        end
+      end
     end
     renderer.draw_text = function(_, text, x)
       return x + #tostring(text)
@@ -96,8 +103,18 @@ test.describe("indent guide drawing", function()
     renderer.draw_text = old_draw_text
     if not ok then error(err) end
 
-    test.ok(rect_grid_calls > 0, "expected indent guides to use renderer.draw_rect_grid")
-    test.equal(guide_rect_calls, 0)
+    test.ok(#guides > 0, "no indent guide reached the renderer")
+    local line_x, line_y = view:get_line_screen_position(1)
+    local _, indent_size = buffer:get_indent_info()
+    indent_size = indent_size or config.indent_size or 2
+    local step = view:get_font():get_width(string.rep(" ", indent_size))
+    test.ok(step > 0)
+    test.equal(guides[1].y, line_y)
+    test.equal(guides[1].x, line_x + step)
+    for _, guide in ipairs(guides) do
+      test.ok(guide.width > 0 and guide.height > 0)
+      test.equal(guide.y, line_y)
+    end
     buffer:on_close()
   end)
 

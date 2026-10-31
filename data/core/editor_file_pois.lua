@@ -12,7 +12,8 @@ local MAX_CANDIDATES = 32768
 local MAX_SCAN_BYTES = 1024 * 1024
 local ACTION_REVALIDATION_INTERVAL = 1
 local INLINE_SCAN_LINES = 128
-local INLINE_SCAN_BYTES = 32768
+local INLINE_SCAN_BYTES = 4096
+local SCAN_BATCH_BYTES = 32768
 local SCAN_SLICE_SECONDS = 0.002
 
 local function perf_add(name, value)
@@ -90,19 +91,10 @@ local function existing_file(path)
 end
 
 local function resolve_candidates(candidates, roots)
-  local points = {}
-  for _, candidate in ipairs(candidates or {}) do
-    for _, root in ipairs(roots) do
-      local point = text_poi_locations.resolve_candidate(
-        candidate, root, "editor-file-location"
-      )
-      if point then
-        point.text_poi = true
-        point.activate = M.activate
-        points[#points + 1] = point
-        break
-      end
-    end
+  local points = text_poi_locations.resolve_candidates(candidates, roots, "editor-file-location")
+  for _, point in ipairs(points) do
+    point.text_poi = true
+    point.activate = M.activate
   end
   return points
 end
@@ -187,7 +179,7 @@ local function cancel_scan(cache)
   cache.worker_handle = nil
 end
 
-local function scan_async(view, cache, first)
+local function scan_async(view, cache, first, revalidate)
   local buffer = view.buffer
   core.add_thread(function()
     local candidates, points, by_line = {}, {}, {}
@@ -203,7 +195,9 @@ local function scan_async(view, cache, first)
         and buffer_revision(buffer) == cache.revision
     end
     if not current() then return end
-    if first > 1 then
+    if revalidate then
+      candidates = cache.candidates
+    elseif first > 1 then
       for _, candidate in ipairs(cache.candidates) do
         candidates[#candidates + 1] = candidate
         yield_if_needed()
@@ -219,28 +213,34 @@ local function scan_async(view, cache, first)
     end
     local scanned, line = 0, first
     local pool = worker_pool.system()
-    while line <= #buffer.lines do
+    while revalidate or line <= #buffer.lines do
       if not current() then return end
-      if #candidates >= MAX_CANDIDATES then break end
+      if not revalidate and #candidates >= MAX_CANDIDATES then break end
       local lines, bytes, chunk_first = {}, 0, line
-      repeat
-        local text = buffer.lines[line]
-        lines[#lines + 1] = text
-        bytes = bytes + #text
-        line = line + 1
-        yield_if_needed()
-      until line > #buffer.lines or #lines >= INLINE_SCAN_LINES or bytes >= INLINE_SCAN_BYTES
+      if not revalidate then
+        repeat
+          local text = buffer.lines[line]
+          lines[#lines + 1] = text
+          bytes = bytes + #text
+          line = line + 1
+          yield_if_needed()
+        until line > #buffer.lines or #lines >= INLINE_SCAN_LINES or bytes >= SCAN_BATCH_BYTES
+      end
       if not current() then return end
       local chunks, chunk_index, done, failure = {}, 1, false, nil
       local handle, err = pool:submit {
         kind = "core.workers.file_locations",
         priority = "background",
-        payload = { lines = lines, first = chunk_first, limit = MAX_CANDIDATES - #candidates },
+        payload = revalidate and { candidates = candidates, roots = cache.roots }
+          or { lines = lines, first = chunk_first, limit = MAX_CANDIDATES - #candidates, roots = cache.roots },
         is_stale = function() return not current() end,
-        on_result = function(message) chunks[#chunks + 1] = message.payload end,
-        on_complete = function() done = true end,
-        on_error = function(message) failure, done = message.error, true end,
-        on_cancelled = function() done = true end,
+        on_result = function(message)
+          chunks[#chunks + 1] = message.payload
+          core.wake_thread(cache)
+        end,
+        on_complete = function() done = true; core.wake_thread(cache) end,
+        on_error = function(message) failure, done = message.error, true; core.wake_thread(cache) end,
+        on_cancelled = function() done = true; core.wake_thread(cache) end,
       }
       if not handle then failure, done = err, true end
       cache.worker_handle = handle
@@ -250,19 +250,24 @@ local function scan_async(view, cache, first)
         if found then
           chunks[chunk_index] = false
           chunk_index = chunk_index + 1
-          for _, candidate in ipairs(found) do
-            candidates[#candidates + 1] = candidate
-            for _, point in ipairs(resolve_candidates({ candidate }, cache.roots)) do
-              points[#points + 1] = point
-              local entries = by_line[point.line]
-              if not entries or entries == cache.by_line[point.line] then
-                local copy = {}
-                for _, entry in ipairs(entries or {}) do copy[#copy + 1] = entry end
-                entries = copy
-                by_line[point.line] = entries
-              end
-              entries[#entries + 1] = point
+          if found.candidates then
+            for _, candidate in ipairs(found.candidates) do
+              candidates[#candidates + 1] = candidate
+              yield_if_needed()
             end
+          end
+          for _, point in ipairs(found.points) do
+            point.text_poi = true
+            point.activate = M.activate
+            points[#points + 1] = point
+            local entries = by_line[point.line]
+            if not entries or entries == cache.by_line[point.line] then
+              local copy = {}
+              for _, entry in ipairs(entries or {}) do copy[#copy + 1] = entry end
+              entries = copy
+              by_line[point.line] = entries
+            end
+            entries[#entries + 1] = point
             yield_if_needed()
           end
         else
@@ -273,50 +278,29 @@ local function scan_async(view, cache, first)
       cache.worker_handle = nil
       if failure then
         cache.pending = nil
+        cache.revalidating = nil
         core.log_quiet("Editor file-location worker failed: path=%s error=%s",
           buffer:get_name(), tostring(failure))
         return
       end
       scanned = scanned + #lines
+      if revalidate then break end
     end
     if not current() then return end
     cache.candidates, cache.points, cache.by_line = candidates, points, by_line
     cache.validated_at = system.get_time()
     cache.pending = nil
+    cache.revalidating = nil
     core.redraw = true
-    core.log_quiet("Editor file locations scanned: path=%s lines=%d points=%d",
-      buffer:get_name(), scanned, #points)
-  end)
+    core.log_quiet("Editor file locations %s: path=%s lines=%d points=%d",
+      revalidate and "revalidated" or "scanned", buffer:get_name(), scanned, #points)
+  end, cache)
 end
 
 local function revalidate_async(view, cache)
   if cache.revalidating then return end
   cache.revalidating = true
-  local buffer = view.buffer
-  core.add_thread(function()
-    local points, by_line = {}, {}
-    local slice_start = system.get_time()
-    for _, candidate in ipairs(cache.candidates) do
-      if view.textview_closed or view.editor_file_poi_cache ~= cache
-          or buffer_revision(buffer) ~= cache.revision then return end
-      for _, point in ipairs(resolve_candidates({ candidate }, cache.roots)) do
-        points[#points + 1] = point
-        local entries = by_line[point.line] or {}
-        by_line[point.line] = entries
-        entries[#entries + 1] = point
-      end
-      if system.get_time() - slice_start >= SCAN_SLICE_SECONDS then
-        coroutine.yield(0)
-        slice_start = system.get_time()
-      end
-    end
-    if view.textview_closed or view.editor_file_poi_cache ~= cache
-        or buffer_revision(buffer) ~= cache.revision then return end
-    cache.points, cache.by_line = points, by_line
-    cache.validated_at = system.get_time()
-    cache.revalidating = nil
-    core.redraw = true
-  end)
+  scan_async(view, cache, 1, true)
 end
 
 local function new_cache(view, revision, source, project, previous, append)
@@ -505,7 +489,7 @@ function M.on_text_transaction(view, transaction)
     cache.lines = view.buffer.lines
     return true
   end
-  if transaction.full_snapshot or cache.pending then
+  if transaction.full_snapshot or cache.pending or cache.revalidating then
     local append = is_append(cache.lines, view.buffer.lines)
     if append and cache.pending then
       cache.revision = buffer_revision(view.buffer)

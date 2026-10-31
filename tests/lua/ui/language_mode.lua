@@ -181,11 +181,34 @@ test.describe("Language Mode", function()
 
   test.it("does not replace an explicit Language Mode while editing", function(context)
     local buffer, editor = new_untitled_editor(context)
-    buffer:set_language_mode("Plain Text")
-    editor:on_text_input('fn main() { println!("explicit plain text"); }')
-    coroutine.yield(0.5)
-    local pool = worker_pool.current_system()
-    if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
+    local pool = worker_pool.system()
+    local old_submit, old_cancel = pool.submit, pool.cancel
+    local submitted
+    local controlled_handle = { cancel = function() end }
+    local ok, err = pcall(function()
+      pool.submit = function(_, job)
+        if job.kind == "language-detection" then
+          submitted = job
+          return controlled_handle
+        end
+        return old_submit(pool, job)
+      end
+      pool.cancel = function(_, handle)
+        if handle == controlled_handle then return true end
+        return old_cancel(pool, handle)
+      end
+      editor:on_text_input('fn main() { println!("explicit plain text"); }')
+      local deadline = system.get_time() + 5
+      while not submitted and system.get_time() < deadline do
+        coroutine.yield(0.01)
+      end
+      test.not_nil(submitted, "content detection did not reach the worker")
+
+      buffer:set_language_mode("Plain Text")
+      submitted.on_result({ value = "rust 0.99 python 0.1" })
+    end)
+    pool.submit, pool.cancel = old_submit, old_cancel
+    if not ok then error(err, 0) end
     test.equal(buffer.language_mode_override, "Plain Text")
     test.equal(buffer.syntax.name, "Plain Text")
   end)
@@ -250,7 +273,6 @@ test.describe("Language Mode", function()
     core.save_workspace = function() workspace_saves = workspace_saves + 1 end
 
     test.ok(command.perform("editor:set_language_mode"))
-    test.equal(captured.label, "Language Mode")
     local suggestions = captured.options.suggest("Lua")
     local lua_item
     for _, item in ipairs(suggestions) do

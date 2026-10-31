@@ -125,6 +125,18 @@ local function view_selections(view)
   end)
 end
 
+local function wait_for_suggestion(view, expected, timeout)
+  local deadline = system.get_time() + (timeout or 10)
+  repeat
+    core.set_active_view(view)
+    view:with_selection_state(function() autocomplete.trigger() end)
+    local item = autocomplete.get_selected_suggestion()
+    if item and item.text == expected then return true end
+    coroutine.yield(0.02)
+  until system.get_time() >= deadline
+  return false
+end
+
 test.describe("autocomplete batch behavior", function()
   test.before_each(function()
     panes.reset_for_tests()
@@ -163,16 +175,10 @@ test.describe("autocomplete batch behavior", function()
     local view, buffer = open_file_editor(context, path)
     test.ok(wait_treesitter_ready(buffer), "Markdown parser should become ready")
     set_view_selections(view, { 3, 1, 3, 1 })
-    coroutine.yield(1.1)
     core.set_active_view(view)
     core.root_panel:on_text_input("zqx")
-    local deadline = system.get_time() + 3
-    repeat
-      coroutine.yield(0.01)
-      core.set_active_view(view)
-      view:with_selection_state(function() autocomplete.trigger() end)
-    until autocomplete.is_open() or system.get_time() >= deadline
-    test.ok(autocomplete.is_open(), "document words should remain available")
+    test.ok(wait_for_suggestion(view, "zqxlocalword"),
+      "the Markdown document word should become available")
     local first = autocomplete.get_selected_suggestion().text
     repeat
       test.equal(autocomplete.get_selected_suggestion().text, "zqxlocalword")
@@ -253,16 +259,20 @@ test.describe("autocomplete batch behavior", function()
     config.plugins.autocomplete.suggestions_scope = "local"
     open_editor(context, "Isn't okay. Won’t happen. 'Quoted'.\n")
 
-    -- The buffer-symbol cache refreshes asynchronously.
-    coroutine.yield(1.1)
+    local view = core.active_view
+    local buffer = view.buffer
+    core.root_panel:on_text_input("Qu")
+    test.ok(wait_for_suggestion(view, "Quoted"),
+      "expected a word from the Buffer cache before checking contractions")
+    autocomplete.close()
+
+    set_view_selections(view, { 2, 1, 2, 3 })
+    core.set_active_view(view)
     core.root_panel:on_text_input("Is")
 
     test.ok(not autocomplete.is_open(), "should not offer 'Isn' from the contraction \"Isn't\"")
     core.root_panel:on_text_input("\nWo")
     test.ok(not autocomplete.is_open(), "should not offer 'Won' from the contraction \"Won’t\"")
-    core.root_panel:on_text_input("\nQu")
-    test.ok(autocomplete.is_open(), "quotation marks should remain ordinary word boundaries")
-    test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "Quoted")
   end)
 
   -- A pasted screenshot is one base64 data URI. Its `+` and `/` split the
@@ -304,26 +314,16 @@ test.describe("autocomplete batch behavior", function()
     context.autocomplete_scope = config.plugins.autocomplete.suggestions_scope
     config.plugins.autocomplete.min_len = 3
     config.plugins.autocomplete.suggestions_scope = "local"
-    open_editor(context, "encyclopedia\n")
-
-    coroutine.yield(1.1)
+    local view = open_editor(context, "encyclopedia\n")
+    core.root_panel:on_text_input("enc")
+    test.ok(wait_for_suggestion(view, "encyclopedia"),
+      "expected the Buffer word cache to publish a prefix match")
+    autocomplete.close()
+    set_view_selections(view, { 2, 1, 2, 4 })
+    core.set_active_view(view)
     core.root_panel:on_text_input("clo")
 
     test.ok(not autocomplete.is_open(), "a middle match should not open automatic Buffer Word Completion")
-  end)
-
-  test.it("automatically discards Buffer words shorter than five characters", function(context)
-    context.autocomplete_min_len = config.plugins.autocomplete.min_len
-    context.autocomplete_scope = config.plugins.autocomplete.suggestions_scope
-    config.plugins.autocomplete.min_len = 3
-    config.plugins.autocomplete.suggestions_scope = "local"
-    open_editor(context, "test testing\n")
-
-    coroutine.yield(1.1)
-    core.root_panel:on_text_input("tes")
-
-    test.ok(autocomplete.is_open(), "the longer prefix match should remain available")
-    test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "testing")
   end)
 
   test.it("manual Buffer Word Completion retains fuzzy matches and short words", function(context)
@@ -331,9 +331,13 @@ test.describe("autocomplete batch behavior", function()
     context.autocomplete_scope = config.plugins.autocomplete.suggestions_scope
     config.plugins.autocomplete.min_len = 3
     config.plugins.autocomplete.suggestions_scope = "local"
-    open_editor(context, "test encyclopedia\n")
-
-    coroutine.yield(1.1)
+    local view = open_editor(context, "id encyclopedia\n")
+    core.root_panel:on_text_input("enc")
+    test.ok(wait_for_suggestion(view, "encyclopedia"),
+      "expected the Buffer word cache to publish a prefix match")
+    autocomplete.close()
+    set_view_selections(view, { 2, 1, 2, 4 })
+    core.set_active_view(view)
     core.root_panel:on_text_input("clo")
     test.ok(not autocomplete.is_open(), "the middle match should not open automatically")
 
@@ -342,10 +346,18 @@ test.describe("autocomplete batch behavior", function()
     test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "encyclopedia")
 
     autocomplete.close()
-    core.root_panel:on_text_input("\ntes")
+    set_view_selections(view, { 2, 1, 2, 4 })
+    core.root_panel:on_text_input("i")
+    test.ok(not autocomplete.is_open(), "automatic completion should wait for a longer partial")
     autocomplete.trigger()
-    test.ok(autocomplete.is_open(), "manual completion should include short words")
-    test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "test")
+    test.ok(autocomplete.is_open(), "manual completion should include a short Buffer word")
+    local found_short = false
+    local first = test.not_nil(autocomplete.get_selected_suggestion()).text
+    repeat
+      if autocomplete.get_selected_suggestion().text == "id" then found_short = true end
+      command.perform("autocomplete:next")
+    until autocomplete.get_selected_suggestion().text == first or found_short
+    test.ok(found_short, "expected manual completion to include the short word")
   end)
 
   test.it("ignores oversized suggestions before matching", function(context)
@@ -412,16 +424,49 @@ test.describe("autocomplete batch behavior", function()
     })
   end)
 
-  test.it("scores code-symbol chunk fuzzy fallback and cuts off weak matches", function()
-    local query, chunks = autocomplete._test.code_symbol_chunk_query("text_dra")
-    test.equal(query, "text dra")
-    local draw_text = autocomplete._test.code_symbol_chunk_match_score("draw_text", chunks)
-    local context_draw = autocomplete._test.code_symbol_chunk_match_score("context_draw", chunks)
-    test.ok(draw_text)
-    test.ok(context_draw)
-    test.ok(draw_text > context_draw)
-    test.is_nil(autocomplete._test.code_symbol_chunk_match_score("D3D11_CREATE_2D_TEXTURE_FAILED", chunks))
-    test.is_nil(autocomplete._test.code_symbol_chunk_match_score("_sg_d3d11_CreateTexture2D", chunks))
+  test.it("keeps direct matches ahead of chunk-matched code completions", function(context)
+    local fixture = USERDIR .. PATHSEP .. "autocomplete-chunk-fixture-"
+      .. tostring(system.get_process_id()) .. "-" .. tostring(math.floor(system.get_time() * 1000000))
+    local path = fixture .. PATHSEP .. "current.txt"
+    test.ok(common.mkdirp(fixture))
+    write_file(path, "text_dra")
+    context.temp_roots = { fixture }
+    autocomplete.add({
+      name = "test-code-symbol-chunks",
+      files = "autocomplete%-chunk%-fixture",
+      items = {
+        draw_text = "",
+        context_draw = "",
+        D3D11_CREATE_2D_TEXTURE_FAILED = "",
+        _sg_d3d11_CreateTexture2D = "",
+      },
+    })
+    local view = open_file_editor(context, path)
+    core.set_active_view(view)
+    autocomplete.trigger()
+    test.ok(autocomplete.is_open(), "expected completion from the registered source")
+
+    local first = test.not_nil(autocomplete.get_selected_suggestion()).text
+    local results, current = {}, first
+    repeat
+      results[#results + 1] = current
+      test.ok(command.perform("autocomplete:next"))
+      current = test.not_nil(autocomplete.get_selected_suggestion()).text
+    until current == first or #results > 12
+
+    local draw_text_index, context_draw_index
+    for index, name in ipairs(results) do
+      if name == "draw_text" then draw_text_index = index end
+      if name == "context_draw" then context_draw_index = index end
+    end
+    test.not_nil(draw_text_index, "expected the best chunk match in completion")
+    test.not_nil(context_draw_index, "expected a direct match to remain available")
+    test.ok(context_draw_index < draw_text_index,
+      "expected the direct match before the chunk fallback")
+    for _, name in ipairs(results) do
+      test.not_equal(name, "D3D11_CREATE_2D_TEXTURE_FAILED")
+      test.not_equal(name, "_sg_d3d11_CreateTexture2D")
+    end
   end)
 
   test.it("does not offer loaded Project symbols in an external unsupported-language file", function(context)

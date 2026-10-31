@@ -51,6 +51,12 @@ local function assert_selection(view, line1, col1, line2, col2)
   test.same({ line1, col1, line2, col2 }, selection_range(view))
 end
 
+local function repeat_find_from(view, line, col)
+  view:with_selection_state(function() view.buffer:set_selection(line, col) end)
+  test.ok(command.perform("editor:repeat_find"))
+  return selection_range(view)
+end
+
 local function active_find_input_for(owner_view)
   local view = core.active_view
   test.ok(view and view.local_find_input, "expected a local find input to be focused")
@@ -226,32 +232,32 @@ test.describe("TextView Prompt Bar find", function()
     test.ok(command.perform("editor:find"))
     local input = active_find_input_for(view)
     input:set_text("hit")
-    local state = input.local_find_state
     buffer:apply_edits({
       { line1 = 2, col1 = 1, line2 = 2, col2 = 5, text = "hit\nhit" },
       { line1 = 4, col1 = 1, line2 = 5, col2 = 1, text = "" },
     }, { merge_undo = false })
     view:update()
-    test.same(state.matches, {
-      { line = 1, col1 = 1, col2 = 4 }, { line = 2, col1 = 1, col2 = 4 },
-      { line = 3, col1 = 1, col2 = 4 }, { line = 4, col1 = 1, col2 = 4 },
-      { line = 5, col1 = 1, col2 = 4 },
-    })
+    local function expect_next(start, lines)
+      local line, col = start, 4
+      for _, expected in ipairs(lines) do
+        local found = repeat_find_from(view, line, col)
+        test.same({ expected, 1, expected, 4 }, found)
+        line, col = found[1], found[4]
+      end
+    end
+    expect_next(1, { 2, 3, 4, 5, 1 })
     buffer:undo()
     view:update()
-    test.same(state.matches, {
-      { line = 1, col1 = 1, col2 = 4 }, { line = 3, col1 = 1, col2 = 4 },
-      { line = 5, col1 = 1, col2 = 4 },
-    })
+    expect_next(1, { 3, 5, 1 })
     buffer:redo()
     view:update()
-    test.equal(#state.matches, 5)
+    expect_next(1, { 2, 3, 4, 5, 1 })
     buffer:apply_edits({
       { line1 = 2, col1 = 1, line2 = 2, col2 = 2, text = "H" },
       { line1 = 2, col1 = 3, line2 = 2, col2 = 4, text = "T" },
     })
     view:update()
-    test.equal(#state.matches, 5, "several edits on one line must not duplicate matches")
+    expect_next(1, { 2, 3, 4, 5, 1 })
   end)
 
   test.it("keeps each Pane's query independent after shared Buffer edits", function(context)
@@ -267,48 +273,56 @@ test.describe("TextView Prompt Bar find", function()
     buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 4, text = "dog\ncat" } })
     view:update()
     sibling:update()
-    test.same(first.local_find_state.matches, {
-      { line = 2, col1 = 1, col2 = 4 }, { line = 4, col1 = 1, col2 = 4 },
-    })
-    test.same(second.local_find_state.matches, {
-      { line = 1, col1 = 1, col2 = 4 }, { line = 3, col1 = 1, col2 = 4 },
-    })
+    core.set_active_view(view)
+    test.ok(command.perform("editor:find"))
+    active_find_input_for(view)
+    local found = repeat_find_from(view, 2, 4)
+    test.same({ 4, 1, 4, 4 }, found)
+    found = repeat_find_from(view, found[1], found[4])
+    test.same({ 2, 1, 2, 4 }, found)
+
+    core.set_active_view(sibling)
+    test.ok(command.perform("editor:find"))
+    active_find_input_for(sibling)
+    found = repeat_find_from(sibling, 1, 4)
+    test.same({ 3, 1, 3, 4 }, found)
+    found = repeat_find_from(sibling, found[1], found[4])
+    test.same({ 1, 1, 1, 4 }, found)
   end)
 
   test.it("updates regex matches and honors changed search options", function(context)
     local view, buffer = open_editor(context, "Cat1\ncat2\nnone")
     test.ok(command.perform("editor:find"))
     local input = active_find_input_for(view)
-    local state = input.local_find_state
     input:set_text("cat[0-9]")
     test.ok(command.perform("editor:toggle_regex"))
-    test.equal(#state.matches, 2)
+    local found = repeat_find_from(view, 3, 1)
+    test.same({ 1, 1, 1, 5 }, found)
+    found = repeat_find_from(view, found[1], found[4])
+    test.same({ 2, 1, 2, 5 }, found)
     test.ok(command.perform("editor:toggle_sensitivity"))
-    test.same(state.matches, { { line = 2, col1 = 1, col2 = 5 } })
+    found = repeat_find_from(view, 3, 1)
+    test.same({ 2, 1, 2, 5 }, found)
     buffer:apply_edits({ { line1 = 3, col1 = 1, line2 = 3, col2 = 5, text = "cat3\nCat4" } })
     view:update()
-    test.same(state.matches, {
-      { line = 2, col1 = 1, col2 = 5 }, { line = 3, col1 = 1, col2 = 5 },
-    })
+    found = repeat_find_from(view, 2, 5)
+    test.same({ 3, 1, 3, 5 }, found)
     input:set_text("[")
-    test.equal(state.info, "Invalid regex")
     view:with_selection_state(function() buffer:set_selection(1, 1) end)
-    test.ok(command.perform("editor:find"))
-    test.equal(state.info, "Invalid regex")
+    local invalid_start = selection_range(view)
+    command.perform("editor:repeat_find")
+    test.same(selection_range(view), invalid_start)
     input:set_text("missing")
-    test.equal(#state.matches, 0)
     buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 5, text = "missing" } })
     view:update()
-    test.same(state.matches, { { line = 1, col1 = 1, col2 = 8 } })
+    test.same(repeat_find_from(view, 1, 1), { 1, 1, 1, 8 })
   end)
 
   test.it("toggles regex and case matching from the find bar", function(context)
     local view = open_editor(context, "Cat1\ncat2\nnone")
     test.ok(command.perform("editor:find"))
     local input = active_find_input_for(view)
-    local state = input.local_find_state
     input:set_text("cat[0-9]")
-    test.equal(#state.matches, 0)
 
     local function click_label(label)
       local found
@@ -330,9 +344,11 @@ test.describe("TextView Prompt Bar find", function()
     end
 
     click_label(".*")
-    test.equal(#state.matches, 2)
+    local found = repeat_find_from(view, 3, 1)
+    test.same({ 1, 1, 1, 5 }, found)
+    test.same(repeat_find_from(view, found[1], found[4]), { 2, 1, 2, 5 })
     click_label("Aa")
-    test.same(state.matches, { { line = 2, col1 = 1, col2 = 5 } })
+    test.same(repeat_find_from(view, 3, 1), { 2, 1, 2, 5 })
     test.equal(core.active_view, input)
   end)
 

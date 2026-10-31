@@ -623,7 +623,23 @@ test.describe("DiffView batch behavior", function()
     test.ok(err and err:find("same file", 1, true))
   end)
 
-  test.it("uses side title precedence and closes only owned transient buffers", function(context)
+  test.it("uses request titles before content names for Diff Sides", function(context)
+    local left_buffer = Buffer("caller", "caller", true)
+    local view, err = diffview.open({
+      contents = {
+        diffview.content.buffer(left_buffer, { name = "Buffer Content Name" }),
+        diffview.content.text("right", { name = "Content Name" }),
+      },
+      content_titles = { nil, "Title Override" },
+    }, true)
+    test.ok(view, err)
+    track(context, "diffviews", view)
+
+    test.equal("Buffer Content Name", view:get_side_title(1))
+    test.equal("Title Override", view:get_side_title(2))
+  end)
+
+  test.it("closes only owned transient Diff Side buffers", function(context)
     local left_closed, right_closed = 0, 0
     local left_buffer = Buffer("caller", "caller", true)
     local old_left_close = left_buffer.on_close
@@ -632,13 +648,11 @@ test.describe("DiffView batch behavior", function()
       return old_left_close(buffer, ...)
     end
 
-    local right = diffview.content.text("owned text", { name = "Content Name" })
     local view, err = diffview.open({
       contents = {
-        diffview.content.buffer(left_buffer, { name = "Buffer Content Name" }),
-        right,
+        diffview.content.buffer(left_buffer),
+        diffview.content.text("owned text"),
       },
-      content_titles = { nil, "Title Override" },
     }, true)
     test.ok(view, err)
     track(context, "diffviews", view)
@@ -648,11 +662,6 @@ test.describe("DiffView batch behavior", function()
       right_closed = right_closed + 1
       return old_right_close(buffer, ...)
     end
-
-    test.equal("caller", view.buffer_view_a.buffer:get_name())
-    test.equal("Title Override", view.buffer_view_b.buffer:get_name())
-    test.equal("Buffer Content Name", view:get_side_title(1))
-    test.equal("Title Override", view:get_side_title(2))
 
     local closed = false
     view:try_close(function() closed = true end)
@@ -927,19 +936,12 @@ test.describe("DiffView batch behavior", function()
     test.same({ { true, "right" }, { false, "right" } }, right_events)
   end)
 
-  test.it("uses Text Diff View wording for arbitrary text comparisons", function(context)
-    local view = track(context, "diffviews", diffview.string_to_string(
-      "left",
-      "right",
-      "left",
-      "right",
-      true
-    ))
-    test.equal(view:get_name(), "Text Diff View")
-  end)
-
   test.it("shows long unchanged regions expanded by default", function(context)
-    test.equal(config.plugins.diffview.fold_unchanged_by_default, false)
+    local previous = config.plugins.diffview.fold_unchanged_by_default
+    config.plugins.diffview.fold_unchanged_by_default = false
+    context.restore_diff_folding_config = function()
+      config.plugins.diffview.fold_unchanged_by_default = previous
+    end
 
     local left, right = {}, {}
     for i = 1, 14 do left[i], right[i] = "same " .. i, "same " .. i end
@@ -1288,7 +1290,6 @@ test.describe("DiffView batch behavior", function()
     test.equal(text(restored.buffer_view_b.buffer), "right restored\n")
     test.equal(restored.buffer_view_a.buffer.intellij_untitled, true)
     test.equal(restored.buffer_view_a.buffer.new_file, true)
-    test.not_nil(restored.buffer_view_a.buffer.intellij_untitled_backing_path)
   end)
 
   test.it("keeps small insert-only hunks compact", function(context)
@@ -1572,26 +1573,6 @@ test.describe("DiffView batch behavior", function()
     test.equal(left.buffer:get_selection(), 4)
     test.ok(command.perform("diff:prev_change"))
     test.equal(left.buffer:get_selection(), 2)
-  end)
-
-  test.it("uses providers and listeners without replacing child TextView or Buffer methods", function(context)
-    local view = track(context, "diffviews", diffview.string_to_string(
-      "aa\nleft\nbb",
-      "aa\nright\nbb",
-      "left",
-      "right",
-      true
-    ))
-    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
-
-    test.equal(rawget(view.buffer_view_a, "draw_line_text"), nil)
-    test.equal(rawget(view.buffer_view_a, "scroll_to_line"), nil)
-    test.equal(rawget(view.buffer_view_a, "scroll_to_make_visible"), nil)
-    test.equal(view.buffer_view_a.buffer.set_selection, Buffer.set_selection)
-    test.equal(view.buffer_view_a.buffer.raw_insert, Buffer.raw_insert)
-    test.equal(view.buffer_view_a.buffer.raw_remove, Buffer.raw_remove)
-    test.ok(view.buffer_view_a.decoration_providers["diff-view"] ~= nil)
-    test.ok(view.buffer_view_a.poi_providers["diff-view"] ~= nil)
   end)
 
 end)

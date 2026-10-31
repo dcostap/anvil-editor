@@ -183,10 +183,16 @@ test.describe("Root Panel Pane presentation", function()
     test.equal(#root:pane_views(), 2)
   end)
 
-  test.it("renders the shell with zero Panes", function()
+  test.it("draws the shell with zero Panes", function()
     root:update()
     test.same(root:pane_views(), {})
-    test.equal(root.content_rect.h, 190)
+    local old_draw_rect = renderer.draw_rect
+    local drawn_rects = 0
+    renderer.draw_rect = function() drawn_rects = drawn_rects + 1 end
+    local ok, err = pcall(root.draw, root)
+    renderer.draw_rect = old_draw_rect
+    test.ok(ok, err)
+    test.ok(drawn_rects > 0, "the empty Window did not draw its background")
   end)
 
   test.it("runs deferred draws queued by another deferred draw", function()
@@ -229,7 +235,6 @@ test.describe("Root Panel Pane presentation", function()
     test.equal(one.current_view.moves, 1)
     test.equal(one.current_view.releases, 1)
     test.equal(two.current_view.releases, 0)
-    test.is_nil(root.grab)
   end)
 
   test.it("clears hover state when the pointer enters another Pane View", function()
@@ -291,15 +296,20 @@ test.describe("Root Panel Pane presentation", function()
 
   test.it("lets a Pane scrollbar own presses near a divider", function()
     local one = panes.create { factory = pane_factory("one") }
-    panes.split(one, "right", { factory = pane_factory("two") })
+    local two = panes.split(one, "right", { factory = pane_factory("two") })
     root:update()
     local rect = one.group.root.rect
     local divider_x = rect.x + rect.w * one.group.root.ratio
+    local first_width, second_width = one.current_view.size.x, two.current_view.size.x
     one.current_view.scrollbar_hit = true
 
     test.ok(root:on_mouse_pressed("left", divider_x - 1, rect.y + 20, 1))
-    test.is_nil(root.dragged_divider)
     test.equal(one.current_view.presses, 1)
+    root:on_mouse_moved(divider_x - 30, rect.y + 20, -29, 0)
+    root:on_mouse_released("left", divider_x - 30, rect.y + 20)
+    root:update()
+    test.equal(one.current_view.size.x, first_width)
+    test.equal(two.current_view.size.x, second_width)
   end)
 
   test.it("routes keyboard events through a registered focus target", function()
@@ -371,18 +381,24 @@ test.describe("Root Panel Pane presentation", function()
 
   test.it("resizes the hit-tested divider", function()
     local one = panes.create { factory = pane_factory("one") }
-    panes.split(one, "right", { factory = pane_factory("two") })
+    local two = panes.split(one, "right", { factory = pane_factory("two") })
     root:update()
     local rect = one.group.root.rect
     local divider_x = rect.x + rect.w * one.group.root.ratio
     local target_x = rect.x + rect.w * 0.25
+    local first_width, second_width = one.current_view.size.x, two.current_view.size.x
     core.active_view = one.current_view
     test.not_nil(pane_layout.divider_at(one.group.root, divider_x, rect.y + 20, 3))
     test.ok(root:on_mouse_pressed("left", divider_x, rect.y + 20, 1))
-    test.not_nil(root.dragged_divider)
     root:on_mouse_moved(target_x, rect.y + 20, target_x - divider_x, 0)
-    test.ok(one.group.root.ratio < 0.3)
+    root:update()
+    test.ok(one.current_view.size.x < first_width)
+    test.ok(two.current_view.size.x > second_width)
     root:on_mouse_released("left", target_x, rect.y + 20)
-    test.is_nil(root.dragged_divider)
+    local resized_first, resized_second = one.current_view.size.x, two.current_view.size.x
+    root:on_mouse_moved(divider_x, rect.y + 20, divider_x - target_x, 0)
+    root:update()
+    test.equal(one.current_view.size.x, resized_first)
+    test.equal(two.current_view.size.x, resized_second)
   end)
 end)

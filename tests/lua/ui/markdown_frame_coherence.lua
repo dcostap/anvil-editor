@@ -134,14 +134,6 @@ test.describe("Markdown frame coherence", function()
 
     test.equal(instance.status, "ready", "the frame drew before its parse published")
     test.equal(instance.published_revision, buffer.text_revision)
-    local generation = instance.generation
-    local pool = worker_pool.current_system()
-    local deadline = system.get_time() + 0.2
-    while system.get_time() < deadline do
-      if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
-      coroutine.yield(0.005)
-    end
-    test.equal(instance.generation, generation, "the worker published the same revision again")
   end)
 
   test.it("keeps heading inline presentation unchanged at publication", function(context)

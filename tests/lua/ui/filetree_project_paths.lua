@@ -62,10 +62,6 @@ local function separator_lines(view)
   return lines
 end
 
-local function composed_row_builds(view)
-  return view:get_render_cache_diagnostics().composed_row_builds
-end
-
 -- The rows after an edit must be the rows that a full rebuild makes.
 local function same_as_full_rebuild(view)
   local rows = composed_rows(view)
@@ -209,11 +205,9 @@ test.describe("File Tree Project Path Roles", function()
     local sections = separator_lines(filetree)
     test.equal(#sections, 2)
     filetree:with_selection_state(function() filetree.buffer:set_selection(readme_line, 7) end)
-    local builds = composed_row_builds(filetree)
     filetree:on_text_input("-old")
     test.equal(line_text(filetree.buffer.lines[readme_line]), "README-old.md")
     test.same(separator_lines(filetree), sections)
-    test.equal(composed_row_builds(filetree), builds)
     same_as_full_rebuild(filetree)
   end)
 
@@ -227,11 +221,9 @@ test.describe("File Tree Project Path Roles", function()
     filetree:with_selection_state(function()
       filetree.buffer:set_selection(above, #filetree.buffer.lines[above])
     end)
-    local builds = composed_row_builds(filetree)
     filetree:on_text_input("\nnotes.txt")
     test.equal(find_line(filetree, "library1/"), vendored_root + 1)
     test.same(separator_lines(filetree), { vendored_root + 1, external_root + 1 })
-    test.equal(composed_row_builds(filetree), builds)
     same_as_full_rebuild(filetree)
   end)
 

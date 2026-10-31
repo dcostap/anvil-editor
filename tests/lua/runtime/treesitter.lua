@@ -900,21 +900,36 @@ class VendorThing
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-symbol-async-cancel-"
       .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
-    mkdir(root)
-    write_file(root .. PATHSEP .. "Model.kt", "class CancelledAsyncThing\n")
-    symbol_index.ensure_scan(root, { force = true, refresh_after_seconds = 0 })
-    test.equal(wait_index_ready(root).status, "ready")
-
-    local request = test.not_nil(symbol_index.workspace_symbols_async("CancelledAsync", {
-      root = root,
-      limit = 10,
-      refresh_after_seconds = 0,
-    }))
-    test.not_nil(request.handle)
-    test.ok(request:cancel())
-    test.equal(request.status, "cancelled")
-    test.is_nil(request.results)
-    common.rm(root, true)
+    local index = seed_ready_symbol_index(root, { "CancelledAsyncThing" })
+    index.native_snapshot = {}
+    local submitted_handle, cancelled_handle
+    local fake_pool = {
+      submit = function()
+        submitted_handle = {}
+        return submitted_handle
+      end,
+      cancel = function(_, handle)
+        cancelled_handle = handle
+        return true
+      end,
+    }
+    local original_system = worker_pool.system
+    worker_pool.system = function() return fake_pool end
+    local ok, err = pcall(function()
+      local request, reason, status = symbol_index.workspace_symbols_async("CancelledAsync", {
+        root = root,
+        limit = 10,
+        refresh_after_seconds = 0,
+      })
+      test.equal(status, "pending", reason)
+      test.not_nil(request)
+      test.ok(request:cancel())
+      test.equal(request.status, "cancelled")
+      test.is_nil(request.results)
+      test.equal(cancelled_handle, submitted_handle)
+    end)
+    worker_pool.system = original_system
+    if not ok then error(err, 0) end
   end)
 
   test.it("Tree-sitter workspace symbol query drops results after Project Paths change", function()

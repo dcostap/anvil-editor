@@ -24,6 +24,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
 
       - name: Set up MSYS2
         uses: msys2/setup-msys2@v2
@@ -45,6 +47,16 @@ jobs:
 
       - name: Build and test
         run: ./scripts/build-standalone-windows.sh
+
+      - name: Check release version
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+        run: |
+          version=$(meson introspect build-windows-x86_64-standalone --projectinfo | python -c 'import json, sys; print(json.load(sys.stdin)["version"])')
+          if [ "$RELEASE_TAG" != "v$version" ]; then
+            echo "Release tag $RELEASE_TAG does not match executable version $version."
+            exit 1
+          fi
 
       - name: Add executable to release
         uses: softprops/action-gh-release@v2.2.2

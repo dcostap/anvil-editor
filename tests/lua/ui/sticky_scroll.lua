@@ -5,6 +5,7 @@ local TextView = require "core.textview"
 local Editor = require "core.editor"
 local markdown_live = require "core.markdown.live_render"
 local sticky_scroll = require "plugins.sticky_scroll"
+local renwindow = require "renwindow"
 
 local function make_view(text, editor)
   local buffer = Buffer("sticky.md", "sticky.md", true)
@@ -14,6 +15,25 @@ local function make_view(text, editor)
   view.size.x, view.size.y = 500, 240
   view:set_wrapping_enabled(false)
   return view, buffer
+end
+
+local function drawn_overlay_text(view, window)
+  local old_draw_text = renderer.draw_text
+  local old_clip = core.clip_rect_stack[1]
+  local text = {}
+  renderer.draw_text = function(font, value, x, _, _, options)
+    text[#text + 1] = tostring(value)
+    return x + font:get_width(tostring(value), options)
+  end
+  renderer.begin_frame(window)
+  renderer.set_clip_rect(0, 0, 800, 600)
+  core.clip_rect_stack[1] = { 0, 0, 800, 600 }
+  local ok, err = pcall(view.draw_overlay, view)
+  renderer.end_frame()
+  renderer.draw_text = old_draw_text
+  core.clip_rect_stack[1] = old_clip
+  if not ok then error(err, 0) end
+  return table.concat(text)
 end
 
 test.describe("sticky scroll", function()
@@ -44,43 +64,43 @@ test.describe("sticky scroll", function()
     test.ok(sticky_scroll.get_level_from_indent(buffer, 1) >= 0)
   end)
 
-  test.it("keeps the settled Markdown scope chain while rebuilding after typing", function()
+  test.it("keeps visible Markdown headings until a typed scope change is ready", function()
     local lines = { "# Parent", "## Short section" }
     for i = 3, 6 do lines[i] = "short section paragraph " .. i end
     lines[7] = "## Following section"
     for i = 8, 24 do lines[i] = "following section paragraph " .. i end
-    local view = make_view(table.concat(lines, "\n"))
-    local data = sticky_scroll.managed_textviews[view]
+    local view, buffer = make_view(table.concat(lines, "\n"))
+    local window = renwindow.create("sticky-scroll-rebuild", 800, 600)
     view.scroll.y = view:get_visual_row_y_offset(5)
     view.scroll.to.y = view.scroll.y
 
-    view:update()
-    local deadline = system.get_time() + 1
-    while not data.sticky_scroll_model_ready and system.get_time() < deadline do
-      coroutine.yield(0)
+    local function wait_for_text(predicate)
+      local deadline = system.get_time() + 15
+      repeat
+        view:update()
+        local text = drawn_overlay_text(view, window)
+        if predicate(text) then return text end
+        coroutine.yield(0.01)
+      until system.get_time() >= deadline
     end
-    test.ok(data.sticky_scroll_model_ready)
-    view:update()
-    test.same(data.sticky_lines, { 1 })
 
-    view.buffer:insert(5, 2, "x")
-    view:update()
+    local ok, err = pcall(function()
+      local initial = wait_for_text(function(text) return text:find("# Parent", 1, true) end)
+      test.ok(initial, "the visible parent heading did not become sticky")
+      test.ok(not initial:find("Short section", 1, true), "a heading without a child became sticky")
 
-    test.same(data.sticky_lines, { 1 })
-    local changed_id = view.buffer:get_change_id()
-    test.ok(data.sticky_scroll_model_change_id ~= changed_id)
-
-    data.sticky_scroll_model_pending_time = 0
-    view:update()
-    deadline = system.get_time() + 1
-    while data.sticky_scroll_model_change_id ~= changed_id
-      and system.get_time() < deadline
-    do
-      coroutine.yield(0)
-    end
-    test.equal(data.sticky_scroll_model_change_id, changed_id)
-    view:update()
-    test.same(data.sticky_lines, { 1 })
+      -- Changing the parent to a sibling heading removes the sticky scope after
+      -- its replacement model is ready. The old heading stays visible meanwhile.
+      buffer:insert(1, 1, "#")
+      view:update()
+      local during_rebuild = drawn_overlay_text(view, window)
+      test.ok(during_rebuild:find("## Parent", 1, true),
+        "typing removed the last settled heading before its replacement was ready")
+      local settled = wait_for_text(function(text) return not text:find("Parent", 1, true) end)
+      test.ok(settled, "the old heading stayed sticky after its scope ended")
+    end)
+    renwindow.close(window)
+    if not ok then error(err, 0) end
   end)
 
   test.it("lays out sticky Markdown headings with their visual row heights", function()

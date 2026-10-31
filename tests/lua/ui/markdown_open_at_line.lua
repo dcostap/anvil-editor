@@ -61,14 +61,10 @@ test.describe("Opening a Markdown file at a line", function()
     local target = 560
     local view = core.root_panel:open_file(path, { line = target, col = 1 })
     test.ok(wait_until(function()
-      return view.size.y > 0 and not view.__async_wrap_reconstruction
-    end), "the view did not finish its layout")
-    -- Let the scroll animation and later layout passes settle.
-    for _ = 1, 60 do coroutine.yield(0.01) end
-
-    local y = test.not_nil(view:get_position_highlight_geometry(target, 1))
-    local top, bottom = view.position.y, view.position.y + view.size.y
-    test.ok(y >= top and y < bottom, ("line %d is outside the view: y=%.1f view=%.1f-%.1f")
-      :format(target, y, top, bottom))
+      if view.size.y <= 0 then return false end
+      local y = view:get_position_highlight_geometry(target, 1)
+      local top, bottom = view.position.y, view.position.y + view.size.y
+      return y and y >= top and y < bottom
+    end), "the destination line did not become visible")
   end)
 end)

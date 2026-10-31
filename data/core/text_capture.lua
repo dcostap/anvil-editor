@@ -4,6 +4,7 @@ local common = require "core.common"
 local panes = require "core.panes"
 local core = require "core"
 local poi = require "core.poi"
+local location_list = require "core.file_location_list"
 
 local TextCaptureView = TextView:extend()
 
@@ -23,6 +24,7 @@ function TextCaptureView:new(capture)
   self.pane_constraint = capture.pane_constraint
   self.text_capture_title = capture.title or buffer.display_name
   self.text_capture_data = capture
+  if capture.file_locations then self:set_file_locations(capture.file_locations) end
   self.remote_poi_source = capture.remote_poi_source == true
   if capture.font then self.font = capture.font end
   if capture.show_line_numbers ~= nil then
@@ -62,7 +64,33 @@ function TextCaptureView:get_state()
 end
 
 function TextCaptureView:get_points_of_interest()
+  if self.text_capture_data.file_locations then
+    return location_list.points(self.text_capture_data.file_locations)
+  end
   return self.text_capture_data.points or {}
+end
+
+local function first_file_location(view, direction)
+  local data = view.text_capture_data.file_locations
+  local point = location_list.point(data, direction > 0 and 1 or location_list.count(data))
+  return point, not point and "empty" or nil
+end
+
+local function next_file_location(view, direction)
+  return location_list.next(view.text_capture_data.file_locations, direction, view.buffer:get_selection())
+end
+
+local function file_location_at(view, line, col)
+  return location_list.at(view.text_capture_data.file_locations, line, col), true
+end
+
+function TextCaptureView:set_file_locations(data)
+  -- Worker snapshots stay immutable. A copied capture can share the same index.
+  self.text_capture_data.file_locations = data
+  self.text_capture_data.points = nil
+  self.first_point_of_interest = data and first_file_location or nil
+  self.next_point_of_interest = data and next_file_location or nil
+  self.get_point_of_interest_at = data and file_location_at or nil
 end
 
 function TextCaptureView:preview_point_of_interest(point)

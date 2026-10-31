@@ -33,7 +33,19 @@ local function refresh(view)
   linewrapping.complete_async_reconstruction(view)
 end
 
-local TEXT = "# Title\n\nA paragraph with **bold** text.\n\n| A | B |\n| --- | --- |\n| one | two |\n\nplain"
+local TEXT = "# Title\n\n" .. string.rep("A paragraph with **bold** text. ", 20)
+  .. "\n\n| A | B |\n| --- | --- |\n| one | two |\n\nplain"
+
+local function snapshot(view)
+  local result = {}
+  for _, line in ipairs({ 1, 3, 5, 6, 7, 9 }) do
+    local x, y = view:get_line_screen_position(line, 1)
+    result[line] = {
+      rows = view:get_visual_row_count_for_line(line), x = x, y = y,
+    }
+  end
+  return result
+end
 
 test.describe("Markdown presentation across a width change", function()
   test.before_each(function(context)
@@ -43,28 +55,40 @@ test.describe("Markdown presentation across a width change", function()
 
   test.after_each(function(context)
     config.markdown_live_editor = context.live
-    if context.view then
-      context.view.discard_buffer_on_close = true
-      context.view:on_close()
+    for _, view in ipairs(context.views or {}) do
+      view.discard_buffer_on_close = true
+      view:on_close()
     end
   end)
 
   for _, wrapping in ipairs({ true, false }) do
     local mode = wrapping and "wrapped" or "unwrapped"
-    test.it("rebuilds only width-dependent lines in a " .. mode .. " view", function(context)
+    test.it("keeps rendered content correct after resizing a " .. mode .. " view", function(context)
+      context.views = {}
       local view = make_view(TEXT, wrapping)
-      context.view = view
+      context.views[#context.views + 1] = view
       view.buffer:set_selection(9, 1)
       refresh(view)
-      local paragraph = test.not_nil(view:resolve_line_render(3))
-      local row = test.not_nil(view:resolve_line_render(7))
+      local wide_rows = view:get_visual_row_count_for_line(3)
 
       view.size.x = 600
-      if wrapping then view:update_wrap_cache() end
+      view:update()
       linewrapping.complete_async_reconstruction(view)
+      view:update()
+      local resized = snapshot(view)
 
-      test.ok(view:resolve_line_render(3) == paragraph, "the paragraph was rebuilt")
-      test.ok(view:resolve_line_render(7) ~= row, "the table row kept its old width")
+      if wrapping then
+        test.ok(resized[3].rows > wide_rows,
+          "the narrower view did not wrap the long paragraph")
+      end
+
+      local reference = make_view(TEXT, wrapping)
+      context.views[#context.views + 1] = reference
+      reference.size.x = 600
+      reference.buffer:set_selection(9, 1)
+      refresh(reference)
+      test.same(resized, snapshot(reference),
+        "resized Markdown geometry differs from a view opened at the same width")
     end)
   end
 end)

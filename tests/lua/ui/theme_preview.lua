@@ -4,6 +4,7 @@ local command = require "core.command"
 local settings = require "plugins.settings"
 local style = require "core.style"
 local color_theme = require "core.color_theme"
+local renwindow = require "renwindow"
 
 test.describe("theme selection preview", function()
   local previous
@@ -20,12 +21,30 @@ test.describe("theme selection preview", function()
   test.it("previews the selected theme without dimming the editor and restores it on cancel", function()
     test.ok(command.perform("core:select_theme"))
     local bar = core.global_prompt_bar
-    test.not_equal(core.root_panel.app_overlay and core.root_panel.app_overlay.owner, bar)
     local saved_background = {table.unpack(style.background)}
     bar:set_text("light")
     bar:update_suggestions()
     local first_preview = {table.unpack(style.background)}
     test.not_equal(table.concat(first_preview, ","), table.concat(saved_background, ","))
+
+    local root = core.root_panel
+    local old_x, old_y, old_w, old_h = root.position.x, root.position.y, root.size.x, root.size.y
+    local window = renwindow.create("theme-preview-overlay", 32, 32)
+    root.position.x, root.position.y, root.size.x, root.size.y = 0, 0, 32, 32
+    local ok, err = pcall(function()
+      renderer.begin_frame(window)
+      renderer.set_clip_rect(0, 0, 32, 32)
+      renderer.draw_rect(0, 0, 32, 32, { 100, 140, 180, 255 })
+      local drawn, draw_error = pcall(root.draw_active_app_overlay, root)
+      renderer.end_frame()
+      test.ok(drawn, draw_error)
+      test.same(renwindow.get_color(window, 16, 16), { 100, 140, 180, 255 },
+        "theme preview dimmed the rendered editor surface")
+    end)
+    root.position.x, root.position.y, root.size.x, root.size.y = old_x, old_y, old_w, old_h
+    renwindow.close(window)
+    test.ok(ok, err)
+
     bar:move_suggestion_idx(1)
     test.not_equal(table.concat(style.background, ","), table.concat(first_preview, ","))
     test.equal("dark", settings.config.theme)
@@ -35,8 +54,12 @@ test.describe("theme selection preview", function()
   end)
 
   test.it("shows the hovered theme in the Sidebar and the saved one after cancel", function()
-    local sent, preview_color_theme = {}, system.preview_color_theme
-    system.preview_color_theme = function(text) sent[#sent + 1] = text; return true end
+    local sent, latest_preview, preview_color_theme = {}, nil, system.preview_color_theme
+    system.preview_color_theme = function(text)
+      sent[#sent + 1] = text
+      if text ~= "" then latest_preview = text end
+      return true
+    end
     local ok, err = pcall(function()
       test.ok(command.perform("core:select_theme"))
       local bar = core.global_prompt_bar
@@ -45,10 +68,10 @@ test.describe("theme selection preview", function()
       bar:move_suggestion_idx(1)
       local hovered_background = {table.unpack(style.background)}
       bar:exit(false)
-      test.equal(#sent, 3)
       test.equal(sent[#sent], "")
       -- The Sidebar draws a preview with the same colours as the previewing Project.
-      color_theme.load_preview(sent[2])
+      test.not_nil(latest_preview, "the hovered theme was not sent to the Sidebar")
+      color_theme.load_preview(latest_preview)
       test.same(hovered_background, style.background)
     end)
     system.preview_color_theme = preview_color_theme

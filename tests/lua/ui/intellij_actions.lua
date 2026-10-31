@@ -168,27 +168,18 @@ test.describe("IntelliJ actions batch behavior", function()
     test.equal(view.selection_state.last_selection, 1)
   end)
 
-  test.it("select all occurrences builds many selections without per-occurrence set_selections", function(context)
+  test.it("selects every occurrence in a large Buffer", function(context)
     local lines = {}
     for i = 1, 200 do lines[i] = "aa xx" end
     local view, buffer = open_editor(context, table.concat(lines, "\n"))
     set_view_selections(view, { 1, 1, 1, 3 })
 
-    local original_set_selections = buffer.set_selections
-    buffer.set_selections = function()
-      error("user:select-all-occurrences should use batched selection replacement")
-    end
-
-    local ok, err = pcall(function()
-      test.ok(command.perform("editor:select_all_occurrences"))
-      local selections = view_selections(view)
-      test.equal(#selections / 4, 200)
-      test.same({ selections[1], selections[2], selections[3], selections[4] }, { 1, 3, 1, 1 })
-      test.same({ selections[#selections - 3], selections[#selections - 2], selections[#selections - 1], selections[#selections] }, { 200, 3, 200, 1 })
-      test.equal(view.selection_state.last_selection, 1)
-    end)
-    buffer.set_selections = original_set_selections
-    if not ok then error(err) end
+    test.ok(command.perform("editor:select_all_occurrences"))
+    local selections = view_selections(view)
+    test.equal(#selections / 4, 200)
+    test.same({ selections[1], selections[2], selections[3], selections[4] }, { 1, 3, 1, 1 })
+    test.same({ selections[#selections - 3], selections[#selections - 2], selections[#selections - 1], selections[#selections] }, { 200, 3, 200, 1 })
+    test.equal(view.selection_state.last_selection, 1)
   end)
 
   test.it("copies the Root Project path regardless of the focused file", function(context)

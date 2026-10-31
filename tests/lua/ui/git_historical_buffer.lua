@@ -1,6 +1,7 @@
 local test = require "core.test"
 
 local historical = require "plugins.git.historical_buffer"
+local treesitter = require "core.treesitter"
 
 local function buffer_text(buffer)
   return table.concat(buffer.lines)
@@ -43,7 +44,7 @@ test.describe("Git Historical Buffer", function()
       }
     )
 
-    test.equal(buffer.treesitter, nil)
+    test.same(treesitter.get_buffer_outline(buffer), {})
   end)
 
   test.test("normalizes CRLF historical blobs to Buffer line semantics", function()

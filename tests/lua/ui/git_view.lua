@@ -98,6 +98,34 @@ local function buffer_text(buffer)
   return table.concat(buffer.lines or {})
 end
 
+local function capture_root_draw_text()
+  local text = {}
+  local old_draw_text = renderer.draw_text
+  local old_draw_text_known_bounds = renderer.draw_text_known_bounds
+  local function capture(font, value, ...)
+    if type(value) == "string" then text[#text + 1] = value end
+  end
+  renderer.draw_text = function(font, value, ...)
+    capture(font, value, ...)
+    return old_draw_text(font, value, ...)
+  end
+  renderer.draw_text_known_bounds = function(font, value, ...)
+    capture(font, value, ...)
+    return old_draw_text_known_bounds(font, value, ...)
+  end
+  local ok, err = pcall(function()
+    core.root_panel:update()
+    renderer.begin_frame(core.window)
+    local drawn, draw_err = pcall(core.root_panel.draw, core.root_panel)
+    renderer.end_frame()
+    if not drawn then error(draw_err, 0) end
+  end)
+  renderer.draw_text = old_draw_text
+  renderer.draw_text_known_bounds = old_draw_text_known_bounds
+  if not ok then error(err, 0) end
+  return table.concat(text)
+end
+
 test.describe("Git View command", function()
   test.before_each(function(context)
     panes.reset_for_tests()
@@ -183,7 +211,7 @@ test.describe("Git View command", function()
     end
   end)
 
-  test.it("loads a Commit Diff View created without focus", function(context)
+  test.it("loads usable Diff content without focusing the new tab", function(context)
     local session, log_view = open_fake_git_view(context.project)
     local tab = {
       id = "restored-diff-load",
@@ -192,20 +220,26 @@ test.describe("Git View command", function()
       closable = true,
       left = "parent",
       right = "commit",
-      changed_files = {},
+      changed_files = {
+        { status = "modified", old_path = "src/app.lua", new_path = "src/app.lua" },
+      },
       selected_file = 1,
     }
     log_view.model.tabs[#log_view.model.tabs + 1] = tab
-    local calls = 0
-    local old_load = log_view.model.load_view
-    log_view.model.load_view = function(model, candidate, callback)
-      calls = calls + 1
-      return old_load(model, candidate, callback)
+    local backend = log_view.model.backend
+    local old_file_at = backend.file_at
+    backend.file_at = function(_, revision, path, _, callback)
+      callback(revision .. " " .. path .. "\n", nil)
     end
-
-    git_view.ensure_tab_view(session, tab, false)
-
-    test.equal(calls, 1)
+    local ok, err = pcall(function()
+      local tab_view = git_view.ensure_tab_view(session, tab, false)
+      local comparison = tab_view:ensure_diff_view(tab)
+      test.contains(buffer_text(comparison.buffer_view_a.buffer), "parent src/app.lua")
+      test.contains(buffer_text(comparison.buffer_view_b.buffer), "commit src/app.lua")
+      test.not_equal(panes.active().current_view, tab_view)
+    end)
+    backend.file_at = old_file_at
+    if not ok then error(err, 0) end
   end)
 
   test.it("opens a file's HEAD comparison directly without presenting Git lists", function(context)
@@ -431,16 +465,19 @@ test.describe("Git View command", function()
     list.size.y = 200
     list.scroll.y = 500 * view:row_height()
     list.scroll.to.y = list.scroll.y
-    local calls = 0
-    view.model.load_more_log = function()
-      calls = calls + 1
-      tab.loading_more = true
+    view.model.load_more_log = function(model, callback)
+      tab.commits[#tab.commits + 1] = {
+        hash = "page-501", short_hash = "page-501", subject = "New page commit",
+      }
+      tab.has_more = false
+      if callback then callback(model, nil) end
       return true
     end
 
     view:update()
+    view:update_pane_buffers()
 
-    test.equal(calls, 1)
+    test.contains(buffer_text(list.buffer), "New page commit")
   end)
 
   test.it("loads the next File History page near its loaded end", function(context)
@@ -466,16 +503,19 @@ test.describe("Git View command", function()
     list.size.y = 200
     list.scroll.y = 100 * history_view:row_height()
     list.scroll.to.y = list.scroll.y
-    local calls = 0
-    log_view.model.load_file_history = function()
-      calls = calls + 1
-      tab.loading = true
+    log_view.model.load_file_history = function(model, candidate, callback)
+      candidate.commits[#candidate.commits + 1] = {
+        hash = "page-101", short_hash = "page-101", subject = "New history revision",
+      }
+      candidate.has_more = false
+      if callback then callback(model, nil, candidate) end
       return true
     end
 
     history_view:update()
+    history_view:update_pane_buffers()
 
-    test.equal(calls, 1)
+    test.contains(buffer_text(list.buffer), "New history revision")
   end)
 
   test.it("keeps File History refreshes invisible when commits are already visible", function(context)
@@ -588,9 +628,12 @@ test.describe("Git View command", function()
 
   test.it("refreshes the current Git View when application focus returns", function(context)
     local session, view = open_fake_git_view(context.project)
-    local calls = 0
+    local tab = view.model:log_tab()
+    tab.commits = { { hash = "old", short_hash = "old", subject = "Old commit" } }
+    view:update_pane_buffers()
     view.model.refresh_log = function(_, callback)
-      calls = calls + 1
+      tab.commits = { { hash = "new", short_hash = "new", subject = "Refreshed commit" } }
+      view:update_pane_buffers()
       if callback then callback(view.model, nil) end
     end
     core.active_view = view:pane_view("log-list")
@@ -599,7 +642,8 @@ test.describe("Git View command", function()
     core.on_event("focuslost")
     core.on_event("focusgained")
 
-    test.equal(calls, 1)
+    test.contains(buffer_text(view:pane_view("log-list").buffer), "Refreshed commit")
+    test.not_ok(buffer_text(view:pane_view("log-list").buffer):find("Old commit", 1, true))
   end)
 
   test.it("uses the represented file as a File History Path Target", function(context)
@@ -1166,6 +1210,75 @@ test.describe("Git View command", function()
     replacement:dispose_owned_buffers()
   end)
 
+  test.it("keeps an attached Diff Side selection and scroll after identical refresh", function(context)
+    local session, log_view = open_fake_git_view(context.project)
+    local left_lines, right_lines = {}, {}
+    for line = 1, 80 do
+      left_lines[line] = "line " .. line
+      right_lines[line] = line == 60 and "changed line 60" or left_lines[line]
+    end
+    local left_text = table.concat(left_lines, "\n") .. "\n"
+    local right_text = table.concat(right_lines, "\n") .. "\n"
+    local tab = {
+      id = "diff-identical-refresh",
+      kind = "commit_diff",
+      title = "Identical Diff Refresh",
+      closable = true,
+      left = "parent",
+      right = "commit",
+      changed_files = {
+        { status = "modified", old_path = "src/app.lua", new_path = "src/app.lua" },
+      },
+      selected_file = 1,
+    }
+    log_view.model.tabs[#log_view.model.tabs + 1] = tab
+    local backend = session.git_model.backend
+    local old_file_at = backend.file_at
+    backend.file_at = function(_, revision, _, _, callback)
+      callback(revision == "parent" and left_text or right_text, nil)
+    end
+
+    local ok, err = pcall(function()
+      test.ok(session.git_model:load_selected_diff_file(tab))
+      local source = git_view.ensure_tab_view(session, tab, true)
+      local comparison = source:ensure_diff_view(tab)
+      require("plugins.git.comparison").attach(
+        comparison, source, tab, source:pane_view("file-list")
+      )
+      local pane = test.not_nil(panes.pane_for_view(source))
+      panes.present(comparison, { pane = pane, focus = true })
+      comparison.size.x, comparison.size.y = 800, 500
+      wait_until(function()
+        comparison:update()
+        return comparison.diff_model ~= nil and comparison.updater_idx == nil
+      end, 5, "the Diff View did not finish computing")
+
+      local side = comparison.buffer_view_b
+      side.buffer:set_selection(60, 6)
+      side:scroll_to_line(60, false, true)
+      comparison:update()
+      local before_line, before_col = side.buffer:get_selection()
+      local _, before_y = side:get_line_screen_position(60)
+      local before_scroll = side.scroll.y
+      test.same({ before_line, before_col }, { 60, 6 })
+      test.ok(before_scroll > 0, "the selected line did not scroll into view")
+
+      test.ok(session.git_model:load_selected_diff_file(tab))
+      local refreshed = source:ensure_diff_view(tab)
+      panes.present(refreshed, { pane = pane, focus = true })
+      refreshed:update()
+      local refreshed_side = refreshed.buffer_view_b
+      local after_line, after_col = refreshed_side.buffer:get_selection()
+      local _, after_y = refreshed_side:get_line_screen_position(60)
+      test.same({ after_line, after_col }, { 60, 6 })
+      test.near(after_y, before_y, 1, "the selected line moved after identical refresh")
+      test.near(refreshed_side.scroll.y, before_scroll, 1,
+        "the Diff Side scroll moved after identical refresh")
+    end)
+    backend.file_at = old_file_at
+    if not ok then error(err, 0) end
+  end)
+
   test.it("reveals the first change when another Git file opens", function(context)
     config.plugins.diffview.layout = "side-by-side"
     local _, view = open_fake_git_view(context.project)
@@ -1410,13 +1523,20 @@ test.describe("Git View command", function()
     test.equal(tab.diff_view, nil)
   end)
 
-  test.it("keeps the previous Diff View visible while the next file loads", function(context)
-    local session, view = open_fake_git_view(context.project)
+  test.it("keeps the previous Diff rendered while the next file loads", function(context)
+    local session, log_view = open_fake_git_view(context.project)
+    local root = core.root_panel
+    local root_rect = {
+      root.position.x, root.position.y, root.size.x, root.size.y,
+    }
+    root.size.x, root.size.y = 1000, 700
     local tab = {
       id = "diff-loading-presentation",
       kind = "commit_diff",
       title = "Diff loading presentation",
       closable = true,
+      left = "parent",
+      right = "commit",
       changed_files = {
         { status = "modified", old_path = "a.lua", new_path = "a.lua" },
         { status = "modified", old_path = "b.lua", new_path = "b.lua" },
@@ -1428,20 +1548,83 @@ test.describe("Git View command", function()
       right_name = "a.lua",
       diff_generation = 1,
     }
-    view.model.tabs[#view.model.tabs + 1] = tab
-    local tab_view = git_view.ensure_tab_view(session, tab, true)
-    tab_view.position.x, tab_view.position.y = 0, 0
-    tab_view.size.x, tab_view.size.y = 800, 300
-    tab_view:update()
-    test.ok(command.perform("git:focus_diff_pane"))
-    local previous = panes.active().current_view
+    log_view.model.tabs[#log_view.model.tabs + 1] = tab
+    local backend = session.git_model.backend
+    local old_file_at = backend.file_at
+    backend.file_at = function(_, revision, path, _, callback)
+      callback(revision .. " " .. path .. "\n", nil)
+    end
+    local pending = {}
+    local ok, err = pcall(function()
+      local source = git_view.ensure_tab_view(session, tab, true)
+      local source_pane = test.not_nil(panes.pane_for_view(source))
+      local split_pane = panes.split(source_pane, "right", {
+        factory = function() return View() end, focus = false,
+      })
+      local points = source:changed_file_points()
+      test.not_nil(points[1])
+      test.not_nil(points[2])
+      test.ok(source:open_changed_file(points[1], { pane = split_pane }))
+      test.equal(tab.right_text, "commit a.lua\n")
+      local function find_comparison(text)
+        for _, pane in ipairs(panes.ordered()) do
+          local current = pane.current_view
+          if current and current.buffer_view_b
+              and buffer_text(current.buffer_view_b.buffer):find(text, 1, true) then
+            return pane, current
+          end
+        end
+      end
+      wait_until(function()
+        return find_comparison("commit a.lua") ~= nil
+      end, 3, "the first Diff View did not open")
+      local destination, previous = find_comparison("commit a.lua")
+      panes.focus(destination)
+      root:update()
+      test.equal(panes.visible_group(), destination.group)
+      test.ok(root:contains_view(previous), "the comparison is not in the Root Panel")
+      test.ok(previous.buffer_view_b.size.x > 0 and previous.buffer_view_b.size.y > 0,
+        "the comparison's right side has no visible area")
+      wait_until(function()
+        root:update()
+        return destination.current_view == previous and previous.diff_model
+          and not previous.pending_first_change_reveal
+      end, 3, "the first Diff View did not finish its update")
+      local initial_text = capture_root_draw_text()
+      test.contains(initial_text, "commit a.lua", initial_text)
 
-    tab.selected_file = 2
-    tab.loading_file = true
-    tab.file_loading_started_at = system.get_time()
-    test.equal(panes.active().current_view, previous)
-    test.equal(tab_view:file_loading_indicator_visible(tab, tab.file_loading_started_at + 0.999), false)
-    test.equal(tab_view:file_loading_indicator_visible(tab, tab.file_loading_started_at + 1.001), true)
+      backend.file_at = function(_, revision, path, _, callback)
+        pending[#pending + 1] = { revision = revision, path = path, callback = callback }
+        return { cancel = function() end }
+      end
+      test.ok(source:open_changed_file(points[2], { pane = destination }))
+      wait_until(function() return #pending == 2 end, 3,
+        "the next file comparison did not reach the backend")
+      test.equal(destination.current_view, previous)
+      local loading_text = capture_root_draw_text()
+      test.contains(loading_text, "commit a.lua", loading_text)
+      test.not_ok(loading_text:find("commit b.lua", 1, true), loading_text)
+
+      for _, request in ipairs(pending) do
+        request.callback(request.revision .. " " .. request.path .. "\n", nil)
+      end
+      wait_until(function()
+        root:update()
+        local pane, view = find_comparison("commit b.lua")
+        return pane == destination and view.diff_model
+          and not view.pending_first_change_reveal
+      end, 3, "the next file comparison did not open")
+      local loaded_pane = find_comparison("commit b.lua")
+      test.equal(loaded_pane, destination)
+      local loaded_text = capture_root_draw_text()
+      test.contains(loaded_text, "commit b.lua", loaded_text)
+      test.not_ok(loaded_text:find("commit a.lua", 1, true), loaded_text)
+    end)
+    backend.file_at = old_file_at
+    root.position.x, root.position.y = root_rect[1], root_rect[2]
+    root.size.x, root.size.y = root_rect[3], root_rect[4]
+    root:update_layout()
+    if not ok then error(err, 0) end
   end)
 
   test.it("keeps Git Log pane TextViews unwrapped", function(context)

@@ -27,13 +27,19 @@ function process.stream.new(proc, fd)
 end
 
 local function take_buffer(stream, amount)
-  local chunks = {}
+  local result, chunks
   local remaining = math.min(amount, stream.len)
   while remaining > 0 and stream.head <= stream.tail do
     local chunk = stream.buf[stream.head]
     local available = #chunk - stream.head_offset + 1
     local take = math.min(remaining, available)
-    chunks[#chunks + 1] = chunk:sub(stream.head_offset, stream.head_offset + take - 1)
+    local part = chunk:sub(stream.head_offset, stream.head_offset + take - 1)
+    if result then
+      chunks = chunks or { result }
+      chunks[#chunks + 1] = part
+    else
+      result = part
+    end
     stream.head_offset = stream.head_offset + take
     stream.len = stream.len - take
     remaining = remaining - take
@@ -49,7 +55,7 @@ local function take_buffer(stream, amount)
     stream.head_offset = 1
     stream.tail = 0
   end
-  return table.concat(chunks)
+  return chunks and table.concat(chunks) or result or ""
 end
 
 ---@alias process.stream.readtype
@@ -74,9 +80,8 @@ end
 ---@return string? errmsg The error message when reading fails.
 ---@return process.errortype|integer? errcode The error code when reading fails.
 function process.stream:read(bytes, options)
-  if type(bytes) == 'string' then bytes = bytes:gsub("^%*", "") end
-  options = options or {}
-  local start = system.get_time()
+  if type(bytes) == "string" and bytes:byte(1) == 42 then bytes = bytes:sub(2) end
+  local start = options and options.timeout and system.get_time()
   local target = 0
   if bytes == "line" or bytes == "l" or bytes == "L" then
     if self.len > 0 then
@@ -119,10 +124,10 @@ function process.stream:read(bytes, options)
         if s then target = self.len - #chunk + s end
       end
     elseif coroutine.isyieldable() then
-      if options.timeout and system.get_time() - start > options.timeout then
+      if start and system.get_time() - start > options.timeout then
         error("timeout expired")
       end
-      coroutine.yield(options.scan or (1 / config.fps))
+      coroutine.yield(options and options.scan or (1 / config.fps))
     else
       break
     end

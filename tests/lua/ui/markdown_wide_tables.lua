@@ -6,6 +6,7 @@ local markdown = require "core.markdown"
 local footnotes = require "core.markdown.footnotes"
 local model = require "core.markdown.model"
 local panes = require "core.panes"
+local renwindow = require "renwindow"
 local style = require "core.style"
 local workers = require "core.worker_pool"
 local test = require "core.test"
@@ -107,29 +108,33 @@ test.describe("Markdown tables wider than the reading lane", function()
     local view = open_view(context, "Some prose.\n\n```\nplain code\n```\n\nend", 2000)
     local code_rects = {}
     local old_rect, old_rounded = renderer.draw_rect, renderer.draw_rounded_rect
-    local old_text = renderer.draw_text
-    local old_push, old_pop = core.push_clip_rect, core.pop_clip_rect
-    local function record(x, _, w, _, _, color)
+    local function record(x, y, w, h, color)
       if color == style.markdown_live_code_background then
-        code_rects[#code_rects + 1] = { x = x, w = w }
+        code_rects[#code_rects + 1] = { x = x, y = y, w = w, h = h }
       end
     end
-    renderer.draw_rect = function(x, y, w, h, color) record(x, y, w, h, nil, color) end
-    renderer.draw_rounded_rect = record
-    renderer.draw_text = function(font, text, x) return x + font:get_width(text) end
-    core.push_clip_rect, core.pop_clip_rect = function() end, function() end
+    renderer.draw_rect = function(x, y, w, h, color)
+      record(x, y, w, h, color)
+      return old_rect(x, y, w, h, color)
+    end
+    renderer.draw_rounded_rect = function(x, y, w, h, radius, color)
+      record(x, y, w, h, color)
+      return old_rounded(x, y, w, h, radius, color)
+    end
+    local window = renwindow.create("markdown-code-lane", view.size.x, view.size.y)
+    renderer.begin_frame(window)
+    renderer.draw_rect(0, 0, view.size.x, view.size.y, style.background)
     local ok, err = pcall(view.draw, view)
+    renderer.end_frame()
     renderer.draw_rect, renderer.draw_rounded_rect = old_rect, old_rounded
-    renderer.draw_text = old_text
-    core.push_clip_rect, core.pop_clip_rect = old_push, old_pop
     if not ok then error(err, 0) end
     test.ok(#code_rects > 0, "the code block has no background")
-    for _, rect in ipairs(code_rects) do
-      test.ok(rect.x + rect.w <= lane_right(view), string.format(
-        "the code background ends at %d, past the lane at %d",
-        rect.x + rect.w, lane_right(view)
-      ))
-    end
+    local rect = code_rects[1]
+    local sample_y = math.floor(rect.y + rect.h / 2)
+    local outside_x = math.floor(lane_right(view) + 4)
+    local outside = renwindow.get_color(window, outside_x, sample_y)
+    local farther_outside = renwindow.get_color(window, outside_x + 8, sample_y)
+    test.same(outside, farther_outside, "the code background spilled past the lane")
   end)
 
   test.it("stops a wide table before the footnote cards", function(context)

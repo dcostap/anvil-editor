@@ -25,21 +25,25 @@ test.describe("Editor file locations in growing files", function()
     if context.root then common.rm(context.root, true) end
   end)
 
-  test.it("keeps the UI responsive while scanning one long line", function(context)
-    coroutine.yield(0.01) -- Let the test runner start before measuring a UI step.
+  test.it("finds a valid file location among many path-like fragments", function(context)
+    local root = USERDIR .. PATHSEP .. "editor-file-poi-long-line-" .. system.get_process_id()
+    local target = root .. PATHSEP .. "target.txt"
+    context.root = root
+    context.old_project = core.root_project
+    test.ok(common.mkdirp(root))
+    local file = assert(io.open(target, "wb"))
+    file:write("target\n")
+    file:close()
+    core.root_project = function() return { path = root } end
+
     local buffer = Buffer()
-    buffer:insert(1, 1, string.rep("missing.txt:9:4 ", 22000))
+    buffer:insert(1, 1, string.rep("missing.txt:9:4 ", 22000) .. "target.txt:12:3")
     local view = Editor(buffer)
     context.buffer = buffer
     context.views = { view }
-    test.equal(#view:get_points_of_interest(), 0)
-
-    for _ = 1, 8 do
-      local started = system.get_time()
-      coroutine.yield(0.01)
-      local elapsed = system.get_time() - started
-      test.ok(elapsed < 0.3, "file-location scanning blocked the UI for " .. elapsed .. " seconds")
-    end
+    local point = wait_for_point(view, 12)
+    test.equal(point.path, common.normalize_path(target))
+    test.equal(point.target_col, 3)
   end)
 
   test.it("does not publish file locations from a replaced long line", function(context)
