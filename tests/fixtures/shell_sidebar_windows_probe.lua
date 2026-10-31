@@ -142,8 +142,18 @@ if path:match("/driver$") then
       bounds(1, 0, full, "Closing the first Sidebar changed the second")
       request(1, "Replacement", 2, "core:toggle_project_sidebar")
       bounds(1, 0, 0, "Closing the second Sidebar changed the first")
+      -- Focus shows the hidden Sidebar over its Project, so no Project changes its layout.
+      local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
+      local mark = file:seek("end") + 1; file:close()
       request(1, "Project", 3, "core:focus_project_sidebar")
-      bounds(1, full, 0, "Focusing one Sidebar opened another Window's Sidebar")
+      local slides = wait(function()
+        local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
+        local text = file:read("*a"):sub(mark); file:close()
+        return text:find("Shell Sidebar slide ended: Window=" .. first_id .. " width=" .. full .. " ", 1, true) and text
+      end, "Focus did not show the first Sidebar")
+      assert(not slides:find("Shell Sidebar slide ended: Window=" .. second_id .. " ", 1, true),
+        "Focusing one Sidebar opened another Window's Sidebar")
+      bounds(1, 0, 0, "The Sidebar that focus showed changed a Project's layout")
       request(1, "Project", 4, "core:toggle_project_sidebar")
       bounds(1, 0, 0, "The focused Sidebar did not close")
       request(1, "Replacement", 3, "core:toggle_project_sidebar")

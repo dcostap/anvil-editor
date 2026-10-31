@@ -40,7 +40,7 @@
 /* How far from the Sidebar's edge, in points, the pointer grabs it. */
 #define SHELL_SIDEBAR_GRIP_POINTS 4
 /* The Sidebar slides open or closed over this time. */
-#define SHELL_SIDEBAR_SLIDE_MS 120
+#define SHELL_SIDEBAR_SLIDE_MS 80
 #define SHELL_CONNECT_TIMEOUT_MS 30000
 /* A launch with files waits this long at most for the first Sidebar list. Without it, files route only by folder. */
 #define SHELL_LAUNCH_LIST_WAIT_MS 5000
@@ -233,8 +233,8 @@ typedef struct {
    * resize, so a left- or top-edge drag does not move the content. */
   POINT anchor;
   bool anchored;
-  /* Where the last frame's Project area starts. The shell moves a frame that starts left of the Sidebar's edge to
-   * that edge, so a slide or a Project that has not drawn its new layout yet shows no content under the Sidebar. */
+  /* Where the last frame's Project area starts. The shell moves a frame that starts left of a docked Sidebar's edge
+   * to that edge, so a Project that has not drawn its new layout yet shows no content under the Sidebar. */
   int content_x;
   /* The last frame has premultiplied alpha; the shell blends it instead of copying it. */
   bool transparent;
@@ -323,6 +323,8 @@ struct ShellWindow {
   Uint64 sidebar_slide_start;
   unsigned sidebar_slide_steps; /* shown widths of the current slide, for diagnostics */
   bool sidebar_sliding;
+  /* Focus shows the hidden Sidebar opaque over the Project, without a change to the Project's layout. */
+  bool sidebar_floating;
   bool sidebar_grip_hover, sidebar_dragging;
   float sidebar_drag_offset;
   Uint32 surface_buttons, sidebar_buttons;
@@ -1635,9 +1637,9 @@ static void send_configure(ShellProject *project) {
   config.origin_y = 0;
   /* Both surfaces cover the whole client area. A Project lays out its UI right of content_x; the Sidebar lays out
    * its strip left of it and draws only popups beyond it. */
-  /* A Project keeps one layout while the Sidebar slides: the widest, so the shell can move it with the Sidebar's edge
-   * and clip it at the right. It takes its final width when the slide ends. */
-  int project_x = window->sidebar_sliding ? 0 : window->sidebar_w;
+  /* A docked Sidebar keeps its space in the Project during its whole slide. It slides over the Project's backdrop. */
+  bool docked = !window->sidebar_floating && (window->sidebar_sliding || sidebar_shown(window));
+  int project_x = docked ? window->sidebar_full_w : 0;
   config.content_x = SDL_min(project->sidebar ? window->sidebar_full_w : project_x, SDL_max(0, config.pixel_w - 1));
   config.refresh_hz = current_refresh_rate(window);
   typedef UINT(WINAPI * DpiForWindow)(HWND);
@@ -2926,7 +2928,7 @@ static void composite_and_present(ShellWindow *window) {
       x += content->anchor.x - origin.x;
       y += content->anchor.y - origin.y;
     }
-    x += SDL_max(0, window->sidebar_w - content->content_x);
+    x += SDL_max(0, (window->sidebar_floating ? 0 : window->sidebar_w) - content->content_x);
     /* Clip to the Project area of the backbuffer. */
     int left = SDL_max(x, config->origin_x), top = SDL_max(y, config->origin_y);
     int right = SDL_min(x + content->surface_w, config->origin_x + config->pixel_w);
@@ -2954,6 +2956,11 @@ static void composite_and_present(ShellWindow *window) {
     ID3D11ShaderResourceView *view = sidebar->transparent ? presentation_view(window, sidebar) : NULL;
     if (rect.right <= 0 || rect.bottom <= 0) {
     } else if (view && compose_ready(window)) {
+      if (window->sidebar_floating) {
+        float opaque[4] = {(background & 0xff) / 255.0f, (background >> 8 & 0xff) / 255.0f,
+                           (background >> 16 & 0xff) / 255.0f, 1.0f};
+        compose_rect(window, NULL, rect, 0, 0, opaque);
+      }
       compose_rect(window, view, rect, slide, 0, NULL);
     } else {
       D3D11_BOX box = {(UINT)slide, 0, 0, (UINT)(slide + rect.right), (UINT)rect.bottom, 1};
@@ -4267,6 +4274,7 @@ static void slide_sidebar(ShellWindow *window) {
   apply_sidebar_layout(window);
   if (window->sidebar_w != shown) window->sidebar_slide_steps++;
   if (window->sidebar_sliding) return;
+  if (!window->sidebar_w) window->sidebar_floating = false;
   send_configure(window->selected);
   SDL_Log("Shell Sidebar slide ended: Window=%u width=%d steps=%u", window->id, window->sidebar_w,
           window->sidebar_slide_steps);
@@ -4275,6 +4283,8 @@ static void slide_sidebar(ShellWindow *window) {
 /* Only this Window slides its Sidebar. A Window that is not shown changes at once. */
 static void start_sidebar_slide(ShellWindow *window) {
   bool hidden = !sidebar_shown(window);
+  /* A closing Sidebar keeps its kind. */
+  if (!hidden) window->sidebar_floating = window->sidebar_hidden;
   window->sidebar_dragging = window->sidebar_grip_hover = false;
   window->sidebar_slide_from = window->sidebar_open;
   window->sidebar_slide_start = SDL_GetTicksNS();
@@ -4286,6 +4296,7 @@ static void start_sidebar_slide(ShellWindow *window) {
     continue_slide(window);
   } else {
     window->sidebar_open = hidden ? 0.0f : 1.0f;
+    if (hidden) window->sidebar_floating = false;
     apply_sidebar_layout(window);
     send_configure(window->selected);
   }
@@ -4297,7 +4308,15 @@ static void set_sidebar_hidden(ShellWindow *window, bool hidden) {
   bool shown = sidebar_shown(window);
   window->sidebar_hidden = hidden;
   SDL_Log("Shell Sidebar %s: Window=%u", hidden ? "hidden" : "shown", window->id);
-  if (sidebar_shown(window) != shown) start_sidebar_slide(window);
+  if (sidebar_shown(window) != shown) {
+    start_sidebar_slide(window);
+  } else if (window->sidebar_floating && !hidden) {
+    /* The toggle docks a Sidebar that focus shows. */
+    window->sidebar_floating = false;
+    window->ui_dirty = true;
+    send_configure(window->selected);
+    if (window->shown) composite_and_present(window);
+  }
   windows_changed();
 }
 

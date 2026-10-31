@@ -71,7 +71,8 @@ if path:match("/driver$") then
       save("hide", true)
       wait(function() return load("hidden") end, "Sidebar did not hide")
       mark = focus(2)
-      wait(function() return load("shown") end, "Focusing did not reveal the Sidebar")
+      wait(function() return trace():find("Shell Sidebar slide ended: Window=%d+ width=[1-9]", mark) end,
+        "Focusing did not reveal the Sidebar")
       -- Search a Tab through the shell's text transport, then activate it through the key transport.
       user32.PostMessageW(window, 0x804a, 11, string.byte("z"))
       press(13)
@@ -106,8 +107,6 @@ else
     save("hidden", true)
     wait(function() return load("focus-2") end, "Second focus request missing")
     assert(command.perform("core:focus_project_sidebar"))
-    wait(function() return system.get_window_content_x() > 0 end, "Sidebar stayed hidden")
-    save("shown", true)
     wait(function() return core.active_view == view end, "Matching Tab did not gain focus")
     save("activated", true)
     wait(function() return load("finish") end, "Finish request missing")

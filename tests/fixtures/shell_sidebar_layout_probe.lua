@@ -1,7 +1,8 @@
 -- mod-version:3
 -- Seam: owned hosted Windows on a private desktop. A drag on the Project Sidebar's edge sets its width, and the
--- Project's Sidebar toggle slides it closed and open. Focus slides the hidden Sidebar open until it loses focus,
--- and the Sidebar stays hidden in the saved layout. The next shell starts with the saved layout.
+-- Project's Sidebar toggle slides it closed and open. Focus slides the hidden Sidebar open over the Project until it
+-- loses focus: the Project keeps its layout, and the Sidebar stays hidden in the saved layout. The next shell starts
+-- with the saved layout.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if action ~= "toggle-sidebar" then return end
 local core, common = require "core", require "core.common"
@@ -69,16 +70,17 @@ if path:match("/driver$") then
  core.add_background_thread(function()
   local shell
   local function content_x(phase) local content = load("content-" .. phase); return content and content.x end
-  -- Each toggle asks the Project to perform its command. The shell shows the Sidebar at widths between its ends,
-  -- and the Project area then starts at target.
-  local function toggle(phase, step, target, message)
+  local function layouts(phase) return load("content-" .. phase).changes end
+  -- Each toggle asks the Project to perform its command. The shell shows the Sidebar at widths between its ends
+  -- and target, and the Project area then starts at content.
+  local function toggle(phase, step, target, content, message)
    local mark = #trace()
    save("toggle-" .. phase .. "-" .. step, {go = true})
    local steps = wait(function()
     return trace():sub(mark + 1):match("Shell Sidebar slide ended: Window=%d+ width=" .. target .. " steps=(%d+)")
    end, 10, message)
    assert(tonumber(steps) > 1, "The Sidebar did not slide: it showed " .. steps .. " width")
-   wait(function() return content_x(phase) == target end, 10, message)
+   wait(function() return content_x(phase) == content end, 10, message)
    save("toggled-" .. phase .. "-" .. step, {go = true})
   end
   local ok, err = pcall(function()
@@ -124,17 +126,22 @@ if path:match("/driver$") then
    coroutine.yield(.5)
    user32.SendMessageW(window, 0x8052, 1, 0)
    wait(function() return trace():find("capture%-1%.bmp") end, 5, "shell capture was not written")
-   toggle(1, 1, 0, "The toggle did not hide the Sidebar")
+   toggle(1, 1, 0, 0, "The toggle did not hide the Sidebar")
    coroutine.yield(.5)
    user32.SendMessageW(window, 0x8052, 2, 0)
    wait(function() return trace():find("capture%-2%.bmp") end, 5, "shell capture was not written")
-   toggle(1, 2, width(320), "The toggle did not show the Sidebar again")
+   toggle(1, 2, width(320), width(320), "The toggle did not show the Sidebar again")
    coroutine.yield(.5)
    user32.SendMessageW(window, 0x8052, 3, 0)
    wait(function() return trace():find("capture%-3%.bmp") end, 5, "shell capture was not written")
-   toggle(1, 3, 0, "The toggle did not hide the Sidebar again")
-   toggle(1, 4, width(320), "Focus did not show the hidden Sidebar")
-   toggle(1, 5, 0, "The hidden Sidebar did not slide closed when it lost focus")
+   toggle(1, 3, 0, 0, "The toggle did not hide the Sidebar again")
+   local before = layouts(1)
+   toggle(1, 4, width(320), 0, "Focus did not show the hidden Sidebar")
+   coroutine.yield(.5)
+   user32.SendMessageW(window, 0x8052, 4, 0)
+   wait(function() return trace():find("capture%-4%.bmp") end, 5, "shell capture was not written")
+   toggle(1, 5, 0, 0, "The hidden Sidebar did not slide closed when it lost focus")
+   assert(layouts(1) == before, "The Sidebar that focus showed changed the Project's layout")
    save("finish-1", {go = true})
    stop_shell(shell)
    shell = nil
@@ -153,7 +160,7 @@ if path:match("/driver$") then
    while system.get_time() - started < 33 do coroutine.yield(.5) end
    local text = trace()
    assert(not text:find("startup deadline expired", mark, true), "The hidden Sidebar failed its startup deadline")
-   toggle(2, 1, width(320), "The toggle did not show the restored Window's Sidebar")
+   toggle(2, 1, width(320), width(320), "The toggle did not show the restored Window's Sidebar")
    wait(function() return trace():find("Shell Sidebar surface Ready", mark, true) end, 10,
     "The shown Sidebar did not render")
    save("finish-2", {go = true})
@@ -173,14 +180,14 @@ elseif path == root .. "/Project" then
  -- The first shell's Project toggles three times, then focuses the hidden Sidebar and takes focus back.
  -- The restored Project toggles once.
  local phase = load("finish-1") and 2 or 1
- -- Reports each Project area start the shell configures.
- local last
+ -- Reports each Project area start the shell configures, and how many it saw.
+ local last, changes = nil, 0
  core.add_background_thread(function()
   while true do
    local x = system.get_window_content_x()
    if x ~= last then
-    last = x
-    save("content-" .. phase, {x = x})
+    last, changes = x, changes + 1
+    save("content-" .. phase, {x = x, changes = changes})
    end
    coroutine.yield(.005)
   end
