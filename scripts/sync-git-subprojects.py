@@ -25,20 +25,24 @@ def sync(source_root, meson_command):
             inputs.extend(sorted(path for path in overlay.rglob("*") if path.is_file()))
         inputs.extend(subprojects / "packagefiles" / name.strip()
                       for name in options.get("diff_files", "").split(",") if name.strip())
-        digest = hashlib.sha256()
+        # Git can check out the same input with LF or CRLF, for example in a worktree.
+        # Line endings do not change an input. The raw digest is the state that older
+        # scripts saved. It is still current, so their checkouts do not refresh.
+        digest, raw_digest = hashlib.sha256(), hashlib.sha256()
         for path in inputs:
             # Meson reads these paths to track configure dependencies.
             print(path.as_posix())
-            digest.update(path.relative_to(source_root).as_posix().encode())
-            digest.update(b"\0")
-            digest.update(path.read_bytes())
-            digest.update(b"\0")
+            name = path.relative_to(source_root).as_posix().encode()
+            data = path.read_bytes()
+            digest.update(name + b"\0" + data.replace(b"\r\n", b"\n") + b"\0")
+            raw_digest.update(name + b"\0" + data + b"\0")
         fingerprint = digest.hexdigest()
         state = state_dir / wrap.stem
-        if state.is_file() and state.read_text(encoding="ascii") == fingerprint:
+        saved = state.read_text(encoding="ascii") if state.is_file() else None
+        if saved == fingerprint:
             continue
         checkout = subprojects / options.get("directory", wrap.stem)
-        if checkout.exists():
+        if checkout.exists() and saved != raw_digest.hexdigest():
             if not (checkout / ".git").exists():
                 raise RuntimeError(f"Refusing to replace non-Git dependency: {checkout}")
             print(f"Refreshing {wrap.stem}: dependency inputs changed. "

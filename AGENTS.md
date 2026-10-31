@@ -1117,6 +1117,7 @@ Meson refreshes cached Git subprojects before it loads them when their checked-i
 `scripts/sync-git-subprojects.py` tracks wrap files, local patches, and package files.
 The first configure also refreshes existing Git checkouts. Missing checkouts use normal Meson downloads.
 A refresh puts local dependency edits in that checkout's Git stash. It does not apply them again.
+Line endings do not count as a change. A worktree can link to the main repo's checkouts and copy its state, and gets the same state.
 Ignored build caches, such as Zig's, stay in place.
 State stays under the ignored `subprojects/.anvil-wrap-state` directory.
 Custom library targets must depend on their input state and expose the library as a build output.

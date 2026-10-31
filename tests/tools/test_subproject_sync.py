@@ -129,6 +129,15 @@ class SubprojectSyncTests(unittest.TestCase):
         self.assertEqual(saved, "my local edit\n")
         self.assertTrue(cache.is_file())
 
+    def test_line_endings_alone_keep_local_edits(self):
+        # Another checkout, such as a Git worktree, can get the same inputs with other line endings.
+        (self.checkout / "notes.txt").write_text("my local edit\n")
+        for path in (self.wrap, self.overlay):
+            data = path.read_bytes()
+            path.write_bytes(data.replace(b"\r\n", b"\n") if b"\r\n" in data else data.replace(b"\n", b"\r\n"))
+        self.assertNotIn("Refreshing sample", self.meson("setup", "--reconfigure", "build"))
+        self.assertEqual((self.checkout / "notes.txt").read_text(), "my local edit\n")
+
     def test_patch_change_rebuilds_and_relinks_custom_library(self):
         # Like Ghostty, this library uses its own build command, not Meson's compiler target.
         (self.overlay.parent / "build.py").write_text(
