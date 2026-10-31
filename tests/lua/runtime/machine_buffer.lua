@@ -3,14 +3,14 @@ local common = require "core.common"
 local core = require "core"
 local fs = require "core.fs"
 local machine_server = dofile("tests/fixtures/machine_server.lua")
+local Project = require "core.project"
 local storage = require "core.storage"
 local test = require "core.test"
 
 -- Seam: the normal Buffer open, edit and save flow in a Project process that uses a Machine.
 -- The Machine keeps its files under a private folder (`--test-root`). The Client has a different
--- copy at the same path, so a read of the Client's copy shows in the text or in the access log.
--- Other subsystems, such as Git and the Markdown vault index, still use the local disk.
--- Idle autosave is off, so only the explicit saves write.
+-- copy at the same path. The Machine guard refuses raw reads of it in this Lua state, and the
+-- text checks catch reads in workers. Idle autosave is off, so only the explicit saves write.
 test.describe("Buffer on a Machine", function()
   local raw_open = io.open
 
@@ -64,24 +64,6 @@ test.describe("Buffer on a Machine", function()
     context.server = machine_server.start(context.user, args)
   end
 
-  -- Records each content read of the Client's copies of the open files in this Lua state.
-  -- Workers read through their payload, so the text checks catch their reads.
-  local function watch_client_copy(context)
-    local function watch(owner, name)
-      local original = owner[name]
-      context.restore[#context.restore + 1] = function() owner[name] = original end
-      owner[name] = function(path, ...)
-        if type(path) == "string" and (common.path_equals(path, context.notes)
-            or common.path_equals(path, context.idea)) then
-          context.accesses[#context.accesses + 1] = name .. " " .. path
-        end
-        return original(path, ...)
-      end
-    end
-    watch(io, "open")
-    watch(encoding, "detect")
-  end
-
   -- Records each conflict choice that autosave shows. `context.prompt` holds the newest one.
   local function capture_prompts(context)
     local show = core.nag_view.show
@@ -100,18 +82,22 @@ test.describe("Buffer on a Machine", function()
     context.user = context.root .. PATHSEP .. "user"
     context.store = context.root .. PATHSEP .. "machine"
     context.project = context.root .. PATHSEP .. "project"
-    context.notes = context.project .. PATHSEP .. "notes.md"
-    context.idea = context.project .. PATHSEP .. "idea.md"
-    context.buffers, context.accesses, context.restore = {}, {}, {}
+    context.notes = context.project .. PATHSEP .. "notes.txt"
+    context.idea = context.project .. PATHSEP .. "idea.txt"
+    context.buffers, context.restore = {}, {}
     test.ok(common.mkdirp(context.user))
     -- A UTF-16 Client copy changes the detected encoding if any code reads it.
     write_file(context.notes, "\255\254C\0l\0i\0e\0n\0t\0\n\0")
     write_file(machine_copy(context, context.notes), "Machine copy\n")
     write_file(context.idea, "Client only\n")
-    local enabled = autosave_fast.enabled
-    context.restore[#context.restore + 1] = function() autosave_fast.enabled = enabled end
+    local enabled, projects = autosave_fast.enabled, core.projects
+    context.restore[#context.restore + 1] = function()
+      autosave_fast.enabled = enabled
+      core.projects = projects
+    end
     autosave_fast.enabled = false
-    watch_client_copy(context)
+    -- In a Project process on a Machine, the Machine's Project is the only Project.
+    core.projects = { Project(context.project) }
     capture_prompts(context)
   end)
 
@@ -129,7 +115,7 @@ test.describe("Buffer on a Machine", function()
 
   test.it("opens, edits and saves the Machine's file", function(context)
     start_server(context)
-    fs.use_machine(machine_server.discovery_path(context.user))
+    fs.use_machine(machine_server.discovery_path(context.user), { context.project })
     local buffer = open(context, context.notes)
     test.equal(text(buffer), "Machine copy\n")
     test.equal(buffer.encoding, "UTF-8")
@@ -147,12 +133,11 @@ test.describe("Buffer on a Machine", function()
     test.equal(read_file(machine_copy(context, context.notes)), "Twice Edited Machine copy\n")
 
     test.equal(read_file(context.notes), "\255\254C\0l\0i\0e\0n\0t\0\n\0")
-    test.same(context.accesses, {})
   end)
 
   test.it("creates a file that the Machine does not have", function(context)
     start_server(context)
-    fs.use_machine(machine_server.discovery_path(context.user))
+    fs.use_machine(machine_server.discovery_path(context.user), { context.project })
     local buffer = open(context, context.idea)
     test.equal(text(buffer), "\n")
 
@@ -162,12 +147,11 @@ test.describe("Buffer on a Machine", function()
     -- A new Buffer takes its line endings from the settings.
     test.equal((read_file(machine_copy(context, context.idea)):gsub("\r\n", "\n")), "New\n")
     test.equal(read_file(context.idea), "Client only\n")
-    test.same(context.accesses, {})
   end)
 
   test.it("does not save over a change on the Machine until the user overwrites it", function(context)
     start_server(context)
-    fs.use_machine(machine_server.discovery_path(context.user))
+    fs.use_machine(machine_server.discovery_path(context.user), { context.project })
     local buffer = open(context, context.notes)
     write_file(machine_copy(context, context.notes), "Changed on the Machine\n")
 
@@ -185,7 +169,7 @@ test.describe("Buffer on a Machine", function()
 
   test.it("finds the result of a save whose reply was lost", function(context)
     start_server(context, "--test-lose-reply", "files.write")
-    fs.use_machine(machine_server.discovery_path(context.user))
+    fs.use_machine(machine_server.discovery_path(context.user), { context.project })
     local buffer = open(context, context.notes)
 
     buffer:insert(1, 1, "Saved ")
@@ -205,7 +189,7 @@ test.describe("Buffer on a Machine", function()
   test.it("after a reconnect, reloads a clean Buffer and keeps the text of a dirty one", function(context)
     write_file(machine_copy(context, context.idea), "Idea on the Machine\n")
     start_server(context)
-    fs.use_machine(machine_server.discovery_path(context.user))
+    fs.use_machine(machine_server.discovery_path(context.user), { context.project })
     local clean = open(context, context.notes)
     local dirty = open(context, context.idea)
     dirty:insert(1, 1, "Unsaved ")
@@ -230,13 +214,13 @@ test.describe("Buffer on a Machine", function()
   test.it("restores unsaved text after a crash", function(context)
     start_server(context)
     local discovery = machine_server.discovery_path(context.user)
-    fs.use_machine(discovery)
+    fs.use_machine(discovery, { context.project })
     local buffer = open(context, context.notes)
     buffer:insert(1, 1, "Unsaved ")
     wait_until(function() return record_count() == 1 end, "The recovery record was not written")
     crash(context, buffer)
 
-    fs.use_machine(discovery)
+    fs.use_machine(discovery, { context.project })
     local restored = open(context, context.notes)
     test.equal(text(restored), "Unsaved Machine copy\n")
     test.ok(restored:is_dirty())
@@ -250,7 +234,7 @@ test.describe("Buffer on a Machine", function()
   test.it("after a crash during a save, knows the save from the record", function(context)
     start_server(context, "--test-lose-reply", "files.write")
     local discovery = machine_server.discovery_path(context.user)
-    fs.use_machine(discovery)
+    fs.use_machine(discovery, { context.project })
     local buffer = open(context, context.notes)
     buffer:insert(1, 1, "Saved ")
     buffer:save()
@@ -266,7 +250,7 @@ test.describe("Buffer on a Machine", function()
     crash(context, buffer)
 
     start_server(context)
-    fs.use_machine(discovery)
+    fs.use_machine(discovery, { context.project })
     local restored = open(context, context.notes)
     test.equal(text(restored), "Later Saved Machine copy\n")
     test.ok(restored:is_dirty())

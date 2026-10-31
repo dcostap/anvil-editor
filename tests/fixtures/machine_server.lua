@@ -2,6 +2,9 @@
 local json = require "core.json"
 local M = {}
 
+-- The server stands for another Machine, so the Client's Machine guard does not apply to it.
+local start_process = process.start
+
 function M.discovery_path(user)
   return user .. PATHSEP .. "machine" .. PATHSEP .. "server.json"
 end
@@ -12,7 +15,7 @@ function M.start(user, args)
   os.remove(path)
   local command = { EXEFILE, "serve" }
   for _, arg in ipairs(args) do command[#command + 1] = arg end
-  local server = assert(process.start(command, {
+  local server = assert(start_process(command, {
     stdin = process.REDIRECT_DISCARD, stdout = process.REDIRECT_DISCARD, stderr = process.REDIRECT_DISCARD,
     env = { ANVIL_USERDIR = user },
   }))

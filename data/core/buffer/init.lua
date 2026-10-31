@@ -462,7 +462,8 @@ function Buffer:load_async(filename, on_finish, opts)
   local function submit(bytes)
     local job, err = request.pool:submit {
       kind = "buffer_read", priority = "interactive",
-      payload = { path = filename, encoding = self.encoding, bom = self.bom, bytes = bytes },
+      -- Bytes from a Machine need no path, and the worker then does not touch the disk.
+      payload = { path = not bytes and filename or nil, encoding = self.encoding, bom = self.bom, bytes = bytes },
       on_result = function(message)
         local ok, failure = pcall(accept, message)
         if not ok then

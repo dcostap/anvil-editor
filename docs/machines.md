@@ -268,29 +268,34 @@ Each hosted Project process uses exactly one Machine. A Project on another Machi
 
 Anvil's file access is synchronous and path-based. VS Code was asynchronous and URI-based from the start. This is the main difficulty.
 
-- Add a `core.fs` module for Project content. Its local backend calls the current primitives. Its Machine backend sends requests.
-- Local state uses explicit APIs: `core.storage` and helpers for `USERDIR`, `DATADIR` and `TEMP`. A path prefix does not decide which disk a call means, because a Machine path can have the same spelling as a local folder.
-- In a Project process on another Machine, the raw primitives raise an error for every path. Only `core.fs` and the local-state APIs work.
-- This guard stops mistakes. It is not a security boundary.
-- The audit includes native code and workers, not only Lua: `src/api/encoding.c` and `src/worker_pool.c` open files, `markdown_vault_index.c` reads through SDL, image loading reads files, and `src/api/thread.c` makes Lua states with the standard libraries.
-- Plugins that call `io.open` directly on Project files hit the guard. They must move to `core.fs`.
+- `core.fs` holds the Project content functions for a Machine. Each Project content call site moves to it when its service exists.
+- **The Machine guard** (`core.machine_guard`) protects a Project process on a Machine. The raw file functions refuse a relative path and a path inside the Project's roots. All other absolute paths are local state, such as `USERDIR`, `DATADIR`, `TEMP` and system fonts.
+- This rule is safe because a Machine serves only paths inside its Projects (`outside_project`). A Client has no correct reason to name another Machine path.
+- Local state needs no change. A Machine path with the same spelling as a local folder is inside the Project's roots, so the guard refuses it. An example is the Machine's Scratch Project under a `USERDIR` path.
+- The guard wraps `io`, `os`, `dofile`, `loadfile`, the path functions of `system`, `process.start` (its working folder and arguments), `encoding.detect`, image loading and saving, font loading and the Terminal's working folder.
+- Worker jobs, Lua or native, are refused when their payload names a Project path. Workers get their paths from the payload, so this covers the native indexes and `src/worker_pool.c`.
+- This guard stops mistakes. It is not a security boundary. A worker that finds a Project path in some other way, such as from a file that it reads, is not stopped.
 
-Lines that match each primitive in `data/` today (one line can hold several uses):
+#### Audit result
 
-| Primitive | Lines | Files |
+Every call site of the raw file functions in `data/` was read. Most touch local state: storage, logs, settings, plugins, themes, fonts, Terminal records, the updater, IPC, performance tools and the test framework. These Project content sites remain, by feature and by the step that moves them:
+
+| Feature | Call sites | Step |
 |---|---|---|
-| `system.get_file_info` | 232 | 65 |
-| `worker_pool` | 187 | 26 |
-| `io.open` | 105 | 57 |
-| `os.remove` | 70 | 27 |
-| `system.absolute_path` | 51 | 22 |
-| `system.list_dir` | 31 | 20 |
-| `process.start` | 23 | 14 |
-| `system.chdir` | 14 | 6 |
-| `os.rename` | 9 | 4 |
-| `dirwatch` | 8 | 6 |
+| Opening a Project | `core/init.lua` (folder checks, `system.chdir` to the Project), `core/project.lua`, `core/project_paths.lua`, `plugins/project_paths`, the `.anvil_project.lua` module (`loadfile`, `autosave_fast`, `autosaveonfocuslost`) | 5 |
+| File list and watcher | `core/project_files.lua` with its worker and the native `project_file_manifest` job, `core/dirwatch.lua`, `plugins/autoreload.lua`, `plugins/folder_counts.lua` | 5 |
+| File Tree | `plugins/filetree/init.lua`: listing and stats; create, rename, copy, delete and Recycle Bin | 5, writes in 6 |
+| Fuzzy Searcher | `plugins/fuzzy_searcher/init.lua` and `search.lua`: folder listing, previews, `rg`, new files | 5, writes in 6 |
+| Open, new, rename and delete file | `core/init.lua` (`open_file`), `commands/core.lua`, `commands/files.lua`, `commands/text.lua`, `rootpanel.lua` drops, `widget/filepicker.lua`, `common.is_binary` | 5, writes in 6 |
+| Previews and locations | `poi_preview.lua`, `editor_file_pois.lua`, `text_poi_locations.lua`, `file_context.lua`, `bookmarks.lua` with its worker, `plugins/tabular_data_preview`, `plugins/intellij_actions.lua` | 5 |
+| Images | `imageview.lua`, `image_animation.lua`, `image_overlay.lua`, `markdown/images.lua` | 5 |
+| Markdown | `markdown/vault_index.lua` with its native jobs, `markdown/rename_links.lua`; writes in `markdown/attachments.lua` and `markdown/live_render.lua` | 9, writes in 6 |
+| Symbol index | `treesitter/symbol_index.lua` with the native `treesitter_project_*` jobs | 9 |
+| Git | `plugins/git`, `plugins/git_view.lua`, `plugins/file_git_status.lua` with the native `filetree_git_status_index` job, `plugins/gitdiff_highlight`, `workers/changes_baseline.lua` | 9 |
+| Terminal | `plugins/terminal.lua` (working folder), `core/control.lua` (`cwd` of a launch) | 7 |
+| LSP and formatters | `lsp/config.lua` (executable lookup on the Client's `PATH`), `lsp/manager.lua`, `lsp/documents.lua`, `plugins/document_format.lua` | 10 |
 
-Many of these calls touch local state, not Project content. Classify each call site: Project content or local state, synchronous or asynchronous, UI thread or worker. The UI thread calls files synchronously in some places, for example in `data/core/buffer/init.lua` and `data/plugins/filetree/init.lua`. These must become asynchronous, or read the local metadata copy.
+The Buffer load and save flow is clean: the Buffer tests on a Machine run with the guard on. In a Project process on a Machine, the Markdown vault index does not track Buffers until the Index service exists.
 
 ### Local metadata copy
 
@@ -509,7 +514,7 @@ This is deferred. The options, from simple to complex:
 
 ## Risks
 
-- The `core.fs` seam touches about 70 Lua files and some native code. `io.open` mixes Project content with local state.
+- About 50 Lua files read Project content. The guard finds a missed site only when it runs, so each service needs tests with the guard on.
 - Synchronous file calls on the UI thread must change before a Project can run on a Machine.
 - Machine-qualified identity touches the shell, Shell App State, Workspace storage and control routing.
 - The POSIX branches of the native code have no CI job. They may be broken.
@@ -535,7 +540,7 @@ These decisions come before code. This doc answers identity, ownership and the a
 1. **Loopback slice.** `anvil serve` on the same PC, with one Project and one authenticated read. Done: see "Machine server" in `AGENTS.md`.
 2. **One file, end to end.** Done: see "Machine server" in `AGENTS.md`. The Buffer load and save flow uses a minimal `core.fs`. The test server maps its paths into a private folder (`--test-root`), and the tests fail if code reads the Client's copy. They cover an open, edit and conditional save, a conflict, a save with an unknown result, a disconnect with a change on the Machine and a reconnect, and a crash with a restart from the recovery record. The record keeps the base version, not the base text: the dirty merge adds the text.
 3. **Pairing and transport** between real PCs, before any service that runs commands. Pairing codes, device tokens, View and Full control, revocation and a fixed port exist: see "Machine server" in `AGENTS.md`. **Done.** On 2026-10-31, a second Windows PC paired through Tailscale Serve with the standalone `anvil.exe`. The Machine listed it, then revoked it. The test showed that an expired code gave the same error as a wrong code, so an expired code now gets its own error.
-4. **The full call-site audit**, then `core.fs` with its local backend and the guard. Users see no change.
+4. **The full call-site audit**, then the Machine guard. Users see no change. Done: see [The file seam](#the-file-seam-corefs). Each Project content site moves to `core.fs` with its service, not before, because most must also become asynchronous.
 5. **Files and Search services**, the Machine's Project list and Project configuration, the local metadata copy, and the picker data sources. Read-only Projects on another Machine ship here.
 6. **Writes** with recovery and today's conflict prompt.
 7. **Terminal service** with Controller and Viewers.

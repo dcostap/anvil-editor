@@ -1,4 +1,5 @@
 local common = require "core.common"
+local machine_guard = require "core.machine_guard"
 
 local native_ok, native_pool = pcall(require, "worker_pool_native")
 if not native_ok then native_pool = nil end
@@ -237,6 +238,7 @@ function worker_pool:submit(spec)
   assert(type(spec) == "table", "worker_pool submit expects a job spec table")
   if self.closed then return nil, "closed" end
   assert(type(spec.kind) == "string" and spec.kind ~= "", "worker_pool job kind is required")
+  machine_guard.check_job(spec.kind, spec.native_payload or spec.payload)
 
   self.next_job_id = self.next_job_id + 1
   local job_id = self.next_job_id

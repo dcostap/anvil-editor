@@ -1,6 +1,7 @@
 -- Project content for this Project process. A Project on another Machine reaches its files only
 -- through this module. For now only the Buffer's open and save flow uses it (docs/machines.md).
 local MachineClient = require "core.machine_client"
+local machine_guard = require "core.machine_guard"
 
 local fs = {}
 local reconnect_listeners = {}
@@ -10,9 +11,11 @@ local reconnect_listeners = {}
 fs.machine = nil
 
 -- `path` names a Machine file: the local server's `server.json` or a paired Machine's record.
+-- `roots` lists the Project's paths. The raw file functions then refuse them (`core.machine_guard`).
 -- Only tests call this until Projects on other Machines exist.
-function fs.use_machine(path)
+function fs.use_machine(path, roots)
   fs.use_local()
+  machine_guard.enable(roots)
   fs.machine = MachineClient.new(path, function(reconnect)
     if not reconnect then return end
     for _, listener in ipairs(reconnect_listeners) do listener() end
@@ -22,6 +25,7 @@ end
 function fs.use_local()
   if fs.machine then fs.machine:close() end
   fs.machine = nil
+  machine_guard.disable()
 end
 
 -- `listener()` runs after each reconnect, because the Client missed the Machine's changes.

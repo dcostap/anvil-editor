@@ -1,6 +1,7 @@
 local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
+local fs = require "core.fs"
 local json = require "core.json"
 local anchors = require "core.markdown.anchors"
 local links = require "core.markdown.links"
@@ -1479,6 +1480,8 @@ end
 
 function vault_index.track_buffer(buffer)
   if not (buffer and buffer.abs_filename) then return false end
+  -- The index reads the Project's files. A Machine's Project needs the Machine's Index service.
+  if fs.machine then return false end
   return vault_index.index_for_path(buffer.abs_filename):track_buffer(buffer)
 end
 
