@@ -1203,15 +1203,19 @@ local function line_comment_at_start(dv)
   local edits = {}
   for line = first_line, last_line do
     if uncomment then
-      edits[#edits + 1] = { line1 = line, col1 = 1, line2 = line, col2 = #comment + 1, text = "" }
+      local text = buffer.lines[line]
+      local col = #comment + 1
+      if text:sub(col, col) == " " then col = col + 1 end
+      if text:sub(col):match("^%s*$") then col = #text end
+      edits[#edits + 1] = { line1 = line, col1 = 1, line2 = line, col2 = col, text = "" }
     else
       edits[#edits + 1] = { line1 = line, col1 = 1, line2 = line, col2 = 1, text = comment }
     end
   end
 
-  local delta = uncomment and -#comment or #comment
   local function adjust_col(line, col)
     if line >= first_line and line <= last_line then
+      local delta = uncomment and 1 - edits[line - first_line + 1].col2 or #comment
       return math.max(1, col + delta)
     end
     return col

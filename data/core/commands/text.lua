@@ -392,6 +392,7 @@ end
 
 local function line_comment(comment, line1, col1, line2, col2)
   local start_comment = (type(comment) == 'table' and comment[1] or comment) .. " "
+  local prefix = type(comment) == 'table' and start_comment or comment
   local end_comment = (type(comment) == 'table' and " " .. comment[2])
   local uncomment = true
   local start_offset = math.huge
@@ -399,7 +400,7 @@ local function line_comment(comment, line1, col1, line2, col2)
     local text = buffer().lines[line]
     local s = text:find("%S")
     if s then
-      local cs, ce = text:find(start_comment, s, true)
+      local cs = text:find(prefix, s, true)
       if cs ~= s then
         uncomment = false
       end
@@ -416,9 +417,15 @@ local function line_comment(comment, line1, col1, line2, col2)
       if end_comment and text:sub(#text - #end_comment, #text - 1) == end_comment then
         edits[#edits + 1] = { line1 = line, col1 = #text - #end_comment, line2 = line, col2 = #text, text = "" }
       end
-      local cs, ce = text:find(start_comment, s, true)
+      local cs, ce = text:find(prefix, s, true)
       if ce then
+        if not end_comment then
+          if text:sub(ce + 1, ce + 1) == " " then ce = ce + 1 end
+          if text:sub(ce + 1):match("^%s*$") then cs, ce = 1, #text - 1 end
+        end
         edits[#edits + 1] = { line1 = line, col1 = cs, line2 = line, col2 = ce + 1, text = "" }
+        if line == line1 then col1 = col1 - math.max(0, math.min(col1 - cs, ce + 1 - cs)) end
+        if line == line2 then col2 = col2 - math.max(0, math.min(col2 - cs, ce + 1 - cs)) end
       end
     elseif s then
       edits[#edits + 1] = { line1 = line, col1 = start_offset, line2 = line, col2 = start_offset, text = start_comment }
@@ -433,8 +440,10 @@ local function line_comment(comment, line1, col1, line2, col2)
       merge_cursors = false,
     })
   end
-  col1 = col1 + (col1 > start_offset and #start_comment or 0) * (uncomment and -1 or 1)
-  col2 = col2 + (col2 > start_offset and #start_comment or 0) * (uncomment and -1 or 1)
+  if not uncomment then
+    col1 = col1 + (col1 > start_offset and #start_comment or 0)
+    col2 = col2 + (col2 > start_offset and #start_comment or 0)
+  end
   if end_comment and end_line then
     col2 = col2 + #end_comment * (uncomment and -1 or 1)
   end

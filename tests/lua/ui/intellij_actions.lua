@@ -140,6 +140,20 @@ test.describe("IntelliJ actions batch behavior", function()
     test.same(view_selections(view), { 1, 2, 3, 3 })
   end)
 
+  test.it("line comment at start removes one separator and clears empty comment lines", function(context)
+    local original = "// code\n//    indented\n//\tcode\n//bare\n// \t "
+    local view, buffer = open_editor(context, original)
+    buffer:clear_undo_redo()
+    set_view_selections(view, { 1, 4, 5, 6 })
+
+    test.ok(command.perform("editor:comment_with_line_comment_at_start"))
+
+    test.equal(table.concat(buffer.lines), "code\n   indented\n\tcode\nbare\n\n")
+    test.same(view_selections(view), { 1, 1, 5, 1 })
+    test.ok(command.perform("core:undo"))
+    test.equal(table.concat(buffer.lines), original .. "\n")
+  end)
+
   test.it("clone caret below until last line adds carets in one bulk selection update", function(context)
     local view, buffer = open_editor(context, "aa\nbb\ncc\ndd")
     set_view_selections(view, { 2, 2, 2, 2 })

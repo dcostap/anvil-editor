@@ -1418,6 +1418,21 @@ test.describe("Text View Selection State edit characterization", function()
     })
   end)
 
+  test.it("toggle-line-comments removes one separator and clears empty comment lines", function(context)
+    local original = "  // code\n  //    indented\n  //\tcode\n  //bare\n  // \t "
+    local buffer, main = new_shared_views(context, original)
+    buffer.syntax.comment = "//"
+    core.set_active_view(main)
+    set_view_selection(main, 1, 6, 5, 8)
+
+    test.ok(command.perform("editor:toggle_line_comments"))
+
+    test.equal(text(buffer), "  code\n     indented\n  \tcode\n  bare\n\n")
+    test.same(selection(main), { 1, 3, 5, 1 })
+    test.ok(command.perform("core:undo"))
+    test.equal(text(buffer), original .. "\n")
+  end)
+
   test.it("indent at a collapsed caret in leading whitespace indents the line and jumps to text", function(context)
     local buffer, main = new_shared_views(context, "  aa")
     core.set_active_view(main)
