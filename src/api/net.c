@@ -301,9 +301,17 @@ static int f_create_server(lua_State* L) {
     port = luaL_checkinteger(L, 1);
   }
 
+  SDL_PropertiesID props = 0;
+#ifdef _WIN32
+  /* On Windows, SO_REUSEADDR lets a second server bind a port that a server
+     already listens on. Both then get some of the clients. */
+  props = SDL_CreateProperties();
+  if (props) SDL_SetBooleanProperty(props, NET_PROP_SERVER_REUSEADDR_BOOLEAN, false);
+#endif
   NET_Server* server = NET_CreateServer(
-    address ? address->address : NULL, port, 0
+    address ? address->address : NULL, port, props
   );
+  if (props) SDL_DestroyProperties(props);
 
   if (server == NULL) {
     lua_pushnil(L);

@@ -9,7 +9,7 @@ test.describe("Local network server", function()
     test.ok(net.private_directory(path))
     test.ok(test.remove_tree(path))
   end)
-  test.it("accepts a client without blocking and closes explicitly", function()
+  test.it("keeps its port, accepts a client without blocking and closes explicitly", function()
     local token = net.random_token()
     test.ok(token:match("^[0-9a-f]+$") and #token >= 64)
     test.not_equal(token, net.random_token())
@@ -23,6 +23,8 @@ test.describe("Local network server", function()
       if server then break end
     end
     test.ok(server)
+    -- A second server on the same port would take some of the first server's clients.
+    test.is_nil(net.create_server(address, port))
     test.is_nil(server:accept())
     local client = assert(net.open_tcp(address, port))
     test.equal(client:wait_until_connected(5000), "success")
