@@ -1634,7 +1634,7 @@ local function recent_file_entry(value, fallback_viewed)
   local filename = normalize_visited_filename(value)
   if not filename then return nil end
   local last_edited = tonumber(type(value) == "table" and value.last_edited)
-  local info = not last_edited and system.get_file_info(filename) or nil
+  local info = not last_edited and require("core.project_files").info(filename) or nil
   return {
     path = filename,
     last_viewed = tonumber(type(value) == "table" and value.last_viewed) or fallback_viewed or os.time(),
@@ -1687,7 +1687,7 @@ function core.set_visited(filename, when)
       table.remove(visited, i)
     end
   end
-  local info = not (previous and previous.last_edited) and system.get_file_info(filename) or nil
+  local info = not (previous and previous.last_edited) and require("core.project_files").info(filename) or nil
   table.insert(visited, 1, {
     path = filename,
     last_viewed = tonumber(when) or os.time(),
@@ -1825,7 +1825,8 @@ function core.set_active_view(view, focus_context)
     local project = core.current_project(
       core.active_view.buffer.abs_filename
     )
-    if project then system.chdir(project.path) end
+    -- A Project on a Machine has no local folder to change to.
+    if project and not require("core.fs").on_machine(project.path) then system.chdir(project.path) end
   end
 end
 
@@ -2094,13 +2095,17 @@ function core.open_image(filename, opts)
   ---@cast ImageView core.imageview
   if ImageView.is_supported(filename) then
     local abs_filename = core.root_project():absolute_path(filename)
-    local file = io.open(abs_filename)
-    if not file then return false end
-    file:close()
+    -- A Machine's image loads after the View opens.
+    local remote = require("core.fs").on_machine(abs_filename)
+    if not remote then
+      local file = io.open(abs_filename)
+      if not file then return false end
+      file:close()
+    end
 
     local view, err = require("core.panes").place(function()
       local image = ImageView(abs_filename)
-      if not image.image then error(image.errmsg or "image load failed") end
+      if not image.image and not image.loading then error(image.errmsg or "image load failed") end
       return image
     end, opts or {})
     if not view then core.error("Image could not be loaded: %s", tostring(err)) end
@@ -2147,16 +2152,18 @@ function core.open_file(filename, opts)
   local total_stage = operation and file_open_stage_begin("core_open_file")
   local path_stage = file_open_stage_begin("open_file_stat")
   local abs_filename = core.root_project():absolute_path(filename)
-  -- A Machine's file opens as text. The Buffer reads it from the Machine.
+  -- A Machine's file opens as text or as an image, without a local probe.
   local remote = require("core.fs").on_machine(abs_filename)
   local info = require("core.project_files").info(abs_filename)
+  -- Before the Machine's file list arrives, a path counts as a file. A wrong path fails its load.
+  if remote and not info then info = { type = "file" } end
   file_open_stage_end(path_stage)
   if info and info.type == "dir" then
     file_open_stage_end(total_stage)
     file_open_fail("directory")
     return nil, "cannot open a directory as a file"
   end
-  if info and not remote and ImageView.is_supported(abs_filename) then
+  if info and ImageView.is_supported(abs_filename) then
     core.log_quiet("Opening image in Image View: %s", abs_filename)
     local view = core.open_image(abs_filename, opts)
     file_open_stage_end(total_stage)

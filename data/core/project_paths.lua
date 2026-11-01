@@ -150,7 +150,7 @@ local function normalize_entry(entry, defaults)
   normalized.role = role
   normalized.source = source
   normalized.id = entry.id or make_id(source, role, abs)
-  normalized.exists = system.get_file_info(abs) ~= nil
+  normalized.exists = require("core.project_files").info(abs) ~= nil
   return normalized
 end
 

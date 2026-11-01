@@ -7,6 +7,7 @@ local View = require "core.view"
 local view_icons = require "core.view_icons"
 local image_formats = require "core.image_formats"
 local image_animation = require "core.image_animation"
+local fs = require "core.fs"
 
 ---@alias core.imageview.zoommode "fit" | "fixed"
 
@@ -84,7 +85,7 @@ function ImageView:get_state()
 end
 
 function ImageView.from_state(state)
-  if not (state.path and system.get_file_info(state.path)) then return nil end
+  if not (state.path and require("core.project_files").info(state.path)) then return nil end
   local view = ImageView(state.path, state.zoom_mode, state.zoom_scale)
   if not view.image then return nil end
   if state.scroll then view.image_x, view.image_y = -state.scroll.x, -state.scroll.y end
@@ -122,7 +123,31 @@ function ImageView:set_image(image, label, path, open_animation)
   self:update()
 end
 
+-- A Machine's image comes from the Machine. The View shows it when its bytes arrive.
+function ImageView:load_from_machine(path)
+  self.path, self.loading = path, true
+  fs.read(path, function(err, bytes)
+    if self.path ~= path then return end
+    self.loading = nil
+    local image, load_err
+    if err then
+      load_err = err.message or err.code
+    else
+      image, load_err = canvas.load_image_data(bytes)
+    end
+    local animation_type = image and image_animation.detect_type(bytes:sub(1, 6))
+    self:set_image(image, nil, path, animation_type and function()
+      return canvas.open_animation_data(bytes, animation_type)
+    end or nil)
+    self.errmsg = load_err
+    core.log_quiet("Image View on a Machine: %s %s", path, image and "loaded" or tostring(load_err))
+    core.redraw = true
+  end)
+  return true
+end
+
 function ImageView:load(path)
+  if fs.on_machine(path) then return self:load_from_machine(path) end
   local image, err = canvas.load_image(path)
   self:set_image(image, nil, path, image and ImageView.file_animation_opener(path))
   self.errmsg = err
@@ -455,7 +480,7 @@ end
 
 -- SVG detail changes only after zoom settles. Raster images keep their source texture.
 function ImageView:refresh_svg()
-  if not self.path or not self.path:lower():match("%.svg$") then return end
+  if not self.path or not self.path:lower():match("%.svg$") or fs.on_machine(self.path) then return end
   local iw, ih = self.image:get_size()
   local scale = math.min(self.zoom_scale, 4096 / iw, 4096 / ih)
   local w, h = math.max(1, math.ceil(iw * scale)), math.max(1, math.ceil(ih * scale))
@@ -586,7 +611,7 @@ function ImageView:draw()
   if self.image then
     self:draw_image()
     self:draw_controls()
-  else
+  elseif not self.loading then
     common.draw_text(style.font, style.dim, self.errmsg or "Could not load image", "center",
       self.position.x, self.position.y, self.size.x, self.size.y)
   end

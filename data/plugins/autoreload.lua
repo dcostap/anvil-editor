@@ -46,7 +46,8 @@ end
 
 local function update_time(buffer)
   local path = buffer.abs_filename
-  if not path then return end
+  -- A Machine's file has no local file to watch.
+  if not path or require("core.fs").on_machine(path) then return end
   local info = system.get_file_info(path)
   local missing = not info or info.type ~= "file"
   local old_path = watched_paths[buffer]

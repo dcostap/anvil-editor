@@ -384,6 +384,9 @@ end
 function project_files.info(path)
   if not fs.on_machine(path) then return system.get_file_info(path) end
   path = common.normalize_path(path)
+  for _, root in ipairs(fs.roots) do
+    if common.path_equals(path, root) then return { type = "dir" } end
+  end
   local key = common.path_compare_key(path)
   for entry_key, entry in pairs(cache) do
     if entry.files and entry_key:sub(-1) == "\0" then

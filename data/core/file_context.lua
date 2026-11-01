@@ -120,7 +120,7 @@ function M.source_directory(view)
     end
     local target = M.view_path_target(view)
     if target then
-      local info = system.get_file_info(target.path)
+      local info = require("core.project_files").info(target.path)
       if info and info.type == "dir" then return target.path end
       return common.dirname(target.path)
     end

@@ -10,6 +10,8 @@ local reconnect_listeners = {}
 -- The Machine of this Project process, or nil when the Project is on this PC.
 ---@type core.machine_client?
 fs.machine = nil
+-- The Project's paths on the Machine, or nil.
+fs.roots = nil
 
 -- `path` names a Machine file: the local server's `server.json` or a paired Machine's record.
 -- `roots` lists the Project's paths. The raw file functions then refuse them (`core.machine_guard`).
@@ -17,6 +19,7 @@ fs.machine = nil
 function fs.use_machine(path, roots)
   fs.use_local()
   machine_guard.enable(roots)
+  fs.roots = roots
   fs.machine = MachineClient.new(path, function(reconnect)
     if not reconnect then return end
     for _, listener in ipairs(reconnect_listeners) do listener() end
@@ -25,7 +28,7 @@ end
 
 function fs.use_local()
   if fs.machine then fs.machine:close() end
-  fs.machine = nil
+  fs.machine, fs.roots = nil, nil
   machine_guard.disable()
 end
 

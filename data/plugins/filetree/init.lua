@@ -14,6 +14,9 @@ local project_paths = require "core.project_paths"
 local panes = require "core.panes"
 local storage = require "core.storage"
 local DirWatch = require "core.dirwatch"
+local fs = require "core.fs"
+local machine_folders = require "core.machine_folders"
+local project_files = require "core.project_files"
 local linewrapping = require "core.linewrapping"
 local file_git_status = require "plugins.file_git_status"
 local path_tree = require "plugins.path_tree"
@@ -232,6 +235,7 @@ local function filetree_item_less(a, b)
 end
 
 local function list_dir_metadata(path)
+  if fs.on_machine(path) then return machine_folders.list(path) end
   return system.list_dir_info(path, 2147483647, nil, nil, true)
 end
 
@@ -797,6 +801,12 @@ function FileTreeView:new(opts)
   file_context.exclude_content_view(self)
   self.root_dir = common.normalize_path(opts.root or core.root_project().path)
   self.current_dir = self.root_dir
+  -- On a Machine, a listing arrives after a wait. Its watch reports the folder then, so the tree lists it again.
+  local machine = fs.on_machine(self.root_dir)
+  if machine then
+    buffer.read_only = true
+    buffer.read_only_reason = "The File Tree of a Project on another Machine cannot change files yet"
+  end
   self.original_entries = {}
   self.original_by_name = {}
   self.known_originals = {}
@@ -807,7 +817,7 @@ function FileTreeView:new(opts)
   self.status_cache = nil
   self.git_status = { generation = 0 }
   self.has_possible_edits = false
-  self.filesystem_watch = DirWatch()
+  self.filesystem_watch = machine and machine_folders.watch() or DirWatch()
   self.filesystem_watched_dirs = {}
   self.filesystem_dir_signatures = {}
   self.filesystem_watch_running = false
@@ -845,8 +855,8 @@ end
 
 function FileTreeView:set_navigation_state(state)
   if type(state) ~= "table" or type(state.root) ~= "string" then return false end
-  local root_info = system.get_file_info(state.root)
-  local current_info = state.current_dir and system.get_file_info(state.current_dir)
+  local root_info = project_files.info(state.root)
+  local current_info = state.current_dir and project_files.info(state.current_dir)
   if not (root_info and root_info.type == "dir" and current_info and current_info.type == "dir") then
     core.log_quiet("File Tree could not restore a missing Navigation Place")
     return false
@@ -886,9 +896,9 @@ end
 
 function FileTreeView.from_state(state)
   if type(state) ~= "table" or type(state.root) ~= "string"
-      or not system.get_file_info(state.root) then return nil end
+      or not project_files.info(state.root) then return nil end
   local view = FileTreeView { root = state.root }
-  local current_info = state.current_dir and system.get_file_info(state.current_dir)
+  local current_info = state.current_dir and project_files.info(state.current_dir)
   if current_info and current_info.type == "dir"
       and in_project(state.current_dir, view.root_dir) then
     view.current_dir = common.normalize_path(state.current_dir)
@@ -1049,7 +1059,7 @@ end
 
 function FileTreeView:watch_filesystem_dir(dir)
   if not self.filesystem_watch or self.filesystem_watched_dirs[dir] then return end
-  if not system.get_file_info(dir) then return end
+  if not project_files.info(dir) then return end
   self.filesystem_watch:watch(dir)
   self.filesystem_watched_dirs[dir] = true
   self.filesystem_dir_signatures[dir] = self:filesystem_dir_signature(dir)
@@ -1356,7 +1366,7 @@ function FileTreeView:restore_expanded_paths(expanded)
       local entry = snapshot.by_abs[path_key(path)]
       if entry and entry.type == "dir" then
         local meta = self.line_meta[entry.line]
-        if type(meta) == "table" and not meta.expanded and system.get_file_info(path) then
+        if type(meta) == "table" and not meta.expanded and project_files.info(path) then
           pending[#pending + 1] = entry
         end
       end
@@ -1489,7 +1499,7 @@ local function project_path_role_for_abs(abs)
 end
 
 local function project_path_root_item(entry)
-  local info = system.get_file_info(entry.path)
+  local info = project_files.info(entry.path)
   local missing = not (info and info.type == "dir")
   return {
     name = entry.label,
@@ -2396,7 +2406,7 @@ function FileTreeView:plan_changes(status_only)
   local info_cache = {}
   local function file_info(path)
     local key = path_key(path)
-    if info_cache[key] == nil then info_cache[key] = system.get_file_info(path) or false end
+    if info_cache[key] == nil then info_cache[key] = project_files.info(path) or false end
     return info_cache[key] or nil
   end
   local entries, errors = self:build_entries(true)
@@ -3007,7 +3017,7 @@ function FileTreeView:auto_expand_single_child_folder(parent_line, seen)
 
   if child_count == 1 and child_entry and child_entry.type == "dir" then
     local meta = self.line_meta[child_line]
-    if type(meta) == "table" and not meta.expanded and system.get_file_info(child_entry.abs) then
+    if type(meta) == "table" and not meta.expanded and project_files.info(child_entry.abs) then
       self:expand_folder(child_line, child_entry, true, seen)
     end
   end
@@ -3053,7 +3063,7 @@ function FileTreeView:open_selected_files()
         return false
       end
       if entry and entry.type == "file" and not seen[entry.abs] then
-        local info = system.get_file_info(entry.abs)
+        local info = project_files.info(entry.abs)
         if info and info.type == "file" then
           files[#files + 1] = entry
           seen[entry.abs] = true
@@ -3083,7 +3093,7 @@ function FileTreeView:open_item(opts)
 
   if entry.parent_directory then return self:up_dir() end
 
-  local info = system.get_file_info(entry.abs)
+  local info = project_files.info(entry.abs)
   if entry.type == "dir" then
     -- Opening folders is a pure UI operation. It deliberately discards/reveals
     -- subtree text without applying pending filesystem edits.
@@ -3142,7 +3152,7 @@ function FileTreeView:open_selected_right()
     return false
   end
 
-  local info = entry.type == "file" and system.get_file_info(entry.abs)
+  local info = entry.type == "file" and project_files.info(entry.abs)
   if not (info and info.type == "file") then return false end
 
   local source = panes.pane_for_view(self)
@@ -3188,7 +3198,7 @@ function FileTreeView:on_drop(drop)
   local folders = {}
   for _, filename in ipairs(drop.files) do
     local path = common.normalize_path(filename)
-    local info = system.get_file_info(path)
+    local info = project_files.info(path)
     if not (info and info.type == "dir") then return false end
     folders[#folders + 1] = path
   end
@@ -3207,7 +3217,7 @@ function FileTreeView:change_directory(directory, opts)
   end
 
   directory = directory and common.normalize_path(directory)
-  local info = directory and system.get_file_info(directory)
+  local info = directory and project_files.info(directory)
   if not (info and info.type == "dir") then return false end
   if common.path_equals(directory, self.current_dir) then return false end
 
@@ -3827,7 +3837,7 @@ local function target_state(target, source_view)
   local root_path = root and root.path
   if target == nil or target == "" then return root_path, nil end
   local path = file_context.resolve_path(target, source_view)
-  local info = path and system.get_file_info(path)
+  local info = path and project_files.info(path)
   if not info then return nil, nil, "File Tree target does not exist" end
   if info.type == "dir" then return path, nil end
   if info.type == "file" then return common.dirname(path), path end
@@ -3837,7 +3847,7 @@ end
 -- Selects the path and expands it when it is a folder.
 local function reveal_target(view, path)
   if not path or not focus_path(view, path) then return end
-  local info = system.get_file_info(path)
+  local info = project_files.info(path)
   if info and info.type == "dir" then view:restore_expanded_paths({ [path] = true }) end
 end
 
@@ -3920,7 +3930,7 @@ end
 
 local function reveal_path_in_context(target, context, pane, source_view)
   local path = file_context.resolve_path(target, source_view)
-  if not path or not system.get_file_info(path) then return nil, "File Tree target does not exist" end
+  if not path or not project_files.info(path) then return nil, "File Tree target does not exist" end
   if (context.placement or "current") == "current" then
     for _, candidate in ipairs(pane and panes.views(pane) or {}) do
       if candidate.extends and candidate:extends(FileTreeView)
@@ -3942,7 +3952,7 @@ end
 
 local function open_path_in_context(target, context, pane, source_view)
   local path = file_context.resolve_path(target, source_view)
-  local info = path and system.get_file_info(path)
+  local info = path and project_files.info(path)
   if not info then return nil, "File Tree target does not exist" end
   if info.type == "dir" or project_paths.resolve(path) then
     return open_root_in_context(path, context, pane, source_view)
