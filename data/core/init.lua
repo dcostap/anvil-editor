@@ -2147,21 +2147,23 @@ function core.open_file(filename, opts)
   local total_stage = operation and file_open_stage_begin("core_open_file")
   local path_stage = file_open_stage_begin("open_file_stat")
   local abs_filename = core.root_project():absolute_path(filename)
-  local info = system.get_file_info(abs_filename)
+  -- A Machine's file opens as text. The Buffer reads it from the Machine.
+  local remote = require("core.fs").on_machine(abs_filename)
+  local info = require("core.project_files").info(abs_filename)
   file_open_stage_end(path_stage)
   if info and info.type == "dir" then
     file_open_stage_end(total_stage)
     file_open_fail("directory")
     return nil, "cannot open a directory as a file"
   end
-  if info and ImageView.is_supported(abs_filename) then
+  if info and not remote and ImageView.is_supported(abs_filename) then
     core.log_quiet("Opening image in Image View: %s", abs_filename)
     local view = core.open_image(abs_filename, opts)
     file_open_stage_end(total_stage)
     if view then file_open_attach_view(view) else file_open_fail("image_load") end
     return view
   end
-  if info and not (opts and opts.as_text) and common.is_binary_file(abs_filename) then
+  if info and not remote and not (opts and opts.as_text) and common.is_binary_file(abs_filename) then
     ask_binary_open(abs_filename, opts)
     file_open_stage_end(total_stage)
     file_open_fail("binary")

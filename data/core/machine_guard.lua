@@ -169,6 +169,13 @@ function machine_guard.disable()
   roots = nil
 end
 
+-- True when the guard is on and the path names a file of the Machine.
+function machine_guard.owns(path)
+  if not roots or type(path) ~= "string" then return false end
+  local normalized = normalize(path)
+  return normalized ~= nil and in_project(normalized)
+end
+
 -- Worker jobs read the paths in their payload. A job that names a Project path is refused.
 function machine_guard.check_job(kind, payload)
   if roots then check_values("worker job " .. tostring(kind), payload, 0) end

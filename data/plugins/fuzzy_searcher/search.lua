@@ -162,7 +162,7 @@ local function file_candidates(job, spec, visit)
     local info = spec.metadata[key]
     if not info then
       if spec.options.min_size or spec.options.sort == "size" or spec.options.sort == "date" then
-        info = system.get_file_info(path)
+        info = project_files.info(path)
         spec.metadata[key] = info
       else
         info = { type = is_folder and "dir" or "file" }

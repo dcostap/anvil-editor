@@ -35,10 +35,13 @@ function M.wait_discovery(user, server)
   error("The Machine server did not publish its discovery file")
 end
 
--- Returns the server process and its discovery record.
+-- Returns the server process and its discovery record. The test process is the server's owner,
+-- so the server ends when a test crashes.
 function M.start(user, args)
   os.remove(M.discovery_path(user))
-  local server = M.spawn(user, args)
+  local command = { "--owner", tostring(system.get_process_id()) }
+  for _, arg in ipairs(args) do command[#command + 1] = arg end
+  local server = M.spawn(user, command)
   return server, M.wait_discovery(user, server)
 end
 

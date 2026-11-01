@@ -1,5 +1,5 @@
 -- Project content for this Project process. A Project on another Machine reaches its files only
--- through this module. For now only the Buffer's open and save flow uses it (docs/machines.md).
+-- through this module. The Buffer's open and save flow and `core.project_files` use it (docs/machines.md).
 local json = require "core.json"
 local MachineClient = require "core.machine_client"
 local machine_guard = require "core.machine_guard"
@@ -27,6 +27,11 @@ function fs.use_local()
   if fs.machine then fs.machine:close() end
   fs.machine = nil
   machine_guard.disable()
+end
+
+-- True when `path` names a file of the Machine. Such paths cannot use the raw file functions.
+function fs.on_machine(path)
+  return machine_guard.owns(path)
 end
 
 -- `listener()` runs after each reconnect, because the Client missed the Machine's changes.

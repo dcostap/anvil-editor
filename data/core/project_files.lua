@@ -379,6 +379,20 @@ function project_files.contains(root, path, kind)
   return entry.paths[key] == true
 end
 
+-- Returns `system.get_file_info(path)`. For a file of a Project on a Machine, it returns `{type = ...}` from
+-- the Project's file list, or nil when the list does not have the path. It does not wait for the Machine.
+function project_files.info(path)
+  if not fs.on_machine(path) then return system.get_file_info(path) end
+  path = common.normalize_path(path)
+  local key = common.path_compare_key(path)
+  for entry_key, entry in pairs(cache) do
+    if entry.files and entry_key:sub(-1) == "\0" then
+      if entry.paths[key] then return { type = "file" } end
+      if entry.searchable_directories[key] then return { type = "dir" } end
+    end
+  end
+end
+
 function project_files.directories(root, opts)
   opts = opts or {}
   local entry = cache[cache_key(root, opts.include_ignored == true)]

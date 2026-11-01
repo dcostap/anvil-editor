@@ -387,7 +387,7 @@ function fuzzy_searcher.remember_file_metadata(meta, metadata)
   local text = meta.text
   local existing = metadata[text]
   if existing and not common.path_equals(existing.abs_path, meta.abs_path) then
-    if system.get_file_info(existing.abs_path) then
+    if project_files.info(existing.abs_path) then
       text = string.format("%s  —  %s", text, display_root(meta.abs_path))
       meta = common.merge(meta, { text = text, disambiguated = true })
     else
@@ -1049,7 +1049,7 @@ function fuzzy_searcher.get_recent_file_entries()
       end
       local key = abs and common.path_compare_key(abs)
       if key and not seen[key] then
-        local info = system.get_file_info(abs)
+        local info = project_files.info(abs)
         local include_ignored = active_view and active_view.include_ignored == true
         local included = true
         if not include_ignored then
@@ -1511,6 +1511,8 @@ end
 local function detect_binary_preview(path)
   local ext = file_extension(path)
   if binary_preview_extensions[ext] then return true, ext:upper() .. " file" end
+  -- A Machine's file has no local copy to probe. The preview's Buffer reads it from the Machine.
+  if require("core.fs").on_machine(path) then return false, nil end
 
   local info = system.get_file_info(path)
   if info and info.size and info.size > (fuzzy_searcher.preview_text_max_bytes or 2097152) then
@@ -2494,7 +2496,7 @@ function fuzzy_searcher.file_metadata_parts(r)
   local path = fullpath(r.abs_path or r.file or r.path)
   local last_edited = file_metadata.recent_times(path)
   if r.file_size == nil then
-    local info = system.get_file_info(path)
+    local info = project_files.info(path)
     r.file_size = info and info.size or false
     r.file_modified = info and info.modified
   end
@@ -3444,7 +3446,7 @@ function path_search.external_path_parts(path)
   local ok, normalized = pcall(common.normalize_path, trim_query(path))
   if not ok or not normalized or not common.is_absolute_path(normalized) then return nil end
 
-  local info = system.get_file_info(normalized)
+  local info = project_files.info(normalized)
   if info and info.type == "dir" then
     return { scope = normalized, query = "" }
   end
@@ -3456,7 +3458,7 @@ function path_search.external_path_parts(path)
   for index = #normalized, 1, -1 do
     if normalized:sub(index, index):match("%s") then
       local candidate = trim_query(normalized:sub(1, index - 1))
-      local candidate_info = common.is_absolute_path(candidate) and system.get_file_info(candidate)
+      local candidate_info = common.is_absolute_path(candidate) and project_files.info(candidate)
       if candidate_info and candidate_info.type == "dir" then
         return {
           scope = candidate,
@@ -3469,7 +3471,7 @@ function path_search.external_path_parts(path)
 
   local scope = path_search.parent_path(normalized)
   while scope and common.is_absolute_path(scope) do
-    local scope_info = system.get_file_info(scope)
+    local scope_info = project_files.info(scope)
     if scope_info and scope_info.type == "dir" then
       return { scope = scope, query = path_search.relative_to_scope(normalized, scope) }
     end
@@ -3570,7 +3572,7 @@ function path_search.direct_result(text, line, col, case_sensitive)
     absolute and expanded or (project_dir() .. PATHSEP .. expanded))
   if not ok or not path then return nil end
 
-  local info = system.get_file_info(path)
+  local info = project_files.info(path)
   if info then
     ensure_recent_project_times()
     local sidebar
@@ -3604,6 +3606,8 @@ function path_search.direct_result(text, line, col, case_sensitive)
   end
 
   if not explicit and mode ~= "" then return nil end
+  -- A Project on a Machine cannot create files yet.
+  if require("core.fs").on_machine(path) then return nil end
   local parts = path_search.external_path_parts(path)
   if not parts or parts.blocked or parts.search_terms or not parts.scope then return nil end
   return {
@@ -5656,7 +5660,7 @@ function path_search.native_results(scope, query, limit, picker)
     for _, match in ipairs(matches) do
       local entry = match.entry
       local path = common.normalize_path(scope .. PATHSEP .. entry.name)
-      local info = not is_folder and system.get_file_info(path) or nil
+      local info = not is_folder and project_files.info(path) or nil
       target[#target+1] = {
         kind = "path",
         label = path,
@@ -7737,7 +7741,7 @@ end
 
 function FSView:open_selected_in_filetree()
   local path = self:selected_file_path()
-  local info = path and system.get_file_info(path)
+  local info = path and project_files.info(path)
   if not info or info.type ~= "file" then return false end
 
   core.log_quiet("Fuzzy Searcher: opening selected file in File Tree path_len=%d", #path)
@@ -7942,7 +7946,7 @@ end
 
 function FSView:activate_create_path(r, new_group)
   local path = common.normalize_path(r.abs_path or r.path)
-  local info = path and system.get_file_info(path)
+  local info = path and project_files.info(path)
   if info then
     if info.type == "dir" then
       if new_group then
@@ -8207,7 +8211,7 @@ function FSView:activate_selected_result(new_group)
     local candidate = path_search.file_picker_candidate(self.file_picker, r)
     if not candidate then return end
     local path = candidate.path
-    local info = system.get_file_info(path)
+    local info = project_files.info(path)
     if not info or (candidate.type == "folder" and info.type ~= "dir")
         or (candidate.type == "file" and info.type ~= "file") then
       self.force_refresh = true
@@ -8278,7 +8282,7 @@ function FSView:poll_modifier_result_metadata()
   for _, result in ipairs(self.results or {}) do
     local path = result.abs_path or result.path
     if path and not result.is_folder then
-      local info = system.get_file_info(path)
+      local info = project_files.info(path)
       local size_changed = options.min_size or options.sort == "size"
       size_changed = size_changed and info and info.size ~= result.file_size
       local date_changed = options.sort == "date"
@@ -8983,7 +8987,7 @@ local function open_current_file()
 
   local query = current_file_query(path)
   view.input:set_text(query, false)
-  local info = path and system.get_file_info(path)
+  local info = path and project_files.info(path)
   if info and info.type == "file" then
     local name = common.basename(query)
     local start_col = #query - #name + 1

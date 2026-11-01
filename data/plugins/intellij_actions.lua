@@ -11,6 +11,7 @@ local config = require "core.config"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local file_context = require "core.file_context"
+local fs = require "core.fs"
 local markdown_selection = require "core.markdown.selection"
 
 local function can_edit(dv, reason)
@@ -1384,6 +1385,8 @@ end, {
 })
 
 command.add(function(target)
+  -- A Project on a Machine has its files on the other PC. This PC's apps cannot open them.
+  if fs.machine then return false end
   local view = type(target) == "string" and target ~= "" and target or core.active_view
   if type(view) ~= "string" and not is_file_bound_view(view) then return false end
   local path = active_file_path(view)
