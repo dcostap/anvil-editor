@@ -61,6 +61,9 @@ function tab.describe(pane, number)
   if icon then item.icon = icon.kind == "file" and {kind = "file", path = icon.path} or {kind = "ui", glyph = icon.glyph} end
   local path_tree = require "plugins.path_tree"
   local path = require("core.file_context").view_file_path(view)
+  -- The file's folder as File Search shows it, with a separator at its end. A file at the Project root has none.
+  local display = path and require("core.project_paths").display_path(path)
+  item.dir = display and display.text:match("^(.*[/\\])[^/\\]*$") or nil
   local git = path and path_tree.git_info_for_file(path)
   local color = path_tree.git_text_color(git and git.kind)
   if color then item.color = {color[1], color[2], color[3], color[4]} end
@@ -189,6 +192,17 @@ function tab.fit(font, text, width)
   return text:sub(1, ends[low] or 0) .. ELLIPSIS
 end
 
+-- Shortens a folder path from its start, one folder at a time, until it fits in `width`. Nil when no folder fits.
+local function fit_dir(font, dir, width)
+  if font:get_width(dir) <= width + 0.5 then return dir end
+  local start = dir:find("[/\\]")
+  while start and start < #dir do
+    local text = ELLIPSIS .. dir:sub(start)
+    if font:get_width(text) <= width + 0.5 then return text end
+    start = dir:find("[/\\]", start + 1)
+  end
+end
+
 -- Draws text with a soft light that passes through its letters from left to right. `phase` runs from 0 to 1 over
 -- one pass. Each letter brightens from `color` to `peak` while the light is on it.
 function tab.draw_shimmer(font, text, x, y, color, peak, phase)
@@ -308,8 +322,9 @@ end
 -- Draws the Tab's content in the rectangle. `name_color` colours a name without a Git or missing-file colour.
 -- Returns true when it drew a spinner frame, so the caller can draw the next one, and the name's left edge.
 -- `shimmer` is the phase of a shimmer through the name, from 0 to 1. `number_gutter` is the right edge of a gutter
--- left of the Tab. The number draws there, so Tabs with and without a number align.
----@param opts {name_color: renderer.color, number_font: renderer.font?, number_gutter: number?, name_font: renderer.font?, now: number?, clock: number?, shimmer: number?, note: boolean?}
+-- left of the Tab. The number draws there, so Tabs with and without a number align. `dir` draws the file's folder
+-- dim before its name, in the space that the name leaves.
+---@param opts {name_color: renderer.color, number_font: renderer.font?, number_gutter: number?, name_font: renderer.font?, now: number?, clock: number?, shimmer: number?, note: boolean?, dir: boolean?}
 function tab.draw(item, x, y, w, h, opts)
   local number_font, name_font = opts.number_font or style.font, opts.name_font or style.font
   local right = x + w
@@ -333,6 +348,8 @@ function tab.draw(item, x, y, w, h, opts)
   if spun then name, spinning = spun, true end
   name = tab.fit(name_font, name, name_width)
   local name_y = middle(name_font)
+  local dir = opts.dir and item.dir and fit_dir(name_font, item.dir, name_width - name_font:get_width(name))
+  if dir then x = renderer.draw_text(name_font, dir, x, name_y, style.dim) end
   if opts.shimmer then
     tab.draw_shimmer(name_font, name, x, name_y, color, style.accent, opts.shimmer)
   else

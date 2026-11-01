@@ -53,10 +53,11 @@ function Scene.model()
       terminal("g", "old shell", 45 * DAY),
     }, {active = 2, visible = 1,
       editor(1, 1, "init.lua", {focused = 30}),
-      editor(2, 1, "sidebar_view.lua", {color = {0xe2, 0xc0, 0x8d, 255}, focused = 50}),
+      editor(2, 1, "sidebar_view.lua", {color = {0xe2, 0xc0, 0x8d, 255}, focused = 50,
+        dir = "data" .. PATHSEP .. "core" .. PATHSEP}),
       terminal_tab(3, 2, "a", "[40 s] \u{03C0} - GLP4", 30, true, 40),
       terminal_tab(4, 3, "b", POWERSHELL, 20 * MINUTE, false, 20),
-      editor(5, 4, "removed.md", {missing = true}),
+      editor(5, 4, "removed.md", {missing = true, dir = "docs" .. PATHSEP}),
     }),
     project(2, "D:/Work/Israel Mallo Mart\u{00ED}nez - ManualSistemas", "ready", 2 * 60 * 60, 2, {
       terminal("h", "\u{03C0} - Israel Mallo Mart\u{00ED}nez", 5 * MINUTE, {agent_state = "blocked",
