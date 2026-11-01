@@ -19,6 +19,9 @@ local FULL_CONTROL = {["files.write"] = true, ["files.mkdir"] = true, ["files.mo
   ["files.copy"] = true, ["files.delete"] = true, ["pairing.start"] = true, ["devices.list"] = true, ["devices.revoke"] = true}
 -- Tailscale Serve and other forwarders need a port that stays the same across restarts.
 local DEFAULT_PORT, OWNER_CHECK_SECONDS = 7690, 1
+-- A Client that does not read its replies holds them in memory. Above MAX_PENDING unsent bytes the server reads
+-- no more requests from it, and after STALL_SECONDS without progress it closes the connection.
+local MAX_PENDING, STALL_SECONDS = 64 * 1024 * 1024, 30
 local server, test_root, lose_reply, fixed_port, owner, waiting
 
 -- A server often ends by a forced stop, and it logs little. So each record goes to disk at once.
@@ -195,7 +198,11 @@ local function reply(client, id, value, bytes)
   end
   -- A service can reply after its Client went away.
   if client.dead then return end
-  client.socket:write(machine.frame("reply", id, json.encode(value), bytes))
+  local ok, err = client.socket:write(machine.frame("reply", id, json.encode(value), bytes))
+  if not ok then
+    log("Machine server cannot write to a Client: %s", tostring(err))
+    client.dead = true
+  end
 end
 
 local function fail(client, id, code, message, details, bytes)
@@ -254,6 +261,15 @@ local function projects()
   return server.projects or sidebar_projects()
 end
 
+-- True when the disk path is in a folder with the server's credentials (`server.private`). A Project can hold
+-- the user folder, and the owner token in its discovery file gives Full control.
+local function is_private(disk)
+  for _, folder in ipairs(server.private) do
+    if common.path_equals(disk, folder) or common.path_belongs_to(disk, folder) then return true end
+  end
+  return false
+end
+
 -- Returns the absolute Machine path, or nil, an error code and a message.
 local function check_path(path)
   if type(path) ~= "string" or not common.is_absolute_path(path) then
@@ -262,9 +278,22 @@ local function check_path(path)
   path = system.absolute_path(path) or path
   for _, project in ipairs(projects()) do
     local root = project.path
-    if common.path_equals(path, root) or common.path_belongs_to(path, root) then return path end
+    if common.path_equals(path, root) or common.path_belongs_to(path, root) then
+      if is_private(common.normalize_path(disk_path(path))) then
+        return nil, "private", "The path holds the credentials of this Machine"
+      end
+      return path
+    end
   end
   return nil, "outside_project", "The path is not in a Project of this Machine"
+end
+
+-- True when a Project root is inside the path, so a change of the path changes that Project too.
+local function holds_project(path)
+  for _, project in ipairs(projects()) do
+    if common.path_belongs_to(project.path, path) then return true end
+  end
+  return false
 end
 
 -- Returns the Project root that `path` names, or nil.
@@ -437,20 +466,39 @@ local function handle(client, id, body, bytes)
   fail(client, id, "unknown_method", "This Machine has no method " .. request.method)
 end
 
+-- True while the Client has too many unsent reply bytes. Closes a Client that stays stalled.
+local function stalled(client)
+  if (client.socket:get_pending_writes() or 0) <= MAX_PENDING then
+    client.stalled = nil
+    return false
+  end
+  client.stalled = client.stalled or system.get_time()
+  if system.get_time() - client.stalled > STALL_SECONDS then
+    log("Machine server closes a Client that does not read its replies")
+    client.dead = true
+  end
+  return true
+end
+
 local function poll_client(client)
-  while not client.closing do
+  while not client.closing and not stalled(client) do
     local chunk = client.socket:read(65536)
     if not chunk then client.dead = true; return end
     if chunk == "" then break end
     client.decoder:feed(chunk)
-    while not client.closing and not client.dead do
+    while not client.closing and not client.dead and not stalled(client) do
       local kind, id, body, bytes = client.decoder:next()
       if not kind then
         if id then client.dead = true end
         break
       end
       if kind ~= "request" then client.dead = true; break end
-      handle(client, id, body, bytes)
+      -- An error in one request must not stop the server for its other Clients.
+      local ok, err = xpcall(handle, debug.traceback, client, id, body, bytes)
+      if not ok then
+        log("Machine server request failed: %s", tostring(err))
+        fail(client, id, "internal_error", "The Machine could not do the request")
+      end
     end
     if client.dead then return end
   end
@@ -473,6 +521,7 @@ local function poll()
       client.socket:close()
       client.dead = true
       table.remove(server.clients, i)
+      for _, closed in ipairs(server.on_close) do closed(client) end
     end
   end
 end
@@ -484,10 +533,16 @@ local function start(listed)
   server = {listener = listener, port = port, token = token, projects = listed, clients = {},
     saves = {}, save_order = {}, devices_path = directory .. PATHSEP .. "devices.json",
     machine = machine_id(directory), epoch = net.random_token():sub(1, 16),
-    discovery = directory .. PATHSEP .. "server.json", owner_check = system.get_time()}
+    discovery = directory .. PATHSEP .. "server.json", owner_check = system.get_time(), on_close = {},
+    private = {}}
+  local user = system.absolute_path(USERDIR) or USERDIR
+  for _, name in ipairs({"machine", "machines"}) do
+    server.private[#server.private + 1] = common.normalize_path(user .. PATHSEP .. name)
+  end
   server.devices = load_devices(server.devices_path)
   local service_context = {reply = reply, fail = fail, check_path = check_path, disk_path = disk_path,
-    machine_path = machine_path, project_root = project_root, log = log}
+    machine_path = machine_path, project_root = project_root, holds_project = holds_project, log = log,
+    private = server.private, on_close = function(fn) server.on_close[#server.on_close + 1] = fn end}
   for _, module in ipairs({"core.serve_files", "core.serve_search"}) do
     for name, method in pairs(require(module).new(service_context)) do services[name] = method end
   end

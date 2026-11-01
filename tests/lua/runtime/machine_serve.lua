@@ -154,10 +154,10 @@ test.describe("Machine server", function()
   end
 
   -- Returns the new device's credentials, from a connection that stays open.
-  local function pair(context, level)
+  local function pair(context, level, name)
     local code = call(owner(context), "pairing.start", {level = level}).result.code
     local client = connect(context.discovery)
-    local hello = call(client, "hello", {protocol = 1, pair = code, name = "Laptop"}).result
+    local hello = call(client, "hello", {protocol = 1, pair = code, name = name or "Laptop"}).result
     test.equal(hello.level, level)
     return hello.device, client, code
   end
@@ -177,8 +177,13 @@ test.describe("Machine server", function()
       "unauthorized")
     client.socket:close()
 
+    -- A device name is text, also when it looks like the JSON encoder's raw-number marker.
+    pair(context, "view", json.number_flag .. "]")
     stop_server(context)
     context.discovery = start_server(context)
+    local names = {}
+    for _, listed in ipairs(call(owner(context), "devices.list", {}).result.devices) do names[#names + 1] = listed.name end
+    test.same(names, {"Laptop", json.number_flag .. "]"})
     client = connect(context.discovery)
     test.equal(call(client, "hello", {protocol = 1, device = device.id, token = device.token}).result.level, "full")
     _, bytes = call(client, "files.read", {path = path})
@@ -335,6 +340,15 @@ test.describe("Machine server", function()
     test.equal(call(client, "files.move", {from = path("copy"), to = context.root .. PATHSEP .. "out"}).error.code,
       "outside_project")
     test.ok(system.get_file_info(path("copy", "b", "moved.md")))
+
+    -- A change cannot take another Project with its parent folder.
+    test.ok(common.mkdirp(path("group", "inner")))
+    stop_server(context)
+    context.server, context.discovery = machine_server.start(context.user, { context.project, path("group", "inner") })
+    client = owner(context)
+    test.equal(call(client, "files.delete", {paths = {path("group")}}).error.code, "project_root")
+    test.equal(call(client, "files.move", {from = path("group"), to = path("moved")}).error.code, "project_root")
+    test.ok(system.get_file_info(path("group", "inner")))
   end)
 
   test.it("stats many paths and lists a folder in one request each", function(context)
@@ -385,6 +399,30 @@ test.describe("Machine server", function()
     test.equal(code, "outside_project")
     _, code = search({"rg", "-e", "needle", ".."})
     test.equal(code, "outside_project")
+    -- Windows reads a path that starts with a separator from the drive's root, not from the folder.
+    _, code = search({"rg", "-e", "secret", "--", ((context.root .. PATHSEP .. "secret.txt"):gsub("^%a:", ""))})
+    test.equal(code, "invalid_path")
+    _, code = search({"rg", "-e", "secret", string.rep(".." .. PATHSEP, 64)})
+    test.ok(code, "A path above the drive's root was accepted")
+    test.ok(search({"rg", "-F", "-e", "needle", "."}):find("needle", 1, true), "The server stopped after a bad path")
+  end)
+
+  test.it("keeps its credentials out of a Project that holds its user folder", function(context)
+    stop_server(context)
+    context.server, context.discovery = machine_server.start(context.user, { context.root })
+    local client = owner(context)
+    local discovery = machine_server.discovery_path(context.user)
+    test.equal(call(client, "files.read", {path = discovery}).error.code, "private")
+    test.equal(call(client, "files.copy", {from = discovery, to = context.root .. PATHSEP .. "copy.json"}).error.code,
+      "private")
+    local reply = call(client, "search.start", {args = {"rg", "-F", "-e", context.discovery.token, "."}, cwd = context.root})
+    local output = {}
+    repeat
+      local read, bytes = call(client, "search.read", {id = reply.result.id})
+      output[#output + 1] = bytes
+    until read.result.done
+    test.equal(table.concat(output), "")
+    client.socket:close()
   end)
 
   local function write_sidebar(context, ...)

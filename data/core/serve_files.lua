@@ -10,9 +10,19 @@ local project_files = require "core.project_files"
 local files = {}
 local MAX_STAT_PATHS, MAX_CHANGE_BATCHES, MAX_CHANGE_PATHS = 4096, 64, 4096
 
--- `server` gives: reply, fail, check_path (path -> path or nil, code, message), disk_path, project_root, log.
+-- `server` gives: reply, fail, check_path (path -> path or nil, code, message), disk_path, project_root,
+-- holds_project, on_close and log.
 function files.new(server)
   local roots = {}
+
+  -- A closed Client's waits go at once, also in a Project without changes.
+  server.on_close(function(client)
+    for _, state in pairs(roots) do
+      for i = #state.waiters, 1, -1 do
+        if state.waiters[i].client == client then table.remove(state.waiters, i) end
+      end
+    end
+  end)
 
   local function relative(state, path)
     path = common.normalize_path(path)
@@ -103,6 +113,14 @@ function files.new(server)
     if not root then return server.fail(client, id, "not_a_project", "The root is not a Project of this Machine") end
     if type(params.since) ~= "number" then return server.fail(client, id, "invalid_request", "since must be a number") end
     local state = root_state(root)
+    -- A Client waits once for each Project. A new wait ends its earlier wait.
+    for i = #state.waiters, 1, -1 do
+      local waiter = state.waiters[i]
+      if waiter.client == client then
+        table.remove(state.waiters, i)
+        server.fail(client, waiter.id, "replaced", "A newer files.changes request replaced this request")
+      end
+    end
     state.waiters[#state.waiters + 1] = {client = client, id = id, since = params.since}
     answer_waiters(state)
   end
@@ -144,11 +162,11 @@ function files.new(server)
   end
 
   -- Returns the disk path of a path that a change can name, or nothing after it sends the error.
-  -- A change cannot move or delete a Project root.
+  -- A change cannot move or delete a Project root, or a folder that holds one.
   local function change_path(client, id, path, root_ok)
     local checked, code, message = server.check_path(path)
     if not checked then return server.fail(client, id, code, message) end
-    if not root_ok and server.project_root(checked) then
+    if not root_ok and (server.project_root(checked) or server.holds_project(checked)) then
       return server.fail(client, id, "project_root", "A Project root cannot move or be deleted")
     end
     return server.disk_path(checked)

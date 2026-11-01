@@ -53,7 +53,7 @@ local function ripgrep_path()
   return "rg"
 end
 
--- `server` gives: reply, fail, check_path, disk_path, machine_path (disk path -> Machine path), log.
+-- `server` gives: reply, fail, check_path, disk_path, machine_path (disk path -> Machine path), private and log.
 function search.new(server)
   local searches, order, sequence = {}, {}, 0
 
@@ -112,13 +112,33 @@ function search.new(server)
     for i = 2, #params.args do command[i] = params.args[i] end
     for _, i in ipairs(indexes) do
       local path = command[i]
+      -- ripgrep reads `\x` from the drive's root and `C:x` from the drive's current folder, not from `cwd`.
+      if not common.is_absolute_path(path) and (path:match("^[/\\]") or path:match("^%a:")) then
+        return server.fail(client, id, "invalid_path", "A path must be absolute or relative to cwd")
+      end
       local absolute = common.is_absolute_path(path) and path or (cwd .. PATHSEP .. path)
-      local checked, path_code, path_message = server.check_path(common.normalize_path(absolute))
+      local normalized_ok, normalized = pcall(common.normalize_path, absolute)
+      if not normalized_ok then return server.fail(client, id, "invalid_path", "The path is not valid") end
+      local checked, path_code, path_message = server.check_path(normalized)
       if not checked then return server.fail(client, id, path_code, path_message) end
       -- In test mode, the Machine's files are under a private folder.
       if common.is_absolute_path(path) then command[i] = server.disk_path(path) end
     end
-    local stream, start_error = process_stream.start(command, {cwd = server.disk_path(cwd)})
+    -- ripgrep skips the credential folders in the folders that it searches. A glob that starts with `/` names a
+    -- path from ripgrep's working folder.
+    local disk_cwd = common.normalize_path(server.disk_path(cwd))
+    local excluded = {}
+    for _, folder in ipairs(server.private) do
+      if common.path_belongs_to(folder, disk_cwd) then
+        excluded[#excluded + 1] = "--glob"
+        excluded[#excluded + 1] = "!/" .. common.relative_path(disk_cwd, folder):gsub("\\", "/")
+      end
+    end
+    if #excluded > 0 then
+      table.insert(excluded, 1, "--glob-case-insensitive")
+      for j = #excluded, 1, -1 do table.insert(command, 2, excluded[j]) end
+    end
+    local stream, start_error = process_stream.start(command, {cwd = disk_cwd})
     if not stream then return server.fail(client, id, "search_failed", tostring(start_error)) end
     if #order >= MAX_SEARCHES then remove(searches[order[1]]) end
     sequence = sequence + 1

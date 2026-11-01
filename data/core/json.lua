@@ -123,6 +123,9 @@ local function encode_string(val)
     #val > number_flag_len
     and
     string.sub(val, 1, number_flag_len) == json.number_flag
+    -- Other text after the flag stays a string, so untrusted text cannot add JSON.
+    and string.sub(val, number_flag_len+1):match("^[-+%d.eE]+$")
+    and tonumber(string.sub(val, number_flag_len+1))
   then
     local num = string.sub(val, number_flag_len+1)
     return num

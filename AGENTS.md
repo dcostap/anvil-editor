@@ -582,6 +582,10 @@ Each service is a module that returns its methods, such as `core.serve_files`. T
 The first list of a root starts its folder watcher. `files.changes {root, since}` waits until a change after the sequence `since`, then gives the changed relative paths. `reset = true` means: list again. The server keeps the last 64 change batches.
 `files.stat {paths}` gives `{type, size, modified}` or false for each path. `files.list_dir {path}` gives the entries of one folder. Both send JSON in the bytes.
 `search.start {args, cwd}` runs the server's own ripgrep, not `args[1]`. `core.serve_search` accepts only the options on its list, and each path must be in a Project. Add an option there only when it cannot run programs or write files.
+A path argument is absolute or relative to `cwd`. The server refuses `\x` and `C:x`, because Windows reads them from another folder.
+The folders `USERDIR/machine` and `USERDIR/machines` hold credentials. The token in `server.json` gives Full control. A Project can hold the user folder, so each path check refuses these folders (`private`), and each search excludes them with a ripgrep `--glob`.
+Each request runs protected: an error replies `internal_error` and does not stop the server. Above 64 MiB of unsent replies, the server reads no more requests from that Client. It closes the Client after 30 seconds without progress.
+`core.json` encodes text after `json.number_flag` as a raw number only when the text is a number. Machine replies carry untrusted names and paths.
 `search.read {id}` waits for output and gives up to 1 MiB of records in the bytes. `done = true` gives ripgrep's exit `code`. A search ends after `search.cancel`, when its Client disconnects, or after 30 seconds without a read.
 Run `runtime/machine_serve.lua` and the `launch-machine-server` shell probe after changes.
 It listens on loopback only. At start it writes `USERDIR/machine/server.json` with its port, token, process ID, Machine ID and epoch. The folder is private.
@@ -619,7 +623,8 @@ File Search uses `project_files.info` for its path checks. On a Machine, it skip
 `core.machine_folders` keeps folder listings from `files.list_dir` for code that lists folders without a wait. `list(path)` gives nil while a listing loads. Its `watch()` has the methods of `core.dirwatch` and reports a folder when its listing arrives or changes.
 The File Tree uses it on a Machine, so it shows each folder after its listing arrives. Folder counts use the same listings.
 `core.file_ops` creates, moves, copies and deletes files and folders, also to the Recycle Bin. For a Machine path each call is a request (`files.mkdir`, `files.move`, `files.copy`, `files.delete`, or `files.write` to create), and the calling coroutine waits. `file_ops.run(path, fn)` runs `fn` in a thread for a Machine path. The server uses the same functions on its own disk.
-These methods need Full control. Their paths must be in a Project, and a Project root cannot move or be deleted. A move or copy fails when its target exists.
+These methods need Full control. Their paths must be in a Project. A Project root, or a folder that holds a Project root, cannot move or be deleted. A move or copy fails when its target exists.
+A Client waits on `files.changes` once for each Project. A new wait ends the earlier wait with `replaced`.
 On a Machine the File Tree applies its changes in a thread. It then lists the changed folders again (`machine_folders.reload`), without a wait for the change notices.
 Rename (`editor:rename`) moves a Machine file with `file_ops.move`, then saves the Buffer's unsaved text. Delete and New Directory also use `core.file_ops`. New Directory starts a relative name at the Project.
 `common.path_suggest` lists Machine folders through `common.machine_listing`, which `fs.use_machine` sets. The listings arrive later, so the first suggestions can be empty.
