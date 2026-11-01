@@ -17,6 +17,7 @@ local Editor = require "core.editor"
 local View = require "core.view"
 local linewrapping = require "core.linewrapping"
 local perf = require "core.perf"
+local blocking_calls = require "core.blocking_calls"
 local style = require "core.style"
 
 -- In the shell every Project process loads this plugin. Only the named Project runs the benchmark.
@@ -46,6 +47,10 @@ local benchmark = {
   metrics_file = env_string("ANVIL_PERF_BENCHMARK_METRICS"),
   actions_file = env_string("ANVIL_PERF_BENCHMARK_ACTIONS"),
   details_file = env_string("ANVIL_PERF_BENCHMARK_DETAILS"),
+  -- Records each raw file call that the UI thread makes while the scene measures.
+  blocking_calls_file = env_string("ANVIL_PERF_BENCHMARK_BLOCKING_CALLS"),
+  -- Each recorded call first waits this long, as on a busy disk.
+  slow_io_ms = math.max(0, env_number("ANVIL_PERF_BENCHMARK_SLOW_IO_MS", 0)),
   heap_file = env_string("ANVIL_PERF_BENCHMARK_HEAP"),
   details = {},
   workload_file = env_string("ANVIL_PERF_BENCHMARK_WORKLOAD"),
@@ -271,9 +276,40 @@ local function write_details()
   return write_atomic(benchmark.details_file, table.concat(lines, "\n") .. "\n")
 end
 
+-- The harness's own files and the scene's setup are not the editor's calls.
+local HARNESS_SOURCES = {
+  "perf_benchmark%.lua$", "perf_actions%.lua$", "perf_scene%.lua$", "[/\\]tests[/\\]scenes[/\\]",
+}
+
+local function start_blocking_calls()
+  if benchmark.blocking_calls_file == "" then return end
+  blocking_calls.start { delay = benchmark.slow_io_ms / 1000, ignore = HARNESS_SOURCES }
+end
+
+-- The recording covers the measured frames only.
+local function stop_blocking_calls()
+  if not blocking_calls.active() or benchmark.blocking_call_rows then return end
+  benchmark.blocking_call_rows = blocking_calls.callers()
+  blocking_calls.stop()
+end
+
+local function write_blocking_calls()
+  if benchmark.blocking_calls_file == "" then return true end
+  stop_blocking_calls()
+  local lines = { "name,calls,at,stack" }
+  for _, row in ipairs(benchmark.blocking_call_rows or {}) do
+    local values = {}
+    for i, field in ipairs({ "name", "calls", "at", "stack" }) do
+      values[i] = '"' .. tostring(row[field]):gsub('"', '""') .. '"'
+    end
+    lines[#lines + 1] = table.concat(values, ",")
+  end
+  return write_atomic(benchmark.blocking_calls_file, table.concat(lines, "\n") .. "\n")
+end
+
 local function write_actions()
   if benchmark.actions_file == "" then return true end
-  local fields = { "id", "name", "start_ms", "dispatch_ms", "ready_ms", "latency_ms", "visible_ms", "redraws", "result" }
+  local fields = { "id", "name", "start_ms", "dispatch_ms", "ready_ms", "latency_ms", "visible_ms", "redraws", "result", "blocking_calls" }
   local lines = { table.concat(fields, ",") }
   for _, row in ipairs(benchmark.action_rows) do
     local values = {}
@@ -1208,6 +1244,7 @@ local function perform_action()
         core.perf_frame_stats = dispatch_stats
         benchmark.pending_action_details = dispatch_stats
       end
+      benchmark.action_blocking_calls = blocking_calls.count()
       benchmark.actions:start(benchmark.workload:action_name(index), function()
         benchmark.workload:dispatch(index)
         benchmark.view = benchmark.workload.view
@@ -1348,6 +1385,7 @@ local function capture_settle_expired(count, deadline)
 end
 
 local function begin_state_settle()
+  stop_blocking_calls()
   -- The measurement has ended. Animations jump to their end, so the captures show one settled frame.
   if benchmark.screenshot_file ~= "" then config.transitions = false end
   benchmark.state_settle_count = 0
@@ -1370,6 +1408,8 @@ local function finish_success()
   local metrics_ok, metrics_err = write_metrics()
   local actions_ok, actions_err = write_actions()
   local details_ok, details_err = write_details()
+  local calls_ok, calls_err = write_blocking_calls()
+  if not calls_ok then metrics_ok, metrics_err = nil, calls_err end
   if not details_ok then metrics_ok, metrics_err = nil, details_err end
   if not actions_ok then metrics_ok, metrics_err = nil, actions_err end
   local fields = {
@@ -1437,6 +1477,7 @@ local function fail(err)
   if benchmark.profile then pcall(benchmark.profile.stop, benchmark.profile) end
   write_actions()
   write_metrics()
+  write_blocking_calls()
   write_result {
     done = 0,
     scenario = benchmark.scenario,
@@ -1890,6 +1931,7 @@ function perf.on_frame(snapshot)
         if benchmark.details_file ~= "" then core.thread_time_stats = {} end
         benchmark.measure_start = system.get_time()
         if benchmark.actions then benchmark.actions.origin = benchmark.measure_start end
+        start_blocking_calls()
         perform_action()
       else
         perform_action()
@@ -1908,6 +1950,9 @@ function perf.on_frame(snapshot)
         local row = benchmark.actions:after_frame(true)
         next_action = row ~= nil
         if row then
+          if blocking_calls.active() then
+            row.blocking_calls = blocking_calls.count() - benchmark.action_blocking_calls
+          end
           benchmark.action_rows[#benchmark.action_rows + 1] = row
           benchmark.workload.completed = benchmark.workload.completed + 1
         end

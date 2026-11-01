@@ -1,6 +1,7 @@
 -- Use the Fuzzy Searcher with its preview over another View, as a user does.
 -- Settings:
---   mode    "files", "symbols" or "text": the search mode.
+--   mode    "files", "symbols", "text" or "paths": the search mode.
+--           Path Search asks Everything. The scenario runner serves a fake one from the fixture.
 --   query   the query to search for. A "type" action types it one character at a time.
 --   behind  "filetree" or "editor": the View that the picker covers.
 --   action  "navigate" moves the selection; "type" types the query again and again.
@@ -13,7 +14,7 @@ local command = require "core.command"
 local support = require "scenes.support"
 
 local scene = {}
-local PREFIXES = { files = "", symbols = "$", text = "#" }
+local PREFIXES = { files = "", symbols = "$", text = "#", paths = "@" }
 -- Moves down this many rows, then back up, so the selection stays among the first results.
 local NAVIGATE_STEPS = 8
 
@@ -30,6 +31,11 @@ local function search_settled(view, text)
   if view.input:get_text() ~= text then return false end
   if view.dirty or view.force_refresh or view.loading_feedback_pending or view.loading_more then return false end
   if view.symbol_search_request then return false end
+  -- Path Search waits for Everything's answer.
+  if view.everything_loading or (view.everything_pending or 0) > 0 then return false end
+  if view:is_path_search() and require("plugins.fuzzy_searcher")._test.everything_state() == "probing" then
+    return false
+  end
   return not (view.status or ""):find("…", 1, true)
 end
 

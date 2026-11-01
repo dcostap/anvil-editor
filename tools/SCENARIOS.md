@@ -171,11 +171,37 @@ Both metrics exclude OS input delivery and physical display scanout. The report 
 
 The `fuzzy_picker` scene opens the Fuzzy Searcher with its preview over the
 File Tree or the editor. Its `mode` setting selects Project File Search,
-Project Symbol Search, or Text Search. A `navigate` action moves the selection
+Project Symbol Search, Text Search, or Path Search. A `navigate` action moves the selection
 and ends when the preview shows the new result. A `type` action types the next
 character of the query and ends when the search for the new text has ended.
 Text Search ends the action at its first rows, because it can search for a
 long time.
+
+Path Search asks Everything for files anywhere on the PC. A scenario with the
+`everything` setting starts a fake Everything (`tools/fake_everything.py`) that
+answers from the fixture, and points `EVERYTHING_HOST` and `EVERYTHING_PORT` at it.
+
+## UI-thread blocking calls
+
+A busy disk or a virus scan can make one file call take seconds. On the UI thread,
+that call stops every frame. Fixture files are warm in the cache, so frame times
+do not show the risk. Each run therefore counts the calls that can block
+(`core.blocking_calls`): file opens, reads and writes, file information, folder
+lists, process starts, and module loads. It counts them in measured frames only
+and names the code that made them, with three stack frames.
+
+- The report lists the call sites, and `blocking-calls.csv` in each run folder
+  has them. `actions.csv` has the count for each action.
+- A scenario with `blocking_call_budget` fails when the median run makes more
+  calls. The fuzzy navigate scenarios have a budget of 0.
+- `--slow-io MS` makes each UI-thread call wait first, as a busy disk does. Use
+  it to see what a remaining call costs. Worker calls do not wait.
+
+A Lua test can use the same counter. `blocking_calls.start()` begins a
+recording and `blocking_calls.callers()` lists its call sites. The Machine guard
+refuses a call before it reaches the counter. When the guard turns off, it
+restores the functions it wrapped. The counter goes on if it was installed
+before the guard turned on. Otherwise the next `start` installs it again.
 
 `filetree_scroll` and `editor_scroll` scroll with the wheel, or with `input =
 "keys"` move the caret one line at a time from the bottom row. Each move then

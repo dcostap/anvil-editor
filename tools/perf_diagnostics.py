@@ -57,16 +57,33 @@ def read_actions(path: Path, expected: int) -> dict[str, Any]:
                 raise ValueError(f"invalid action visible_ms: {path}")
         else:
             row.pop("visible_ms", None)
+        if row.get("blocking_calls") not in (None, ""):
+            row["blocking_calls"] = int(row["blocking_calls"])
+            if row["blocking_calls"] < 0:
+                raise ValueError(f"invalid action blocking_calls: {path}")
+        else:
+            row.pop("blocking_calls", None)
         grouped[row["name"]].append(row)
     summaries = {}
     for name, actions in grouped.items():
         summaries[name] = {
             f"{key}_{stat}": value
-            for key in ("dispatch_ms", "ready_ms", "latency_ms", "visible_ms", "redraws")
+            for key in ("dispatch_ms", "ready_ms", "latency_ms", "visible_ms", "redraws", "blocking_calls")
             for stat, value in distribution([row[key] for row in actions if key in row]).items()
         }
     return {"summary": summaries, "rows": captured,
             "sequence": [[row["name"], row["result"]] for row in captured]}
+
+
+def read_blocking_calls(path: Path) -> dict[str, Any] | None:
+    """Return the UI thread's raw file calls in the measured frames, by call site.
+
+    A missing file means that the run did not record them."""
+    if not path.exists():
+        return None
+    callers = [{"name": row["name"], "calls": int(row["calls"]), "at": row["at"], "stack": row["stack"]}
+               for row in rows(path)]
+    return {"total": sum(caller["calls"] for caller in callers), "callers": callers}
 
 
 def red_flags(case: dict[str, Any], frame_budget_ms: float, action_budget_ms: float) -> list[dict[str, Any]]:
