@@ -1,5 +1,6 @@
 local core = require "core"
 local common = require "core.common"
+local machine_project = require "core.machine_project"
 local panes = require "core.panes"
 local system = require "system"
 
@@ -40,11 +41,28 @@ local function reattach(terminals)
   for _, view in ipairs(terminals) do view:reattach_session() end
 end
 
+-- A Project process reaches the files of its own Machine only, and only inside its Project. A Pane snapshot has
+-- paths, not their Machine, so a Pane moves only where its paths name the same files.
+local function machine_refusal(views, to)
+  local source = machine_project.parse(machine_project.current)
+  local target, root = machine_project.parse(to)
+  if source ~= target then return "a Pane cannot move between Machines" end
+  if not target then return nil end
+  for _, view in ipairs(views) do
+    local path = view.buffer and view.buffer.abs_filename
+    if path and not (common.path_equals(path, root) or common.path_belongs_to(path, root)) then
+      return "the target Project cannot reach " .. path
+    end
+  end
+end
+
 local function export(request)
   local pane = panes.find(request.pane)
   if not pane then return refuse("Pane is no longer available") end
   if pending[request.transfer] then return refuse("Transfer is already pending") end
   local views = panes.views(pane)
+  local refusal = machine_refusal(views, request.to)
+  if refusal then return refuse(refusal) end
   local terminals = live_terminals(views)
   for _, view in ipairs(terminals) do
     local reason = view:move_refusal()
@@ -77,7 +95,8 @@ local function export(request)
   pending[request.transfer] = { pane = pane, views = views, buffers = buffers, terminals = terminals }
   local ok
   ok, err = send("select", request.to, { action = "import", snapshot = snapshot,
-    source = project and project.path or system.getcwd(), target = request.target, transfer = request.transfer })
+    source = machine_project.root_key(project and project.path or system.getcwd()), target = request.target,
+    transfer = request.transfer })
   if not ok then
     pending[request.transfer] = nil
     reattach(terminals)

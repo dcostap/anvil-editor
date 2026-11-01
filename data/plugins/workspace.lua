@@ -437,7 +437,7 @@ local function load_workspace()
         end
         panes.restore_workspace_state(workspace.pane_state, load_view)
       end
-      untitled_recovery.restore_project(core.root_project().path)
+      untitled_recovery.restore_project(machine_project.root_key(core.root_project().path))
       ensure_initial_filetree_pane()
     end
 

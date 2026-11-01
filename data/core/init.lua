@@ -204,9 +204,10 @@ end
 
 function core.open_project_in_same_window(project)
   if system.is_hosted_surface() then
-    local path = type(project) == "table" and project.path or project
+    local machine_project = require "core.machine_project"
+    local path = machine_project.folder_key(type(project) == "table" and project.path or project)
     -- The shell checks a Machine Project's key itself.
-    if not require("core.machine_project").is_key(path) then
+    if not machine_project.is_key(path) then
       path = type(path) == "string" and system.absolute_path(path)
       local info = path and system.get_file_info(path)
       if not info or info.type ~= "dir" then return false end
@@ -299,9 +300,10 @@ end
 
 function core.open_project_in_new_window(project)
   if system.is_hosted_surface() then
-    local path = type(project) == "table" and project.path or project
+    local machine_project = require "core.machine_project"
+    local path = machine_project.folder_key(type(project) == "table" and project.path or project)
     if type(path) ~= "string" or path == "" then return false end
-    path = system.absolute_path(path) or path
+    if not machine_project.is_key(path) then path = system.absolute_path(path) or path end
     core.log_quiet("Request Project in a Window through shell identity rules: %s", path)
     return system.open_project_window(path)
   end

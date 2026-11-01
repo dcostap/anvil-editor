@@ -107,6 +107,12 @@ local function result_row(row, project, state)
   return out.abs_path and out
 end
 
+-- A row's file can be read here only when this Project and the row's Project are both on this PC. A Machine's
+-- path names a file of that Machine, and this process reaches only its own Project's files.
+function other.can_preview(row)
+  return not require("core.fs").machine and not machine_project.is_key(row.other_project)
+end
+
 -- Sends the query of a search mode, "files" or "text", to the other loaded Projects. The same query keeps the
 -- replies that it already has, so a file index update in this Project does not ask again.
 function other.request(picker, mode, query, line)

@@ -5,6 +5,8 @@
 local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
+local fs = require "core.fs"
+local project_files = require "core.project_files"
 local project_paths = require "core.project_paths"
 local panes = require "core.panes"
 
@@ -22,6 +24,8 @@ end
 
 local function normalize(path)
   path = common.home_expand(path)
+  -- This PC cannot resolve a path on a Machine. Such a path is absolute already.
+  if fs.on_machine(path) then return common.normalize_path(path) end
   return common.normalize_path(system.absolute_path(path) or path)
 end
 
@@ -91,7 +95,11 @@ function M.add(path, options)
   options = options or {}
   if type(path) ~= "string" or path == "" then return nil, "No folder" end
   path = normalize(path)
-  local info = system.get_file_info(path)
+  -- A Project on a Machine reaches only the Machine's folders inside it.
+  if fs.machine and not fs.on_machine(path) then
+    return nil, "A Project on a Machine can only add its own folders: " .. common.home_encode(path)
+  end
+  local info = project_files.info(path)
   if not (info and info.type == "dir") then return nil, "Not a folder: " .. common.home_encode(path) end
   local root = root_path()
   if root and common.path_equals(path, root) then return nil, "This folder is the Root Project" end

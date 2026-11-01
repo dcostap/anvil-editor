@@ -50,6 +50,21 @@ test.describe("untitled recovery helpers", function()
     test.not_equal(recovery.project_key(a), recovery.project_key(b))
   end)
 
+  test.test("a Project on a Machine keeps its Untitled text apart from the same path on this PC", function(context)
+    local core = require "core"
+    local machine_project = require "core.machine_project"
+    local path = join_path(context.temp_root, "notes")
+    local key = "anvil-machine://0123456789abcdef0123456789abcdef/" .. path
+    local root_project, current = core.root_project, machine_project.current
+    core.root_project = function() return { path = path } end
+    machine_project.current = key
+    local ok, paths = pcall(recovery.project_paths)
+    core.root_project, machine_project.current = root_project, current
+    test.ok(ok, paths)
+    test.equal(paths.project, key)
+    test.not_equal(paths.key, recovery.project_key(path))
+  end)
+
   test.test("safe replace keeps the previous primary when durable synchronization fails", function(context)
     local path = join_path(context.temp_root, "buffer.txt")
     write_file(path, "old")

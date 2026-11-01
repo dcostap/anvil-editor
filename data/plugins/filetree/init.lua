@@ -665,18 +665,24 @@ end
 
 -- On a Machine the file list and the folder listings arrive later, so no metadata tells that a saved folder is
 -- gone. The tree waits for the listings of its saved folders, then restores them as a local tree does.
--- A saved root that is gone shows an empty tree.
+-- A saved root that is gone shows an empty tree. The restore replaces the tree's text, so the tree takes no
+-- edits until it ends.
 local function restore_on_machine(view, state)
+  view:add_edit_guard("filetree-restore", function() return false, "File Tree: the folders are still loading" end)
   core.add_thread(function()
-    local current = state.current_dir and common.normalize_path(state.current_dir)
-    if current and in_project(current, view.root_dir) then
-      local info = file_ops.info(current)
-      if info and info.type == "dir" then view.current_dir = current end
-    end
-    machine_folders.wait(view.current_dir)
-    for path in pairs(state.expanded_paths or {}) do machine_folders.wait(path) end
-    view:refresh(false, false)
-    restore_folders(view, state)
+    local ok, err = pcall(function()
+      local current = state.current_dir and common.normalize_path(state.current_dir)
+      if current and in_project(current, view.root_dir) then
+        local info = file_ops.info(current)
+        if info and info.type == "dir" then view.current_dir = current end
+      end
+      machine_folders.wait(view.current_dir)
+      for path in pairs(state.expanded_paths or {}) do machine_folders.wait(path) end
+      view:refresh(false, false)
+      restore_folders(view, state)
+    end)
+    view:remove_edit_guard("filetree-restore")
+    if not ok then return core.error("File Tree: cannot restore %s: %s", view.current_dir, err) end
     core.log_quiet("File Tree on a Machine restored: %s", view.current_dir)
   end)
 end
@@ -3009,6 +3015,11 @@ function FileTreeView:change_directory(directory, opts)
   end
 
   directory = directory and common.normalize_path(directory)
+  -- A path outside the Machine's roots names a folder of this PC, so a tree on the Machine stays in them.
+  if directory and fs.on_machine(self.current_dir) and not fs.on_machine(directory) then
+    core.log_quiet("File Tree directory change blocked: %s is outside the Project on the Machine", directory)
+    return false
+  end
   local info = directory and project_files.info(directory)
   if not (info and info.type == "dir") then return false end
   if common.path_equals(directory, self.current_dir) then return false end

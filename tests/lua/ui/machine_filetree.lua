@@ -87,6 +87,30 @@ test.describe("File Tree on a Machine", function()
 
     write_file(machine_copy(context, context.project .. PATHSEP .. "new.md"), "New\n")
     test.ok(wait_until(function() return text(tree):find("new.md", 1, true) ~= nil end), text(tree))
+
+    -- Up Directory stays in the Machine's Project. The folder above it is a folder of this PC.
+    test.ok(tree:change_directory(context.project .. PATHSEP .. "sub"))
+    tree:up_dir()
+    test.ok(common.path_equals(tree.current_dir, context.project), tree.current_dir)
+    tree:up_dir()
+    test.ok(common.path_equals(tree.current_dir, context.project), tree.current_dir)
+  end)
+
+  test.it("adds a Machine folder as a Vendored Project Path, and refuses a folder of this PC", function(context)
+    local paths = require "plugins.project_paths"
+    local tree = open_tree(context)
+    test.ok(wait_until(function() return text(tree):find("sub/", 1, true) ~= nil end), text(tree))
+    local local_folder = context.root .. PATHSEP .. "local"
+    test.ok(common.mkdirp(local_folder))
+    local ok, err = pcall(function()
+      local entry, message = paths.add(context.project .. PATHSEP .. "sub")
+      test.equal(entry and entry.role, "vendored", message)
+      entry, message = paths.add(local_folder)
+      test.is_nil(entry)
+      test.ok(message)
+    end)
+    require("core.project_paths").configure_workspace {}
+    test.ok(ok, err)
   end)
 
   test.it("opens a file that the Project's ignore rules hide from File Search", function(context)
@@ -123,7 +147,13 @@ test.describe("File Tree on a Machine", function()
       local restored = test.not_nil(filetree.from_state(saved), "The File Tree was not restored: " .. saved.root)
       shown = restored
       panes.create { factory = function() return restored end }
+      -- The restore replaces the tree's text, so the tree takes no edits until it ends.
+      local before = text(restored)
+      restored.buffer:set_selection(1, 1)
+      restored:on_text_input("x")
+      test.equal(text(restored), before, "A typed edit reached the tree during the restore")
       test.ok(wait_until(function() return text(restored):find("plan.md", 1, true) ~= nil end), text(restored))
+      test.ok(wait_until(function() return restored:can_edit("text input") end), "The tree stayed read-only")
     end
   end)
 

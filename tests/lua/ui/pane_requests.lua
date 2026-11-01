@@ -140,6 +140,16 @@ test.describe("Pane requests", function()
     test.is_nil(core.title_bar.dragged_pane)
     test.equal(source.group, target.group)
     test.same(panes.ordered(), {target, source})
+
+    -- The Sidebar names a Project on a Machine by its key.
+    local machine_project = require "core.machine_project"
+    local current = machine_project.current
+    machine_project.current = "anvil-machine://0123456789abcdef0123456789abcdef/C:/Project"
+    drag("move", machine_project.current)
+    local dragged = core.title_bar.dragged_pane
+    drag("leave", machine_project.current)
+    machine_project.current = current
+    test.equal(dragged, source)
   end)
 
   test.it("joins groups and reorders their Panes before and after anchors", function()

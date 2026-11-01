@@ -172,7 +172,8 @@ local function file_candidates(job, spec, visit)
     end
     if not modifiers.accepts(spec.options, info) then return end
     if is_folder and spec.line then return end
-    if spec.line and spec.line > 1 then
+    -- This process cannot count the lines of a Machine's file, so a line number does not filter it.
+    if spec.line and spec.line > 1 and not fs.on_machine(path) then
       local file = io.open(path, "rb")
       local count = 0
       if file then

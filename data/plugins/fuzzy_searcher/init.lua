@@ -1485,9 +1485,12 @@ local function line_count(path)
   return n
 end
 
+-- This process cannot count the lines of a Machine's file, so a line number does not filter it.
 line_exists = function(relpath, nr)
   if not nr then return true end
-  return line_count(fullpath(relpath)) >= nr
+  local path = fullpath(relpath)
+  if require("core.fs").on_machine(path) then return true end
+  return line_count(path) >= nr
 end
 
 local binary_preview_extensions = {
@@ -3493,6 +3496,8 @@ end
 function path_search.ignored_project_path_parts(query)
   local roots = project_paths.search_roots("files")
   if #roots ~= 1 then return nil end
+  -- This search reads this PC's folders. A Project on a Machine searches its file list instead.
+  if require("core.fs").on_machine(roots[1].path) then return nil end
   local root = common.normalize_path(roots[1].path)
   if not query:find("[/\\]") then
     if everything.state == "unavailable" then return nil end
@@ -4703,6 +4708,12 @@ function FSView:update_preview_view()
     self:clear_preview_view()
     self.preview_blocked = { reason = r.bookmark.status == "file_missing" and "File missing"
       or r.bookmark.status == "checking" and "Checking Bookmark location…" or "Bookmark location missing", path = r.file }
+    return nil
+  end
+
+  if r.other_project and not r.terminal and not fuzzy_searcher.other_projects.can_preview(r) then
+    self:clear_preview_view()
+    self.preview_blocked = { reason = "No preview for a file of another Machine", path = r.file }
     return nil
   end
 
@@ -7945,6 +7956,8 @@ function FSView:open_focused_preview(new_group)
   if self:is_navigation_history_mode() or self:is_bookmark_mode() then return self:confirm() end
   local preview = self.preview_view
   local result = self:selected_result()
+  -- Another Project opens its own file.
+  if result and result.other_project then return self:confirm(new_group) end
   if not (preview and preview:extends(TextView) and result and result.file) then return false end
 
   local state = preview:get_selection_state()

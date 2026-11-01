@@ -174,9 +174,11 @@ end
 local function execute(request, x, y)
   local action = request.action
   if action == "drag" then
-    -- A Tab of another Project has the same Pane IDs, so the source Project must be this one.
+    -- A Tab of another Project has the same Pane IDs, so the source Project must be this one. The Sidebar names a
+    -- Project on a Machine by its key.
     local project = core.root_project()
-    local own = project and common.path_equals(project.path, request.source)
+    local key = project and require("core.machine_project").root_key(project.path)
+    local own = key and (key == request.source or common.path_equals(key, request.source))
     core.title_bar:sidebar_pane_drag(own and panes.find(request.pane) or nil, request.phase, x, y)
     return true
   end

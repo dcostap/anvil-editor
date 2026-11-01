@@ -36,7 +36,8 @@ M.is_untitled_buffer = is_untitled_buffer
 
 local function normalize_project_path(path)
   path = tostring(path or "default")
-  path = common.normalize_path(path)
+  -- A Project on a Machine has a key, not a path on this PC.
+  if not require("core.machine_project").is_key(path) then path = common.normalize_path(path) end
   if PLATFORM == "Windows" then path = path:lower() end
   return path
 end
@@ -72,9 +73,10 @@ function M.project_key(project_path)
   return hash_text(normalize_project_path(project_path))
 end
 
+-- A Project on a Machine uses its key, so it does not share Untitled text with the same path on this PC.
 local function current_project_path()
   local project = core.root_project and core.root_project()
-  return project and project.path or system.getcwd() or "default"
+  return project and require("core.machine_project").root_key(project.path) or system.getcwd() or "default"
 end
 
 local function project_paths(project_path)

@@ -220,6 +220,33 @@ test.describe("Project File Search in other Projects", function()
     test.ok(ok, err)
   end)
 
+  test.it("shows no preview of a file of a Project on a Machine, and opens it in that Project", function(context)
+    local other_key = "anvil-machine://0123456789abcdef0123456789abcdef/" .. context.other:gsub("\\", "/")
+    core.project_sidebar[2].path = other_key
+    -- This PC has a file at the Machine file's path. Its text is not the Machine's text.
+    local other_file = context.other .. PATHSEP .. "alpha-other.txt"
+    write_file(other_file, "This PC's copy\n")
+    fuzzy_searcher.open("alpha")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return #sent(context, "project_search") > 0 end), "no search was sent")
+    test.ok(pane_requests.perform(serialize {
+      action = "project_results", source = other_key, id = sent(context, "project_search")[1].request.id,
+      rows = { { label = "alpha-other.txt", abs_path = other_file, spans = { { 1, 5 } } } },
+    }))
+    test.ok(wait_until(function() return file_index(picker.results, other_file) end), "the Machine's row did not show")
+    picker.selected = file_index(picker.results, other_file)
+    test.ok(wait_until(function()
+      picker:update_preview_view()
+      return picker.preview_blocked or picker.preview_view and picker.preview_view.buffer
+    end), "the preview did not settle")
+    test.is_nil(picker.preview_view and picker.preview_view.buffer, "the preview read this PC's file")
+
+    picker:open_focused_preview(false)
+    local opens = sent(context, "open_file")
+    test.equal(#opens, 1)
+    test.equal(opens[1].path, other_key)
+  end)
+
   test.it("opens a file that another Project chose at its line", function(context)
     test.ok(pane_requests.perform(serialize { action = "open_file", file = context.local_file, line = 2, col = 1 }))
     local view = core.active_view

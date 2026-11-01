@@ -104,6 +104,23 @@ test.describe("File Search on a Machine", function()
       local buffer = core.buffer_registry:find(plan)
       return buffer and not buffer:is_loading() and table.concat(buffer.lines) == "Plan\n"
     end), "The chosen file did not open with the Machine's text")
+
+    -- A line number in the query finds the Machine's file. The open goes to that line.
+    for _, query in ipairs({ "steps:2", "steps:2 sort:name" }) do
+      fuzzy_searcher.open(query)
+      picker = test.not_nil(core.fuzzy_searcher_active_view)
+      test.ok(wait_until(function() return #file_rows(picker) == 1 end),
+        query .. ": status=" .. tostring(picker.status) .. " files=" .. table.concat(file_rows(picker), ", "))
+      picker:close()
+    end
+
+    -- With ignored files, a path query still searches the Machine's files, not this PC's folder.
+    fuzzy_searcher.open("sub/st")
+    picker = test.not_nil(core.fuzzy_searcher_active_view)
+    test.ok(command.perform("fuzzy:toggle_ignored_files"))
+    test.ok(wait_until(function() return #file_rows(picker) == 1 end),
+      "status=" .. tostring(picker.status) .. " files=" .. table.concat(file_rows(picker), ", "))
+    test.same(file_rows(picker), { "steps.md" })
   end)
 
   test.it("creates the file that the query names on the Machine, and opens it", function(context)

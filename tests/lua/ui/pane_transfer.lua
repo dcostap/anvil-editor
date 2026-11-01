@@ -66,6 +66,41 @@ test.describe("Pane transfer", function()
     test.equal(panes.find(pane.id), pane)
   end)
 
+  test.it("names a Project on a Machine by its key, and moves a Pane only where its files are", function()
+    local machine_project = require "core.machine_project"
+    local machine = "anvil-machine://0123456789abcdef0123456789abcdef/"
+    local current = machine_project.current
+    machine_project.current = machine .. "C:/a"
+    -- Opening an Editor for a path can change the working folder. Later tests read fixtures from it.
+    local cwd = system.getcwd()
+    local ok, err = pcall(function()
+      local pane = panes.create { factory = function() return Capture { title = "Notes", text = "one" } end }
+      test.ok(perform { action = "export", pane = pane.id, to = machine .. "C:/b", transfer = transfer_id,
+        target = { mode = "group", side = "after" } })
+      test.equal(sent[1].request.source, machine_project.current)
+      -- The source keeps its Pane when the target fails.
+      test.not_ok(perform { action = "transferred", transfer = transfer_id, ok = false, error = "test" })
+
+      -- This PC and another Machine have other files at the same paths.
+      pane = panes.create { factory = function() return Capture { title = "Notes", text = "one" } end }
+      test.not_ok(export(pane, transfer_id .. "-local"))
+      test.not_ok(perform { action = "export", pane = pane.id, transfer = transfer_id .. "-other",
+        to = "anvil-machine://fedcba9876543210fedcba9876543210/C:/a", target = { mode = "group", side = "after" } })
+
+      -- The target Project reaches only the files inside it.
+      local Buffer = require "core.buffer"
+      local buffer = Buffer()
+      buffer:set_filename("x.md", "C:\\a\\x.md")
+      pane = panes.create { factory = function() return Editor(buffer) end }
+      test.not_ok(perform { action = "export", pane = pane.id, to = machine .. "C:/b", transfer = transfer_id .. "-file",
+        target = { mode = "group", side = "after" } })
+      test.equal(#sent, 1)
+    end)
+    machine_project.current = current
+    system.chdir(cwd)
+    test.ok(ok, err)
+  end)
+
   test.it("keeps the source when the target reports failure", function()
     local pane = panes.create()
     test.ok(export(pane))

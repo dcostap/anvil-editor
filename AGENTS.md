@@ -627,6 +627,8 @@ After an error, the loop scans the Project again. A scan that fails, for example
 `core.text_search.start` starts ripgrep like `core.process_stream.start`. In a Project on a Machine, it gives a stream with the same methods that reads from `search.read`. Text Search uses it for each ripgrep run.
 A stream that fails, such as while the Machine is away, makes Text Search show "Text Search failed", not "No matches". The next query searches again.
 File Search uses `project_files.info` for its path checks. On a Machine, it skips the local probe before a preview, and its create row makes the file through `core.file_ops`. `core.open_file` opens a Machine file as text.
+A line number in a File Search query does not filter a Machine's files, because their lines are not counted here. With Include Ignored Files, a path query searches the Machine's file list, not this PC's folders or Everything.
+Other Project rows show no preview when this Project or the row's Project is on a Machine. Their Machine and this process's Machine can differ. Opening a row goes to its own Project.
 `core.machine_folders` keeps folder listings from `files.list_dir` for code that lists folders without a wait. `list(path)` gives nil while a listing loads. Its `watch()` has the methods of `core.dirwatch` and reports a folder when its listing arrives or changes.
 The File Tree uses it on a Machine, so it shows each folder after its listing arrives. Folder counts use the same listings.
 `core.file_ops` creates, moves, copies and deletes files and folders, also to the Recycle Bin. For a Machine path each call is a request (`files.mkdir`, `files.move`, `files.copy`, `files.delete`, or `files.write` to create), and the calling coroutine waits. `file_ops.run(path, fn)` runs `fn` in a thread for a Machine path. The server uses the same functions on its own disk.
@@ -634,7 +636,8 @@ These methods need Full control. Their paths must be in a Project. A Project roo
 A Client waits on `files.changes` once for each Project. A new wait ends the earlier wait with `replaced`.
 On a Machine the File Tree applies its changes in a thread. It then lists the changed folders again (`machine_folders.reload`), without a wait for the change notices.
 While the changes run, the tree takes no edits and no second apply, because the new list replaces its text.
-A restored File Tree on a Machine waits for the listings of its saved folders, then restores them. No metadata tells that a saved folder is gone, so a gone root shows an empty tree.
+A restored File Tree on a Machine waits for the listings of its saved folders, then restores them. No metadata tells that a saved folder is gone, so a gone root shows an empty tree. The tree takes no edits until the restore ends.
+Up Directory and other folder changes stay in the Machine's Project. The folder above it is a folder of this PC.
 Rename (`editor:rename`) moves a Machine file with `file_ops.move`, then saves the Buffer's unsaved text. Delete and New Directory also use `core.file_ops`. New Directory starts a relative name at the Project.
 Save As of a new Buffer checks the target with `file_ops.info`, so it asks before it writes over a Machine file. A File Tree delete that cannot reach the Machine shows an error and keeps the edit.
 `common.path_suggest` lists Machine folders through `common.machine_listing`, which `fs.use_machine` sets. The listings arrive later, so the first suggestions can be empty.
@@ -647,7 +650,10 @@ Run `runtime/machine_files.lua`, `ui/machine_file_search.lua` and `ui/machine_fi
 
 A Project on another Machine has a key: `anvil-machine://<Machine ID>/<path on the Machine>` (`core.machine_project`). The Sidebar, Shell App State, recent Projects and Workspaces use the key as the Project's path. Windows file functions reject it.
 The shell uses the key as the Project's identity and passes it to the Project process with `--project`. That process connects with `fs.use_machine`: to this PC's own server when the ID is its own, or else to the paired Machine's record in `USERDIR/machines`. Inside the process, paths are native paths.
-Code that names this Project to the Sidebar or to other Projects uses `machine_project.root_key(path)`: Workspaces, recent Projects, Numbered Panes and Other Project search. Pane requests accept a key in their Project fields. Path normalization would change a key's separators, so Path Search and other code do not normalize a key.
+Code that names this Project to the Sidebar or to other Projects uses `machine_project.root_key(path)`: Workspaces, Untitled recovery, recent Projects, Numbered Panes, Sidebar Tab drags, Pane transfers and Other Project search. Pane requests accept a key in their Project fields. Path normalization would change a key's separators, so Path Search and other code do not normalize a key.
+`core.open_project_in_same_window` and `core.open_project_in_new_window` give a folder of this process's Machine its key (`machine_project.folder_key`).
+A Pane moves only between Projects of the same Machine, or between Projects of this PC. On a Machine, the target Project must hold each file of the Pane.
+A Project on a Machine adds only its own folders as Project Paths, so they are Vendored. External folders are refused.
 `machine:open_project` lists the paired Machines, then the chosen Machine's Projects (`projects.list`).
 A Project on a Machine skips its Project module, Git, Git file changes and the symbol index until their services exist. The guard would show an error for each.
 Run the `launch-machine-project` shell probe after changes. It opens this PC's own Scratch through its server, opens a file, and checks that no guard refusal shows. The test server's owner is the test process, so a crashed test does not leave a server.

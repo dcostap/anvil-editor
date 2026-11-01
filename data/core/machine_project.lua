@@ -46,4 +46,14 @@ function machine_project.root_key(path)
   return machine_project.current or path
 end
 
+-- The name of a folder that opens as a Project: a folder on this process's Machine gets its key.
+-- Other paths and keys stay unchanged.
+function machine_project.folder_key(path)
+  local machine = machine_project.parse(machine_project.current)
+  if machine and not machine_project.is_key(path) and fs.on_machine(path) then
+    return machine_project.key(machine, path)
+  end
+  return path
+end
+
 return machine_project

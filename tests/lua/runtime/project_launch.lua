@@ -76,6 +76,27 @@ test.describe("Project window launch", function()
     test.same(context.shell.selected, {})
   end)
 
+  test.it("names a folder of a Project on a Machine by its Machine key", function(context)
+    local machine_guard = require "core.machine_guard"
+    local machine_project = require "core.machine_project"
+    local root = context.temp_root .. PATHSEP .. "machine"
+    local folder = root .. PATHSEP .. "sub"
+    local machine = "anvil-machine://0123456789abcdef0123456789abcdef/"
+    stub_shell(context)
+    local current = machine_project.current
+    machine_project.current = machine .. root
+    machine_guard.enable({ root })
+    local ok, err = pcall(function()
+      test.ok(core.open_project_in_same_window(folder))
+      test.ok(core.open_project_in_new_window(folder))
+    end)
+    machine_guard.disable()
+    machine_project.current = current
+    test.ok(ok, err)
+    test.same(context.shell.selected, { machine .. folder })
+    test.same(context.shell.windows, { machine .. folder })
+  end)
+
   test.it("starts a new Windows Project directly and grants it foreground access", function(context)
     if PLATFORM ~= "Windows" then return end
 
