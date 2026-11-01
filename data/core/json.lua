@@ -116,6 +116,16 @@ local function encode_table(val, stack)
 end
 
 
+-- True when the text is a complete JSON number, such as `-0.5e+3`. `+1`, `01` and `1.` are not.
+local function is_json_number(text)
+  local integer, rest = text:match("^%-?(%d+)(.*)$")
+  if not integer or (#integer > 1 and integer:sub(1, 1) == "0") then return false end
+  rest = rest:match("^%.%d+(.*)$") or rest
+  rest = rest:match("^[eE][-+]?%d+(.*)$") or rest
+  return rest == ""
+end
+
+
 local function encode_string(val)
   if val == json.null then
     return "null"
@@ -124,8 +134,7 @@ local function encode_string(val)
     and
     string.sub(val, 1, number_flag_len) == json.number_flag
     -- Other text after the flag stays a string, so untrusted text cannot add JSON.
-    and string.sub(val, number_flag_len+1):match("^[-+%d.eE]+$")
-    and tonumber(string.sub(val, number_flag_len+1))
+    and is_json_number(string.sub(val, number_flag_len+1))
   then
     local num = string.sub(val, number_flag_len+1)
     return num
@@ -196,6 +205,9 @@ local literal_map = {
   [ "null"  ] = nil,
 }
 
+-- The first error stops the parse. Parsers that went on after an error could loop at the end of the text.
+local DECODE_FAILURE = {}
+
 local function decode_error(str, idx, msg)
   local line_count = 1
   local col_count = 1
@@ -207,6 +219,7 @@ local function decode_error(str, idx, msg)
     end
   end
   error_message = string.format("%s at line %d col %d", msg, line_count, col_count)
+  error(DECODE_FAILURE, 0)
 end
 
 
@@ -427,20 +440,24 @@ function json.last_error()
   return error_message
 end
 
-function json.decode(str)
-  if type(str) ~= "string" then
-    return false, "expected argument of type string, got " .. type(str)
-  end
-  error_message = ""
+local function decode(str)
   local res, idx = parse(str, next_char(str, 1, space_chars, true))
   idx = next_char(str, idx, space_chars, true)
   if idx <= #str then
     decode_error(str, idx, "trailing garbage")
   end
-  if error_message ~= "" then
-    return false, error_message
-  end
   return res
+end
+
+function json.decode(str)
+  if type(str) ~= "string" then
+    return false, "expected argument of type string, got " .. type(str)
+  end
+  error_message = ""
+  local ok, res = pcall(decode, str)
+  if ok then return res end
+  if res ~= DECODE_FAILURE then error(res, 0) end
+  return false, error_message
 end
 
 local function indent(code, level, indent_width)

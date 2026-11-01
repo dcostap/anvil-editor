@@ -104,6 +104,15 @@ test.describe("Machine server", function()
     test.equal(call(client, "hello", {protocol = 1, token = string.rep("0", 64)}).error.code, "unauthorized")
     test.is_nil(call(client, "hello", {protocol = 1, token = context.discovery.token}))
     client.socket:close()
+
+    -- Incomplete JSON gets no reply, and the server goes on with other clients.
+    client = connect(context.discovery)
+    test.ok(client.socket:write(machine.frame("request", 1, "[")))
+    coroutine.yield(1)
+    local other = connect(context.discovery)
+    test.equal(call(other, "hello", {protocol = 1, token = context.discovery.token}).result.protocol, 1)
+    other.socket:close()
+    client.socket:close()
   end)
 
   test.it("refuses a client with another protocol version", function(context)
@@ -405,6 +414,16 @@ test.describe("Machine server", function()
     _, code = search({"rg", "-e", "secret", string.rep(".." .. PATHSEP, 64)})
     test.ok(code, "A path above the drive's root was accepted")
     test.ok(search({"rg", "-F", "-e", "needle", "."}):find("needle", 1, true), "The server stopped after a bad path")
+
+    -- A reply holds a bounded part of one long line, whatever --max-columns the Client gives.
+    write_file(context.project .. PATHSEP .. "long.txt", "needle" .. string.rep("x", 3 * 1024 * 1024) .. "\n")
+    for _, columns in ipairs {{}, {"--max-columns", "0"}, {"--max-columns", "99999999"}} do
+      local args = {"rg", "-F", "-e", "needle"}
+      for _, arg in ipairs(columns) do args[#args + 1] = arg end
+      args[#args + 1] = "long.txt"
+      found = search(args)
+      test.ok(#found < 1024 * 1024, "A reply held " .. #found .. " bytes")
+    end
   end)
 
   test.it("keeps its credentials out of a Project that holds its user folder", function(context)
@@ -421,6 +440,18 @@ test.describe("Machine server", function()
       local read, bytes = call(client, "search.read", {id = reply.result.id})
       output[#output + 1] = bytes
     until read.result.done
+    test.equal(table.concat(output), "")
+
+    -- A search from a subfolder cannot name the folder above it, where the credentials are.
+    local sub = context.root .. PATHSEP .. "sub"
+    test.ok(common.mkdirp(sub))
+    reply = call(client, "search.start", {args = {"rg", "-F", "-e", context.discovery.token, context.root}, cwd = sub})
+    output = {}
+    while reply.result do
+      local read, bytes = call(client, "search.read", {id = reply.result.id})
+      output[#output + 1] = bytes
+      if read.result.done then break end
+    end
     test.equal(table.concat(output), "")
     client.socket:close()
   end)

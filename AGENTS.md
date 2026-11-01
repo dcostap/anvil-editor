@@ -581,11 +581,13 @@ Each service is a module that returns its methods, such as `core.serve_files`. T
 `files.list {root}` gives the Project's scan from `core.project_files`: files, then folders, relative to the root and separated by NUL bytes. `files` counts the files. Ignore rules apply as in a local Project.
 The first list of a root starts its folder watcher. `files.changes {root, since}` waits until a change after the sequence `since`, then gives the changed relative paths. `reset = true` means: list again. The server keeps the last 64 change batches.
 `files.stat {paths}` gives `{type, size, modified}` or false for each path. `files.list_dir {path}` gives the entries of one folder. Both send JSON in the bytes.
-`search.start {args, cwd}` runs the server's own ripgrep, not `args[1]`. `core.serve_search` accepts only the options on its list, and each path must be in a Project. Add an option there only when it cannot run programs or write files.
+`search.start {args, cwd}` runs the server's own ripgrep, not `args[1]`. `core.serve_search` accepts only the options on its list, and each path must be in `cwd`, which must be in a Project. Add an option there only when it cannot run programs or write files.
+The server sets `--max-columns` to at most 64 KiB, also when the Client gives none or 0. ripgrep then omits a longer line, so one line cannot fill the server's memory.
 A path argument is absolute or relative to `cwd`. The server refuses `\x` and `C:x`, because Windows reads them from another folder.
-The folders `USERDIR/machine` and `USERDIR/machines` hold credentials. The token in `server.json` gives Full control. A Project can hold the user folder, so each path check refuses these folders (`private`), and each search excludes them with a ripgrep `--glob`.
+The folders `USERDIR/machine` and `USERDIR/machines` hold credentials. The token in `server.json` gives Full control. A Project can hold the user folder, so each path check refuses these folders (`private`), and each search excludes them with a ripgrep `--glob`. The glob names a path from `cwd`, so it holds only for paths in `cwd`.
 Each request runs protected: an error replies `internal_error` and does not stop the server. Above 64 MiB of unsent replies, the server reads no more requests from that Client. It closes the Client after 30 seconds without progress.
-`core.json` encodes text after `json.number_flag` as a raw number only when the text is a number. Machine replies carry untrusted names and paths.
+`core.json` encodes text after `json.number_flag` as a raw number only when the text is a complete JSON number. `+1`, `01` and `1.` stay text. Machine replies carry untrusted names and paths.
+`json.decode` stops at the first error. The server decodes a request before its login, so incomplete JSON must not stop the server.
 `search.read {id}` waits for output and gives up to 1 MiB of records in the bytes. `done = true` gives ripgrep's exit `code`. A search ends after `search.cancel`, when its Client disconnects, or after 30 seconds without a read.
 Run `runtime/machine_serve.lua` and the `launch-machine-server` shell probe after changes.
 It listens on loopback only. At start it writes `USERDIR/machine/server.json` with its port, token, process ID, Machine ID and epoch. The folder is private.

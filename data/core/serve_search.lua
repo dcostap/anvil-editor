@@ -14,7 +14,12 @@ local OPTIONS = {
   ["--with-filename"] = 0, ["-i"] = 0, ["-F"] = 0, ["-u"] = 0, ["--color"] = 1, ["--max-columns"] = 1, ["-e"] = 1,
 }
 
--- Returns the indexes of the path arguments, or nil and an error. `args[1]` is the program.
+-- ripgrep omits a line longer than this many bytes, so one line cannot fill the memory. A Client value
+-- above it, or 0 (no limit), becomes this value.
+local MAX_COLUMNS = 64 * 1024
+
+-- Returns the indexes of the path arguments, or nil and an error. `args[1]` is the program. It sets each
+-- `--max-columns` value to at most MAX_COLUMNS.
 local function path_indexes(args)
   local paths, i = {}, 2
   while i <= #args do
@@ -33,6 +38,9 @@ local function path_indexes(args)
       if count == 1 and type(value) ~= "string" then return nil, arg .. " needs a value" end
       if arg == "--color" and value ~= "never" then return nil, "--color must be never" end
       if arg == "--max-columns" and not value:match("^%d+$") then return nil, "--max-columns must be a number" end
+      if arg == "--max-columns" and (tonumber(value) == 0 or tonumber(value) > MAX_COLUMNS) then
+        args[i + 1] = tostring(MAX_COLUMNS)
+      end
       i = i + count
     elseif arg:sub(1, 1) == "-" then
       return nil, "The Machine does not run ripgrep with " .. arg
@@ -121,6 +129,10 @@ function search.new(server)
       if not normalized_ok then return server.fail(client, id, "invalid_path", "The path is not valid") end
       local checked, path_code, path_message = server.check_path(normalized)
       if not checked then return server.fail(client, id, path_code, path_message) end
+      -- The credential exclusions below hold only for paths in `cwd`.
+      if not common.path_equals(normalized, cwd) and not common.path_belongs_to(normalized, cwd) then
+        return server.fail(client, id, "invalid_path", "A search path must be in cwd")
+      end
       -- In test mode, the Machine's files are under a private folder.
       if common.is_absolute_path(path) then command[i] = server.disk_path(path) end
     end
@@ -134,10 +146,11 @@ function search.new(server)
         excluded[#excluded + 1] = "!/" .. common.relative_path(disk_cwd, folder):gsub("\\", "/")
       end
     end
-    if #excluded > 0 then
-      table.insert(excluded, 1, "--glob-case-insensitive")
-      for j = #excluded, 1, -1 do table.insert(command, 2, excluded[j]) end
-    end
+    if #excluded > 0 then table.insert(excluded, 1, "--glob-case-insensitive") end
+    -- A Client that gives no --max-columns gets MAX_COLUMNS.
+    table.insert(excluded, 1, tostring(MAX_COLUMNS))
+    table.insert(excluded, 1, "--max-columns")
+    for j = #excluded, 1, -1 do table.insert(command, 2, excluded[j]) end
     local stream, start_error = process_stream.start(command, {cwd = disk_cwd})
     if not stream then return server.fail(client, id, "search_failed", tostring(start_error)) end
     if #order >= MAX_SEARCHES then remove(searches[order[1]]) end
