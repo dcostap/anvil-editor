@@ -52,6 +52,36 @@ test.describe("Machine server", function()
     error("The Machine server did not reply to " .. method)
   end
 
+  -- Sends requests without a wait for replies, and gives their IDs.
+  local function send(client, requests)
+    local frames, ids = {}, {}
+    for i, request in ipairs(requests) do
+      ids[i] = client.next_id
+      frames[i] = machine.frame("request", client.next_id, json.encode({method = request[1], params = request[2]}))
+      client.next_id = client.next_id + 1
+    end
+    test.ok(client.socket:write(table.concat(frames)))
+    return ids
+  end
+
+  -- Reads replies until each ID has one, or the time ends. Gives the replies by ID.
+  local function replies(client, ids, seconds)
+    local got, missing = {}, #ids
+    local deadline = system.get_time() + seconds
+    while missing > 0 and system.get_time() < deadline do
+      local kind, reply_id, body = client.decoder:next()
+      if kind then
+        if not got[reply_id] then missing = missing - 1 end
+        got[reply_id] = json.decode(body)
+      else
+        local chunk = client.socket:read(1024 * 1024)
+        if not chunk then break end
+        if chunk == "" then coroutine.yield(0.01) else client.decoder:feed(chunk) end
+      end
+    end
+    return got, missing
+  end
+
   test.before_each(function(context)
     context.root = USERDIR .. PATHSEP .. "machine-serve-" .. system.get_process_id() .. "-"
       .. math.floor(system.get_time() * 1000000)
@@ -424,13 +454,36 @@ test.describe("Machine server", function()
       found = search(args)
       test.ok(#found < 1024 * 1024, "A reply held " .. #found .. " bytes")
     end
+
+    -- A search that a newer search pushes out answers its waiting read.
+    local first = call(client, "search.start", {args = {"rg", "-e", "needle", "."}, cwd = context.project})
+    call(client, "search.cancel", {id = first.result.id})
+    local requests = {{"search.start", {args = {"rg", "-e", "needle", "."}, cwd = context.project}},
+      {"search.read", {id = tostring(tonumber(first.result.id) + 1)}}}
+    for _ = 1, 16 do requests[#requests + 1] = requests[1] end
+    local _, missing = replies(client, send(client, requests), 10)
+    test.equal(missing, 0, "A read of a removed search got no reply")
+  end)
+
+  test.it("answers each request that arrived while a Client did not read its replies", function(context)
+    write_file(context.project .. PATHSEP .. "large.bin", string.rep("x", 2 * 1024 * 1024))
+    local client = owner(context)
+    local requests = {}
+    for i = 1, 48 do requests[i] = {"files.read", {path = context.project .. PATHSEP .. "large.bin"}} end
+    local ids = send(client, requests)
+    coroutine.yield(1)
+    local _, missing = replies(client, ids, 20)
+    test.equal(missing, 0, "Requests after the stall got no reply")
   end)
 
   test.it("keeps its credentials out of a Project that holds its user folder", function(context)
     stop_server(context)
-    context.server, context.discovery = machine_server.start(context.user, { context.root })
+    -- A ripgrep glob reads [ ] { } as patterns. The user folder's name must still match only itself.
+    local user = context.root .. PATHSEP .. "user[1]{a}"
+    test.ok(common.mkdirp(user))
+    context.server, context.discovery = machine_server.start(user, { context.root })
     local client = owner(context)
-    local discovery = machine_server.discovery_path(context.user)
+    local discovery = machine_server.discovery_path(user)
     test.equal(call(client, "files.read", {path = discovery}).error.code, "private")
     test.equal(call(client, "files.copy", {from = discovery, to = context.root .. PATHSEP .. "copy.json"}).error.code,
       "private")

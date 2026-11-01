@@ -54,6 +54,12 @@ end
 -- A reply carries at most CHUNK bytes. A search stops reading ripgrep while it holds that much unread output.
 local CHUNK, MAX_SEARCHES, IDLE_SECONDS = 1024 * 1024, 16, 30
 
+-- A glob reads [ ] { } * ? as patterns. A character class holds each one as itself. A backslash does not
+-- escape on Windows, where it separates folders.
+local function glob_literal(text)
+  return (text:gsub("[%[%]{}%*%?]", "[%0]"))
+end
+
 local function ripgrep_path()
   if PLATFORM ~= "Windows" then return "rg" end
   local bundled = DATADIR .. PATHSEP .. "plugins" .. PATHSEP .. "fuzzy_searcher" .. PATHSEP .. "rg.exe"
@@ -65,6 +71,7 @@ end
 function search.new(server)
   local searches, order, sequence = {}, {}, 0
 
+  -- A read that waits for a removed search gets an error, so the Client does not wait for ever.
   local function remove(state)
     if searches[state.id] ~= state then return end
     searches[state.id] = nil
@@ -72,6 +79,9 @@ function search.new(server)
       if id == state.id then table.remove(order, i) break end
     end
     state.stream:cancel()
+    local waiter = state.waiter
+    state.waiter = nil
+    if waiter and not state.client.dead then server.fail(state.client, waiter, "not_found", "The search has ended") end
   end
 
   local function answer(state)
@@ -143,7 +153,7 @@ function search.new(server)
     for _, folder in ipairs(server.private) do
       if common.path_belongs_to(folder, disk_cwd) then
         excluded[#excluded + 1] = "--glob"
-        excluded[#excluded + 1] = "!/" .. common.relative_path(disk_cwd, folder):gsub("\\", "/")
+        excluded[#excluded + 1] = "!/" .. glob_literal((common.relative_path(disk_cwd, folder):gsub("\\", "/")))
       end
     end
     if #excluded > 0 then table.insert(excluded, 1, "--glob-case-insensitive") end

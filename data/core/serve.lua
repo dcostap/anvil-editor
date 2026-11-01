@@ -480,12 +480,9 @@ local function stalled(client)
   return true
 end
 
+-- Requests that arrived during a stall wait in the decoder, so they run before the next socket read.
 local function poll_client(client)
-  while not client.closing and not stalled(client) do
-    local chunk = client.socket:read(65536)
-    if not chunk then client.dead = true; return end
-    if chunk == "" then break end
-    client.decoder:feed(chunk)
+  while not client.closing and not client.dead do
     while not client.closing and not client.dead and not stalled(client) do
       local kind, id, body, bytes = client.decoder:next()
       if not kind then
@@ -500,7 +497,11 @@ local function poll_client(client)
         fail(client, id, "internal_error", "The Machine could not do the request")
       end
     end
-    if client.dead then return end
+    if client.closing or client.dead or stalled(client) then return end
+    local chunk = client.socket:read(65536)
+    if not chunk then client.dead = true; return end
+    if chunk == "" then return end
+    client.decoder:feed(chunk)
   end
 end
 
