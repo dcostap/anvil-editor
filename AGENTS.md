@@ -615,7 +615,10 @@ On a Machine, `core.project_files` fills its normal entry from `files.list`, `fi
 `core.text_search.start` starts ripgrep like `core.process_stream.start`. In a Project on a Machine, it gives a stream with the same methods that reads from `search.read`. Text Search uses it for each ripgrep run.
 File Search uses `project_files.info` for its path checks. On a Machine, it offers no row that creates a file, and it skips the local probe before a preview. `core.open_file` opens a Machine file as text.
 `core.machine_folders` keeps folder listings from `files.list_dir` for code that lists folders without a wait. `list(path)` gives nil while a listing loads. Its `watch()` has the methods of `core.dirwatch` and reports a folder when its listing arrives or changes.
-The File Tree uses it on a Machine, so it shows each folder after its listing arrives. Its Buffer is read-only there until writes exist. Folder counts use the same listings.
+The File Tree uses it on a Machine, so it shows each folder after its listing arrives. Folder counts use the same listings.
+`core.file_ops` creates, moves, copies and deletes files and folders, also to the Recycle Bin. For a Machine path each call is a request (`files.mkdir`, `files.move`, `files.copy`, `files.delete`, or `files.write` to create), and the calling coroutine waits. `file_ops.run(path, fn)` runs `fn` in a thread for a Machine path. The server uses the same functions on its own disk.
+These methods need Full control. Their paths must be in a Project, and a Project root cannot move or be deleted. A move or copy fails when its target exists.
+On a Machine the File Tree applies its changes in a thread. It then lists the changed folders again (`machine_folders.reload`), without a wait for the change notices.
 An Image View of a Machine file reads its bytes through `core.fs` and loads them with `canvas.load_image_data`. Autoreload does not watch Machine files, and focus does not change the process's folder to a Machine Project.
 Run `runtime/machine_files.lua`, `ui/machine_file_search.lua` and `ui/machine_filetree.lua` after changes.
 

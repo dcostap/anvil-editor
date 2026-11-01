@@ -114,6 +114,12 @@ function fs.list_dir(path, on_done)
   end)
 end
 
+-- `files.mkdir {path}`, `files.move {from, to}`, `files.copy {from, to}` and `files.delete {paths, trash}`
+-- change files on the Machine. `on_done(err)`. `core.file_ops` calls them.
+function fs.change(method, params, on_done)
+  fs.machine:request(method, params, nil, function(err) on_done(err) end)
+end
+
 -- `on_done(err, version)` with the version that the save wrote, or the error `unknown_save`.
 function fs.save_result(save, on_done)
   fs.machine:request("files.save_result", {save = save}, nil, function(err, result)

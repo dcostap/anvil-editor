@@ -3,6 +3,7 @@
 -- Paths in lists and change notices are relative to the Project root, with `/` or `\` as on the Machine.
 local core = require "core"
 local common = require "core.common"
+local file_ops = require "core.file_ops"
 local json = require "core.json"
 local project_files = require "core.project_files"
 
@@ -142,8 +143,63 @@ function files.new(server)
     server.reply(client, id, {result = {count = #entries}}, json.encode(entries))
   end
 
+  -- Returns the disk path of a path that a change can name, or nothing after it sends the error.
+  -- A change cannot move or delete a Project root.
+  local function change_path(client, id, path, root_ok)
+    local checked, code, message = server.check_path(path)
+    if not checked then return server.fail(client, id, code, message) end
+    if not root_ok and server.project_root(checked) then
+      return server.fail(client, id, "project_root", "A Project root cannot move or be deleted")
+    end
+    return server.disk_path(checked)
+  end
+
+  local function finish(client, id, ok, err)
+    if not ok then return server.fail(client, id, "change_failed", tostring(err)) end
+    server.reply(client, id, {result = {}})
+  end
+
+  -- `files.mkdir {path}` makes the folder and its missing parents.
+  local function mkdir(client, id, params)
+    local path = change_path(client, id, params.path, true)
+    if path then finish(client, id, file_ops.mkdirp(path)) end
+  end
+
+  -- `files.move {from, to}` and `files.copy {from, to}` fail when `to` exists.
+  local function move(client, id, params)
+    local from = change_path(client, id, params.from)
+    local to = from and change_path(client, id, params.to)
+    if not to then return end
+    local parent = common.dirname(to)
+    if parent and not system.get_file_info(parent) then
+      local ok, err = file_ops.mkdirp(parent)
+      if not ok then return finish(client, id, ok, err) end
+    end
+    finish(client, id, file_ops.move(from, to))
+  end
+
+  local function copy(client, id, params)
+    local from = change_path(client, id, params.from, true)
+    local to = from and change_path(client, id, params.to)
+    if to then finish(client, id, file_ops.copy(from, to)) end
+  end
+
+  -- `files.delete {paths, trash}` deletes the paths. `trash = true` moves them to the Recycle Bin.
+  local function delete(client, id, params)
+    if type(params.paths) ~= "table" or #params.paths > MAX_STAT_PATHS then
+      return server.fail(client, id, "invalid_request", "paths must be a list of at most " .. MAX_STAT_PATHS)
+    end
+    local paths = {}
+    for i, path in ipairs(params.paths) do
+      paths[i] = change_path(client, id, path)
+      if not paths[i] then return end
+    end
+    finish(client, id, file_ops.delete(paths, params.trash == true))
+  end
+
   return {["files.list"] = list, ["files.changes"] = changes, ["files.stat"] = stat_paths,
-    ["files.list_dir"] = list_dir}
+    ["files.list_dir"] = list_dir, ["files.mkdir"] = mkdir, ["files.move"] = move, ["files.copy"] = copy,
+    ["files.delete"] = delete}
 end
 
 return files

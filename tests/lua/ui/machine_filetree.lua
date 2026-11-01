@@ -1,5 +1,6 @@
 local common = require "core.common"
 local core = require "core"
+local config = require "core.config"
 local fs = require "core.fs"
 local machine_folders = require "core.machine_folders"
 local machine_server = dofile("tests/fixtures/machine_server.lua")
@@ -13,7 +14,7 @@ local test = require "core.test"
 -- folder (`--test-root`). The Client has other files at the same path, and the Machine guard refuses raw reads
 -- of them.
 test.describe("File Tree on a Machine", function()
-  local raw_open = io.open
+  local raw_open, raw_list_dir = io.open, system.list_dir
 
   local function write_file(path, text)
     common.mkdirp(common.dirname(path))
@@ -94,9 +95,42 @@ test.describe("File Tree on a Machine", function()
     test.same({ view.image:get_size() }, { 8, 6 })
   end)
 
-  test.it("keeps the Machine's files unchanged when the user edits the File Tree", function(context)
+  local function find_entry(tree, name)
+    for _, entry in ipairs(tree:build_entries(false)) do
+      if entry.text == name then return entry end
+    end
+    error("Missing entry: " .. name)
+  end
+
+  test.it("creates, renames and deletes the Machine's files", function(context)
+    config.plugins.filetree.delete_to_trash, context.trash = false, config.plugins.filetree.delete_to_trash
     local tree = open_tree(context)
     test.ok(wait_until(function() return text(tree):find("notes.md", 1, true) ~= nil end), text(tree))
-    test.ok(tree.buffer.read_only, "The File Tree of a Machine Project must be read-only")
+    local notes = find_entry(tree, "notes.md")
+    tree.buffer:insert(notes.line, 1, "renamed-")
+    tree:sync_meta()
+    local sub = find_entry(tree, "sub")
+    tree.buffer:remove(sub.line, 1, sub.line + 1, 1)
+    tree:sync_meta()
+    local last = #tree.buffer.lines
+    tree.buffer:insert(last, #tree.buffer.lines[last], "\nmade/new.md")
+    tree:sync_meta()
+    local plan, err = tree:plan_changes()
+    test.not_nil(plan, err)
+    local done
+    tree:apply_plan(plan, function(changed) done = changed end)
+    test.ok(wait_until(function() return done ~= nil end), "the File Tree did not finish its changes")
+    config.plugins.filetree.delete_to_trash = context.trash
+    test.ok(done)
+
+    local function on_machine(name) return system.get_file_info(machine_copy(context, context.project .. PATHSEP .. name)) end
+    test.ok(on_machine("renamed-notes.md"))
+    test.is_nil(on_machine("notes.md"))
+    test.equal(on_machine("made" .. PATHSEP .. "new.md").type, "file")
+    test.is_nil(on_machine("sub"))
+    -- The Client's copy at the same path does not change.
+    test.same(raw_list_dir(context.project), { "client-only.md" })
+    test.ok(wait_until(function() return text(tree):find("renamed-notes.md", 1, true) ~= nil end), text(tree))
+    test.is_nil(text(tree):find("sub/", 1, true))
   end)
 end)

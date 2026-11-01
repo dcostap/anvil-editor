@@ -14,6 +14,7 @@ local project_paths = require "core.project_paths"
 local panes = require "core.panes"
 local storage = require "core.storage"
 local DirWatch = require "core.dirwatch"
+local file_ops = require "core.file_ops"
 local fs = require "core.fs"
 local machine_folders = require "core.machine_folders"
 local project_files = require "core.project_files"
@@ -407,243 +408,6 @@ local function filetree_clipboard_metas_for_lines(view, lines, start, count)
   return metas
 end
 
-local function copy_file(src, dest)
-  local input, err = io.open(src, "rb")
-  if not input then return nil, err end
-  local output
-  output, err = io.open(dest, "wb")
-  if not output then input:close(); return nil, err end
-  local function fail(message)
-    input:close()
-    output:close()
-    local removed, remove_err = os.remove(dest)
-    if not removed then
-      return nil, tostring(message) .. "; incomplete copy remains at " .. dest .. ": " .. tostring(remove_err)
-    end
-    return nil, message
-  end
-  while true do
-    local chunk, read_err = input:read(1024 * 1024)
-    if read_err then return fail(read_err) end
-    if not chunk then break end
-    local ok
-    ok, err = output:write(chunk)
-    if not ok then return fail(err) end
-  end
-  local input_ok, input_err = input:close()
-  local output_ok, output_err = output:close()
-  if not input_ok or not output_ok then
-    local removed, remove_err = os.remove(dest)
-    err = input_err or output_err
-    if not removed then
-      err = tostring(err) .. "; incomplete copy remains at " .. dest .. ": " .. tostring(remove_err)
-    end
-    return nil, err
-  end
-  return true
-end
-
-local function copy_recursive(src, dest, entry_type)
-  local info = system.get_file_info(src)
-  if not info then return nil, "source does not exist: " .. src end
-  if info.symlink then return nil, "copying links is not supported: " .. src end
-  entry_type = entry_type or info.type
-  if entry_type == "dir" then
-    local entries, list_err = system.list_dir(src)
-    if not entries then return nil, list_err or ("cannot list directory: " .. src) end
-    local ok, err, path = common.mkdirp(dest)
-    if not ok then return nil, string.format("mkdir failed: %s: %s", path or dest, err) end
-    for _, name in ipairs(entries) do
-      local child_src = path_join(src, name)
-      local child_dest = path_join(dest, name)
-      local child_info = system.get_file_info(child_src)
-      if child_info then
-        ok, err = copy_recursive(child_src, child_dest, child_info.type)
-        if not ok then return nil, err end
-      else
-        return nil, "cannot inspect source: " .. child_src
-      end
-    end
-    return true
-  end
-
-  local parent = parent_dir(dest)
-  if parent and not system.get_file_info(parent) then
-    local ok, err, path = common.mkdirp(parent)
-    if not ok then return nil, string.format("mkdir failed: %s: %s", path or parent, err) end
-  end
-  return copy_file(src, dest)
-end
-
-local function delete_permanent(path)
-  local info = system.get_file_info(path)
-  if not info then return true end
-  if info.type == "dir" then
-    local ok, err, failed_path = common.rm(path, true)
-    if not ok then return nil, string.format("%s: %s", failed_path or path, err) end
-    return true
-  end
-  local ok, err = os.remove(path)
-  if not ok then return nil, err end
-  return true
-end
-
-local function ps_single_quote(s)
-  return "'" .. s:gsub("'", "''") .. "'"
-end
-
-local function shell_quote_arg(s)
-  return '"' .. s:gsub('"', '\\"') .. '"'
-end
-
-local function wait_paths_gone(paths, timeout)
-  local deadline = system.get_time() + (timeout or 30)
-  while system.get_time() < deadline do
-    local remaining = false
-    for _, path in ipairs(paths) do
-      if system.get_file_info(path) then remaining = true; break end
-    end
-    if not remaining then return true end
-    system.sleep(0.05)
-  end
-  for _, path in ipairs(paths) do
-    if system.get_file_info(path) then return nil, "Recycle Bin operation did not complete: " .. path end
-  end
-  return true
-end
-
-local function trash_windows_ffi(paths)
-  local ok, ffi = pcall(require, "ffi")
-  if not ok then return nil, "LuaJIT FFI unavailable" end
-  local ok_bit, bit = pcall(require, "bit")
-  if not ok_bit then return nil, "LuaJIT bit library unavailable" end
-
-  if not core.filetree_wintrash_ffi_defined then
-    ffi.cdef[[
-typedef void* HWND;
-typedef unsigned int UINT;
-typedef int BOOL;
-typedef const wchar_t* LPCWSTR;
-typedef struct _SHFILEOPSTRUCTW {
-  HWND hwnd;
-  UINT wFunc;
-  LPCWSTR pFrom;
-  LPCWSTR pTo;
-  unsigned short fFlags;
-  BOOL fAnyOperationsAborted;
-  void* hNameMappings;
-  LPCWSTR lpszProgressTitle;
-} SHFILEOPSTRUCTW;
-int SHFileOperationW(SHFILEOPSTRUCTW *lpFileOp);
-int MultiByteToWideChar(UINT CodePage, unsigned long dwFlags, const char *lpMultiByteStr,
-  int cbMultiByte, wchar_t *lpWideCharStr, int cchWideChar);
-unsigned long GetLastError(void);
-]]
-    core.filetree_wintrash_ffi_defined = true
-  end
-
-  local shell32 = ffi.load("shell32")
-  local kernel32 = ffi.load("kernel32")
-  local CP_UTF8 = 65001
-  local FO_DELETE = 0x0003
-  local FOF_SILENT = 0x0004
-  local FOF_NOCONFIRMATION = 0x0010
-  local FOF_ALLOWUNDO = 0x0040
-  local FOF_NOCONFIRMMKDIR = 0x0200
-  local FOF_NOERRORUI = 0x0400
-
-  local converted, total = {}, 1
-  for _, path in ipairs(paths) do
-    local normalized = common.normalize_path(path):gsub("/", "\\")
-    local len = kernel32.MultiByteToWideChar(CP_UTF8, 0, normalized, #normalized, nil, 0)
-    if len <= 0 then
-      return nil, string.format("MultiByteToWideChar length failed for %s (%s)", path, tonumber(kernel32.GetLastError()))
-    end
-    converted[#converted + 1] = { path = normalized, len = len }
-    total = total + len + 1
-  end
-
-  local from = ffi.new("wchar_t[?]", total)
-  local offset = 0
-  for _, item in ipairs(converted) do
-    local written = kernel32.MultiByteToWideChar(CP_UTF8, 0, item.path, #item.path, from + offset, item.len)
-    if written ~= item.len then
-      return nil, string.format("MultiByteToWideChar failed for %s (%s)", item.path, tonumber(kernel32.GetLastError()))
-    end
-    offset = offset + item.len
-    from[offset] = 0
-    offset = offset + 1
-  end
-  from[offset] = 0
-
-  local op = ffi.new("SHFILEOPSTRUCTW")
-  op.hwnd = nil
-  op.wFunc = FO_DELETE
-  op.pFrom = from
-  op.pTo = nil
-  op.fFlags = bit.bor(FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_SILENT, FOF_NOERRORUI, FOF_NOCONFIRMMKDIR)
-
-  local rc = shell32.SHFileOperationW(op)
-  if rc ~= 0 then return nil, "SHFileOperationW failed: " .. tostring(tonumber(rc)) end
-  if op.fAnyOperationsAborted ~= 0 then return nil, "SHFileOperationW operation was aborted" end
-  return wait_paths_gone(paths, 30)
-end
-
-local function trash_windows_powershell(paths)
-  local dir = USERDIR .. PATHSEP .. "storage"
-  common.mkdirp(dir)
-  local script = path_join(dir, "filetree-trash-" .. tostring(system.get_time()):gsub("%W", "") .. ".ps1")
-  local fp, err = io.open(script, "wb")
-  if not fp then return nil, err end
-  fp:write("$ErrorActionPreference = 'Stop'\r\n")
-  fp:write("$paths = @(\r\n")
-  for i, path in ipairs(paths) do
-    fp:write("  " .. ps_single_quote(path) .. (i < #paths and "," or "") .. "\r\n")
-  end
-  fp:write(")\r\n")
-  fp:write("$shell = New-Object -ComObject 'Shell.Application'\r\n")
-  fp:write("foreach ($literal in $paths) {\r\n")
-  fp:write("  if (-not (Test-Path -LiteralPath $literal)) { continue }\r\n")
-  fp:write("  $path = Get-Item -LiteralPath $literal\r\n")
-  fp:write("  $folder = $shell.NameSpace($path.DirectoryName)\r\n")
-  fp:write("  if ($null -eq $folder) { throw 'Could not open parent shell namespace' }\r\n")
-  fp:write("  $item = $folder.ParseName($path.Name)\r\n")
-  fp:write("  if ($null -eq $item) { throw 'Could not resolve shell item' }\r\n")
-  fp:write("  $item.InvokeVerb('delete')\r\n")
-  fp:write("}\r\n")
-  fp:write("$deadline = (Get-Date).AddSeconds(30)\r\n")
-  fp:write("while ((Get-Date) -lt $deadline) {\r\n")
-  fp:write("  $remaining = @($paths | Where-Object { Test-Path -LiteralPath $_ })\r\n")
-  fp:write("  if ($remaining.Count -eq 0) { exit 0 }\r\n")
-  fp:write("  Start-Sleep -Milliseconds 50\r\n")
-  fp:write("}\r\n")
-  fp:write("throw ('Recycle Bin operation did not complete: ' + (($paths | Where-Object { Test-Path -LiteralPath $_ }) -join ', '))\r\n")
-  fp:close()
-  local ok, why, code = os.execute("powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " .. shell_quote_arg(script))
-  os.remove(script)
-  if ok ~= true and ok ~= 0 then
-    return nil, string.format("PowerShell trash failed (%s %s)", tostring(why), tostring(code))
-  end
-  return true
-end
-
-local function trash_paths(paths)
-  if #paths == 0 then return true end
-  if PLATFORM == "Windows" and filetree_config.delete_to_trash then
-    local ok, err = trash_windows_ffi(paths)
-    if ok then return true end
-    core.log("File Tree: SHFileOperationW trash failed, falling back to PowerShell: %s", err)
-    local ps_ok, ps_err = trash_windows_powershell(paths)
-    if ps_ok then return true end
-    return nil, string.format("%s; PowerShell fallback: %s", err, ps_err)
-  end
-  for _, path in ipairs(paths) do
-    local ok, err = delete_permanent(path)
-    if not ok then return nil, err end
-  end
-  return true
-end
-
 local function ordered_moves_or_cycle(moves)
   local path_key, path_equals, path_belongs_to = path_comparisons()
   local by_from = {}
@@ -803,10 +567,6 @@ function FileTreeView:new(opts)
   self.current_dir = self.root_dir
   -- On a Machine, a listing arrives after a wait. Its watch reports the folder then, so the tree lists it again.
   local machine = fs.on_machine(self.root_dir)
-  if machine then
-    buffer.read_only = true
-    buffer.read_only_reason = "The File Tree of a Project on another Machine cannot change files yet"
-  end
   self.original_entries = {}
   self.original_by_name = {}
   self.known_originals = {}
@@ -3132,15 +2892,20 @@ function FileTreeView:open_simple_created_file(opts)
   end
 
   local operation = plan.creates[1]
-  if not self:apply_plan(plan) then return false end
   local pane = panes.pane_for_view(self)
-  return core.open_file(operation.path, {
-    pane = pane,
-    placement = opts.placement or "current",
-    direction = opts.placement == "split" and "right" or nil,
-    focus = true,
-    reason = "filetree-create-open",
-  }) ~= nil
+  local opened
+  self:apply_plan(plan, function(changed)
+    opened = changed and core.open_file(operation.path, {
+      pane = pane,
+      placement = opts.placement or "current",
+      direction = opts.placement == "split" and "right" or nil,
+      focus = true,
+      reason = "filetree-create-open",
+    }) ~= nil
+  end)
+  -- On a Machine the file opens after the Machine creates it.
+  if opened == nil then return true end
+  return opened
 end
 
 function FileTreeView:open_selected_right()
@@ -3256,7 +3021,7 @@ function FileTreeView:enter_directory(entry)
   return self:change_directory(entry.abs)
 end
 
-function FileTreeView:apply_plan(plan)
+local function apply_plan_now(self, plan)
   local changed = false
   local project_paths_changed = false
   local selection_path_map = { __moves = {} }
@@ -3295,7 +3060,7 @@ function FileTreeView:apply_plan(plan)
   end)
 
   local function apply_create(op)
-    local existing = system.get_file_info(op.path)
+    local existing = file_ops.info(op.path)
     if existing then
       if op.type == "dir" and existing.type == "dir" then return true end
       core.error("File Tree: target already exists: %s", op.path)
@@ -3303,18 +3068,16 @@ function FileTreeView:apply_plan(plan)
     end
     local ok, err, path
     if op.type == "dir" then
-      ok, err, path = common.mkdirp(op.path)
+      ok, err, path = file_ops.mkdirp(op.path)
       if not ok then core.error("File Tree: mkdir failed: %s: %s", path or op.path, err); return false end
     else
       local parent = parent_dir(op.path)
-      if parent and not system.get_file_info(parent) then
-        ok, err, path = common.mkdirp(parent)
+      if parent and not file_ops.info(parent) then
+        ok, err, path = file_ops.mkdirp(parent)
         if not ok then core.error("File Tree: mkdir failed: %s: %s", path or parent, err); return false end
       end
-      local fp
-      fp, err = io.open(op.path, "wb")
-      if not fp then core.error("File Tree: create failed: %s", err); return false end
-      fp:close()
+      ok, err = file_ops.create(op.path)
+      if not ok then core.error("File Tree: create failed: %s", err); return false end
     end
     core.log("File Tree: created %s", op.path)
     changed = true
@@ -3334,7 +3097,7 @@ function FileTreeView:apply_plan(plan)
     return
   end
   for _, op in ipairs(ordered_moves) do
-    if system.get_file_info(op.to) then
+    if file_ops.info(op.to) then
       core.error("File Tree: target already exists: %s", op.to)
       return
     end
@@ -3343,11 +3106,11 @@ function FileTreeView:apply_plan(plan)
       return
     end
     local parent = parent_dir(op.to)
-    if parent and not system.get_file_info(parent) then
-      local ok, err, path = common.mkdirp(parent)
+    if parent and not file_ops.info(parent) then
+      local ok, err, path = file_ops.mkdirp(parent)
       if not ok then core.error("File Tree: mkdir failed: %s: %s", path or parent, err); return end
     end
-    local ok, err = os.rename(op.from, op.to)
+    local ok, err = file_ops.move(op.from, op.to)
     if not ok then core.error("File Tree: move failed: %s", err); return end
     selection_path_map[path_key(op.from)] = op.to
     selection_path_map.__moves[#selection_path_map.__moves + 1] = { from = op.from, to = op.to }
@@ -3363,14 +3126,14 @@ function FileTreeView:apply_plan(plan)
 
   table.sort(plan.copies, function(a, b) return path_depth(a.to) < path_depth(b.to) end)
   for _, op in ipairs(plan.copies) do
-    if system.get_file_info(op.to) then
+    if file_ops.info(op.to) then
       core.error("File Tree: target already exists: %s", op.to)
       return
     end
-    local ok, err = copy_recursive(op.apply_from or op.from, op.to, op.type)
+    local ok, err = file_ops.copy(op.apply_from or op.from, op.to)
     if not ok then
       core.error("File Tree: copy failed: %s%s", err,
-        system.get_file_info(op.to) and ("; incomplete copy remains at " .. op.to) or "")
+        file_ops.info(op.to) and ("; incomplete copy remains at " .. op.to) or "")
       return
     end
     core.log("File Tree: copied %s -> %s", op.from, op.to)
@@ -3384,13 +3147,13 @@ function FileTreeView:apply_plan(plan)
   table.sort(plan.trashes, function(a, b) return #a.abs > #b.abs end)
   local trash_list = {}
   for _, op in ipairs(plan.trashes) do
-    if system.get_file_info(op.abs) then trash_list[#trash_list + 1] = op.abs end
+    if file_ops.info(op.abs) then trash_list[#trash_list + 1] = op.abs end
   end
   if #trash_list > 0 then
-    local ok, err = trash_paths(trash_list)
+    local ok, err = file_ops.delete(trash_list, filetree_config.delete_to_trash)
     if not ok then core.error("File Tree: trash/delete failed: %s", err); return end
     for _, path in ipairs(trash_list) do
-      core.log("File Tree: %s %s", filetree_config.delete_to_trash and PLATFORM == "Windows" and "trashed" or "deleted", path)
+      core.log("File Tree: %s %s", file_ops.trashes(filetree_config.delete_to_trash) and "trashed" or "deleted", path)
     end
     changed = true
   end
@@ -3399,8 +3162,27 @@ function FileTreeView:apply_plan(plan)
   for _, op in ipairs(plan.moves) do reveal_paths[#reveal_paths + 1] = op.to end
   for _, op in ipairs(plan.copies) do reveal_paths[#reveal_paths + 1] = op.to end
   for _, op in ipairs(plan.creates) do reveal_paths[#reveal_paths + 1] = op.path end
+  if fs.on_machine(self.root_dir) then
+    -- The Machine's change notices come later. The tree lists the changed folders again now.
+    local folders = {}
+    for _, path in ipairs(reveal_paths) do folders[#folders + 1] = parent_dir(path) end
+    for _, op in ipairs(plan.moves) do folders[#folders + 1] = parent_dir(op.from) end
+    for _, path in ipairs(trash_list) do folders[#folders + 1] = parent_dir(path) end
+    machine_folders.reload(folders)
+  end
   self:refresh_preserving_selection_paths(true, reveal_paths, selection_path_map, selection_paths)
   if changed then core.log("File Tree: applied edits") else core.log("File Tree: nothing to apply") end
+  return changed
+end
+
+---Applies the plan's changes to the disk, then lists the tree again. `on_done(changed)` runs after it.
+---On a Machine the changes run in the background, so the result is nil; locally it is `changed`.
+function FileTreeView:apply_plan(plan, on_done)
+  local changed
+  file_ops.run(self.root_dir, function()
+    changed = apply_plan_now(self, plan) or false
+    if on_done then on_done(changed) end
+  end)
   return changed
 end
 
@@ -3465,7 +3247,7 @@ function FileTreeView:operation_count(plan)
 end
 
 function FileTreeView:operation_summary(plan)
-  local trash_label = filetree_config.delete_to_trash and PLATFORM == "Windows" and "Trash" or "Delete"
+  local trash_label = file_ops.trashes(filetree_config.delete_to_trash) and "Trash" or "Delete"
   return string.format(
     "Create: %d   Copy: %d   Move: %d   %s: %d",
     #plan.creates, #plan.copies, #plan.moves, trash_label, #plan.trashes

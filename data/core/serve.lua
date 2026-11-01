@@ -11,11 +11,12 @@ local net = require "net"
 local core = {threads = {}, background_threads = 0}
 package.loaded.core = core
 local PROTOCOL = 1
-local FEATURES = {"projects.list", "files.list", "files.changes", "files.stat", "files.list_dir", "search.start", "search.read", "search.cancel", "files.read", "files.write", "files.save_result", "pairing.start", "devices.list", "devices.revoke"}
+local FEATURES = {"projects.list", "files.list", "files.changes", "files.stat", "files.list_dir", "files.mkdir", "files.move", "files.copy", "files.delete", "search.start", "search.read", "search.cancel", "files.read", "files.write", "files.save_result", "pairing.start", "devices.list", "devices.revoke"}
 local MAX_CLIENTS, MAX_REQUEST_JSON, MAX_FILE, HELLO_TIMEOUT = 32, 64 * 1024, 16 * 1024 * 1024, 10
 local MAX_SAVES, PAIRING_TIME, PAIRING_ATTEMPTS, MAX_NAME = 1024, 300, 5, 100
 -- A View device only reads. These methods need Full control.
-local FULL_CONTROL = {["files.write"] = true, ["pairing.start"] = true, ["devices.list"] = true, ["devices.revoke"] = true}
+local FULL_CONTROL = {["files.write"] = true, ["files.mkdir"] = true, ["files.move"] = true,
+  ["files.copy"] = true, ["files.delete"] = true, ["pairing.start"] = true, ["devices.list"] = true, ["devices.revoke"] = true}
 -- Tailscale Serve and other forwarders need a port that stays the same across restarts.
 local DEFAULT_PORT, OWNER_CHECK_SECONDS = 7690, 1
 local server, test_root, lose_reply, fixed_port, owner, waiting

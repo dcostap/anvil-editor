@@ -8,7 +8,7 @@ local project_files = require "core.project_files"
 
 local machine_folders = {}
 
-local listings, folder_paths, loading, subscribed = {}, {}, {}, {}
+local listings, folder_paths, loading, again, subscribed = {}, {}, {}, {}, {}
 local watches = setmetatable({}, { __mode = "k" })
 
 local function key(path) return common.path_compare_key(common.normalize_path(path)) end
@@ -20,15 +20,21 @@ local function report(path)
   end
 end
 
-local function fetch(path)
+local fetch
+fetch = function(path)
   local folder = key(path)
-  if loading[folder] then return end
+  -- A listing that started before a change can miss it, so it lists again after it.
+  if loading[folder] then again[folder] = true return end
   loading[folder], folder_paths[folder] = true, common.normalize_path(path)
   fs.list_dir(path, function(err, entries)
     loading[folder] = nil
     if err then core.log_quiet("Machine folder listing failed: %s: %s", path, tostring(err.message or err.code)) end
     -- A folder that the Machine cannot list shows empty.
     listings[folder] = entries or {}
+    if again[folder] then
+      again[folder] = nil
+      return fetch(path)
+    end
     report(path)
   end)
 end
@@ -76,6 +82,17 @@ function machine_folders.wait(path)
   return listing
 end
 
+-- Lists the folders again after this Client changed them, and waits in this coroutine for the new listings.
+-- Folders without a listing load when code lists them.
+function machine_folders.reload(paths)
+  for _, path in ipairs(paths) do
+    if listings[key(path)] ~= nil then fetch(path) end
+  end
+  for _, path in ipairs(paths) do
+    while loading[key(path)] do coroutine.yield(0.02) end
+  end
+end
+
 local Watch = {}
 Watch.__index = Watch
 
@@ -103,7 +120,7 @@ end)
 -- Forgets all listings, for example when the Project process stops using its Machine.
 function machine_folders.clear()
   for _, root in pairs(subscribed) do project_files.unsubscribe(root, "machine-folders") end
-  listings, folder_paths, loading, subscribed = {}, {}, {}, {}
+  listings, folder_paths, loading, again, subscribed = {}, {}, {}, {}, {}
 end
 
 return machine_folders

@@ -191,6 +191,7 @@ test.describe("Machine server", function()
     local path = context.project .. PATHSEP .. "notes.md"
     local reply = call(client, "files.read", {path = path})
     test.equal(call(client, "files.write", {path = path, base = reply.result.version}).error.code, "forbidden")
+    test.equal(call(client, "files.delete", {paths = {path}}).error.code, "forbidden")
     test.equal(call(client, "pairing.start", {level = "view"}).error.code, "forbidden")
     client.socket:close()
     local file = io.open(path, "rb")
@@ -315,6 +316,25 @@ test.describe("Machine server", function()
       end
     end
     test.ok(listed, table.concat(seen, ", "))
+  end)
+
+  test.it("makes, moves, copies and deletes files in its Projects only", function(context)
+    local function path(...) return table.concat({context.project, ...}, PATHSEP) end
+    local client = owner(context)
+    test.same(call(client, "files.mkdir", {path = path("a", "b")}).result, {})
+    test.same(call(client, "files.move", {from = path("notes.md"), to = path("a", "b", "moved.md")}).result, {})
+    test.same(call(client, "files.copy", {from = path("a"), to = path("copy")}).result, {})
+    local file = assert(io.open(path("copy", "b", "moved.md"), "rb"))
+    test.equal(file:read("*a"), "# Notes\n")
+    file:close()
+    test.equal(call(client, "files.copy", {from = path("a"), to = path("copy")}).error.code, "change_failed")
+    test.equal(call(client, "files.copy", {from = path("a"), to = path("a", "b", "c")}).error.code, "change_failed")
+    test.same(call(client, "files.delete", {paths = {path("a"), path("missing.md")}}).result, {})
+    test.is_nil(system.get_file_info(path("a")))
+    test.equal(call(client, "files.delete", {paths = {context.project}}).error.code, "project_root")
+    test.equal(call(client, "files.move", {from = path("copy"), to = context.root .. PATHSEP .. "out"}).error.code,
+      "outside_project")
+    test.ok(system.get_file_info(path("copy", "b", "moved.md")))
   end)
 
   test.it("stats many paths and lists a folder in one request each", function(context)
