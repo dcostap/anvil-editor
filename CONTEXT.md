@@ -336,6 +336,10 @@ _Avoid_: Cursor trail, mouse trail
 An editing action that keeps selected text selected while placing matching delimiters around it. A multiline line-content selection may become an indented delimiter block.
 _Avoid_: auto-pairing, wrapper conversion
 
+**Shown Indentation**:
+The indentation at which a caret on an empty line shows. The empty line holds no whitespace; the first edit at the caret writes this indentation.
+_Avoid_: virtual indent, virtual space, phantom indentation
+
 **Current Line Highlight**:
 A background highlight that marks the visual row containing the active caret in a Text View.
 _Avoid_: Line highlighting, active line highlight

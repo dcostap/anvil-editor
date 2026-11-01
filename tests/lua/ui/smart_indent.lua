@@ -691,14 +691,15 @@ test.describe("smart indentation", function()
   end)
 
   test.it("End on a blank line moves to the block's indentation", function(context)
-    local buffer, view = new_editor(context, "f {\n  g {\n    x\n\n  }\n}", "sample.odin")
+    -- The empty line's caret shows the indentation of `b)`, deeper than the block's.
+    local buffer, view = new_editor(context, "f {\n  g(a,\n    b)\n\n}", "sample.odin")
     core.set_active_view(view)
     buffer:set_selection(4, 1, 4, 1)
 
     test.ok(command.perform("core:move_to_end_of_line"))
 
-    test.equal(text(buffer), "f {\n  g {\n    x\n    \n  }\n}\n")
-    test.same(view:get_selection_state().selections, { 4, 5, 4, 5 })
+    test.equal(text(buffer), "f {\n  g(a,\n    b)\n  \n}\n")
+    test.same(view:get_selection_state().selections, { 4, 3, 4, 3 })
   end)
 
   test.it("End on a line with text still moves to the line end", function(context)

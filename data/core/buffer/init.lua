@@ -111,6 +111,15 @@ function Buffer:clear_undo_redo()
   self.redo_stack = { idx = 1 }
 end
 
+---Makes the undo entries after position `idx` of the undo stack undo and
+---redo as one step with the entry at `idx`.
+---@param idx integer A value of `undo_stack.idx` from before the edits
+function Buffer:join_undo_since(idx)
+  for i = idx + 1, self.undo_stack.idx - 1 do
+    if self.undo_stack[i] then self.undo_stack[i].joins_previous = true end
+  end
+end
+
 
 ---Always returns a valid utf8 line even if the file contains binary data.
 ---@param idx integer
@@ -1901,6 +1910,7 @@ local function push_batch_undo(undo_stack, time, transaction, before_selections,
     edits = transaction.inverse_edits,
     observer_state = transaction.observer_state,
     merge_undo = transaction.merge_undo,
+    joins_previous = transaction.joins_previous,
   }
   undo_stack[undo_stack.idx - config.max_undos] = nil
   undo_stack.idx = undo_stack.idx + 1
@@ -1971,6 +1981,7 @@ local function pop_undo(self, undo_stack, redo_stack, modified)
       -- The opposite entry is the same step, so a redone reload is still a reload.
       entry.change_type = cmd.change_type
       entry.merge_undo = cmd.merge_undo
+      entry.joins_previous = cmd.joins_previous
     end
   elseif cmd.type == "selection" then
     if can_restore_selection_undo(self, cmd) then
@@ -1985,7 +1996,14 @@ local function pop_undo(self, undo_stack, redo_stack, modified)
   -- if next undo command is within the merge timeout then treat as a single
   -- command and continue to execute it
   local next = undo_stack[undo_stack.idx - 1]
-  if next and cmd.merge_undo ~= false and next.merge_undo ~= false
+  -- An entry that joins the one before it always undoes and redoes with it.
+  local joined
+  if undo_stack == self.redo_stack then
+    joined = next and next.joins_previous
+  else
+    joined = next and cmd.joins_previous
+  end
+  if joined or next and cmd.merge_undo ~= false and next.merge_undo ~= false
       and math.abs(cmd.time - next.time) < config.undo_merge_timeout then
     return pop_undo(self, undo_stack, redo_stack, modified)
   end
@@ -2289,6 +2307,7 @@ function Buffer:apply_edits(edits, opts)
     new_last_selection = old_last_selection,
     selection_owner_id = owner_id,
     merge_undo = opts.merge_undo,
+    joins_previous = opts.joins_previous,
     -- Text observers can retain their own reversible location state.
     observer_state = {},
     restore_observer_state = opts.restore_observer_state,

@@ -865,7 +865,7 @@ end
 local function move_to_line_offset(dv, line, col, offset)
   local xo = dv.last_x_offset
   if xo.line ~= line or xo.col ~= col then
-    xo.offset = dv:get_col_x_offset(line, col)
+    xo.offset = dv:get_caret_x_offset(line, col)
   end
   xo.line = line + offset
   xo.col = dv:get_x_offset_col(line + offset, xo.offset)
@@ -4829,9 +4829,19 @@ end
 ---@return number x
 ---@return number y
 function TextView:get_caret_screen_position(line, col)
-  return self:get_line_screen_position(
+  local x, y = self:get_line_screen_position(
     line, col, linewrapping.has_wrapped_line_end_affinity(self, line, col)
   )
+  return x + require("core.empty_line_indent").caret_offset(self, line, col), y
+end
+
+
+---Get a caret's x offset in its row. A caret on an empty line includes the
+---line's shown indentation.
+---@return number
+function TextView:get_caret_x_offset(line, col, line_end)
+  return self:get_col_x_offset(line, col, line_end)
+    + require("core.empty_line_indent").caret_offset(self, line, col)
 end
 
 
@@ -7324,8 +7334,9 @@ function TextView:on_text_input(text)
       return true
     end
   end
-  if self:dedent_typed_closer(text) then return true end
-  self.buffer:text_input(text)
+  require("core.empty_line_indent").write_then(self, function()
+    if not self:dedent_typed_closer(text) then self.buffer:text_input(text) end
+  end)
   return true
 end
 
@@ -7509,6 +7520,11 @@ function TextView:update()
   local perf_active = core.perf_frame_stats ~= nil
   local update_start = perf_active and system.get_time()
   local file_open_update = file_open_view_update_begin(self)
+
+  if self.buffer.empty_line_indent_due and core.active_view == self then
+    self.buffer.empty_line_indent_due = nil
+    require("core.empty_line_indent").clean(self)
+  end
 
   local regions = self.__horizontal_scroll_regions
   if regions then

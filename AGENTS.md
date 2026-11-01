@@ -767,6 +767,16 @@ A Text View without row measurements keeps its top line when lines change above 
 See [shared editing](docs/shared-editing.md) for the plan: dirty-Buffer merges and Disk Conflicts.
 Run `ui/buffer_reload.lua` and `runtime/buffer_apply_lines.lua` after changes.
 
+## Shown Indentation
+
+An empty line holds no whitespace. Its caret shows at the indentation that Enter at the end of the line above writes (`core.empty_line_indent`).
+The Buffer keeps the caret at column 1. Only the drawn caret, the Up/Down goal column and the next edit use the Shown Indentation.
+Typing, Tab and paste first write the Shown Indentation. One undo reverts it with the edit (`Buffer:join_undo_since`).
+After a user edit, a caret line that holds only its Shown Indentation, with the caret at its end, becomes empty. That edit undoes with the edit before it. Undo, redo and reload do not start it.
+Whitespace-only lines that no edit touches stay. `config.keep_newline_whitespace` turns the cleanup off.
+In Markdown, a blank line after a list item or a quote shows at the margin.
+Keep `newline_indent` in step with `core:newline`. Run `ui/empty_line_indent.lua` and `ui/smart_indent.lua` after changes.
+
 ## Autocomplete searches
 
 Autocomplete runs Project symbol searches through `workspace_symbols_async`. It submits only the last input context in each frame. A new Buffer edit, caret position, View, Project Paths generation, or close cancels the old requests. Parse refresh reuses the current requests. Results request a redraw even when normal frame pacing leaves the UI idle. Local symbols and matching visible suggestions remain available while Project searches run.

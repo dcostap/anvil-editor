@@ -2135,7 +2135,7 @@ function LineWrapping.wrapped_visual_line_position(textview, line, col, idx_delt
   if last_x_offset.line == line and last_x_offset.col == col and last_x_offset.line_end == line_end then
     x = last_x_offset.offset
   else
-    x = textview:get_col_x_offset(line, col, line_end)
+    x = textview:get_caret_x_offset(line, col, line_end)
   end
   local target_line, target_col, target_line_end = LineWrapping.get_line_col_from_index_and_x(textview, idx + idx_delta, x)
   last_x_offset.offset = x

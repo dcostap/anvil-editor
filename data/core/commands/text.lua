@@ -5,6 +5,7 @@ local config = require "core.config"
 local keymap = require "core.keymap"
 local linewrapping = require "core.linewrapping"
 local intelligence = require "core.language_intelligence"
+local empty_line_indent = require "core.empty_line_indent"
 local navigation_history = require "core.navigation_history"
 local encodings = require "core.buffer.encodings"
 local translate = require "core.buffer.translate"
@@ -1340,7 +1341,8 @@ local function smart_indent_backspace(buffer)
   return true
 end
 
--- End on a blank line moves to the block's indentation.
+-- End on a blank line moves to the block's indentation. An empty line whose
+-- caret already shows that indentation stays empty.
 local function smart_end_on_blank_line(buffer)
   local line = single_caret(buffer)
   if not line then return false end
@@ -1348,6 +1350,7 @@ local function smart_end_on_blank_line(buffer)
   if not leading:match("^[\t ]*$") then return false end
   local expected = block_indent(buffer, line)
   if not expected or expected == leading then return false end
+  if leading == "" and expected == empty_line_indent.get(buffer, line) then return false end
   buffer:apply_edits({
     { line1 = line, col1 = 1, line2 = line, col2 = #leading + 1, text = expected },
   }, {
@@ -1444,6 +1447,51 @@ local function coalesce_duplicate_replacements(edits)
   return result, original_to_coalesced
 end
 
+local function paste_clipboard(dv, clipboard)
+  local transaction
+  -- If the clipboard has changed since our last look, use that instead
+  if core.cursor_clipboard["full"] ~= clipboard then
+    core.cursor_clipboard = {}
+    core.cursor_clipboard_whole_line = {}
+    local text = clipboard:gsub("\r", "")
+    transaction = dv.buffer:text_input_by_selection(function(_, line1, col1)
+      return smart_paste_text(dv.buffer, line1, col1, text)
+    end, nil, { type = "paste" })
+  else
+    -- Use internal clipboard(s)
+    -- If there are mixed whole lines and normal lines, consider them all as normal
+    local only_whole_lines = true
+    for _,whole_line in pairs(core.cursor_clipboard_whole_line) do
+      if not whole_line then
+        only_whole_lines = false
+        break
+      end
+    end
+    if #core.cursor_clipboard_whole_line == (#dv.buffer.selections/4) then
+      -- If we have the same number of clipboards and selections,
+      -- paste each clipboard into its corresponding selection
+      if only_whole_lines then
+        transaction = paste_matching_whole_lines(dv.buffer, core.cursor_clipboard)
+      else
+        transaction = dv.buffer:text_input_by_selection(function(idx, line1, col1)
+          local sources = core.cursor_clipboard.sources
+          return smart_paste_text(dv.buffer, line1, col1,
+            tostring(core.cursor_clipboard[idx] or ""):gsub("\r", ""),
+            sources and sources[idx])
+        end, nil, { type = "paste" })
+      end
+    else
+      -- Paste every clipboard and add a selection at the end of each one
+      if not only_whole_lines then
+        transaction = paste_all_normal_clipboards(dv.buffer)
+      else
+        transaction = paste_all_whole_line_clipboards(dv.buffer)
+      end
+    end
+  end
+  return transaction
+end
+
 local commands = {
   ["core:select_none"] = function(dv)
     local l1, c1 = dv.buffer:get_selection_idx(dv.buffer.last_selection)
@@ -1479,48 +1527,7 @@ local commands = {
     if not clipboard or clipboard == "" then
     	return
     end
-    local transaction
-    -- If the clipboard has changed since our last look, use that instead
-    if core.cursor_clipboard["full"] ~= clipboard then
-      core.cursor_clipboard = {}
-      core.cursor_clipboard_whole_line = {}
-      local text = clipboard:gsub("\r", "")
-      transaction = dv.buffer:text_input_by_selection(function(_, line1, col1)
-        return smart_paste_text(dv.buffer, line1, col1, text)
-      end, nil, { type = "paste" })
-    else
-      -- Use internal clipboard(s)
-      -- If there are mixed whole lines and normal lines, consider them all as normal
-      local only_whole_lines = true
-      for _,whole_line in pairs(core.cursor_clipboard_whole_line) do
-        if not whole_line then
-          only_whole_lines = false
-          break
-        end
-      end
-      if #core.cursor_clipboard_whole_line == (#dv.buffer.selections/4) then
-        -- If we have the same number of clipboards and selections,
-        -- paste each clipboard into its corresponding selection
-        if only_whole_lines then
-          transaction = paste_matching_whole_lines(dv.buffer, core.cursor_clipboard)
-        else
-          transaction = dv.buffer:text_input_by_selection(function(idx, line1, col1)
-            local sources = core.cursor_clipboard.sources
-            return smart_paste_text(dv.buffer, line1, col1,
-              tostring(core.cursor_clipboard[idx] or ""):gsub("\r", ""),
-              sources and sources[idx])
-          end, nil, { type = "paste" })
-        end
-      else
-        -- Paste every clipboard and add a selection at the end of each one
-        if not only_whole_lines then
-          transaction = paste_all_normal_clipboards(dv.buffer)
-        else
-          transaction = paste_all_whole_line_clipboards(dv.buffer)
-        end
-      end
-    end
-    return transaction
+    return empty_line_indent.write_then(dv, function() return paste_clipboard(dv, clipboard) end)
   end,
 
   ["core:paste_primary_selection"] = function(dv, x, y)
@@ -1531,10 +1538,11 @@ local commands = {
       dv.mouse_selecting = nil
     end
     local text = tostring(system.get_primary_selection() or ""):gsub("\r", "")
-    local transaction = dv.buffer:text_input_by_selection(function(_, line1, col1)
-      return smart_paste_text(dv.buffer, line1, col1, text)
-    end, nil, { type = "paste" })
-    return transaction
+    return empty_line_indent.write_then(dv, function()
+      return dv.buffer:text_input_by_selection(function(_, line1, col1)
+        return smart_paste_text(dv.buffer, line1, col1, text)
+      end, nil, { type = "paste" })
+    end)
   end,
 
   ["core:newline"] = function(dv)
@@ -3002,6 +3010,12 @@ local function move_char_batch(dv, move_fn, collapse_to_end)
   buffer:set_selection_list(selections, last_selection, { merge_cursors = true, sanitized = true })
 end
 
+-- Tab on an empty line indents from the line's shown indentation.
+local indent_selections = commands["core:indent"]
+commands["core:indent"] = function(dv)
+  return empty_line_indent.write_then(dv, function() return indent_selections(dv) end)
+end
+
 commands["core:move_to_previous_char"] = function(dv)
   if reveal_markdown_task_source_from_implicit_content(dv) then return end
   move_char_batch(dv, translate.previous_char, false)
@@ -3031,6 +3045,7 @@ local function move_line_batch(dv, line_offset)
     end
   end
   local simple_line_cache = {}
+  local space_width = dv:get_font():get_width(" ")
   local seen = {}
   local mapped_last_selection = nil
 
@@ -3042,7 +3057,7 @@ local function move_line_batch(dv, line_offset)
     end
     local x = by_col[col]
     if x == nil then
-      x = dv:get_col_x_offset(line, col)
+      x = dv:get_caret_x_offset(line, col)
       by_col[col] = x
     end
     return x
@@ -3102,24 +3117,23 @@ local function move_line_batch(dv, line_offset)
       target_line, target_col = last_line, #buffer.lines[last_line]
     else
       target_line = dv.fold_aware_line_move and dv:fold_aware_line_move(line, line_offset) or line + line_offset
-      if is_simple_line(line) and is_simple_line(target_line) then
-        local x = (col - 1) * dv:get_font():get_width(" ")
-        target_col = common.clamp(col, 1, #buffer.lines[target_line])
-        last_x_offset.offset = x
-        last_x_offset.line = target_line
-        last_x_offset.col = target_col
+      local x
+      if last_x_offset.line == line and last_x_offset.col == col then
+        x = last_x_offset.offset
+      elseif is_simple_line(line) then
+        x = (col - 1) * space_width + empty_line_indent.caret_offset(dv, line, col)
       else
-        local x
-        if last_x_offset.line == line and last_x_offset.col == col then
-          x = last_x_offset.offset
-        else
-          x = get_cached_x(line, col)
-        end
-        target_col = common.clamp(get_cached_col(target_line, x), 1, #buffer.lines[target_line])
-        last_x_offset.offset = x
-        last_x_offset.line = target_line
-        last_x_offset.col = target_col
+        x = get_cached_x(line, col)
       end
+      if is_simple_line(target_line) then
+        target_col = math.floor(x / space_width + 0.5) + 1
+      else
+        target_col = get_cached_col(target_line, x)
+      end
+      target_col = common.clamp(target_col, 1, #buffer.lines[target_line])
+      last_x_offset.offset = x
+      last_x_offset.line = target_line
+      last_x_offset.col = target_col
     end
     local target_fold = dv.get_collapsed_fold_at_line and dv:get_collapsed_fold_at_line(target_line)
     if target_fold and target_fold.line1 == target_line then target_col = 1 end
@@ -3253,6 +3267,7 @@ local function select_line_batch(dv, line_offset)
     end
   end
   local simple_line_cache = {}
+  local space_width = dv:get_font():get_width(" ")
 
   local function get_cached_x(line, col)
     local by_col = x_by_line_col[line]
@@ -3262,7 +3277,7 @@ local function select_line_batch(dv, line_offset)
     end
     local x = by_col[col]
     if x == nil then
-      x = dv:get_col_x_offset(line, col)
+      x = dv:get_caret_x_offset(line, col)
       by_col[col] = x
     end
     return x
@@ -3302,24 +3317,23 @@ local function select_line_batch(dv, line_offset)
       target_line, target_col = last_line, #buffer.lines[last_line]
     else
       target_line = dv.fold_aware_line_move and dv:fold_aware_line_move(line, line_offset) or line + line_offset
-      if is_simple_line(line) and is_simple_line(target_line) then
-        local x = (col - 1) * dv:get_font():get_width(" ")
-        target_col = common.clamp(col, 1, #buffer.lines[target_line])
-        last_x_offset.offset = x
-        last_x_offset.line = target_line
-        last_x_offset.col = target_col
+      local x
+      if last_x_offset.line == line and last_x_offset.col == col then
+        x = last_x_offset.offset
+      elseif is_simple_line(line) then
+        x = (col - 1) * space_width + empty_line_indent.caret_offset(dv, line, col)
       else
-        local x
-        if last_x_offset.line == line and last_x_offset.col == col then
-          x = last_x_offset.offset
-        else
-          x = get_cached_x(line, col)
-        end
-        target_col = common.clamp(get_cached_col(target_line, x), 1, #buffer.lines[target_line])
-        last_x_offset.offset = x
-        last_x_offset.line = target_line
-        last_x_offset.col = target_col
+        x = get_cached_x(line, col)
       end
+      if is_simple_line(target_line) then
+        target_col = math.floor(x / space_width + 0.5) + 1
+      else
+        target_col = get_cached_col(target_line, x)
+      end
+      target_col = common.clamp(target_col, 1, #buffer.lines[target_line])
+      last_x_offset.offset = x
+      last_x_offset.line = target_line
+      last_x_offset.col = target_col
     end
     local target_fold = dv.get_collapsed_fold_at_line and dv:get_collapsed_fold_at_line(target_line)
     if target_fold and target_fold.line1 == target_line then target_col = 1 end
