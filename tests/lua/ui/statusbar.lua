@@ -268,6 +268,12 @@ test.describe("Pane Status Bars", function()
     root:update()
     test.ok(not shows(left), "the message moved with focus")
     test.ok(shows(right), "the message left its Pane when focus moved")
+    local other = panes.create { factory = function() return named_view("other.lua") end }
+    root:update()
+    test.ok(shows(other), "the message did not show in another Pane Group")
+    panes.focus(left)
+    root:update()
+    test.ok(shows(right), "the message did not go back to its Pane")
   end)
 
   test.it("does not open the log when empty space is clicked during a message", function(context)

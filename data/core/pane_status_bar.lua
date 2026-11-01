@@ -150,15 +150,15 @@ function PaneStatusBar:is_focused()
 end
 
 ---Whether this bar shows the current message. A message stays in the Pane
----that had focus when it appeared. After that Pane closes, the focused bar
----shows it.
+---that had focus when it appeared. While that Pane is hidden or closed, the
+---focused bar shows it.
 ---@return boolean
 function PaneStatusBar:shows_message()
   local controller = self.controller
   if not controller:message_active() then return false end
   local panes = core.panes or require "core.panes"
   local owner = controller.message.pane
-  if owner and panes.contains(owner) then return owner == self.pane end
+  if owner and panes.is_visible(owner) then return owner == self.pane end
   return self:is_focused()
 end
 
