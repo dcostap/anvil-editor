@@ -388,23 +388,23 @@ A handoff has a fixed order:
 
 1. A Client asks for control. The request names the control generation that the Client saw last. If the action that took control was a keystroke, the request carries it.
 2. If that generation is not the current one, the host refuses. So two requests cannot both win. The Client can try again.
-3. The host makes a new generation and tells all Clients.
-4. The host resizes to the new Controller's size.
-5. The host sends a snapshot at the new size. The snapshot names the last output record that it contains. Output after that record follows it.
-6. The new Controller shows the snapshot and confirms.
-7. The host then sends the held keystroke to the program, and accepts input from the new Controller.
+3. The host makes a new generation and resizes to the new Controller's size.
+4. The host sends a role record to each Client at that place in the output. It names the generation, the Controller's device and the size. Each Client resizes its screen there, as the host's model did. ConPTY then repaints the new grid. So a handoff or a resize sends no snapshot.
+5. The keystroke that took control follows the request on the same connection. So it reaches the program only when the request wins.
 
 A query that comes before the handoff goes to the old Controller. If the old Controller does not answer before its generation ends, the query stays unanswered. This is the same as today, when no editor is attached.
 
 If the Controller disconnects, the session has no Controller until a Client asks. A Controller that reconnects with an old generation is a Viewer.
 
-Today, the host orders a snapshot and the output after it with its model lock and its replay state (`src/terminal_host.c`). The new boundary uses the same mechanism.
+A Client on the host's own PC takes control when it attaches, if the Controller is also on that PC. One PC has one user, and a Pane move attaches before the old View's detach arrives. A remote Controller keeps control until someone types.
+
+The host orders an attach snapshot and the output after it with its model lock. Role records use the same lock.
 
 ### Changes to the Terminal host
 
-- Today the host accepts one client (`attach_client` in `src/terminal_host.c`). That client has an 8 MiB queue and a 10-second stall timeout.
+- The host accepts up to 8 Clients: one Controller and the Viewers. Each Client has its own pipe and an 8 MiB queue. The Controller's queue has a 10-second stall timeout.
 - A detached host that is not busy and has no new output for 10 minutes ends. A busy host, such as a working Pi, keeps running.
-- The host must accept one Controller and any number of Viewers. Each Client has its own queue. A Viewer that stalls is dropped and attaches again with a snapshot. A slow Viewer never stalls the Controller.
+- A Viewer whose queue is full is dropped and attaches again with a snapshot. A slow Viewer never stalls the Controller.
 - The host already keeps the Ghostty screen model, so Viewers only display it.
 - Ghostty snapshots contain no images. A Viewer that joins sees no inline images until the program sends them again. Reconnects have the same limit today.
 - Terminal hosts are Windows-only today, because they use ConPTY. Other host systems need a PTY backend.

@@ -65,6 +65,7 @@ test.describe("Terminal Session restoration", function()
       end
     end
     if context.file then os.remove(context.file) end
+    if context.other then context.other:detach() end
   end)
 
   local function open(context, state)
@@ -120,26 +121,49 @@ test.describe("Terminal Session restoration", function()
     test.equal(#terminal.open_views(), before)
   end)
 
-  test.it("rejects a second client while the shell has an attached client", function(context)
+  test.it("shares the shell with a second client, and typing takes control", function(context)
     local view = open(context)
-    mark(view, "single_client_marker")
+    mark(view, "before_share_marker")
     local native = require "terminal_native"
     local record = assert(loadfile(USERDIR .. "/terminal-sessions/" .. view:get_state().session_id .. ".lua"))()
-    local session, err = native.new {
+    test.equal(record.shared, true)
+    local other, err = native.new {
       session_id = record.session_id, host_pid = record.host_pid,
       host_creation_time = record.host_creation_time, pipe_name = record.pipe_name,
+      cols = 50, rows = 12,
     }
-    test.ok(session, err)
-    local deadline = system.get_time() + 8
-    local changed, status
-    repeat
-      changed, status = session:update()
-      if status.kind == "failed" then break end
-      coroutine.yield(0.01)
-    until system.get_time() >= deadline
-    session:close()
-    test.equal(status.kind, "failed")
-    mark(view, "first_client_still_works")
+    test.ok(other, err)
+    context.other = other
+    local status
+    local function other_printed(marker)
+      local _, current = other:update()
+      status = current
+      local capture = other:text_capture()
+      return capture and ("\n" .. capture.text .. "\n"):find("\n" .. marker .. "\n", 1, true) ~= nil
+    end
+    local function own_status()
+      local _, current = view.session:update()
+      return current
+    end
+    -- The second client on this PC takes control. The first shows the shell at the second's size.
+    test.ok(wait_for(view, function()
+      return other_printed("before_share_marker") and own_status().viewer and view.session:snapshot(nil, false).cols == 50
+    end), "the first client did not become a Viewer at the Controller's size")
+    -- The Viewer names the Controller's device. A local Controller is this PC.
+    local controller = own_status().controller
+    test.ok(type(controller) == "string" and controller ~= "", "the Viewer does not name the Controller")
+    test.ok(other:write("echo from_controller_marker\r"))
+    test.ok(wait_for(view, function()
+      other_printed("")
+      return printed(view, "from_controller_marker")
+    end), "the Viewer did not show the Controller's output")
+    -- Typing in the Viewer takes control. Its input reaches the shell, and the other client becomes a Viewer.
+    mark(view, "from_viewer_marker")
+    test.ok(wait_for(view, function() return other_printed("from_viewer_marker") and status.viewer end),
+      "typing did not take control")
+    test.not_equal(own_status().viewer, true)
+    test.ok(wait_for(view, function() return view.session:snapshot(nil, false).cols ~= 50 end),
+      "the new Controller did not set its own size")
   end)
 
   test.it("starts a new shell when the record has a different creation time", function(context)

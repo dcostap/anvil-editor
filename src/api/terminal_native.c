@@ -126,6 +126,16 @@ typedef struct {
   uint16_t rows;
   uint32_t cell_width;
   uint32_t cell_height;
+  /* The size of this View. A Viewer's screen keeps the Controller's size, so the View's own size waits here. */
+  AnvilTerminalSize wanted;
+  /* Control, from the host's ROLE records. The reader hands each ROLE to the UI thread in `role_next`, at its
+     place in the output. It sends no more output until the UI thread takes it. Hosts without shared sessions
+     send no ROLE, and their one Client controls. */
+  AnvilTerminalRole role_next;
+  bool role_ready;
+  bool viewer, take_pending;
+  uint32_t control_generation;
+  char controller_name[ANVIL_TERMINAL_NAME_LENGTH];
   GhosttyColorScheme color_scheme;
   bool color_scheme_known;
   TerminalContrast contrast;
@@ -324,6 +334,20 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
       wake_for_terminal_output(session);
       continue;
     }
+    if (header.type == ANVIL_TERMINAL_ROLE && header.size == sizeof(AnvilTerminalRole)) {
+      AnvilTerminalRole role; memcpy(&role, buffer, sizeof(role));
+      if (role.controller > 1 || !memchr(role.controller_name, 0, sizeof(role.controller_name))) {
+        session->read_error = ERROR_INVALID_DATA; InterlockedExchange(&session->read_failed, 1); break;
+      }
+      EnterCriticalSection(&session->read_lock);
+      while ((session->read_queue_count || session->role_ready) &&
+             InterlockedCompareExchange(&session->closing, 0, 0) == 0)
+        SleepConditionVariableCS(&session->read_ready, &session->read_lock, 200);
+      session->role_next = role; session->role_ready = true;
+      LeaveCriticalSection(&session->read_lock);
+      wake_for_terminal_output(session);
+      continue;
+    }
     if (header.type == ANVIL_TERMINAL_EXITED && !replaying && header.size == sizeof(AnvilTerminalExited)) {
       AnvilTerminalExited exited; memcpy(&exited, buffer, sizeof(exited));
       session->exit_code = exited.exit_code;
@@ -400,7 +424,7 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
     EnterCriticalSection(&session->read_lock);
     bool queue_was_empty = session->read_queue_count == 0;
     while (offset < read && InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
-      while (session->read_queue_count == TERMINAL_READ_QUEUE_CAPACITY &&
+      while ((session->read_queue_count == TERMINAL_READ_QUEUE_CAPACITY || session->role_ready) &&
              InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
         SleepConditionVariableCS(&session->read_ready, &session->read_lock, 200);
         /* A full local queue must not hide a peer disconnect indefinitely. */
@@ -592,11 +616,29 @@ static bool write_all(TerminalSession *session, const uint8_t *data, size_t leng
   return enqueue_record(session, ANVIL_TERMINAL_INPUT, data, length);
 }
 
+static AnvilTerminalSize wanted_size(const TerminalSession *session) {
+  if (session->wanted.cols && session->wanted.rows) return session->wanted;
+  return (AnvilTerminalSize){ session->cols, session->rows, session->cell_width, session->cell_height };
+}
+
+/* Typed input. A Viewer first asks for control with the generation that it saw last. The input follows on the
+   same pipe, so the host gives it to the program only when the request wins. */
+static bool write_typed(TerminalSession *session, const uint8_t *data, size_t length) {
+  if (session->viewer && !session->take_pending && length) {
+    AnvilTerminalTake take = { session->control_generation, wanted_size(session) };
+    if (!enqueue_record(session, ANVIL_TERMINAL_TAKE, (const uint8_t *)&take, sizeof(take))) return false;
+    session->take_pending = true;
+  }
+  return write_all(session, data, length);
+}
+
+/* Query answers. Only the Controller answers, as the host drops a Viewer's input. */
 static void terminal_write_pty(
   GhosttyTerminal terminal, void *userdata, const uint8_t *data, size_t length
 ) {
   (void)terminal;
-  write_all((TerminalSession *)userdata, data, length);
+  TerminalSession *session = (TerminalSession *)userdata;
+  if (!session->viewer) write_all(session, data, length);
 }
 
 static void terminal_bell(GhosttyTerminal terminal, void *userdata) {
@@ -610,7 +652,8 @@ static GhosttyClipboardWriteResult terminal_clipboard_write(
 ) {
   (void)terminal;
   TerminalSession *session = (TerminalSession *)userdata;
-  if (!write || write->location != GHOSTTY_CLIPBOARD_LOCATION_STANDARD) {
+  /* A program's clipboard write goes to the Controller's clipboard only. */
+  if (!write || write->location != GHOSTTY_CLIPBOARD_LOCATION_STANDARD || session->viewer) {
     return GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED;
   }
   if (write->contents_len == 0) {
@@ -953,7 +996,7 @@ static bool start_reconnect(TerminalSession *session, bool wait_for_exit) {
   job->references = 2;
   job->host_pid = session->host_pid;
   job->wait_for_exit = wait_for_exit;
-  job->size = (AnvilTerminalSize){ session->cols, session->rows, session->cell_width, session->cell_height };
+  job->size = wanted_size(session);
   if (session->preserve_grid) job->size.cols = job->size.rows = 0;
   memcpy(job->id, session->id, sizeof(job->id));
   DuplicateHandle(GetCurrentProcess(), session->process, GetCurrentProcess(), &job->process,
@@ -1386,6 +1429,7 @@ static int f_terminal_new(lua_State *L) {
   if (session->rows == 0) session->rows = 1;
   if (session->cell_width == 0) session->cell_width = 1;
   if (session->cell_height == 0) session->cell_height = 1;
+  session->wanted = (AnvilTerminalSize){ session->cols, session->rows, session->cell_width, session->cell_height };
 
   lua_getfield(L, 1, "cwd");
   const char *cwd = lua_isstring(L, -1) ? lua_tostring(L, -1) : NULL;
@@ -1527,6 +1571,11 @@ static void push_status(lua_State *L, TerminalSession *session) {
     session->state == TERMINAL_STATE_RECONNECTING ||
     (session->state == TERMINAL_STATE_RUNNING && !session->replay_finished));
   set_boolean_field(L, "replaying", !session->replay_finished);
+  if (session->viewer) {
+    set_boolean_field(L, "viewer", true);
+    lua_pushstring(L, session->controller_name);
+    lua_setfield(L, -2, "controller");
+  }
   set_integer_field(L, "editor_ready", (uint32_t)editor_ready);
   if (busy >= 0) set_boolean_field(L, "busy", busy != 0);
   if (agent_state[0] && session->state == TERMINAL_STATE_RUNNING) {
@@ -1639,6 +1688,9 @@ static bool service_transport(TerminalSession *session) {
     }
     session->read_queue_head = session->read_queue_count = 0;
     session->write_queue_head = session->write_queue_count = 0;
+    /* The new connection's ROLE says who controls. An older host sends none, and this Client controls. */
+    session->role_ready = session->take_pending = false;
+    if (session->viewer) { session->viewer = false; session->state_revision++; }
     session->read_error = session->write_error = 0;
     InterlockedExchange(&session->read_failed, 0); InterlockedExchange(&session->write_failed, 0);
     InterlockedExchange(&session->reader_done, 0); InterlockedExchange(&session->closing, 0);
@@ -1656,6 +1708,36 @@ static bool service_transport(TerminalSession *session) {
     }
   }
   return !session->transport_released;
+}
+
+static bool resize_model(TerminalSession *session, AnvilTerminalSize size) {
+  if (ghostty_terminal_resize(session->terminal, size.cols, size.rows, size.cell_width, size.cell_height)
+      != GHOSTTY_SUCCESS) return false;
+  session->cols = size.cols; session->rows = size.rows;
+  session->cell_width = size.cell_width; session->cell_height = size.cell_height;
+  update_terminal_render_state(session);
+  session->render_generation++;
+  return true;
+}
+
+/* UI thread, at the ROLE's place in the output. A Viewer's screen follows the host's size there. A Controller
+   sets the size itself, so it ignores the size, except in the ROLE that makes it the Controller. */
+static void apply_role(TerminalSession *session, const AnvilTerminalRole *role) {
+  bool was_viewer = session->viewer;
+  session->viewer = !role->controller;
+  session->take_pending = false;
+  session->control_generation = role->generation;
+  bool name_changed = strcmp(session->controller_name, role->controller_name) != 0;
+  memcpy(session->controller_name, role->controller_name, sizeof(session->controller_name));
+  if (was_viewer != session->viewer || (session->viewer && name_changed)) session->state_revision++;
+  AnvilTerminalSize size = { role->size.cols, role->size.rows, session->cell_width, session->cell_height };
+  if ((session->viewer || was_viewer) && size.cols && size.rows && size.cols <= 32767 && size.rows <= 32767 &&
+      (size.cols != session->cols || size.rows != session->rows)) resize_model(session, size);
+  /* The View can change size while it waits for control. */
+  AnvilTerminalSize wanted = wanted_size(session);
+  if (!session->viewer && was_viewer && (wanted.cols != session->cols || wanted.rows != session->rows) &&
+      enqueue_record(session, ANVIL_TERMINAL_RESIZE, (const uint8_t *)&wanted, sizeof(wanted)))
+    resize_model(session, wanted);
 }
 
 /* READY is one published update. History uses bounded page steps afterward. */
@@ -1738,8 +1820,14 @@ static int f_terminal_update(lua_State *L) {
   size_t total = 0;
   while (total < TERMINAL_READ_BUDGET) {
     size_t amount = 0;
+    bool role = false;
+    AnvilTerminalRole next;
     EnterCriticalSection(&session->read_lock);
-    if (session->read_queue_count > 0) {
+    if (session->role_ready) {
+      /* The reader set this only with an empty queue, and holds later output until this point. */
+      role = true; next = session->role_next; session->role_ready = false;
+      WakeConditionVariable(&session->read_ready);
+    } else if (session->read_queue_count > 0) {
       amount = session->read_queue_count;
       if (amount > sizeof(buffer)) amount = sizeof(buffer);
       if (amount > TERMINAL_READ_BUDGET - total) amount = TERMINAL_READ_BUDGET - total;
@@ -1752,6 +1840,7 @@ static int f_terminal_update(lua_State *L) {
       WakeConditionVariable(&session->read_ready);
     }
     LeaveCriticalSection(&session->read_lock);
+    if (role) { apply_role(session, &next); changed = true; continue; }
     if (amount == 0) break;
     if (session->vt_trace_file) {
       DWORD written = 0;
@@ -1781,7 +1870,7 @@ static int f_terminal_update(lua_State *L) {
   }
   bool output_remains = false;
   EnterCriticalSection(&session->read_lock);
-  output_remains = session->read_queue_count > 0;
+  output_remains = session->read_queue_count > 0 || session->role_ready;
   LeaveCriticalSection(&session->read_lock);
   if (output_remains) wake_for_terminal_output(session);
   bool host_exited = InterlockedCompareExchange(&session->host_exited, 0, 0) != 0;
@@ -1816,7 +1905,7 @@ static int f_terminal_write(lua_State *L) {
   size_t length = 0;
   const char *text = luaL_checklstring(L, 2, &length);
   uint64_t rejected_before = session->rejected_writes;
-  bool ok = write_all(session, (const uint8_t *)text, length);
+  bool ok = write_typed(session, (const uint8_t *)text, length);
   lua_pushboolean(L, ok);
   if (ok) return 1;
   if (session->rejected_writes != rejected_before) {
@@ -1935,7 +2024,7 @@ static int f_terminal_paste(lua_State *L) {
     input, length, mode.value, encoded, capacity, &written
   );
   uint64_t rejected_before = session->rejected_writes;
-  bool ok = result == GHOSTTY_SUCCESS && write_all(
+  bool ok = result == GHOSTTY_SUCCESS && write_typed(
     session, (const uint8_t *)encoded, written
   );
   HeapFree(GetProcessHeap(), 0, input);
@@ -2009,6 +2098,12 @@ static int f_terminal_resize(lua_State *L) {
   }
 
   AnvilTerminalSize size = { cols, rows, cell_width, cell_height };
+  session->wanted = size;
+  /* A Viewer keeps the Controller's grid. Its size goes with its request for control. */
+  if (session->viewer) {
+    lua_pushboolean(L, true);
+    return 1;
+  }
   if (!enqueue_record(session, ANVIL_TERMINAL_RESIZE, (const uint8_t *)&size, sizeof(size))) {
     lua_pushboolean(L, false);
     return 1;
@@ -2026,6 +2121,19 @@ static int f_terminal_resize(lua_State *L) {
   update_terminal_render_state(session);
   session->render_generation++;
   lua_pushboolean(L, true);
+  return 1;
+}
+
+/* Takes control without input. Returns false for a Controller or a closed session. */
+static int f_terminal_take_control(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  bool ok = terminal_is_live(session) && session->viewer && !session->take_pending;
+  if (ok) {
+    AnvilTerminalTake take = { session->control_generation, wanted_size(session) };
+    ok = enqueue_record(session, ANVIL_TERMINAL_TAKE, (const uint8_t *)&take, sizeof(take));
+    session->take_pending = ok;
+  }
+  lua_pushboolean(L, ok);
   return 1;
 }
 
@@ -2299,7 +2407,7 @@ static int f_terminal_key(lua_State *L) {
   );
   uint64_t rejected_before = session->rejected_writes;
   bool ok = result == GHOSTTY_SUCCESS && written > 0 &&
-    write_all(session, (const uint8_t *)encoded, written);
+    write_typed(session, (const uint8_t *)encoded, written);
   lua_pushboolean(L, ok);
   if (!ok && session->rejected_writes != rejected_before) {
     lua_pushliteral(L, "queue_full");
@@ -3256,7 +3364,8 @@ static int f_terminal_mouse(lua_State *L) {
   GhosttyResult result = ghostty_mouse_encoder_encode(
     session->mouse_encoder, session->mouse_event, encoded, sizeof(encoded), &written
   );
-  bool ok = result == GHOSTTY_SUCCESS && (written == 0 || write_all(
+  /* Mouse reports of a Viewer do not take control. */
+  bool ok = result == GHOSTTY_SUCCESS && (written == 0 || session->viewer || write_all(
     session, (const uint8_t *)encoded, written
   ));
   lua_pushboolean(L, ok);
@@ -3308,7 +3417,7 @@ static int f_terminal_focus(lua_State *L) {
     session->terminal, GHOSTTY_TERMINAL_DATA_MODE, &mode
   );
   bool ok = result == GHOSTTY_SUCCESS;
-  if (ok && mode.value) {
+  if (ok && mode.value && !session->viewer) {
     static const uint8_t focus_in[] = "\x1b[I";
     static const uint8_t focus_out[] = "\x1b[O";
     ok = focused
@@ -3998,6 +4107,7 @@ static const luaL_Reg terminal_methods[] = {
   { "trace", f_terminal_trace },
   { "paste", f_terminal_paste },
   { "resize", f_terminal_resize },
+  { "take_control", f_terminal_take_control },
   { "clear", f_terminal_clear },
   { "request_editor", f_terminal_request_editor },
   { "set_project", f_terminal_set_project },

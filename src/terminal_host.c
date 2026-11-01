@@ -15,6 +15,8 @@
 
 #define CLIENT_QUEUE_LIMIT (8u * 1024u * 1024u)
 #define CLIENT_STALL_TIMEOUT_MS 10000u
+/* One Controller and the Viewers. Control connections also take a slot for a moment. */
+#define MAX_CLIENTS 8
 /* A running host answers at once. A new host answers after it starts its shell,
    which takes seconds when the machine stalls. */
 #define CONNECT_TIMEOUT_MS 5000u
@@ -37,23 +39,45 @@ typedef struct {
   int64_t since;
 } AgentRecord;
 
+typedef struct TerminalHost TerminalHost;
+
+/* One connected Client. Its reader thread does the handshake and reads its messages; its writer thread sends
+   its queue. The monitor reaps the slot after `stop`. Fields other than the threads change under the host lock. */
 typedef struct {
-  AnvilConPTY pty;
+  TerminalHost *host;
   AnvilIPCPipe pipe;
+  HostRecord *head, *tail;
+  /* Queued bytes. A snapshot may exceed the queue limit by its own length (`allowance`). */
+  size_t queued, allowance;
+  uint64_t writer_progress;
+  volatile LONG stop;
+  /* A local Client runs on this PC and sends a HELLO without a name. */
+  bool used, attached, controller, view_only, local, status_pending;
+  /* Changes with each connection in this slot, so late output and replies skip a new Client. */
+  uint32_t epoch;
+  HANDLE reader, writer;
+  char name[ANVIL_TERMINAL_NAME_LENGTH];
+} HostClient;
+
+struct TerminalHost {
+  AnvilConPTY pty;
   GhosttyTerminal model;
   AnvilTerminalSize size;
-  CRITICAL_SECTION lock;
+  /* The lock guards the model and the Clients. The input lock orders writes to the shell with control changes,
+     so a late keystroke of an old Controller cannot reach the program. Take the input lock first. */
+  CRITICAL_SECTION lock, input_lock;
   CONDITION_VARIABLE ready, space;
-  HostRecord *head, *tail;
-  size_t queued;
-  volatile LONG attached;
-  bool replaying;
+  HostClient clients[MAX_CLIENTS];
+  /* The controlling slot or -1, and the control generation. Each grant makes a new generation. */
+  int controller;
+  uint32_t generation;
+  char computer[ANVIL_TERMINAL_NAME_LENGTH];
+  HANDLE listen;
   bool busy, status_pending;
-  uint64_t writer_progress;
-  volatile LONG backpressured, client_stop;
+  volatile LONG backpressured, registry_requested;
   volatile LONG stop, reader_stop, reader_done;
   volatile LONG64 last_output, exit_sent_ms, last_input;
-  HANDLE reader, writer, client, console_close;
+  HANDLE reader, console_close;
   const char *id, *pipe_name, *project, *shell, *cwd;
   /* The owning Project after a move. The client thread sets next_project under lock; the monitor applies it. */
   char moved_project[32768], next_project[32768];
@@ -77,7 +101,10 @@ typedef struct {
      whether a command runs between its C and D marks, and the reader's OSC scanner. */
   char nonce[33];
   volatile LONG command_running;
+  /* The token of an `anvil` request, and the Client that asked. */
   volatile LONG editor_request;
+  int editor_client;
+  uint32_t editor_epoch;
   int64_t command_started, command_finished;
   int command_exit;
   /* The line the shell submitted for the running command. Revival types it at the new prompt. */
@@ -91,7 +118,7 @@ typedef struct {
   AgentRecord agent, step;
   char agent_model[ANVIL_TERMINAL_AGENT_TEXT_MAX + 1];
   volatile LONG agent_revision;
-} TerminalHost;
+};
 
 static wchar_t *wide_string(const char *text) {
   int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, NULL, 0);
@@ -193,10 +220,11 @@ static bool write_registry(TerminalHost *host) {
   FILE *file = temp ? _wfopen(temp, L"wb") : NULL;
   bool ok = path && file;
   if (ok) {
-    /* A detach is complete only after disconnect_client saved the screen. The
-       client thread clears attached first, and a title or busy write before the
-       disconnect would otherwise report a detach whose snapshot is still old. */
-    bool attached = host->attached || host->client || host->writer;
+    /* A detach is complete only after reap_client saved the screen. The client
+       thread clears attached first, and a title or busy write before the reap
+       would otherwise report a detach whose snapshot is still old. */
+    bool attached = false;
+    for (int i = 0; i < MAX_CLIENTS; i++) attached = attached || host->clients[i].attached || host->clients[i].writer;
     fprintf(file, "return {\n  version = 1,\n  host_pid = %lu,\n  attached = %s,\n",
       (unsigned long)GetCurrentProcessId(), attached ? "true" : "false");
     fprintf(file, "  busy = %s,\n", host->busy ? "true" : "false");
@@ -204,7 +232,7 @@ static bool write_registry(TerminalHost *host) {
     registry_string(file, "host_creation_time", created);
     registry_string(file, "pipe_name", host->pipe_name);
     registry_string(file, "project_path", host->project);
-    fputs("  movable = true,\n", file);
+    fputs("  movable = true,\n  shared = true,\n", file);
     registry_string(file, "shell", host->shell);
     registry_string(file, "cwd", host->last_cwd);
     registry_string(file, "title", host->title);
@@ -271,53 +299,110 @@ static void delete_registry(TerminalHost *host) {
   ReleaseMutex(mutex); CloseHandle(mutex);
 }
 
+static int client_index(HostClient *client) { return (int)(client - client->host->clients); }
+
 /* Transport failure is a detach, never a shell failure. Caller may hold lock. */
-static void stop_client(TerminalHost *host) {
+static void stop_client(HostClient *client) {
+  TerminalHost *host = client->host;
   EnterCriticalSection(&host->lock);
-  host->attached = false;
-  InterlockedExchange(&host->client_stop, 1);
+  client->attached = client->controller = false;
+  if (host->controller == client_index(client)) host->controller = -1;
+  InterlockedExchange(&client->stop, 1);
   WakeAllConditionVariable(&host->ready);
   WakeAllConditionVariable(&host->space);
   LeaveCriticalSection(&host->lock);
-  anvil_ipc_pipe_cancel(&host->pipe);
+  anvil_ipc_pipe_cancel(&client->pipe);
 }
 
 static void stop_host(TerminalHost *host) {
   InterlockedExchange(&host->stop, 1);
-  stop_client(host);
+  for (int i = 0; i < MAX_CLIENTS; i++)
+    if (host->clients[i].used) stop_client(&host->clients[i]);
 }
 
-/* Caller holds lock. Accounting includes the record being written. */
-static bool queue_record(TerminalHost *host, uint16_t type, const void *bytes, uint32_t length) {
-  uint64_t progress = host->writer_progress, stalled_since = GetTickCount64();
+static bool any_attached(TerminalHost *host) {
+  for (int i = 0; i < MAX_CLIENTS; i++) if (host->clients[i].attached) return true;
+  return false;
+}
+
+/* True when the record fits without a wait. The monitor never waits for a Client. */
+static bool queue_room(HostClient *client, uint32_t length) {
+  return client->attached && !client->stop &&
+    client->queued + sizeof(HostRecord) + length <= CLIENT_QUEUE_LIMIT + client->allowance;
+}
+
+/* Caller holds lock. Accounting includes the record being written. The Controller's full queue waits for its
+   writer, so the shell's output keeps its pace. A Viewer's full queue drops that Viewer; it attaches again with
+   a snapshot. So a slow Viewer never stalls the Controller. */
+static bool queue_record(HostClient *client, uint16_t type, const void *bytes, uint32_t length) {
+  TerminalHost *host = client->host;
+  uint64_t progress = client->writer_progress, stalled_since = GetTickCount64();
   bool waited = false;
-  while (sizeof(HostRecord) + length > CLIENT_QUEUE_LIMIT - host->queued) {
+  while (client->queued + sizeof(HostRecord) + length > CLIENT_QUEUE_LIMIT + client->allowance) {
+    if (!client->attached || host->stop || (type == ANVIL_TERMINAL_OUTPUT && host->reader_stop)) break;
+    if (!client->controller) {
+      host_log(host, "viewer queue full; drop viewer, keep shell");
+      stop_client(client); break;
+    }
     if (!waited) {
       host_log(host, "client queue full; wait for writer progress");
       waited = true; InterlockedExchange(&host->backpressured, 1);
     }
-    if (host->writer_progress != progress) {
-      progress = host->writer_progress; stalled_since = GetTickCount64();
+    if (client->writer_progress != progress) {
+      progress = client->writer_progress; stalled_since = GetTickCount64();
     }
-    if (!host->attached || host->stop || (type == ANVIL_TERMINAL_OUTPUT && host->reader_stop)) break;
     uint64_t elapsed = GetTickCount64() - stalled_since;
     if (elapsed >= CLIENT_STALL_TIMEOUT_MS) {
       host_log(host, "client writer made no progress; detach, keep shell");
-      stop_client(host); break;
+      stop_client(client); break;
     }
     SleepConditionVariableCS(&host->space, &host->lock, (DWORD)(CLIENT_STALL_TIMEOUT_MS - elapsed));
   }
-  InterlockedExchange(&host->backpressured, 0);
-  if (!host->attached || host->stop || (type == ANVIL_TERMINAL_OUTPUT && host->reader_stop)) return false;
+  if (waited) InterlockedExchange(&host->backpressured, 0);
+  if (!client->attached || host->stop || (type == ANVIL_TERMINAL_OUTPUT && host->reader_stop)) return false;
   if (waited) host_log(host, "client writer resumed; continue output");
   HostRecord *record = malloc(sizeof(*record) + length);
-  if (!record) { stop_client(host); return false; }
+  if (!record) { stop_client(client); return false; }
   record->next = NULL; record->type = type; record->length = length;
   if (length) memcpy(record->bytes, bytes, length);
-  if (host->tail) host->tail->next = record; else host->head = record;
-  host->tail = record; host->queued += sizeof(*record) + length;
-  WakeConditionVariable(&host->ready);
+  if (client->tail) client->tail->next = record; else client->head = record;
+  client->tail = record; client->queued += sizeof(*record) + length;
+  WakeAllConditionVariable(&host->ready);
   return true;
+}
+
+/* Caller holds lock. Sends output that is already in the model to the Clients that are attached now. A queue
+   wait releases the lock, and a Client that attaches meanwhile has the output in its snapshot. So the list of
+   Clients is fixed first, and the Controller comes last. */
+static void broadcast_output(TerminalHost *host, const uint8_t *bytes, uint32_t length) {
+  uint32_t epochs[MAX_CLIENTS]; bool to[MAX_CLIENTS];
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    to[i] = host->clients[i].attached; epochs[i] = host->clients[i].epoch;
+  }
+  for (int pass = 0; pass < 2; pass++) {
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+      HostClient *client = &host->clients[i];
+      if (!to[i] || client->epoch != epochs[i] || client->controller != (pass == 1)) continue;
+      queue_record(client, ANVIL_TERMINAL_OUTPUT, bytes, length);
+    }
+  }
+}
+
+static void fill_role(TerminalHost *host, HostClient *client, AnvilTerminalRole *role) {
+  memset(role, 0, sizeof(*role));
+  role->generation = host->generation;
+  role->controller = client->controller;
+  role->size = host->size;
+  if (host->controller >= 0)
+    memcpy(role->controller_name, host->clients[host->controller].name, sizeof(role->controller_name));
+}
+
+static void fill_status(TerminalHost *host, AnvilTerminalStatus *status) {
+  memset(status, 0, sizeof(*status));
+  status->busy = host->busy;
+  snprintf(status->agent_app, sizeof(status->agent_app), "%s", host->agent.app);
+  snprintf(status->agent_state, sizeof(status->agent_state), "%s", host->agent.state);
+  snprintf(status->agent_model, sizeof(status->agent_model), "%s", host->agent_model);
 }
 
 /* Standard base64 with optional padding. Returns the decoded length, or -1. */
@@ -539,14 +624,12 @@ static DWORD WINAPI host_reader(void *userdata) {
     if (!ReadFile(host->pty.output_read, bytes, sizeof(bytes), &read, NULL) || !read) break;
     scan_marks(host, bytes, read);
     EnterCriticalSection(&host->lock);
-    while (host->replaying && !host->stop && !host->reader_stop)
-      SleepConditionVariableCS(&host->space, &host->lock, INFINITE);
     if (host->reader_stop) { LeaveCriticalSection(&host->lock); break; }
-    /* Only the editor answers terminal queries. Detached queries go unanswered.
+    /* Only the Controller answers terminal queries. Detached queries go unanswered.
        ConPTY itself answers cursor-position DSR requests. */
     ghostty_terminal_vt_write(host->model, bytes, read);
     InterlockedIncrement64(&host->model_revision);
-    if (host->attached && !host->stop) queue_record(host, ANVIL_TERMINAL_OUTPUT, bytes, read);
+    if (!host->stop) broadcast_output(host, bytes, read);
     InterlockedExchange64(&host->last_output, GetTickCount64());
     LeaveCriticalSection(&host->lock);
   }
@@ -555,26 +638,27 @@ static DWORD WINAPI host_reader(void *userdata) {
 }
 
 static DWORD WINAPI host_writer(void *userdata) {
-  TerminalHost *host = userdata;
-  while (!InterlockedCompareExchange(&host->client_stop, 0, 0)) {
+  HostClient *client = userdata;
+  TerminalHost *host = client->host;
+  while (!InterlockedCompareExchange(&client->stop, 0, 0)) {
     EnterCriticalSection(&host->lock);
-    while (!host->head && !host->client_stop)
+    while (!client->head && !client->stop)
       SleepConditionVariableCS(&host->ready, &host->lock, INFINITE);
-    HostRecord *record = host->head;
-    if (record) { host->head = record->next; if (!host->head) host->tail = NULL; }
+    HostRecord *record = client->head;
+    if (record) { client->head = record->next; if (!client->head) client->tail = NULL; }
     LeaveCriticalSection(&host->lock);
     if (!record) continue;
-    bool ok = anvil_ipc_pipe_write(&host->pipe, record->type, record->bytes, record->length, NULL, 0);
+    bool ok = anvil_ipc_pipe_write(&client->pipe, record->type, record->bytes, record->length, NULL, 0);
     EnterCriticalSection(&host->lock);
-    host->queued -= sizeof(*record) + record->length;
+    client->queued -= sizeof(*record) + record->length;
     if (ok) {
-      host->writer_progress++;
+      client->writer_progress++;
       if (record->type == ANVIL_TERMINAL_EXITED) InterlockedExchange64(&host->exit_sent_ms, GetTickCount64());
     }
     WakeAllConditionVariable(&host->space);
     LeaveCriticalSection(&host->lock);
     free(record);
-    if (!ok) { stop_client(host); break; }
+    if (!ok) { stop_client(client); break; }
   }
   return 0;
 }
@@ -591,32 +675,93 @@ static bool apply_size(TerminalHost *host, AnvilTerminalSize size) {
   return true;
 }
 
+/* Caller holds the input lock. Writes typed input to the shell. */
+static void write_input(HostClient *client, const uint8_t *bytes, uint32_t length) {
+  TerminalHost *host = client->host;
+  InterlockedExchange64(&host->last_input, GetTickCount64());
+  DWORD offset = 0;
+  while (offset < length && !client->stop) {
+    DWORD written = 0;
+    if (!WriteFile(host->pty.input_write, bytes + offset, length - offset, &written, NULL) || !written) {
+      /* A terminal reply can arrive after a short command exits. Keep the client
+         connected so the output drain can send that command's exit status. */
+      if (WaitForSingleObject(host->pty.process, 0) == WAIT_OBJECT_0)
+        host_log(host, "input arrived after shell exit; keep client for output drain");
+      else stop_client(client);
+      break;
+    }
+    offset += written;
+  }
+}
+
+/* Caller holds lock. Tells each Client its role, the Controller and the size, at this exact place in the output.
+   A Client resizes its own screen there, as the host's model did. ConPTY then repaints the new grid. */
+static void send_roles(TerminalHost *host) {
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    HostClient *other = &host->clients[i];
+    if (!other->attached) continue;
+    AnvilTerminalRole role; fill_role(host, other, &role);
+    queue_record(other, ANVIL_TERMINAL_ROLE, &role, sizeof(role));
+  }
+}
+
+/* A TAKE with the current generation makes this Client the Controller at its size, with a new generation. The
+   ROLE records come before any output of the new generation. The keystroke that took control follows the TAKE
+   as normal input on the same pipe, so it reaches the program only when the TAKE wins. A refused TAKE does
+   nothing: the newer ROLE is already on its way to that Client, which can ask again. */
+static void take_control(HostClient *client, const uint8_t *bytes, uint32_t length) {
+  TerminalHost *host = client->host;
+  (void)length;
+  AnvilTerminalTake take; memcpy(&take, bytes, sizeof(take));
+  EnterCriticalSection(&host->input_lock);
+  EnterCriticalSection(&host->lock);
+  bool granted = client->attached && !client->view_only && take.generation == host->generation;
+  uint32_t current = host->generation;
+  if (granted) {
+    if (host->controller >= 0) host->clients[host->controller].controller = false;
+    host->generation++;
+    host->controller = client_index(client);
+    client->controller = true;
+    if (!apply_size(host, take.size)) host_log(host, "take: keep the size; the requested size is not valid");
+    send_roles(host);
+    host_log(host, "control granted: generation=%lu slot=%d", (unsigned long)host->generation, client_index(client));
+  }
+  LeaveCriticalSection(&host->lock);
+  LeaveCriticalSection(&host->input_lock);
+  if (!granted)
+    host_log(host, "control refused: generation=%lu current=%lu", (unsigned long)take.generation, (unsigned long)current);
+}
+
+/* Reads the HELLO and attaches the Client. Returns false for a control connection or a failure. */
+static bool attach_client(HostClient *client);
+
 static DWORD WINAPI host_client(void *userdata) {
-  TerminalHost *host = userdata;
+  HostClient *client = userdata;
+  TerminalHost *host = client->host;
+  if (!attach_client(client)) { stop_client(client); return 0; }
   AnvilIPCHeader header; uint8_t bytes[ANVIL_TERMINAL_MAX_PAYLOAD];
-  while (anvil_ipc_pipe_read(&host->pipe, &header, bytes, sizeof(bytes))) {
+  while (anvil_ipc_pipe_read(&client->pipe, &header, bytes, sizeof(bytes))) {
     if (header.type == ANVIL_TERMINAL_INPUT && header.size) {
-      InterlockedExchange64(&host->last_input, GetTickCount64());
-      DWORD offset = 0;
-      while (offset < header.size && !host->client_stop) {
-        DWORD written = 0;
-        if (!WriteFile(host->pty.input_write, bytes + offset, header.size - offset, &written, NULL) || !written) {
-          /* A terminal reply can arrive after a short command exits. Keep the client
-             connected so the output drain can send that command's exit status. */
-          if (WaitForSingleObject(host->pty.process, 0) == WAIT_OBJECT_0)
-            host_log(host, "input arrived after shell exit; keep client for output drain");
-          else stop_client(host);
-          break;
-        }
-        offset += written;
-      }
+      /* Input of a Viewer, such as a late query answer, never reaches the program. */
+      EnterCriticalSection(&host->input_lock);
+      if (client->controller) write_input(client, bytes, header.size);
+      LeaveCriticalSection(&host->input_lock);
     } else if (header.type == ANVIL_TERMINAL_RESIZE && header.size == sizeof(AnvilTerminalSize)) {
       AnvilTerminalSize size; memcpy(&size, bytes, sizeof(size));
-      EnterCriticalSection(&host->lock); bool ok = apply_size(host, size); LeaveCriticalSection(&host->lock);
+      EnterCriticalSection(&host->lock);
+      AnvilTerminalSize before = host->size;
+      bool ok = !client->controller || apply_size(host, size);
+      if (ok && (before.cols != host->size.cols || before.rows != host->size.rows)) send_roles(host);
+      LeaveCriticalSection(&host->lock);
       if (!ok) break;
+    } else if (header.type == ANVIL_TERMINAL_TAKE && header.size == sizeof(AnvilTerminalTake)) {
+      take_control(client, bytes, header.size);
     } else if (header.type == ANVIL_TERMINAL_EDITOR_REQUEST && header.size == sizeof(uint32_t)) {
       uint32_t token; memcpy(&token, bytes, sizeof(token));
+      EnterCriticalSection(&host->lock);
+      host->editor_client = client_index(client); host->editor_epoch = client->epoch;
       InterlockedExchange(&host->editor_request, (LONG)token);
+      LeaveCriticalSection(&host->lock);
       host_log(host, "editor request: wait for a fresh idle probe");
     } else if (header.type == ANVIL_TERMINAL_ACTIVATE && !header.size) {
       InterlockedExchange(&host->activate_requested, 1);
@@ -635,12 +780,10 @@ static DWORD WINAPI host_client(void *userdata) {
     } else if (header.type == ANVIL_TERMINAL_CLEAR && !header.size) {
       static const uint8_t clear[] = "\033[2J\033[3J\033[H";
       EnterCriticalSection(&host->lock);
-      while (host->replaying && !host->client_stop && !host->stop)
-        SleepConditionVariableCS(&host->space, &host->lock, INFINITE);
-      if (host->attached && !host->stop) {
+      if (client->controller && !host->stop) {
         ghostty_terminal_vt_write(host->model, clear, sizeof(clear) - 1);
         InterlockedIncrement64(&host->model_revision);
-        queue_record(host, ANVIL_TERMINAL_OUTPUT, clear, sizeof(clear) - 1);
+        broadcast_output(host, clear, sizeof(clear) - 1);
       }
       LeaveCriticalSection(&host->lock);
     } else if (header.type == ANVIL_TERMINAL_DETACH && !header.size) {
@@ -648,7 +791,7 @@ static DWORD WINAPI host_client(void *userdata) {
       host_log(host, "detach requested"); break;
     } else break;
   }
-  stop_client(host);
+  stop_client(client);
   return 0;
 }
 
@@ -660,99 +803,128 @@ static void join_thread(HANDLE *thread) {
 
 static bool save_snapshot(TerminalHost *host, bool final);
 
-static void disconnect_client(TerminalHost *host) {
-  stop_client(host);
-  join_thread(&host->client); join_thread(&host->writer);
-  InterlockedExchange(&host->editor_request, 0);
-  /* A claim can arrive between the main loop's check and the pipe closing. */
-  if (InterlockedExchange(&host->activate_requested, 0)) host->prepared = false;
-  /* Allow the final control connection to complete an activation whose queued message was cancelled. */
-  if (host->prepared) host->prepared_deadline = GetTickCount64() + 10000;
+/* Monitor only. Ends a stopped slot's threads and frees it for the next connection. */
+static void reap_client(HostClient *client) {
+  TerminalHost *host = client->host;
+  join_thread(&client->reader); join_thread(&client->writer);
   EnterCriticalSection(&host->lock);
-  while (host->head) { HostRecord *next = host->head->next; free(host->head); host->head = next; }
-  host->tail = NULL; host->queued = 0;
-  host->replaying = false;
+  while (client->head) { HostRecord *next = client->head->next; free(client->head); client->head = next; }
+  client->tail = NULL; client->queued = client->allowance = 0;
+  if (host->editor_client == client_index(client) && host->editor_epoch == client->epoch) {
+    InterlockedExchange(&host->editor_request, 0); host->editor_client = -1;
+  }
+  bool attached = any_attached(host);
+  client->used = false;
   WakeAllConditionVariable(&host->space);
   LeaveCriticalSection(&host->lock);
-  DisconnectNamedPipe(host->pipe.handle);
-  ResetEvent(host->pipe.stop_event);
-  InterlockedExchange(&host->client_stop, 0);
+  anvil_ipc_pipe_close(&client->pipe);
+  memset(&client->pipe, 0, sizeof(client->pipe));
+  if (attached) return;
+  /* A claim can arrive just before the pipe closes. The monitor applies it before its deadline check. Allow the
+     final control connection to complete an activation whose queued message was cancelled. */
+  if (host->prepared) host->prepared_deadline = GetTickCount64() + 10000;
   host_log(host, host->stop ? "client closed; end host" : "detached; shell remains live");
   if (!host->stop && host->model) save_snapshot(host, false);
 }
 
-static bool attach_client(TerminalHost *host) {
+static bool attach_client(HostClient *client) {
+  TerminalHost *host = client->host;
   ULONG actual_pid = 0;
-  AnvilIPCHeader header; AnvilTerminalHello hello;
-  host->pipe.timeout_ms = 5000;
-  if (!GetNamedPipeClientProcessId(host->pipe.handle, &actual_pid) ||
-      !anvil_ipc_pipe_read(&host->pipe, &header, &hello, sizeof(hello)) ||
-      header.type != ANVIL_TERMINAL_HELLO || header.size != sizeof(hello) ||
-      memcmp(hello.id, host->id, ANVIL_TERMINAL_ID_LENGTH + 1) != 0 || hello.client_pid != actual_pid ||
-      hello.replay > 1) {
+  AnvilIPCHeader header;
+  struct { AnvilTerminalHello hello; AnvilTerminalClientInfo info; } message;
+  AnvilTerminalHello *hello = &message.hello;
+  memset(&message, 0, sizeof(message));
+  client->pipe.timeout_ms = 5000;
+  if (!GetNamedPipeClientProcessId(client->pipe.handle, &actual_pid) ||
+      !anvil_ipc_pipe_read(&client->pipe, &header, &message, sizeof(message)) ||
+      header.type != ANVIL_TERMINAL_HELLO ||
+      (header.size != sizeof(*hello) && header.size != sizeof(message)) ||
+      memcmp(hello->id, host->id, ANVIL_TERMINAL_ID_LENGTH + 1) != 0 || hello->client_pid != actual_pid ||
+      hello->replay > 1) {
     host_log(host, "rejected client: HELLO identity or protocol mismatch"); return false;
   }
-  if (!hello.replay) {
+  bool has_info = header.size == sizeof(message);
+  if (!hello->replay) {
     /* A close must work even when snapshot encoding is unavailable. */
     AnvilTerminalWelcome welcome = { GetCurrentProcessId(), GetProcessId(host->pty.process), 1, host->size };
-    if (anvil_ipc_pipe_write(&host->pipe, ANVIL_TERMINAL_WELCOME, &welcome, sizeof(welcome), NULL, 0) &&
-        anvil_ipc_pipe_read(&host->pipe, &header, NULL, 0) && !header.size) {
+    if (anvil_ipc_pipe_write(&client->pipe, ANVIL_TERMINAL_WELCOME, &welcome, sizeof(welcome), NULL, 0) &&
+        anvil_ipc_pipe_read(&client->pipe, &header, NULL, 0) && !header.size) {
       if (header.type == ANVIL_TERMINAL_CLOSE) {
         host->explicit_close = true;
         host_log(host, "close requested through control connection"); stop_host(host);
       } else if (header.type == ANVIL_TERMINAL_END) {
         host_log(host, "end requested through control connection; keep the record for revival"); stop_host(host);
       } else if (header.type == ANVIL_TERMINAL_DETACH) {
-        /* Unused clients send CLOSE. DETACH means a view accepted this shell. */
-        if (host->prepared) {
-          host->prepared = false;
-          if (!write_registry(host)) { host->explicit_close = true; stop_host(host); }
-        }
+        /* Unused clients send CLOSE. DETACH means a view accepted this shell. The monitor applies it. */
+        InterlockedExchange(&host->activate_requested, 1);
         host_log(host, "detach requested through control connection");
       }
     }
     return false;
   }
-  host->pipe.timeout_ms = INFINITE;
+  client->pipe.timeout_ms = INFINITE;
+  if (has_info && memchr(message.info.name, 0, sizeof(message.info.name)) && message.info.name[0])
+    memcpy(client->name, message.info.name, sizeof(client->name));
+  else memcpy(client->name, host->computer, sizeof(client->name));
+  client->view_only = has_info && (message.info.flags & ANVIL_TERMINAL_VIEW_ONLY);
+  client->local = !has_info;
   uint8_t *snapshot = NULL; size_t length = 0;
+  EnterCriticalSection(&host->input_lock);
   EnterCriticalSection(&host->lock);
-  AnvilTerminalSize size = hello.size;
+  /* An attach takes control when the session has no Controller. A local Client also takes it from a local
+     Controller: one PC has one user, and a Pane move attaches before the old View's detach arrives. A remote
+     Controller keeps control until someone types. A Viewer keeps the Controller's size. */
+  int previous = host->controller;
+  bool control = !client->view_only && !host->stop &&
+    (previous < 0 || (client->local && host->clients[previous].local));
+  AnvilTerminalSize size = hello->size;
   /* A restored View has no layout yet. Keep the live grid, not a temporary 80x24
      grid that makes ConPTY repaint its old physical screen over a cleared model. */
   if (!size.cols && !size.rows) { size.cols = host->size.cols; size.rows = host->size.rows; }
-  bool ok = apply_size(host, size) && anvil_terminal_snapshot_encode(host->model, &snapshot, &length);
-  host->attached = ok; host->replaying = ok;
+  bool ok = !host->stop && (!control || apply_size(host, size)) &&
+    anvil_terminal_snapshot_encode(host->model, &snapshot, &length);
   if (ok) {
-    host->writer = CreateThread(NULL, 0, host_writer, host, 0, NULL);
-    host->client = CreateThread(NULL, 0, host_client, host, 0, NULL);
-    ok = host->writer && host->client;
+    client->writer = CreateThread(NULL, 0, host_writer, client, 0, NULL);
+    ok = client->writer != NULL;
   }
   if (ok) {
+    client->attached = true;
+    client->epoch++;
+    /* The snapshot goes out whole. Later output waits behind it, within the normal queue limit. */
+    client->allowance = length + (length / ANVIL_TERMINAL_MAX_PAYLOAD + 4) * sizeof(HostRecord) + 1024;
+    if (control) {
+      if (previous >= 0) host->clients[previous].controller = false;
+      host->generation++;
+      host->controller = client_index(client);
+      client->controller = true;
+      /* The others learn the new generation and size before any output at that size. */
+      client->attached = false;
+      send_roles(host);
+      client->attached = true;
+    }
     AnvilTerminalWelcome welcome = { GetCurrentProcessId(), GetProcessId(host->pty.process), 1, host->size };
-    ok = queue_record(host, ANVIL_TERMINAL_WELCOME, &welcome, sizeof(welcome));
-    /* The checkpoint stays immutable while queue waits release the model lock. */
+    ok = queue_record(client, ANVIL_TERMINAL_WELCOME, &welcome, sizeof(welcome));
+    AnvilTerminalRole role; fill_role(host, client, &role);
+    ok = ok && queue_record(client, ANVIL_TERMINAL_ROLE, &role, sizeof(role));
     for (size_t offset = 0; ok && offset < length;) {
       size_t count = length - offset;
       if (count > ANVIL_TERMINAL_MAX_PAYLOAD) count = ANVIL_TERMINAL_MAX_PAYLOAD;
-      ok = queue_record(host, ANVIL_TERMINAL_REPLAY, snapshot + offset, (uint32_t)count);
+      ok = queue_record(client, ANVIL_TERMINAL_REPLAY, snapshot + offset, (uint32_t)count);
       offset += count;
     }
-    ok = ok && queue_record(host, ANVIL_TERMINAL_REPLAY_END, NULL, 0);
+    ok = ok && queue_record(client, ANVIL_TERMINAL_REPLAY_END, NULL, 0);
     /* Prepared clients need Pi's live status, but still have no saved session record. */
-    AnvilTerminalStatus status = { host->busy };
-    snprintf(status.agent_app, sizeof(status.agent_app), "%s", host->agent.app);
-    snprintf(status.agent_state, sizeof(status.agent_state), "%s", host->agent.state);
-    snprintf(status.agent_model, sizeof(status.agent_model), "%s", host->agent_model);
-    ok = ok && queue_record(host, ANVIL_TERMINAL_STATUS, &status, sizeof(status));
-    host->status_pending = false;
+    AnvilTerminalStatus status; fill_status(host, &status);
+    ok = ok && queue_record(client, ANVIL_TERMINAL_STATUS, &status, sizeof(status));
+    client->status_pending = false;
   }
-  host->replaying = false;
-  WakeAllConditionVariable(&host->space);
   LeaveCriticalSection(&host->lock);
+  LeaveCriticalSection(&host->input_lock);
   free(snapshot);
-  if (!ok) { host_log(host, "attach failed; keep shell"); stop_client(host); return false; }
-  write_registry(host);
-  host_log(host, "attach client=%lu shell=%lu snapshot=%zu", (unsigned long)actual_pid,
+  if (!ok) { host_log(host, "attach failed; keep shell"); return false; }
+  InterlockedExchange(&host->registry_requested, 1);
+  host_log(host, "attach client=%lu slot=%d %s generation=%lu shell=%lu snapshot=%zu", (unsigned long)actual_pid,
+    client_index(client), control ? "controller" : "viewer", (unsigned long)host->generation,
     (unsigned long)GetProcessId(host->pty.process), length);
   return true;
 }
@@ -985,8 +1157,12 @@ int anvil_terminal_host_main(int argc, char **argv) {
   if (strcmp(argv[3], expected_pipe) != 0) return 1;
   TerminalHost host = { .busy = true, .id = argv[2], .pipe_name = argv[3], .shell = argv[5],
     .cwd = argv[6], .project = argv[12], .activity = (int64_t)time(NULL), .prepared = argc == 15 };
-  InitializeCriticalSection(&host.lock);
+  InitializeCriticalSection(&host.lock); InitializeCriticalSection(&host.input_lock);
   InitializeConditionVariable(&host.ready); InitializeConditionVariable(&host.space);
+  host.controller = host.editor_client = -1;
+  for (int i = 0; i < MAX_CLIENTS; i++) host.clients[i].host = &host;
+  DWORD computer_size = sizeof(host.computer);
+  if (!GetComputerNameA(host.computer, &computer_size)) snprintf(host.computer, sizeof(host.computer), "This PC");
   const char *directories[] = { "logs", "terminal-sessions" };
   for (size_t i = 0; i < 2; i++) {
     char dir[32768]; snprintf(dir, sizeof(dir), "%s/%s", argv[4], directories[i]);
@@ -1020,15 +1196,14 @@ int anvil_terminal_host_main(int argc, char **argv) {
   DWORD error = 0, exit_code = 1;
   HANDLE revival_lock = NULL;
   bool ever_running = false;
-  HANDLE handle = CreateNamedPipeA(argv[3], PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED |
-    FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
-    PIPE_REJECT_REMOTE_CLIENTS, 1, 65536, 65536, 0, NULL);
+  /* The first instance proves that this host owns the name. Each Client then gets its own instance. */
+  const DWORD pipe_mode = PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS;
+  host.listen = CreateNamedPipeA(argv[3], PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED |
+    FILE_FLAG_FIRST_PIPE_INSTANCE, pipe_mode, MAX_CLIENTS, 65536, 65536, 0, NULL);
+  if (host.listen == INVALID_HANDLE_VALUE) host.listen = NULL;
   OVERLAPPED accept = {0}; bool accepting = false, connected = false;
   accept.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
-  if (handle == INVALID_HANDLE_VALUE || !accept.hEvent) goto cleanup;
-  if (!anvil_ipc_pipe_init(&host.pipe, handle, ANVIL_TERMINAL_PROTOCOL_VERSION,
-                          ANVIL_TERMINAL_MAX_PAYLOAD)) { handle = INVALID_HANDLE_VALUE; goto cleanup; }
-  handle = INVALID_HANDLE_VALUE;
+  if (!host.listen || !accept.hEvent) goto cleanup;
   if (argc == 16) {
     revival_lock = registry_lock(host.id);
     if (!revival_lock || registry_host_live(&host)) { error = ERROR_PIPE_BUSY; goto cleanup; }
@@ -1085,32 +1260,61 @@ int anvil_terminal_host_main(int argc, char **argv) {
       if (!write_registry(&host)) { host.explicit_close = true; break; }
     }
     uint64_t now = GetTickCount64();
-    if (host.prepared && !host.attached && now >= host.prepared_deadline) {
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+      HostClient *client = &host.clients[i];
+      if (client->used && InterlockedCompareExchange(&client->stop, 0, 0)) {
+        reap_client(client); write_registry(&host); idle_since = now;
+      }
+    }
+    if (InterlockedExchange(&host.registry_requested, 0)) { write_registry(&host); idle_since = 0; }
+    EnterCriticalSection(&host.lock);
+    bool attached = any_attached(&host);
+    LeaveCriticalSection(&host.lock);
+    int free_slot = -1, used = 0;
+    for (int i = MAX_CLIENTS - 1; i >= 0; i--) {
+      if (host.clients[i].used) used++; else free_slot = i;
+    }
+    if (host.prepared && !used && now >= host.prepared_deadline) {
       host.explicit_close = true;
       host_log(&host, "unused prepared shell had no client");
       break;
     }
-    if ((host.client || host.writer) && host.client_stop) {
-      disconnect_client(&host); write_registry(&host); idle_since = now;
-    }
-    if (!host.client && !host.writer && !accepting && !connected && !exited_at) {
-      ResetEvent(accept.hEvent);
-      BOOL ok = ConnectNamedPipe(host.pipe.handle, &accept);
-      DWORD connect_error = ok ? ERROR_SUCCESS : GetLastError();
-      accepting = !ok && connect_error == ERROR_IO_PENDING;
-      connected = ok || connect_error == ERROR_PIPE_CONNECTED;
-      if (!accepting && !connected) break;
+    if (free_slot >= 0 && !accepting && !connected && !exited_at) {
+      /* All instances can be busy for a moment, until the monitor reaps a stopped Client. */
+      if (!host.listen) host.listen = CreateNamedPipeA(argv[3], PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+        pipe_mode, MAX_CLIENTS, 65536, 65536, 0, NULL);
+      if (host.listen == INVALID_HANDLE_VALUE) host.listen = NULL;
+      if (host.listen) {
+        ResetEvent(accept.hEvent);
+        BOOL ok = ConnectNamedPipe(host.listen, &accept);
+        DWORD connect_error = ok ? ERROR_SUCCESS : GetLastError();
+        accepting = !ok && connect_error == ERROR_IO_PENDING;
+        connected = ok || connect_error == ERROR_PIPE_CONNECTED;
+        if (!accepting && !connected) { CloseHandle(host.listen); host.listen = NULL; }
+      }
     }
     if (accepting && WaitForSingleObject(accept.hEvent, 0) == WAIT_OBJECT_0) {
       DWORD done = 0;
-      connected = GetOverlappedResult(host.pipe.handle, &accept, &done, FALSE) != FALSE;
+      connected = GetOverlappedResult(host.listen, &accept, &done, FALSE) != FALSE;
       accepting = false;
-      if (!connected) break;
+      if (!connected) { CloseHandle(host.listen); host.listen = NULL; }
     }
-    if (connected) {
+    if (connected && free_slot >= 0) {
+      /* The Client's thread reads its HELLO, so a slow Client cannot stall the shell or the other Clients. */
       connected = false;
-      if (!attach_client(&host)) { disconnect_client(&host); write_registry(&host); }
-      else idle_since = 0;
+      HostClient *client = &host.clients[free_slot];
+      EnterCriticalSection(&host.lock);
+      uint32_t epoch = client->epoch;
+      memset(client, 0, sizeof(*client));
+      client->host = &host; client->epoch = epoch; client->used = true;
+      LeaveCriticalSection(&host.lock);
+      /* The pipe owns the handle, also when its setup fails. */
+      bool ok = anvil_ipc_pipe_init(&client->pipe, host.listen, ANVIL_TERMINAL_PROTOCOL_VERSION,
+        ANVIL_TERMINAL_MAX_PAYLOAD);
+      host.listen = NULL;
+      if (ok) client->reader = CreateThread(NULL, 0, host_client, client, 0, NULL);
+      if (!client->reader) InterlockedExchange(&client->stop, 1);
+      idle_since = 0;
     }
     if (!exited_at && WaitForSingleObject(host.pty.process, 0) == WAIT_OBJECT_0) {
       host.shell_ended = true;
@@ -1132,18 +1336,21 @@ int anvil_terminal_host_main(int argc, char **argv) {
         if (!host.explicit_close) final_snapshot_saved = save_snapshot(&host, true);
         AnvilTerminalExited exited = { exit_code };
         EnterCriticalSection(&host.lock);
-        bool queued = queue_record(&host, ANVIL_TERMINAL_EXITED, &exited, sizeof(exited));
+        bool queued = false;
+        for (int i = 0; i < MAX_CLIENTS; i++)
+          if (host.clients[i].attached)
+            queued = queue_record(&host.clients[i], ANVIL_TERMINAL_EXITED, &exited, sizeof(exited)) || queued;
         LeaveCriticalSection(&host.lock);
         exit_queued = true;
         if (!queued) break;
       }
     }
     uint64_t sent_at = InterlockedCompareExchange64(&host.exit_sent_ms, 0, 0);
-    if (exit_queued && (!host.attached || (sent_at && now - sent_at > 3000))) break;
+    if (exit_queued && (!attached || (sent_at && now - sent_at > 3000))) break;
     /* Unused shells need no process scans. A prepared program needs them to clear stale agent status. */
     if ((!host.prepared || InterlockedCompareExchange(&host.agent_revision, 0, 0)) &&
         !exited_at && now >= busy_probe_at) {
-      busy_probe_at = now + (host.attached ? 500 : 2000);
+      busy_probe_at = now + (attached ? 500 : 2000);
       /* Take the request before the snapshot. A cached idle status cannot release it. */
       LONG editor_request = InterlockedExchange(&host.editor_request, 0);
       char command[16384];
@@ -1163,12 +1370,14 @@ int anvil_terminal_host_main(int argc, char **argv) {
       /* The agent's records end with the program, as at a prompt. Pi clears them when it quits normally. */
       if (!busy) clear_agent(&host);
       if (editor_request) {
+        /* The answer goes to the Client that asked, while it stays connected. */
         uint32_t token = (uint32_t)editor_request;
-        if (!busy && host.attached && !host.replaying && !host.client_stop &&
-            host.queued + sizeof(HostRecord) + sizeof(token) <= CLIENT_QUEUE_LIMIT &&
-            queue_record(&host, ANVIL_TERMINAL_EDITOR_READY, &token, sizeof(token))) {
+        HostClient *asker = host.editor_client >= 0 ? &host.clients[host.editor_client] : NULL;
+        bool live = asker && asker->attached && asker->epoch == host.editor_epoch;
+        if (!busy && live && queue_room(asker, sizeof(token)) &&
+            queue_record(asker, ANVIL_TERMINAL_EDITOR_READY, &token, sizeof(token))) {
           host_log(&host, "editor request: command ended, ready");
-        } else {
+        } else if (live) {
           InterlockedCompareExchange(&host.editor_request, editor_request, 0);
         }
       }
@@ -1178,7 +1387,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
         write_registry(&host);
         activity_written = host.activity;
       }
-      if (host.attached || busy) idle_since = 0;
+      if (attached || busy) idle_since = 0;
       else if (!idle_since) idle_since = now;
       uint64_t last = InterlockedCompareExchange64(&host.last_output, 0, 0);
       if (idle_since && now - idle_since >= ORPHAN_GRACE_MS && now >= last && now - last >= ORPHAN_GRACE_MS) {
@@ -1187,13 +1396,15 @@ int anvil_terminal_host_main(int argc, char **argv) {
     }
     EnterCriticalSection(&host.lock);
     /* Never block the monitor on a full client queue. Send the latest status later. */
-    if (host.attached && !host.replaying && !host.client_stop && host.status_pending &&
-        host.queued + sizeof(HostRecord) + sizeof(AnvilTerminalStatus) <= CLIENT_QUEUE_LIMIT) {
-      AnvilTerminalStatus status = { host.busy };
-      snprintf(status.agent_app, sizeof(status.agent_app), "%s", host.agent.app);
-      snprintf(status.agent_state, sizeof(status.agent_state), "%s", host.agent.state);
-      snprintf(status.agent_model, sizeof(status.agent_model), "%s", host.agent_model);
-      if (queue_record(&host, ANVIL_TERMINAL_STATUS, &status, sizeof(status))) host.status_pending = false;
+    if (host.status_pending) {
+      for (int i = 0; i < MAX_CLIENTS; i++) if (host.clients[i].attached) host.clients[i].status_pending = true;
+      host.status_pending = false;
+    }
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+      HostClient *client = &host.clients[i];
+      if (!client->status_pending || !queue_room(client, sizeof(AnvilTerminalStatus))) continue;
+      AnvilTerminalStatus status; fill_status(&host, &status);
+      if (queue_record(client, ANVIL_TERMINAL_STATUS, &status, sizeof(status))) client->status_pending = false;
     }
     LeaveCriticalSection(&host.lock);
     if (!exited_at && now >= title_probe_at) {
@@ -1247,8 +1458,8 @@ cleanup:
   host_log(&host, "exit Windows error=%lu", (unsigned long)error);
   stop_host(&host);
   if (accepting) {
-    CancelIoEx(host.pipe.handle, &accept);
-    DWORD done; GetOverlappedResult(host.pipe.handle, &accept, &done, TRUE);
+    CancelIoEx(host.listen, &accept);
+    DWORD done; GetOverlappedResult(host.listen, &accept, &done, TRUE);
   }
   if (accept.hEvent) CloseHandle(accept.hEvent);
   if (host.explicit_close || host.prepared) delete_registry(&host);
@@ -1263,13 +1474,12 @@ cleanup:
   if (!host.explicit_close && ever_running && (!final_snapshot_saved ||
       host.snapshot_revision != (uint64_t)InterlockedCompareExchange64(&host.model_revision, 0, 0)))
     save_snapshot(&host, true);
-  join_thread(&host.client); join_thread(&host.writer);
+  for (int i = 0; i < MAX_CLIENTS; i++) if (host.clients[i].used) reap_client(&host.clients[i]);
   if (host.console_close) { CloseHandle(host.console_close); host.pty.pseudoconsole = NULL; }
-  anvil_conpty_close(&host.pty); anvil_ipc_pipe_close(&host.pipe);
-  if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
-  while (host.head) { HostRecord *next = host.head->next; free(host.head); host.head = next; }
+  anvil_conpty_close(&host.pty);
+  if (host.listen) CloseHandle(host.listen);
   if (host.model) ghostty_terminal_free(host.model);
-  DeleteCriticalSection(&host.lock);
+  DeleteCriticalSection(&host.lock); DeleteCriticalSection(&host.input_lock);
   if (host.prepared && host.explicit_close) {
     wchar_t *path = wide_string(host.log_path);
     if (path) { DeleteFileW(path); free(path); }

@@ -95,6 +95,16 @@ It keeps terminal text, scrollback and ConPTY's input mode. It does not send a f
 Existing shells need a new Terminal Session to load the updated integration.
 Run `ui/terminal_stale_modes.lua` after changes.
 
+A Terminal host accepts up to 8 Clients. One Client is the Controller: it sets the size, sends input and answers terminal queries. The others are Viewers.
+Viewers show the Controller's screen at its size. They send no query answers, focus reports or mouse reports, and get no clipboard writes.
+Typed input in a Viewer takes control. The client sends `TAKE` with the control generation that it saw last, then the input on the same pipe. The host refuses an old generation and drops a Viewer's input.
+After a grant or a resize, the host sends a `ROLE` record to each Client at that place in the output. Each Client resizes its own screen there. A handoff sends no snapshot.
+A Client on the host's own PC takes control when it attaches, if the Controller is also on this PC. A Pane move attaches before the old View's detach arrives, so the target still controls. A remote Controller keeps control.
+A Viewer whose 8 MiB queue is full is dropped. It attaches again with a snapshot, so it never stalls the Controller.
+Hosts that write `shared = true` in their record accept more than one Client. Older hosts refuse a second Client and send no `ROLE`, so their one Client controls.
+The session status reports `viewer` and the Controller's device name. `session:take_control()` takes control without input.
+Run `ui/terminal_sessions.lua` and `ui/pane_transfer.lua` after changes.
+
 Pane Close skips confirmation when Pi reports `idle` or `done`, even while its shell command remains busy.
 Window Close asks once for its live Terminal Sessions, including idle shells and idle Pi.
 Keep running detaches them. End all ends them but keeps their revival records. Cancel stops Window Close.
