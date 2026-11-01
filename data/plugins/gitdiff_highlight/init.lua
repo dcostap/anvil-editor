@@ -57,7 +57,8 @@ local function baseline_path(identity)
 end
 
 local function current_file_id(buffer)
-	if not buffer.abs_filename then return nil end
+	-- A Machine file has no ID on this PC.
+	if not buffer.abs_filename or require("core.fs").on_machine(buffer.abs_filename) then return nil end
 	local info = system.get_file_info(buffer.abs_filename)
 	return info and info.file_id or nil
 end

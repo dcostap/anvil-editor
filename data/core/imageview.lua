@@ -85,10 +85,17 @@ function ImageView:get_state()
 end
 
 function ImageView.from_state(state)
-  if not (state.path and require("core.project_files").info(state.path)) then return nil end
+  if not state.path then return nil end
+  -- A Machine's file list can arrive after the restore. Its read tells if the image exists.
+  local on_machine = fs.on_machine(state.path)
+  if not (on_machine or require("core.project_files").info(state.path)) then return nil end
   local view = ImageView(state.path, state.zoom_mode, state.zoom_scale)
-  if not view.image then return nil end
-  if state.scroll then view.image_x, view.image_y = -state.scroll.x, -state.scroll.y end
+  if not (view.image or view.loading) then return nil end
+  if view.loading then
+    view.restore_scroll = state.scroll
+  elseif state.scroll then
+    view.image_x, view.image_y = -state.scroll.x, -state.scroll.y
+  end
   return view
 end
 
@@ -140,6 +147,9 @@ function ImageView:load_from_machine(path)
       return canvas.open_animation_data(bytes, animation_type)
     end or nil)
     self.errmsg = load_err
+    local scroll = self.restore_scroll
+    self.restore_scroll = nil
+    if image and scroll then self.image_x, self.image_y = -scroll.x, -scroll.y end
     core.log_quiet("Image View on a Machine: %s %s", path, image and "loaded" or tostring(load_err))
     core.redraw = true
   end)

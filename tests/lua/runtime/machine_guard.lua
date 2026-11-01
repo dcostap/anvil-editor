@@ -54,6 +54,15 @@ test.describe("Machine guard", function()
     file:close()
   end)
 
+  test.it("owns the files of a Project at a drive root", function(context)
+    local drive = PLATFORM == "Windows" and context.root:match("^%a:\\") or "/"
+    fs.use_machine(context.root .. PATHSEP .. "machine.json", { drive })
+    local file = drive .. "notes.md"
+    test.ok(fs.on_machine(file), file)
+    refused(process.start, { "rg", "Client", file })
+    fs.use_local()
+  end)
+
   test.it("refuses a worker job that names a Project path", function(context)
     local pool = worker_pool.system()
     refused(pool.submit, pool, { kind = "worker_pool_test", payload = { files = { context.notes } } })

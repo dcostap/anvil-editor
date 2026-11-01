@@ -197,7 +197,7 @@ function Buffer:set_language_mode(mode, opts)
 end
 
 
-local forget_machine_record
+local move_machine_record
 
 function Buffer:set_filename(filename, abs_filename)
   local stage = file_open_stage_begin("buffer_set_filename_metadata")
@@ -209,8 +209,8 @@ function Buffer:set_filename(filename, abs_filename)
   end
   self.filename = filename
   self.abs_filename = abs_filename
-  -- A recovery record names its file. The next write uses the new name.
-  if old.abs_filename and old.abs_filename ~= abs_filename then forget_machine_record(old.abs_filename) end
+  -- A recovery record names its file, so it moves with the name.
+  if old.abs_filename and old.abs_filename ~= abs_filename then move_machine_record(self, old.abs_filename) end
   language_mode.on_buffer_path_changed(self, old_path, language_mode.buffer_path(self))
   local syntax_changed = self:reset_syntax({ notify = false })
   local filename_changed = old.filename ~= self.filename or old.abs_filename ~= self.abs_filename
@@ -954,7 +954,8 @@ local function record_key(path)
 end
 
 local function write_machine_record(self)
-  if not fs.machine or not fs.machine.machine or not self.abs_filename then return end
+  -- A closed Buffer has no record, also when a write was due or a save replies later.
+  if not fs.machine or not fs.machine.machine or not self.abs_filename or self.machine_closed then return end
   local key = record_key(self.abs_filename)
   if not self:is_dirty() then return storage.clear("machine_recovery", key) end
   local save = self.machine_save
@@ -965,9 +966,14 @@ local function write_machine_record(self)
   })
 end
 
--- A Buffer that the user closes without a save, or that has a new name, has no record under its old name.
-forget_machine_record = function(path)
+local function forget_machine_record(path)
   if fs.machine and fs.machine.machine then storage.clear("machine_recovery", record_key(path)) end
+end
+
+-- A Buffer with a new name has no record under its old name. Its unsaved text gets a record under the new name.
+move_machine_record = function(self, old_path)
+  forget_machine_record(old_path)
+  write_machine_record(self)
 end
 
 local function machine_record_due(self)
@@ -1035,9 +1041,15 @@ local function apply_machine_file(self, bytes, version)
 end
 
 reload_from_machine = function(self)
-  fs.read(self.abs_filename, function(err, bytes, version)
+  local path, revision = self.abs_filename, self.text_revision
+  fs.read(path, function(err, bytes, version)
     if err then
       core.error("Cannot reload %s from the Machine: %s", self:get_name(), err.message or err.code)
+      return
+    end
+    -- Text that the user typed during the read wins. Its next save meets any change on the Machine as a conflict.
+    if self.text_revision ~= revision or self.abs_filename ~= path then
+      core.log_quiet("Machine reload of %s skipped: the Buffer changed during the read", self:get_name())
       return
     end
     apply_machine_file(self, bytes, version)
@@ -1051,8 +1063,9 @@ local function finish_machine_save(self, request, err, version)
     if err.code == "conflict" then
       machine_conflict(self, err.version)
     elseif err.code == "offline" then
-      -- The save did not leave this PC. It runs again after the reconnect.
-      self.machine_offline_save = true
+      -- The save did not leave this PC. It runs again after the reconnect, to the same file.
+      self.machine_offline_save = { filename = request.filename, abs_filename = request.abs_filename,
+        same_file = request.same_file }
       core.log_quiet("Machine save for %s waits for the connection", request.filename)
     else
       core.error("Cannot save %s on the Machine: %s", request.filename, err.message or err.code)
@@ -1061,8 +1074,13 @@ local function finish_machine_save(self, request, err, version)
   end
   if not request.same_file then self:set_filename(request.filename, request.abs_filename) end
   self.machine_version, self.new_file = version, false
-  -- Only the sent text is saved. Later edits stay unsaved.
+  -- Only the sent text is saved. Later edits stay unsaved. An undo and a new edit can reach the same undo
+  -- position with other text, as a local background save also checks.
   self.clean_change_id = request.change_id
+  if self:get_change_id() == request.change_id and self.text_revision ~= request.revision
+      and machine.content_version(encode_text(self)) ~= request.sent then
+    self.clean_change_id = -1
+  end
   core.log_quiet("Machine save finished for %s at revision %d", request.filename, request.revision)
   if core.set_recent_file_edited then core.set_recent_file_edited(self.abs_filename) end
   core.redraw = true
@@ -1100,12 +1118,19 @@ local function save_on_machine(self, filename, abs_filename)
   end)
 end
 
+local check_machine_file
+
 -- After a reconnect, find the result of a save whose reply did not arrive. A restarted server
 -- does not know the save, so the file's version tells: the sent bytes, the base, or other work.
 local function resolve_machine_save(self, request)
   fs.save_result(request.id, function(err, version)
     if self.machine_save ~= request then return end
-    if not err then return finish_machine_save(self, request, nil, version) end
+    if not err then
+      -- Another program can have changed the file after the save.
+      finish_machine_save(self, request, nil, version)
+      if not self.machine_save then check_machine_file(self) end
+      return
+    end
     if err.code ~= "unknown_save" then return end
     fs.read(request.abs_filename, function(read_err, _, current)
       if self.machine_save ~= request then return end
@@ -1124,12 +1149,15 @@ end
 
 -- After a reconnect, the Client missed the Machine's changes. A clean Buffer whose file changed
 -- reloads. A Buffer with unsaved text keeps it, and gets a conflict.
-local function check_machine_file(self)
+check_machine_file = function(self)
   fs.read(self.abs_filename, function(err, bytes, version)
     if self.machine_save or self:is_loading() then return end
     if err and err.code ~= "not_found" then return end
     if version == self.machine_version then
-      if self.machine_offline_save and self:is_dirty() then self:save() end
+      if self.machine_offline_save and self:is_dirty() then
+        self.machine_offline_save = nil
+        self:save()
+      end
       return
     end
     if bytes and not self:is_dirty() then return apply_machine_file(self, bytes, version) end
@@ -1139,7 +1167,12 @@ end
 
 fs.on_reconnect(function()
   for _, buffer in ipairs(core.buffer_registry:list()) do
-    if buffer.abs_filename and not buffer:is_loading() and not buffer.load_error then
+    local offline = buffer.machine_offline_save
+    if offline and not offline.same_file and not buffer.machine_save then
+      -- A Save As to another file sends the current text there. The file it came from does not change.
+      buffer.machine_offline_save = nil
+      buffer:save(offline.filename, offline.abs_filename)
+    elseif buffer.abs_filename and not buffer:is_loading() and not buffer.load_error then
       local request = buffer.machine_save
       if request and request.unknown then
         resolve_machine_save(buffer, request)
@@ -3323,6 +3356,7 @@ end
 -- For plugins to get notified when a buffer is closed
 function Buffer:on_close()
   -- A dirty Buffer closes only after the user discards its text. A crash does not get here.
+  self.machine_closed, records_due[self] = true, nil
   if self.abs_filename then forget_machine_record(self.abs_filename) end
   self:cancel_load()
   cancel_pending_save(self)

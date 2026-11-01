@@ -3147,7 +3147,10 @@ local function apply_plan_now(self, plan)
   table.sort(plan.trashes, function(a, b) return #a.abs > #b.abs end)
   local trash_list = {}
   for _, op in ipairs(plan.trashes) do
-    if file_ops.info(op.abs) then trash_list[#trash_list + 1] = op.abs end
+    -- A Machine that does not answer does not tell that the path is gone.
+    local info, err = file_ops.info(op.abs)
+    if err then core.error("File Tree: trash/delete failed: %s", err); return end
+    if info then trash_list[#trash_list + 1] = op.abs end
   end
   if #trash_list > 0 then
     local ok, err = file_ops.delete(trash_list, filetree_config.delete_to_trash)

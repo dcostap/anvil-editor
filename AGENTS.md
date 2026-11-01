@@ -609,13 +609,15 @@ The server polls its sockets. A link inside a Project can point outside it, as i
 `--test-root <folder>` before the Projects maps each Machine path into that folder: `C:\a\b` is `<folder>\C\a\b`. Only tests use it, so one PC can hold a Client copy and a different Machine copy at the same path.
 `--test-lose-reply <method>` does the first request of that method, then closes the connection without its reply. Only tests use it.
 `core.machine_client` is the Client. A scheduler thread connects through a Machine file and sends `hello`. `request` holds other requests until `hello` succeeds, and it never blocks the UI thread.
+The connect and the `hello` reply must finish in 10 seconds. Then the Client fails the connection and tries again, because a forwarder can accept a connection that no server answers.
 A Machine file is the local discovery file or the record of a paired Machine. After a disconnect, the Client connects again with a growing delay, up to 5 seconds. It reads the Machine file each time, because a restarted local server has a new port and token.
 `MachineClient.pair(host, port, code, name, on_done)` sends a pairing code one time and saves the record in `USERDIR/machines/<machine id>.json`. The folder is private. A wrong code saves nothing and does not try again, because each attempt counts.
 The record keeps the host, the port, the device ID and the token, protected with `machine.protect`. On Windows that is DPAPI for the current user. Other platforms keep the token as it is and rely on the private folder.
 A request that was not sent fails with `offline`. A request whose reply did not arrive fails with `disconnected`: the Machine can have done it.
 `core.fs` holds the Project content of a Project process. `fs.use_machine(discovery, roots)` makes the process use a Machine. `roots` lists the Project's paths. Only tests call it until Projects on other Machines exist.
 It also turns on the Machine guard (`core.machine_guard`). The raw file functions then refuse relative paths and paths inside the roots. Other absolute paths are local state, because a Machine serves only paths inside its Projects.
-Worker jobs whose payload names a Project path are refused at submit. Do not send a path that the worker does not read. A new raw function that takes a path needs a wrapper in the guard.
+Worker jobs whose payload names a Project path are refused at submit. The `bytes` and `text` fields hold file text, so the guard does not check them. Do not send a path that the worker does not read. A new raw function that takes a path needs a wrapper in the guard.
+A Project at a drive root, such as `D:\`, owns all paths on that drive.
 On a Machine, `core.project_files` fills its normal entry from `files.list`, `files.stat` and a `files.changes` loop. Its subscribers see the same change batches as for a local Project.
 `fs.on_machine(path)` tells if a path names a Machine file. `project_files.info(path)` is `system.get_file_info` for local paths. For a Machine file it gives only `{type}` from the file list, without a wait.
 `core.text_search.start` starts ripgrep like `core.process_stream.start`. In a Project on a Machine, it gives a stream with the same methods that reads from `search.read`. Text Search uses it for each ripgrep run.
@@ -627,10 +629,12 @@ These methods need Full control. Their paths must be in a Project. A Project roo
 A Client waits on `files.changes` once for each Project. A new wait ends the earlier wait with `replaced`.
 On a Machine the File Tree applies its changes in a thread. It then lists the changed folders again (`machine_folders.reload`), without a wait for the change notices.
 Rename (`editor:rename`) moves a Machine file with `file_ops.move`, then saves the Buffer's unsaved text. Delete and New Directory also use `core.file_ops`. New Directory starts a relative name at the Project.
+Save As of a new Buffer checks the target with `file_ops.info`, so it asks before it writes over a Machine file. A File Tree delete that cannot reach the Machine shows an error and keeps the edit.
 `common.path_suggest` lists Machine folders through `common.machine_listing`, which `fs.use_machine` sets. The listings arrive later, so the first suggestions can be empty.
 A Markdown attachment on a Machine uploads the file from this PC into the note's attachment folder. The Obsidian attachment setting comes from the Machine. A file URI link to this PC is refused.
-Live Preview binds no vault index on a Machine, and link completion offers no note names. Both wait for the Index service.
-An Image View of a Machine file reads its bytes through `core.fs` and loads them with `canvas.load_image_data`. Autoreload does not watch Machine files, and focus does not change the process's folder to a Machine Project.
+Live Preview binds no vault index on a Machine, and link completion offers no note names. Both wait for the Index service. The vault index also ignores the load and rename of a Machine Buffer.
+An Image View of a Machine file reads its bytes through `core.fs` and loads them with `canvas.load_image_data`. A restored Image View loads the same way, then applies its saved pan. Autoreload does not watch Machine files, and focus does not change the process's folder to a Machine Project.
+An image in a Machine note loads in a thread (`markdown/images.lua`). It finds the path with Machine stats, in the same order as locally, then reads the bytes. Its subscribers hear when it is ready. A Machine file has no local file ID, so the Git changes baseline keeps none.
 Run `runtime/machine_files.lua`, `ui/machine_file_search.lua` and `ui/machine_filetree.lua` after changes.
 
 A Project on another Machine has a key: `anvil-machine://<Machine ID>/<path on the Machine>` (`core.machine_project`). The Sidebar, Shell App State, recent Projects and Workspaces use the key as the Project's path. Windows file functions reject it.
@@ -643,12 +647,15 @@ On a Machine, `core.open_buffer` loads each file in the background. The Machine 
 `Buffer:save` sends the whole file with the version that the Buffer loaded or saved last. The Buffer stays dirty until the Machine confirms. A save during another save sends again after the reply.
 A refused save records the Machine's version in `buffer.machine_conflict` and calls `Buffer:on_machine_conflict`. Autosave shows its normal conflict choice there, without Save Copy. Overwrite and Save as New File first call `Buffer:accept_machine_version`.
 Each save has a save ID. When its reply is lost, the Buffer stays dirty. After the reconnect it asks `files.save_result`. On `unknown_save` the file's version decides: the sent bytes mean saved, the base means not saved, other bytes mean a conflict. The Buffer never sends the old bytes again.
-After each reconnect, each open Buffer reads its file again. A clean Buffer whose file changed reloads through edits. A dirty Buffer keeps its text and gets a conflict. A save that went `offline` runs again.
+After each reconnect, each open Buffer reads its file again. A clean Buffer whose file changed reloads through edits. A dirty Buffer keeps its text and gets a conflict. A save that went `offline` runs again, to the file that it named. So an offline Save As writes the new file, not the old one.
+A save result that the Client finds after a reconnect also gets this check, because another program can have changed the file after the save.
+A reply marks only the sent text as saved. An undo and a new edit can reach the same undo position with other text, so the Buffer then stays dirty.
+A reload from the Machine is ignored when the user typed during the read. The next save then meets any change on the Machine as a conflict.
 Autosave keeps no local disk state for Machine files. Its disk state is the last conflict.
 Each dirty Machine Buffer has a recovery record in `core.storage` (`machine_recovery`, one key for each Machine and path). It holds the text, encoding, line endings, base version and the sent version of the open save.
 An edit writes it after 0.5 seconds. A save writes it before the request leaves. A clean Buffer deletes it. Records are written on the UI thread, as Untitled recovery is.
 When a Machine file loads and has a record, the Buffer takes the record's text as one edit. The Machine's version decides: the same bytes mean clean, the base or the sent version mean dirty, other bytes mean a conflict.
-A Buffer that the user closes without a save deletes its record. A rename deletes the record of the old name.
+A Buffer that the user closes without a save deletes its record, and no due write or later reply writes it again. A rename moves the record to the new name.
 Run `runtime/machine_serve.lua`, `runtime/machine_client.lua`, `runtime/machine_buffer.lua`, `anvil:machine-frame` and `anvil:launch-mode` after changes. Tests that need a fixed port must try ports until one opens: Windows reserves whole port ranges, and `get_port()` returns the requested port. Pass one file to each `--test-args`: the runner reads only the first path.
 
 ## Companion (Android)

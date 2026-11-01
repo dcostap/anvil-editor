@@ -35,9 +35,15 @@ local function normalize(path)
   return prefix .. table.concat(parts, sep)
 end
 
+-- A drive root, such as `d:\`, already ends with the separator.
+local function folder_prefix(root)
+  return root:sub(-1) == sep and root or root .. sep
+end
+
 local function in_project(normalized)
   for _, root in ipairs(roots) do
-    if normalized == root or normalized:sub(1, #root + 1) == root .. sep then return true end
+    local prefix = folder_prefix(root)
+    if normalized == root or normalized:sub(1, #prefix) == prefix then return true end
   end
   return false
 end
@@ -67,11 +73,16 @@ local function check_text(name, text)
     while first do
       -- `C:\project-old` holds the text of the root `C:\project`, but it is not inside it.
       local after = spelled:sub(last + 1, last + 1)
-      if after == "" or after == sep or after:match("[%s\"']") then refuse(name, "a Project path", text) end
+      if after == "" or after == sep or after:match("[%s\"']") or root:sub(-1) == sep then
+        refuse(name, "a Project path", text)
+      end
       first, last = spelled:find(root, last + 1, true)
     end
   end
 end
+
+-- File text in a job, such as the `bytes` of a Buffer read, is not a path, also when it names one.
+local TEXT_FIELDS = { bytes = true, text = true }
 
 local function check_values(name, value, depth)
   if type(value) == "string" then
@@ -80,7 +91,9 @@ local function check_values(name, value, depth)
       if normalized and in_project(normalized) then refuse(name, "a Project path", value) end
     end
   elseif type(value) == "table" and depth < 8 then
-    for _, item in pairs(value) do check_values(name, item, depth + 1) end
+    for key, item in pairs(value) do
+      if not TEXT_FIELDS[key] then check_values(name, item, depth + 1) end
+    end
   end
 end
 

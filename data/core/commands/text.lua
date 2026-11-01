@@ -15,6 +15,7 @@ local TextView = require "core.textview"
 local Editor = require "core.editor"
 local tokenizer = require "core.tokenizer"
 local panes = require "core.panes"
+local file_ops = require "core.file_ops"
 
 -- Specialized Text Views can own selection without replacing text commands.
 local function selection_commands(map)
@@ -171,7 +172,12 @@ function prompt_save_as(dv, text)
       local save_filename = common.home_expand(prompt_filename)
       local normalized = core.normalize_to_project_dir(save_filename)
       local abs_filename = core.project_absolute_path(normalized)
-      if not dv.buffer.filename and system.get_file_info(abs_filename) then
+      if dv.buffer.filename then return save(save_filename, dv) end
+      -- A Machine file needs a reply, so the check runs in a thread there.
+      file_ops.run(abs_filename, function()
+        local info, err = file_ops.info(abs_filename)
+        if err then return core.error("Cannot save %s: %s", normalized, err) end
+        if not info then return save(save_filename, dv) end
         core.nag_view:show(
           "Overwrite Existing File",
           string.format("%s already exists. Overwrite it?", normalized),
@@ -190,9 +196,7 @@ function prompt_save_as(dv, text)
             end
           end
         )
-      else
-        save(save_filename, dv)
-      end
+      end)
     end,
     suggest = function (text)
       return common.home_encode_list(common.path_suggest(

@@ -185,7 +185,10 @@ function MachineClient:connect()
   local found, err = read_machine_file(self.path)
   if not found then return self:fail(err) end
   local socket
-  socket, err = open_socket(found.host, found.port, system.get_time() + CONNECT_TIMEOUT,
+  -- One deadline covers the connect and the `hello` reply. A forwarder can accept a connection
+  -- that no server answers.
+  self.hello_deadline = system.get_time() + CONNECT_TIMEOUT
+  socket, err = open_socket(found.host, found.port, self.hello_deadline,
     function() return self.state == "closed" end)
   if self.state == "closed" then
     if socket then socket:close() end
@@ -220,6 +223,8 @@ function MachineClient:receive()
         end
         if kind == "reply" then self:dispatch(id, body, bytes) end
       end
+    elseif self.state == "connecting" and system.get_time() >= self.hello_deadline then
+      return self:fail("The Machine did not answer")
     else
       -- The transport polls its socket. Poll often only while a reply is due.
       coroutine.yield(next(self.pending) and 0.005 or 0.05)

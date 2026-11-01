@@ -4,6 +4,7 @@ local core = require "core"
 local json = require "core.json"
 local machine = require "machine"
 local MachineClient = require "core.machine_client"
+local net = require "net"
 local machine_server = dofile("tests/fixtures/machine_server.lua")
 local test = require "core.test"
 
@@ -60,6 +61,33 @@ test.describe("Machine client", function()
     if context.device then context.device:close() end
     machine_server.stop(context.server)
     test.ok(test.remove_tree(context.root))
+  end)
+
+  test.it("stops waiting for a Machine that accepts the connection but does not answer", function(context)
+    local address = assert(net.resolve_address("127.0.0.1"))
+    test.equal(address:wait_until_resolved(5000), "success")
+    local listener, port
+    for i = 1, 64 do
+      port = 49152 + (math.floor(system.get_time() * 1000) + i * 127) % 16384
+      listener = net.create_server(address, port)
+      if listener then break end
+    end
+    test.not_nil(listener, "No free port")
+    local path = context.root .. PATHSEP .. "silent.json"
+    write_file(path, json.encode({ port = port, token = "silent" }))
+    local client, sockets = MachineClient.new(path), {}
+    local deadline = system.get_time() + 20
+    while client.state ~= "waiting" and system.get_time() < deadline do
+      local socket = listener:accept()
+      if socket then sockets[#sockets + 1] = socket end
+      coroutine.yield(0.05)
+    end
+    local state = client.state
+    client:close()
+    for _, socket in ipairs(sockets) do socket:close() end
+    listener:close()
+    test.ok(#sockets > 0, "The Client did not connect")
+    test.equal(state, "waiting")
   end)
 
   test.it("reads the Machine's file, not the Client's copy at the same path", function(context)

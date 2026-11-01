@@ -74,6 +74,26 @@ test.describe("Project files on a Machine", function()
     test.equal(info[client_only], false)
   end)
 
+  test.it("loads a note's image from the Machine", function(context)
+    local images = require "core.markdown.images"
+    local folder = context.project .. PATHSEP .. "attachments"
+    test.ok(common.mkdirp(machine_copy(context, folder)))
+    test.ok(canvas.new(8, 6, { 40, 100, 180, 255 }, true):save_image(machine_copy(context, folder .. PATHSEP .. "pic.png")))
+    write_file(machine_copy(context, context.project .. PATHSEP .. ".obsidian" .. PATHSEP .. "app.json"),
+      '{"attachmentFolderPath": "attachments"}')
+    images.clear_assets()
+    local opts = { source_path = context.project .. PATHSEP .. "notes.md", project_root = context.project }
+    local found, missing = images.get_asset("pic.png", opts), images.get_asset("gone.png", opts)
+    local notices = 0
+    images.subscribe(found, context, function() notices = notices + 1 end)
+    wait_until(function() return found.status ~= "loading" and missing.status ~= "loading" end, "The images did not load")
+    images.clear_assets()
+    test.equal(found.status, "ready", found.errmsg)
+    test.same({ found.image:get_size() }, { 8, 6 })
+    test.equal(notices, 1)
+    test.equal(missing.status, "error")
+  end)
+
   test.it("reports a change on the Machine to subscribers", function(context)
     local changed = {}
     project_files.subscribe(context.project, "machine-files-test", function(paths)

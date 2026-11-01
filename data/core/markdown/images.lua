@@ -204,12 +204,6 @@ local function file_exists(path)
   return info and info.type == "file"
 end
 
-local function try_relative_file(root, rel)
-  if not root then return nil end
-  local path = join_path(root, rel)
-  return file_exists(path) and path or nil
-end
-
 local function read_file(path)
   local fp = io.open(path, "rb")
   if not fp then return nil end
@@ -219,6 +213,12 @@ local function read_file(path)
 end
 
 local local_files = { exists = file_exists, read = read_file }
+
+local function try_relative_file(root, rel, files)
+  if not root then return nil end
+  local path = join_path(root, rel)
+  return files.exists(path) and path or nil
+end
 
 -- The files of a note on a Machine. Only paths in its Project exist. The caller waits in a coroutine
 -- (`file_ops.run`).
@@ -278,10 +278,16 @@ local function obsidian_attachment_folder(root, source_dir, files)
   return join_path(root, folder)
 end
 
-local function resolve_in_obsidian_attachment_folder(rel, source_dir, project_root)
-  local root = find_obsidian_vault_root(source_dir, project_root)
-  local folder = obsidian_attachment_folder(root, source_dir)
-  return try_relative_file(folder, rel)
+local function resolve_in_obsidian_attachment_folder(rel, source_dir, project_root, files)
+  local root = find_obsidian_vault_root(source_dir, project_root, files)
+  local folder = obsidian_attachment_folder(root, source_dir, files)
+  return try_relative_file(folder, rel, files)
+end
+
+-- A note on a Machine has its images on the Machine. Only remote and embedded images are local.
+local function on_machine(url, opts)
+  return opts.source_path and not images.is_remote(url) and not images.is_data_image(url)
+    and require("core.fs").on_machine(opts.source_path)
 end
 
 function images.attachment_directory(opts)
@@ -298,9 +304,11 @@ function images.attachment_directory(opts)
   return opts.project_root and common.normalize_path(join_path(opts.project_root, configured)) or nil
 end
 
-function images.resolve_local_path(url, opts)
+---`files` reads a Machine's files instead of the local disk. It must run in a thread.
+function images.resolve_local_path(url, opts, files)
   perf_frame_add("markdown_image_resolve_local_path_calls", 1)
   opts = opts or {}
+  files = files or local_files
   if type(url) ~= "string" or url == "" or images.is_remote(url)
     or url:sub(1, 5):lower() == "data:"
   then
@@ -313,7 +321,7 @@ function images.resolve_local_path(url, opts)
     return nil
   end
   if is_absolute_path(filesystem_url) then
-    local resolved = file_exists(filesystem_url) and filesystem_url or nil
+    local resolved = files.exists(filesystem_url) and filesystem_url or nil
     perf_frame_add(
       resolved and "markdown_image_resolve_absolute_hits"
         or "markdown_image_resolve_local_path_misses",
@@ -323,19 +331,19 @@ function images.resolve_local_path(url, opts)
   end
 
   local source_dir = dirname(opts.source_path)
-  local path = try_relative_file(source_dir, filesystem_url)
+  local path = try_relative_file(source_dir, filesystem_url, files)
   if path then
     perf_frame_add("markdown_image_resolve_source_hits", 1)
     return path
   end
 
-  path = try_relative_file(opts.project_root, filesystem_url)
+  path = try_relative_file(opts.project_root, filesystem_url, files)
   if path then
     perf_frame_add("markdown_image_resolve_project_hits", 1)
     return path
   end
 
-  path = resolve_in_obsidian_attachment_folder(filesystem_url, source_dir, opts.project_root)
+  path = resolve_in_obsidian_attachment_folder(filesystem_url, source_dir, opts.project_root, files)
   perf_frame_add(
     path and "markdown_image_resolve_attachment_hits"
       or "markdown_image_resolve_local_path_misses",
@@ -401,6 +409,7 @@ end
 ---@return userdata? animation
 ---@return string? errmsg
 function images.open_animation(entry)
+  if entry.machine_bytes then return canvas.open_animation_data(entry.machine_bytes, entry.animation_type) end
   if entry.path then return canvas.open_animation(entry.path, entry.animation_type) end
   local data, errmsg = images.decode_data_image(entry.url)
   if not data then return nil, errmsg end
@@ -460,6 +469,13 @@ function images.asset_key(url, opts)
   if images.is_data_image(url) then
     return data_asset_identity(url, opts.max_data_image_bytes, "\0")
   end
+  if on_machine(url, opts) then
+    return table.concat({
+      "machine", tostring(url or ""),
+      normalize_context_path(opts.source_path),
+      normalize_context_path(opts.project_root),
+    }, "\0")
+  end
   local local_path = images.resolve_local_path(url, opts)
   if local_path then return "local\0" .. normalize_context_path(local_path) end
   if images.is_remote(url) then
@@ -497,6 +513,31 @@ local function apply_loaded(entry, loaded)
   entry.size = info and info.size
 end
 
+-- Each check on a Machine waits for a reply, so the asset loads in a thread. Its subscribers
+-- hear when it is ready.
+local function load_from_machine(entry, url, opts)
+  entry.status, entry.machine = "loading", true
+  require("core").add_thread(function()
+    local files = machine_files(opts.project_root)
+    local path = images.resolve_local_path(url, opts, files)
+    local bytes = path and files.read(path)
+    local image, errmsg
+    if bytes then image, errmsg = canvas.load_image_data(bytes) end
+    entry.path = path
+    if image then
+      entry.status, entry.image = "ready", image
+      entry.animation_type = image_animation.detect_type(bytes)
+      entry.machine_bytes = entry.animation_type and bytes or nil
+    else
+      entry.status = "error"
+      entry.errmsg = errmsg or (path and "image could not be loaded" or "image not found on the Machine")
+    end
+    require("core").log_quiet("Markdown image on a Machine: %s %s", tostring(url), entry.status)
+    notify(entry)
+  end)
+  return entry
+end
+
 local function refresh_asset(entry, url, opts)
   perf_frame_add("markdown_image_asset_refreshes", 1)
   entry.alt = opts.alt
@@ -505,6 +546,9 @@ local function refresh_asset(entry, url, opts)
   entry.status = "idle"
   entry.image = nil
   entry.errmsg = nil
+  entry.machine_bytes = nil
+
+  if on_machine(url, opts) then return load_from_machine(entry, url, opts) end
 
   if images.is_data_image(url) then
     entry.path = nil
@@ -598,7 +642,8 @@ function images.get_asset(url, opts)
   local retry = entry.retry_generation ~= opts.retry_generation
   if retry and entry.status ~= "loading" then
     perf_frame_add("markdown_image_asset_retry_checks", 1)
-    local info = entry.path and system.get_file_info(entry.path)
+    -- A Machine's image has no local file to check. A failed load tries again.
+    local info = entry.path and not entry.machine and system.get_file_info(entry.path)
     local changed = info and (info.modified ~= entry.modified or info.size ~= entry.size)
     if entry.status == "error" or entry.status == "remote-disabled" or changed then
       refresh_asset(entry, url, opts)

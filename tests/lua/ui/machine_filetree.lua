@@ -1,6 +1,7 @@
 local common = require "core.common"
 local core = require "core"
 local Editor = require "core.editor"
+local ImageView = require "core.imageview"
 local command = require "core.command"
 local config = require "core.config"
 local fs = require "core.fs"
@@ -95,6 +96,13 @@ test.describe("File Tree on a Machine", function()
     shown = view
     test.ok(wait_until(function() return view.image ~= nil end), tostring(view.errmsg))
     test.same({ view.image:get_size() }, { 8, 6 })
+
+    -- A Workspace restore makes the View before the Machine's file list and bytes arrive.
+    project_files.invalidate(context.project)
+    local restored = test.not_nil(ImageView.from_state({ path = path, zoom_mode = "fixed", zoom_scale = 4,
+      scroll = { x = 10, y = 5, to = { x = 10, y = 5 } } }))
+    test.ok(wait_until(function() return restored.image ~= nil end), tostring(restored.errmsg))
+    test.same({ -restored.image_x, -restored.image_y }, { 10, 5 })
   end)
 
   test.it("makes a folder, and renames and deletes an open file, with the file commands", function(context)
@@ -129,6 +137,35 @@ test.describe("File Tree on a Machine", function()
       return info and info.type == "dir"
     end), "The Machine has no new folder")
     test.same(raw_list_dir(context.project), { "client-only.md" })
+  end)
+
+  test.it("saves a new Buffer as a Machine file, and asks before it overwrites one", function(context)
+    local show = core.nag_view.show
+    local prompt
+    core.nag_view.show = function(_, title, _, _, callback) prompt = { title = title, choose = callback } end
+    local function save_as(name)
+      local buffer = core.open_buffer()
+      shown = Editor(buffer)
+      panes.focus(panes.create { factory = function() return shown end })
+      buffer:insert(1, 1, "Fresh")
+      test.ok(command.perform("editor:save_as"), "Save As did not run")
+      core.global_prompt_bar:set_text(name)
+      core.global_prompt_bar:submit()
+      return buffer
+    end
+    local ok, err = pcall(function()
+      local fresh = save_as("fresh.md")
+      test.ok(wait_until(function() return not fresh:is_dirty() end), "The new file was not saved")
+      local file = assert(raw_open(machine_copy(context, context.project .. PATHSEP .. "fresh.md"), "rb"))
+      test.equal((file:read("*a"):gsub("\r\n", "\n")), "Fresh\n")
+      file:close()
+
+      save_as("notes.md")
+      test.ok(wait_until(function() return prompt ~= nil end), "The overwrite choice did not show")
+      test.equal(prompt.title, "Overwrite Existing File")
+    end)
+    core.nag_view.show = show
+    test.ok(ok, err)
   end)
 
   test.it("uploads a file from this PC into a note's attachment folder", function(context)
@@ -187,5 +224,28 @@ test.describe("File Tree on a Machine", function()
     test.same(raw_list_dir(context.project), { "client-only.md" })
     test.ok(wait_until(function() return text(tree):find("renamed-notes.md", 1, true) ~= nil end), text(tree))
     test.is_nil(text(tree):find("sub/", 1, true))
+  end)
+
+  test.it("reports a delete that cannot reach the Machine", function(context)
+    local tree = open_tree(context)
+    test.ok(wait_until(function() return text(tree):find("notes.md", 1, true) ~= nil end), text(tree))
+    local notes = find_entry(tree, "notes.md")
+    tree.buffer:remove(notes.line, 1, notes.line + 1, 1)
+    tree:sync_meta()
+    local plan, err = tree:plan_changes()
+    test.not_nil(plan, err)
+    machine_server.stop(context.server)
+    test.ok(wait_until(function() return fs.machine.state == "waiting" end), "The Client did not see the disconnect")
+
+    local errors, error_fn = {}, core.error
+    core.error = function(...) errors[#errors + 1] = string.format(...) end
+    local done
+    tree:apply_plan(plan, function(changed) done = changed end)
+    local finished = wait_until(function() return done ~= nil end)
+    core.error = error_fn
+    test.ok(finished, "the File Tree did not finish its changes")
+    test.equal(done, false)
+    test.equal(#errors, 1, table.concat(errors, "\n"))
+    test.is_nil(text(tree):find("notes.md", 1, true), "The tree lost the user's edit")
   end)
 end)

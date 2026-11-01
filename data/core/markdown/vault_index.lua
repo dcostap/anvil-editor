@@ -1486,6 +1486,7 @@ function vault_index.track_buffer(buffer)
 end
 
 function vault_index.on_buffer_filename_changed(buffer, old_abs_filename)
+  if fs.machine then return end
   if old_abs_filename and buffer and buffer.abs_filename
     and common.path_equals(old_abs_filename, buffer.abs_filename)
   then
@@ -1537,7 +1538,7 @@ function vault_index.install_buffer_hooks()
   buffer_hooks_installed = true
   local Buffer = require "core.buffer"
   Buffer.register_text_transaction_handler("markdown-vault-load", function(buffer, transaction)
-    if not (transaction and transaction.type == "load"
+    if fs.machine or not (transaction and transaction.type == "load"
       and buffer.abs_filename and is_markdown(buffer.abs_filename)) then return end
     local index = vault_index.index_for_path(buffer.abs_filename)
     if not index.buffer_listeners[buffer] then return end

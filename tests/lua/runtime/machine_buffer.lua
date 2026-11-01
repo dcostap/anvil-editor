@@ -1,5 +1,6 @@
 local autosave_fast = require "plugins.autosave_fast"
 local common = require "core.common"
+local config = require "core.config"
 local core = require "core"
 local fs = require "core.fs"
 local machine_server = dofile("tests/fixtures/machine_server.lua")
@@ -133,6 +134,34 @@ test.describe("Buffer on a Machine", function()
     test.equal(read_file(machine_copy(context, context.notes)), "Twice Edited Machine copy\n")
 
     test.equal(read_file(context.notes), "\255\254C\0l\0i\0e\0n\0t\0\n\0")
+
+    -- An undo and a new edit before the reply can reach the same undo position. That text is not saved.
+    -- Edits within the undo merge time join one undo step, so this test waits between them.
+    coroutine.yield(config.undo_merge_timeout + 0.1)
+    buffer:insert(1, 1, "A ")
+    buffer:save()
+    buffer:undo()
+    buffer:insert(1, 1, "B ")
+    wait_until(function() return not buffer.machine_save end, "The third save did not finish")
+    test.equal(read_file(machine_copy(context, context.notes)), "A Twice Edited Machine copy\n")
+    test.ok(buffer:is_dirty())
+
+    -- Text typed while a reload reads the file stays.
+    buffer:save()
+    wait_until(function() return not buffer:is_dirty() end, "The fourth save did not finish")
+    buffer:reload()
+    buffer:insert(1, 1, "Typed ")
+    coroutine.yield(1)
+    test.equal(text(buffer), "Typed B Twice Edited Machine copy\n")
+    test.ok(buffer:is_dirty())
+  end)
+
+  test.it("opens a file whose text names a Project path", function(context)
+    write_file(machine_copy(context, context.idea), context.notes)
+    start_server(context)
+    fs.use_machine(machine_server.discovery_path(context.user), { context.project })
+    local buffer = open(context, context.idea)
+    test.equal(text(buffer), context.notes .. "\n")
   end)
 
   test.it("creates a file that the Machine does not have", function(context)
@@ -237,12 +266,55 @@ test.describe("Buffer on a Machine", function()
     local buffer = open(context, context.notes)
     buffer:insert(1, 1, "Discarded ")
     wait_until(function() return record_count() == 1 end, "The recovery record was not written")
+    -- An edit just before the close has a record write that is still due.
+    buffer:insert(1, 1, "Late ")
     core.buffer_registry:release(buffer, context)
     core.buffer_registry:remove(buffer, true)
+    test.equal(record_count(), 0)
+    coroutine.yield(1)
     test.equal(record_count(), 0)
     local reopened = open(context, context.notes)
     test.equal(text(reopened), "Machine copy\n")
     test.ok(not reopened:is_dirty())
+  end)
+
+  test.it("keeps the record of a dirty Buffer whose file gets a new name", function(context)
+    start_server(context)
+    local discovery = machine_server.discovery_path(context.user)
+    fs.use_machine(discovery, { context.project })
+    local buffer = open(context, context.notes)
+    buffer:insert(1, 1, "Unsaved ")
+    wait_until(function() return record_count() == 1 end, "The recovery record was not written")
+    -- The File Tree moves the file on the Machine, then renames the open Buffer.
+    local moved = context.project .. PATHSEP .. "moved.txt"
+    write_file(machine_copy(context, moved), read_file(machine_copy(context, context.notes)))
+    os.remove(machine_copy(context, context.notes))
+    buffer:set_filename("moved.txt", moved)
+    test.equal(record_count(), 1)
+    crash(context, buffer)
+
+    fs.use_machine(discovery, { context.project })
+    local restored = open(context, moved)
+    test.equal(text(restored), "Unsaved Machine copy\n")
+    test.ok(restored:is_dirty())
+  end)
+
+  test.it("saves an offline Save As to its new file after the reconnect", function(context)
+    start_server(context)
+    fs.use_machine(machine_server.discovery_path(context.user), { context.project })
+    local buffer = open(context, context.notes)
+    buffer:insert(1, 1, "Copy of ")
+    machine_server.stop(context.server)
+    wait_until(function() return fs.machine.state == "waiting" end, "The Client did not see the disconnect")
+    local copy = context.project .. PATHSEP .. "copy.txt"
+    buffer:save("copy.txt", copy)
+    wait_until(function() return not buffer.machine_save end, "The offline save did not end")
+    start_server(context)
+    wait_until(function() return read_file(machine_copy(context, copy)) == "Copy of Machine copy\n" end,
+      "The Save As did not reach the new file")
+    test.equal(read_file(machine_copy(context, context.notes)), "Machine copy\n")
+    wait_until(function() return not buffer:is_dirty() end, "The Save As did not finish")
+    test.ok(common.path_equals(buffer.abs_filename, copy), buffer.abs_filename)
   end)
 
   test.it("after a crash during a save, knows the save from the record", function(context)
