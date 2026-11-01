@@ -1511,30 +1511,6 @@ local function file_extension(path)
   return ext and ext:lower() or ""
 end
 
-local function detect_binary_preview(path)
-  local ext = file_extension(path)
-  if binary_preview_extensions[ext] then return true, ext:upper() .. " file" end
-  -- A Machine's file has no local copy to probe. The preview's Buffer reads it from the Machine.
-  if require("core.fs").on_machine(path) then return false, nil end
-
-  local info = system.get_file_info(path)
-  if info and info.size and info.size > (fuzzy_searcher.preview_text_max_bytes or 2097152) then
-    return true, string.format("Large file (%.1f MB)", info.size / 1024 / 1024)
-  end
-
-  local fp = io.open(path, "rb")
-  if not fp then return true, "Cannot open file" end
-  local data = fp:read(8192) or ""
-  fp:close()
-
-  if data:sub(1, 4) == "%PDF" then return true, "PDF file" end
-  if data:sub(1, 2) == "MZ" then return true, "Windows executable" end
-  if data:sub(1, 4) == "PK\003\004" then return true, "ZIP container" end
-  if data:sub(1, 7) == "\127ELF\002\001\001" or data:sub(1, 4) == "\127ELF" then return true, "ELF binary" end
-  if common.is_binary(data) then return true, "Binary file" end
-  return false, nil
-end
-
 local function tokenize_code_query(q, case_sensitive)
   local t = {}
   for w in (case_sensitive and tostring(q or "") or tostring(q or ""):lower()):gmatch("%S+") do
@@ -2483,6 +2459,37 @@ local function draw_project_result_row(font, r, x, y, width)
   end
 end
 
+-- A result without a size gets it from a worker, so drawing its row reads no file.
+-- Rows that appear in one frame share one job.
+fuzzy_searcher.file_info_requests = {}
+
+function fuzzy_searcher.request_file_info(r, path)
+  if r.file_info_requested then return end
+  r.file_info_requested = true
+  fuzzy_searcher.file_info_requests[#fuzzy_searcher.file_info_requests + 1] = { result = r, path = path }
+  if #fuzzy_searcher.file_info_requests > 1 then return end
+  core.add_thread(function()
+    local batch = fuzzy_searcher.file_info_requests
+    fuzzy_searcher.file_info_requests = {}
+    local paths = {}
+    for index, request in ipairs(batch) do paths[index] = request.path end
+    local function store(infos)
+      for index, request in ipairs(batch) do
+        local info = infos[index]
+        request.result.file_size = info and info.size or false
+        request.result.file_modified = info and info.modified or nil
+      end
+      core.redraw = true
+    end
+    local job = require("core.worker_pool").named("file_io", { worker_count = 1 }):submit {
+      kind = "file_info", priority = "interactive", payload = { paths = paths },
+      on_result = function(message) store(message.payload.infos) end,
+      on_error = function() store({}) end,
+    }
+    if not job then store({}) end
+  end)
+end
+
 function fuzzy_searcher.file_metadata_parts(r)
   local file_metadata = require "plugins.file_metadata"
   local cache = r._file_metadata_cache
@@ -2506,9 +2513,14 @@ function fuzzy_searcher.file_metadata_parts(r)
   local path = fullpath(r.abs_path or r.file or r.path)
   local last_edited = file_metadata.recent_times(path)
   if r.file_size == nil then
-    local info = project_files.info(path)
-    r.file_size = info and info.size or false
-    r.file_modified = info and info.modified
+    -- A Machine's file information is in memory.
+    if require("core.fs").on_machine(path) then
+      local info = project_files.info(path)
+      r.file_size = info and info.size or false
+      r.file_modified = info and info.modified
+    else
+      fuzzy_searcher.request_file_info(r, path)
+    end
   end
   local git_status = require "plugins.file_git_status"
   local folder_counts = require "plugins.folder_counts"
@@ -3566,7 +3578,73 @@ function path_search.plan(text, options)
   return parts
 end
 
-function path_search.direct_result(text, line, col, case_sensitive)
+-- The typed path's information comes from a worker. Each refresh asks for it, and a busy
+-- disk must not stop typing. A known answer shows at once and is read again after a second.
+path_search.direct_infos, path_search.direct_info_count = {}, 0
+path_search.DIRECT_INFO_SECONDS = 1
+
+function path_search.same_info(a, b)
+  if not a or not b then return a == b end
+  return a.type == b.type and a.size == b.size and a.modified == b.modified
+end
+
+---Return the path's information and true when it is known. A path that does not exist has none.
+---With `wait`, read an unknown path here. Enter after typing a path must open that path.
+function path_search.direct_info(path, wait)
+  if require("core.fs").on_machine(path) then return project_files.info(path), true end
+  local key = common.path_compare_key(path) or path
+  local entry = path_search.direct_infos[key]
+  local known = entry ~= nil and entry.checked_at ~= nil
+  if not entry then
+    -- Typing makes one path for each character. Keep only recent ones.
+    if path_search.direct_info_count >= 256 then
+      path_search.direct_infos, path_search.direct_info_count = {}, 0
+    end
+    entry = {}
+    path_search.direct_infos[key] = entry
+    path_search.direct_info_count = path_search.direct_info_count + 1
+  end
+  if wait and not known then
+    entry.info, entry.checked_at = project_files.info(path), system.get_time()
+    return entry.info, true
+  end
+  if entry.job or (known and system.get_time() - entry.checked_at < path_search.DIRECT_INFO_SECONDS) then
+    return entry.info, known
+  end
+  local function finish(info, failed)
+    if path_search.direct_infos[key] ~= entry then return end
+    entry.job = nil
+    local changed = not entry.checked_at or (not failed and not path_search.same_info(entry.info, info))
+    if not failed then entry.info = info end
+    entry.checked_at = system.get_time()
+    if changed and active_view and not active_view.closed then
+      active_view.dirty = true
+      active_view:schedule_update(true)
+    end
+  end
+  entry.job = require("core.worker_pool").system():submit {
+    kind = "file_info", priority = "interactive", payload = { paths = { path } },
+    on_result = function(message) finish(message.payload.infos[1] or nil) end,
+    on_error = function(message)
+      core.log_quiet("Fuzzy Path Search: path information failed path_len=%d error=%s", #path, tostring(message.error))
+      finish(nil, true)
+    end,
+  }
+  if not entry.job then
+    entry.info, entry.checked_at = project_files.info(path), system.get_time()
+    return entry.info, true
+  end
+  return entry.info, known
+end
+
+---Forget a path's information after a change, such as its creation.
+function path_search.forget_direct_info(path)
+  local key = path and common.path_compare_key(path)
+  if key then path_search.direct_infos[key] = nil end
+end
+
+---Return the result for a typed path, or nil and true while its information is read.
+function path_search.direct_result(text, line, col, case_sensitive, wait)
   local mode, query = split_mode_prefix(tostring(text or ""))
   if mode ~= "" and mode ~= "@" then return nil end
   query = common.sanitize_prompt_path(query)
@@ -3584,7 +3662,7 @@ function path_search.direct_result(text, line, col, case_sensitive)
     absolute and expanded or (project_dir() .. PATHSEP .. expanded))
   if not ok or not path then return nil end
 
-  local info = project_files.info(path)
+  local info, known = path_search.direct_info(path, wait)
   if info then
     ensure_recent_project_times()
     local sidebar
@@ -3617,6 +3695,8 @@ function path_search.direct_result(text, line, col, case_sensitive)
     }
   end
 
+  -- Offer to create the path only after its read shows that it does not exist.
+  if not known then return nil, true end
   if not explicit and mode ~= "" then return nil end
   local parts = path_search.external_path_parts(path)
   if not parts or parts.blocked or parts.search_terms or not parts.scope then return nil end
@@ -4480,6 +4560,7 @@ function FSView:clear_preview_view()
     self:set_preview_interactive(false)
   end
   local preview = self.preview_view
+  if preview and preview.cancel_load then preview:cancel_load() end
   if preview and preview.buffer then
     if preview.cancel_horizontal_extent_scan then
       preview:cancel_horizontal_extent_scan()
@@ -4698,7 +4779,44 @@ function FSView:load_text_preview(key, path)
       end
     end
     self:schedule_update(true)
-  end, { backup_prompt = false })
+  end, { backup_prompt = false, recheck = false })
+end
+
+-- Tell if the file at `path` can have a text preview. The size and the first bytes are read
+-- on a worker, and the preview updates when the probe finishes.
+function FSView:cancel_preview_probe()
+  local probe = self.preview_probe
+  self.preview_probe = nil
+  if probe and probe.job then probe.pool:cancel(probe.job) end
+end
+
+function FSView:probe_preview(path)
+  self:cancel_preview_probe()
+  local ext = file_extension(path)
+  if binary_preview_extensions[ext] then
+    return { path = path, blocked = true, reason = ext:upper() .. " file" }
+  end
+  -- A Machine's file has no local copy to probe. The preview's Buffer reads it from the Machine.
+  if require("core.fs").on_machine(path) then return { path = path, blocked = false } end
+  local pool = require("core.worker_pool").named("file_io", { worker_count = 1 })
+  local probe = { path = path, pending = true, pool = pool }
+  local function finish(blocked, reason)
+    if not probe.pending then return end
+    probe.pending, probe.job = nil, nil
+    probe.blocked, probe.reason = blocked, reason or "Unsupported binary file"
+    if self.preview_probe == probe and not (self.closing or self.closed) then self:schedule_update(true) end
+  end
+  probe.job = pool:submit {
+    kind = "plugins.fuzzy_searcher.preview_probe", priority = "interactive",
+    payload = { path = path, max_bytes = fuzzy_searcher.preview_text_max_bytes or 2097152 },
+    on_result = function(message) finish(message.payload.blocked, message.payload.reason) end,
+    on_error = function(message)
+      core.log_quiet("Fuzzy Searcher preview probe failed: path=%s error=%s", path, tostring(message.error))
+      finish(true, "Cannot open file")
+    end,
+  }
+  if not probe.job then finish(true, "Cannot open file") end
+  return probe
 end
 
 function FSView:update_preview_view()
@@ -4776,13 +4894,19 @@ function FSView:update_preview_view()
   elseif ImageView.is_supported(path) then
     key = "image:" .. path
   else
-    -- Probe each selected path once. Updates run every frame, and the probe
-    -- opens and reads the file.
+    -- Probe each selected path once. Updates run every frame.
     local probe = self.preview_probe
     if not probe or probe.path ~= path then
-      local blocked, reason = detect_binary_preview(path)
-      probe = { path = path, blocked = blocked, reason = reason or "Unsupported binary file" }
+      probe = self:probe_preview(path)
       self.preview_probe = probe
+    end
+    if probe.pending then
+      key = "probe:" .. path
+      if self.preview_key ~= key then
+        self:clear_preview_view()
+        self.preview_key = key
+      end
+      return nil
     end
     if probe.blocked then
       key = "blocked:" .. path .. ":" .. tostring(probe.reason)
@@ -4799,7 +4923,8 @@ function FSView:update_preview_view()
   if not r.revision and self.preview_key ~= key then
     self:clear_preview_view()
     if key:sub(1, 6) == "image:" then
-      view = ImageView(path, "fit")
+      view = ImageView(nil, "fit")
+      view:load_in_background(path)
     else
       self.preview_key = key
       self:load_text_preview(key, path)
@@ -5811,16 +5936,23 @@ function path_search.filter_file_picker_results(results, picker)
   return out
 end
 
-function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
-  local limit = self:result_limit()
-  local direct = path_search.direct_result(base, line, col, self.case_sensitive)
-  self.direct_path_result = direct
+---Return the result for a typed path, true while its information is read, and the path plan.
+function FSView:direct_path_for(base, line, col, wait)
+  local direct, pending = path_search.direct_result(base, line, col, self.case_sensitive, wait)
   local path_plan = path_search.plan(base, { include_ignored = self.include_ignored })
   if direct and direct.exact_path and direct.is_folder and not path_plan.external then
     direct.kind = "folder"
     direct.project = nil
     direct.path_search = nil
   end
+  return direct, pending, path_plan
+end
+
+function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
+  local limit = self:result_limit()
+  local direct, direct_pending, path_plan = self:direct_path_for(base, line, col)
+  self.direct_path_result, self.direct_path_pending = direct, direct_pending
+  self.direct_path_query = { base = base, line = line, col = col }
   self.path_search_active = path_plan.external == true
   local mode = path_plan.mode
   base = path_plan.query or ""
@@ -7225,7 +7357,7 @@ function FSView:start_modifier_search(base, line, col, grep, reset_selection)
   self.path_search_active = path_plan and path_plan.external == true
   self:cancel_deferred_loading_feedback()
   self:clear_preview_view()
-  self.preview_probe = nil
+  self:cancel_preview_probe()
   if reset_selection then self.selected, self.viewport_offset = 1, 1 end
   self.has_more = false
   self.status = self.query_modifiers.error or "Searching files…"
@@ -8012,6 +8144,7 @@ function FSView:activate_create_path(r, new_group)
         return
       end
       core.log_quiet("Fuzzy Path Search: created folder path_len=%d", #path)
+      path_search.forget_direct_info(path)
       self.force_refresh = true
       self.dirty = true
       self:refresh(self.input:get_text())
@@ -8038,6 +8171,7 @@ function FSView:activate_create_path(r, new_group)
       return
     end
     core.log_quiet("Fuzzy Path Search: created file path_len=%d", #path)
+    path_search.forget_direct_info(path)
     opened = self:open_file_result({ kind = "path", file = path, abs_path = path, line = r.line }, new_group)
   end)
   return opened
@@ -8107,6 +8241,22 @@ function FSView:confirm_folder_open(r, new_group)
 end
 
 function FSView:confirm(new_group)
+  -- Enter right after typing a path opens that path, even before its worker read ends.
+  -- A selection below the first row shows that the user chose another row.
+  local function first_row()
+    local index = 1
+    while self.results[index] and self.results[index].header do index = index + 1 end
+    return index
+  end
+  if self.direct_path_pending and self.selected <= first_row() then
+    local query = self.direct_path_query
+    local direct = self:direct_path_for(query.base, query.line, query.col, true)
+    self.direct_path_result, self.direct_path_pending = direct, nil
+    if direct then
+      self.results = path_search.prepend_direct(self.results, direct)
+      self.selected = 1
+    end
+  end
   if self:can_mark_result(self.selected) then
     local indices = self:get_selected_result_indices()
     if #indices > 1 then return self:open_selected_results(indices) end
@@ -9347,6 +9497,7 @@ return {
   open_file_picker = fuzzy_searcher.open_file_picker,
   open_static_results = open_static_results,
   _test = {
+    path_search = path_search,
     everything_folder_search_params = everything_folder_search_params,
     everything_folder_search_query = everything_folder_search_query,
     everything_file_search_params = everything_file_search_params,

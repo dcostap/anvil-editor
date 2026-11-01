@@ -393,8 +393,11 @@ end
 ---Read and decode on a worker. Construct lines in batches, then publish once.
 ---The Buffer rejects edits and saves until the load succeeds.
 ---Set `opts.backup_prompt` to false for read-only copies, such as previews.
+---The worker checks that the file did not change while it read it. Before publishing, the UI
+---checks the file again. Set `opts.recheck` to false to skip that UI-thread check for a read-only
+---copy: a slow disk must not stop the UI for a preview.
 ---On a Machine, the Buffer first gets the file's bytes. A missing file makes a new file.
----@param opts? { backup_prompt?: boolean }
+---@param opts? { backup_prompt?: boolean, recheck?: boolean }
 local restore_machine_record
 
 function Buffer:load_async(filename, on_finish, opts)
@@ -493,8 +496,9 @@ function Buffer:load_async(filename, on_finish, opts)
           return
         end
         -- Bytes from a Machine came with their version. The local disk does not matter.
-        local info = not request.version and system.get_file_info(filename)
-        if not request.version and (not info or info.file_id ~= data.info.file_id
+        local recheck = not request.version and not (opts and opts.recheck == false)
+        local info = recheck and system.get_file_info(filename)
+        if recheck and (not info or info.file_id ~= data.info.file_id
           or info.size ~= data.info.size or info.modified ~= data.info.modified) then
           finish("failed", "source changed during file loading")
           return

@@ -24,6 +24,7 @@ local function fixture(options)
       return is_directory and path or path:match("^(.*)/[^/]+$")
     end,
     marker_probe = options.marker_probe,
+    marker_scan = options.marker_scan,
     use_marker_scan = options.use_marker_scan ~= nil and options.use_marker_scan or false,
     is_active = function() return active end,
     watcher_factory = function() return {
@@ -140,6 +141,38 @@ test.describe("Shared repository Git status", function()
     service:lookup("C:/outer/inner/one.lua")
     test.equal(#discoveries, 2, "a new nested marker must not use the old outer route")
     test.ok(common.path_equals(discoveries[2].path, "C:/outer/inner"))
+    service:close()
+  end)
+
+  test.it("looks for Git markers on a worker and finds the repository when the scan ends", function()
+    local scans = {}
+    local service, discoveries, _, clock = fixture {
+      use_marker_scan = true,
+      root_for_path = function(path, is_directory)
+        path = common.normalize_path(path)
+        return is_directory and path or common.dirname(path)
+      end,
+      marker_scan = function(paths, callback)
+        scans[#scans + 1] = { paths = paths, callback = callback }
+        return { cancel = function() end }
+      end,
+    }
+    -- A busy disk must not stop the UI while a row looks for its repository.
+    test.is_nil(service:lookup("C:/outer/inner/one.lua"))
+    test.is_nil(service:lookup("C:/outer/inner/two.lua"))
+    test.equal(#scans, 1, "rows in one folder share one scan")
+    test.equal(#discoveries, 0, "discovery waits for the scan")
+    test.not_ok(service:is_settled("C:/outer/inner/one.lua"))
+
+    local found = {}
+    for index, path in ipairs(scans[1].paths) do found[index] = common.path_equals(path, "C:/outer") end
+    scans[1].callback(found)
+    test.equal(clock.publications(), 1, "the scan result must redraw the rows")
+    service:lookup("C:/outer/inner/one.lua")
+    test.equal(#discoveries, 1)
+    test.ok(common.path_equals(discoveries[1].path, "C:/outer"))
+    service:lookup("C:/outer/other.lua")
+    test.equal(#scans, 1, "scanned folders must not scan again")
     service:close()
   end)
 

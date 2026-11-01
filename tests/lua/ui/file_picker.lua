@@ -60,6 +60,10 @@ test.describe("File Picker", function()
     }
 
     test.equal(picker.input:get_text(), query)
+    -- The rows move when the typed path's row arrives. A user picks from the final rows.
+    local deadline = system.get_time() + 5
+    while picker.direct_path_pending and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.not_ok(picker.direct_path_pending, "the typed path was not read")
     local folder_index
     for index, result in ipairs(picker.results) do
       if not result.header then

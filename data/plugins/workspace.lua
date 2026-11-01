@@ -282,8 +282,43 @@ local function ensure_initial_filetree_pane()
 end
 
 
+-- A save during use writes on a worker, so a slow disk cannot stop the UI. The save thread
+-- waits for it. A save at a Project switch or at exit writes at once, after that write ends.
+local background_write
+-- A save at exit waits this long for a write during use. Then it writes anyway.
+local BACKGROUND_WRITE_WAIT_SECONDS = 5
+
+local function write_in_background(key, workspace)
+  local write = { done = false }
+  local function finish(success, err)
+    write.done, write.success, write.error = true, success, err
+  end
+  write.job = require("core.worker_pool").named("storage", { worker_count = 1 }):submit {
+    kind = "storage_save", priority = "background",
+    payload = { userdir = USERDIR, module = STORAGE_MODULE, key = key, value = workspace },
+    on_result = function(message) finish(message.payload.success, message.payload.error) end,
+    on_error = function(message) finish(false, message.error) end,
+    on_cancelled = function() finish(false, "save cancelled") end,
+  }
+  if not write.job then return storage.save(STORAGE_MODULE, key, workspace) end
+  background_write = write
+  while not write.done do coroutine.yield(0.01) end
+  if background_write == write then background_write = nil end
+  return write.success, write.error
+end
+
+local function wait_for_background_write()
+  local write = background_write
+  local deadline = system.get_time() + BACKGROUND_WRITE_WAIT_SECONDS
+  while write and not write.done and system.get_time() < deadline do
+    require("core.worker_pool").named("storage"):drain { max_ms = 10, max_messages = 100 }
+    if not write.done then system.sleep(0.001) end
+  end
+end
+
 ---@param during_use? boolean A save while the Project stays open. It reuses the
 ---restored key and skips the write when nothing changed.
+
 local function save_workspace(during_use)
   if empty_window_requested() then
     if not during_use then core.log_quiet("Workspace: skipped save for an empty Anvil window") end
@@ -324,7 +359,13 @@ local function save_workspace(during_use)
   local text = common.serialize(workspace, { sort = true })
   local serialization_ended = system.get_time()
   if during_use and key == last_saved_key and text == last_saved_text then return true end
-  local saved, err = storage.save(STORAGE_MODULE, key, workspace)
+  local saved, err
+  if during_use then
+    saved, err = write_in_background(key, workspace)
+  else
+    wait_for_background_write()
+    saved, err = storage.save(STORAGE_MODULE, key, workspace)
+  end
   if not saved then
     core.log_quiet("Workspace: save failed for %s: %s", project_dir, tostring(err))
     return false

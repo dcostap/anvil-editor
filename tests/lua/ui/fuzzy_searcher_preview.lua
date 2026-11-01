@@ -6,6 +6,7 @@ local keymap = require "core.keymap"
 local markdown = require "core.markdown"
 local test = require "core.test"
 local worker_pool = require "core.worker_pool"
+local blocking_calls = require "core.blocking_calls"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
 local Buffer = require "core.buffer"
@@ -144,6 +145,7 @@ test.describe("Fuzzy Searcher preview", function()
   end)
 
   test.after_each(function(context)
+    blocking_calls.stop()
     config.plugins.linewrapping.enable_by_default = context.linewrapping_enable_by_default
     config.fuzzy_searcher_markdown_preview = context.fuzzy_searcher_markdown_preview
     if context.original_buffer_load_async then
@@ -336,10 +338,51 @@ test.describe("Fuzzy Searcher preview", function()
     })
     local picker = core.fuzzy_searcher_active_view
 
-    test.is_nil(picker:update_preview_view(), "the selection waited for the file read")
+    -- A busy disk or a virus scan can make any file call take seconds.
+    blocking_calls.start()
+    local shown = picker:update_preview_view()
+    local calls = blocking_calls.callers()
+    blocking_calls.stop()
+    test.is_nil(shown, "the selection waited for the file read")
+    test.same(calls, {}, "the selection must not call the disk on the UI thread")
     test.is_nil(picker.preview_blocked)
     local preview = test.not_nil(load_preview(picker))
     test.equal(table.concat(preview.buffer.lines), "loaded later\n")
+  end)
+
+  test.it("probes selected files on a worker and names why one has no text preview", function(context)
+    local binary = temp_file_path("fuzzy-preview-probe-binary-test.dat")
+    local large = temp_file_path("fuzzy-preview-probe-large-test.txt")
+    local missing = temp_file_path("fuzzy-preview-probe-missing-test.txt")
+    context.files = { binary, large }
+    write_file(binary, "text\0binary")
+    -- Larger than the 2 MB text preview limit.
+    write_file(large, string.rep("x\n", 1024 * 1024 + 1))
+
+    fuzzy_searcher.open_static_results("Files", {
+      { kind = "file", file = binary, text = binary },
+      { kind = "file", file = large, text = large },
+      { kind = "file", file = missing, text = missing },
+    })
+    local picker = core.fuzzy_searcher_active_view
+    local reasons = {}
+    blocking_calls.start()
+    for index = 1, 3 do
+      picker.selected = index
+      test.is_nil(load_preview(picker))
+      reasons[index] = picker.preview_blocked and picker.preview_blocked.reason
+    end
+    -- Other editor parts run while the test waits. Only the preview's calls count.
+    local calls = {}
+    for _, caller in ipairs(blocking_calls.callers()) do
+      if caller.stack:find("fuzzy_searcher", 1, true) then
+        calls[#calls + 1] = caller.name .. " at " .. caller.stack
+      end
+    end
+    blocking_calls.stop()
+
+    test.same(reasons, { "Binary file", "Large file (2.0 MB)", "Cannot open file" })
+    test.same(calls, {}, "the preview must not call the disk on the UI thread:\n" .. table.concat(calls, "\n"))
   end)
 
   test.it("shows the selected file when an earlier preview load finishes late", function(context)
@@ -360,10 +403,19 @@ test.describe("Fuzzy Searcher preview", function()
       { kind = "file", file = second, text = second },
     })
     local picker = core.fuzzy_searcher_active_view
-    picker:update()
+    -- A worker first probes the file. The read starts in a later update.
+    local function update_until_reads(count)
+      local deadline = system.get_time() + 10
+      picker:update()
+      while #pending < count and system.get_time() < deadline do
+        coroutine.yield(0.001)
+        picker:update()
+      end
+    end
+    update_until_reads(1)
     test.equal(#pending, 1, "expected the first preview read to start")
     picker.selected = 2
-    picker:update()
+    update_until_reads(2)
     test.equal(#pending, 2, "expected selection to start the second preview read")
 
     pending[1].buffer:replace_snapshot("first\n")

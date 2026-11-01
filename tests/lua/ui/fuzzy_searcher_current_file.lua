@@ -164,7 +164,7 @@ test.describe("Fuzzy Searcher current file query", function()
 
     test.equal(picker.input:get_text(), common.normalize_path(path))
     test.ok(picker.path_search_active)
-    test.ok(common.path_equals(picker.results[1].abs_path, path))
+    test.ok(wait_for_result(picker, path))
   end)
 
   test.it("opens the selected file in a File Tree", function(context)

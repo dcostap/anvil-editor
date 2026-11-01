@@ -555,17 +555,34 @@ test.describe("Workspace persistence", function()
     run_last_captured_thread(context)
     core.add_thread = context.original_add_thread
 
-    view_state.label = "edited"
-    core.request_workspace_save("test edit")
-    local deadline = system.get_time() + 15
+    local blocking_calls = require "core.blocking_calls"
     local key
-    repeat
-      coroutine.yield(0.05)
-      key = workspace_keys_for_path(project_path)[1]
-    until (key and saved_label(key) == "edited") or system.get_time() > deadline
+    local function save_label(label)
+      view_state.label = label
+      core.request_workspace_save("test edit")
+      local deadline = system.get_time() + 15
+      repeat
+        coroutine.yield(0.05)
+        key = blocking_calls.without(function() return workspace_keys_for_path(project_path)[1] end)
+      until (key and blocking_calls.without(saved_label, key) == label) or system.get_time() > deadline
+    end
+    -- The first save finds the Workspace's storage key. Later saves know it.
+    save_label("first edit")
+    test.equal(saved_label(key), "first edit")
+    blocking_calls.start()
+    save_label("edited")
+    -- A slow disk must not stop the UI while the user works.
+    local calls = {}
+    for _, caller in ipairs(blocking_calls.callers()) do
+      if caller.stack:find("plugins/workspace.lua", 1, true) then
+        calls[#calls + 1] = caller.name .. " at " .. caller.stack
+      end
+    end
+    blocking_calls.stop()
 
     test.not_nil(key)
     test.equal(saved_label(key), "edited")
+    test.same(calls, {}, "the save wrote on the UI thread:\n" .. table.concat(calls, "\n"))
   end)
 
   test.test("does not replace saved Workspace state before it is restored", function(context)

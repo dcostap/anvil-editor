@@ -969,7 +969,8 @@ function Buffer:set_filename(...)
 		if not old_path and persisted and old_identity and old_identity ~= new_identity then
 			remove_persisted_identity(old_identity)
 		end
-	else
+	elseif not buffer_gitdiff_disabled(self) then
+		-- A Buffer without change highlights, such as a preview, reads no Changes Baseline.
 		local loaded = load_changes_baseline(self)
 		if not loaded and old_path and not self.binary then
 			activate_changes_baseline(self, table.concat(self.lines or {}), "automatic", true)

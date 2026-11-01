@@ -33,6 +33,22 @@ local function marker_probe(path)
   return info and info.type ~= nil
 end
 
+-- Path Search rows can name folders anywhere on the PC. A busy disk must not stop the UI
+-- while they look for Git markers, so the default scan runs on a worker.
+-- `callback(found)` gets `found[i] == true` when `paths[i]` has a marker.
+local function marker_scan(paths, callback)
+  local pool = require("core.worker_pool").system()
+  local job = pool:submit {
+    kind = "git_marker_scan", priority = "interactive", payload = { paths = paths },
+    on_result = function(message) callback(message.payload.found) end,
+    on_error = function(message)
+      core.log_quiet("Shared Git marker scan failed: %s", tostring(message.error))
+      callback(nil)
+    end,
+  }
+  return job and { cancel = function() pool:cancel(job) end }
+end
+
 local function parent_directory(path)
   local parent = common.dirname(path)
   if not parent or parent == "" or common.path_equals(parent, path) then return nil end
@@ -63,6 +79,9 @@ function Service.new(options)
     clock = options.clock or system.get_time,
     root_for_path = options.root_for_path or root_for_path,
     marker_probe = options.marker_probe or marker_probe,
+    -- An injected probe runs on the UI thread, unless the caller also injects a scan.
+    marker_scan = options.marker_scan or (not options.marker_probe and marker_scan or nil),
+    marker_scans = {},
     use_marker_scan = options.use_marker_scan == nil and true or options.use_marker_scan,
     is_active = options.is_active or is_active,
     watcher_factory = options.watcher_factory or function() return DirWatch() end,
@@ -142,11 +161,47 @@ function Service:notify(root, reason, err)
   end
 end
 
-function Service:nearest_marker_root(directory)
+---Look for Git markers on a worker. Rows find their repository after the scan ends.
+---Returns false when no worker can take the scan.
+function Service:scan_markers(paths)
+  local key = common.path_compare_key(paths[1])
+  if self.marker_scans[key] then return true end
+  local scan = {}
+  self.marker_scans[key] = scan
+  scan.job = self.marker_scan(paths, function(found)
+    if self.closed or self.marker_scans[key] ~= scan then return end
+    self.marker_scans[key] = nil
+    -- A failed scan retries like a folder without a marker.
+    found = found or {}
+    local now = self.clock()
+    for index, path in ipairs(paths) do
+      local path_key = common.path_compare_key(path)
+      if found[index] then
+        self.marker_cache[path_key] = { path = path, root = path }
+      else
+        self.marker_cache[path_key] = { path = path, retry_at = now + NEGATIVE_MARKER_RETRY }
+      end
+    end
+    -- Rows that missed while the scan ran can find their repository now.
+    self:invalidate_lookups()
+    self.publish(paths[1])
+  end)
+  if not scan.job then
+    self.marker_scans[key] = nil
+    return false
+  end
+  return true
+end
+
+function Service:nearest_marker_root(directory, probe_here)
   local current = directory
   local visited = {}
   local root
   local now = self.clock()
+  -- Folders without a cached answer. A nested repository can be in any of them.
+  -- A Machine's folders are not on this PC, so a local worker cannot read them.
+  local unknown = self.marker_scan and not probe_here
+    and not require("core.fs").on_machine(directory) and {} or nil
   while current do
     local key = common.path_compare_key(current)
     if not key then break end
@@ -160,7 +215,9 @@ function Service:nearest_marker_root(directory)
         cached = nil
       end
     end
-    if not cached then
+    if not cached and unknown then
+      unknown[#unknown + 1] = current
+    elseif not cached then
       local ok, exists = pcall(self.marker_probe, current)
       if ok and exists then root = current end
       self.marker_cache[key] = {
@@ -171,6 +228,10 @@ function Service:nearest_marker_root(directory)
       if root then break end
     end
     current = parent_directory(current)
+  end
+  if unknown and #unknown > 0 then
+    if self:scan_markers(unknown) then return nil end
+    return self:nearest_marker_root(directory, true)
   end
   for _, item in ipairs(visited) do
     if root then
@@ -226,6 +287,7 @@ function Service:invalidate_discovery(path, whole_subtree)
       self.aliases[key] = nil
     end
     self.marker_cache = {}
+    self:cancel_marker_scans()
     return
   end
   path = common.normalize_path(path) or path
@@ -249,6 +311,15 @@ function Service:invalidate_discovery(path, whole_subtree)
       self.aliases[key] = nil
     end
   end
+  -- A scan that started before the change can miss the new marker.
+  self:cancel_marker_scans()
+end
+
+function Service:cancel_marker_scans()
+  for _, scan in pairs(self.marker_scans) do
+    if scan.job and scan.job.cancel then pcall(scan.job.cancel, scan.job) end
+  end
+  self.marker_scans = {}
 end
 
 function Service:retry_failed_discovery(path)
@@ -431,6 +502,7 @@ function Service:is_settled(path, is_directory)
   if self.closed or not path then return true end
   local state = self:state_for(path, is_directory)
   if not state then
+    if next(self.marker_scans) then return false end
     local hint = self.root_for_path(path, is_directory)
     if hint and self.use_marker_scan then
       local cached = self.marker_cache[common.path_compare_key(hint)]
@@ -550,6 +622,7 @@ function Service:close()
   for key, state in pairs(self.repositories) do self:release(key, state) end
   self.aliases = {}
   self.marker_cache = {}
+  self:cancel_marker_scans()
   for owner in pairs(self.subscribers) do
     if type(owner) == "table" then rawset(owner, self.subscription_callback_key, nil) end
   end

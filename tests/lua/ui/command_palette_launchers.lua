@@ -359,15 +359,20 @@ test.describe("Command Palette View launchers", function()
 
     local picker = core.fuzzy_searcher_active_view
     set_query(picker, context.folder)
+    -- The typed folder's row shows after a worker reads it.
     local selected
-    for index, result in ipairs(picker.results) do
-      local path = result.abs_path or result.file or result.path
-      if path and common.path_equals(path, context.folder) then
-        selected = result
-        picker.selected = index
-        break
+    local deadline = system.get_time() + 5
+    repeat
+      for index, result in ipairs(picker.results) do
+        local path = result.abs_path or result.file or result.path
+        if path and common.path_equals(path, context.folder) then
+          selected = result
+          picker.selected = index
+          break
+        end
       end
-    end
+      if not selected then coroutine.yield(0.02) end
+    until selected or system.get_time() > deadline
     test.not_nil(selected)
     picker:confirm(false)
 

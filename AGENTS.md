@@ -864,6 +864,10 @@ Send a copy of the input, then check its revision before applying results on the
 Do not read live Editor or UI objects from a worker.
 The pool returns results to the UI during its budgeted frame drain.
 
+A busy disk or a virus scan can make one file call take seconds. Do not open, read, write or stat files on the UI thread in code that runs while the user works.
+Use the `file_info`, `file_read`, `storage_load` and `storage_save` workers. The Session Log writes on its own thread.
+The fuzzy navigate scenarios allow 0 UI-thread file calls. See [UI-thread blocking calls](tools/SCENARIOS.md#ui-thread-blocking-calls).
+
 Starting a child process can block for hundreds of milliseconds on Windows.
 Do not call `process.start` on the UI thread for recurring work.
 Submit a `process_capture` job instead. Git uses `worker_pool.named("git")` through `plugins.git.backend.run_git`.
