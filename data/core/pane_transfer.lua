@@ -48,10 +48,12 @@ local function machine_refusal(views, to)
   local target, root = machine_project.parse(to)
   if source ~= target then return "a Pane cannot move between Machines" end
   if not target then return nil end
+  -- A Text View names its Buffer's file, an Image View its image and a File Tree its folder.
   for _, view in ipairs(views) do
-    local path = view.buffer and view.buffer.abs_filename
-    if path and not (common.path_equals(path, root) or common.path_belongs_to(path, root)) then
-      return "the target Project cannot reach " .. path
+    for _, path in pairs { view.buffer and view.buffer.abs_filename or nil, view.path, view.root_dir } do
+      if type(path) == "string" and not (common.path_equals(path, root) or common.path_belongs_to(path, root)) then
+        return "the target Project cannot reach " .. path
+      end
     end
   end
 end

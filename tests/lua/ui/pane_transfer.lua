@@ -94,6 +94,17 @@ test.describe("Pane transfer", function()
       pane = panes.create { factory = function() return Editor(buffer) end }
       test.not_ok(perform { action = "export", pane = pane.id, to = machine .. "C:/b", transfer = transfer_id .. "-file",
         target = { mode = "group", side = "after" } })
+
+      -- An Image View and a File Tree also name files.
+      local image = USERDIR .. PATHSEP .. "pane-transfer.png"
+      assert(canvas.new(2, 2, { 0, 0, 0, 255 }, true):save_image(image))
+      pane = panes.create { factory = function() return require("core.imageview")(image) end }
+      test.not_ok(perform { action = "export", pane = pane.id, to = machine .. "C:/b", transfer = transfer_id .. "-image",
+        target = { mode = "group", side = "after" } })
+      pane = panes.create { factory = function() return require("plugins.filetree").View { root = USERDIR } end }
+      test.not_ok(perform { action = "export", pane = pane.id, to = machine .. "C:/b", transfer = transfer_id .. "-tree",
+        target = { mode = "group", side = "after" } })
+      os.remove(image)
       test.equal(#sent, 1)
     end)
     machine_project.current = current

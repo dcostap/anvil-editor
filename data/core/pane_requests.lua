@@ -102,7 +102,7 @@ local schemas = {
   project_search = {from = true, id = true, mode = true, query = true, case_sensitive = true, limit = true},
   project_results = {source = true, id = true, rows = true, more = true},
   search = {text = true},
-  open_file = {file = true, line = true, col = true},
+  open_file = {file = true, line = true, col = true, filetree = true},
 }
 for _, schema in pairs(schemas) do schema.action = true end
 
@@ -149,7 +149,8 @@ local function validate(request)
   if request.action == "project_results" and (type(request.rows) ~= "table"
     or request.more ~= nil and type(request.more) ~= "boolean") then return nil, "invalid search rows" end
   if request.action == "search" and type(request.text) ~= "string" then return nil, "invalid search text" end
-  if request.action == "open_file" and (not identifier(request.file) or not common.is_absolute_path(request.file)) then
+  if request.action == "open_file" and (not identifier(request.file) or not common.is_absolute_path(request.file)
+    or request.filetree ~= nil and request.filetree ~= true) then
     return nil, "invalid file path"
   end
   if request.action == "drag" and request.phase ~= "move" and request.phase ~= "drop"
@@ -196,6 +197,10 @@ local function execute(request, x, y)
   end
   -- A file that another Project's File Search chose. It opens as a result of this Project's own search does.
   if action == "open_file" then
+    if request.filetree then
+      return require("core.command").perform_with_context("filetree:open_at_current_path",
+        {placement = "current", source_pane = panes.active()}, request.file)
+    end
     local view, err = core.open_file(request.file,
       {placement = "current", line = request.line, col = request.col, focus = true})
     return view and true, err

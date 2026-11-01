@@ -179,6 +179,18 @@ test.describe("Project File Search in other Projects", function()
     test.ok(common.path_equals(opens[1].request.file, other_file))
   end)
 
+  test.it("shows another Project's file in that Project's File Tree", function(context)
+    local picker, other_file = open_with_other_rows(context)
+    picker.selected = file_index(picker.results, other_file)
+    test.ok(picker:open_selected_in_filetree())
+    local opens = sent(context, "open_file")
+    test.equal(#opens, 1)
+    test.equal(opens[1].route, "select")
+    test.ok(common.path_equals(opens[1].path, context.other))
+    test.ok(common.path_equals(opens[1].request.file, other_file))
+    test.equal(opens[1].request.filetree, true)
+  end)
+
   test.it("answers another Project's File Search with its best files", function(context)
     test.ok(pane_requests.perform(serialize {
       action = "project_search", from = context.other, id = 7, mode = "files", query = "alpha",
@@ -241,6 +253,14 @@ test.describe("Project File Search in other Projects", function()
     end), "the preview did not settle")
     test.is_nil(picker.preview_view and picker.preview_view.buffer, "the preview read this PC's file")
 
+    -- Explorer shows only this PC's folders.
+    local show_in_folder, shown = common.show_in_folder, nil
+    common.show_in_folder = function(path) shown = path return true end
+    local revealed = picker:reveal_selected_in_explorer()
+    common.show_in_folder = show_in_folder
+    test.not_ok(revealed)
+    test.is_nil(shown, "Explorer showed this PC's copy")
+
     picker:open_focused_preview(false)
     local opens = sent(context, "open_file")
     test.equal(#opens, 1)
@@ -252,6 +272,11 @@ test.describe("Project File Search in other Projects", function()
     local view = core.active_view
     test.ok(view.buffer and common.path_equals(view.buffer.abs_filename, context.local_file))
     test.equal(select(1, view.buffer:get_selection()), 2)
+
+    test.ok(pane_requests.perform(serialize { action = "open_file", file = context.local_file, filetree = true }))
+    local tree = core.active_view
+    test.ok(tree:extends(require("plugins.filetree").View), "no File Tree opened")
+    test.ok(common.path_equals(tree.current_dir, context.own), tree.current_dir)
   end)
 
   local function own_file_rows(picker)

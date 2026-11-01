@@ -214,11 +214,12 @@ function other.receive(request)
   return true
 end
 
--- Selects the row's Project and opens its file there.
-function other.open(result)
-  core.log_quiet("Other Project search: opening %s in %s", result.abs_path, result.other_project)
-  return send("select", result.other_project,
-    {action = "open_file", file = result.abs_path, line = result.line, col = result.col})
+-- Selects the row's Project and opens its file there. With `filetree`, that Project shows the file in its File Tree.
+function other.open(result, filetree)
+  core.log_quiet("Other Project search: opening %s in %s%s", result.abs_path, result.other_project,
+    filetree and " (File Tree)" or "")
+  return send("select", result.other_project, {action = "open_file", file = result.abs_path,
+    line = result.line, col = result.col, filetree = filetree or nil})
 end
 
 return other

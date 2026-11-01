@@ -87,6 +87,9 @@ test.describe("File Tree on a Machine", function()
 
     write_file(machine_copy(context, context.project .. PATHSEP .. "new.md"), "New\n")
     test.ok(wait_until(function() return text(tree):find("new.md", 1, true) ~= nil end), text(tree))
+    -- A file command, such as New Directory, reports its Machine path to the File Tree.
+    local synced, err = pcall(tree.sync_path, tree, context.project .. PATHSEP .. "new.md", "command")
+    test.ok(synced, err)
 
     -- Up Directory stays in the Machine's Project. The folder above it is a folder of this PC.
     test.ok(tree:change_directory(context.project .. PATHSEP .. "sub"))

@@ -264,6 +264,7 @@ Without other rows, this Project's list is not cut.
 File Search uses the Project's file index. Text Search runs ripgrep in the Project's roots and searches its Terminal Sessions.
 A Terminal row carries the lines near its match for the preview, at most 4 KB.
 The picker ignores answers to an earlier query. Opening a file row sends `open_file` to its Project through the select route. A Terminal row sends `terminal_find`.
+Open in File Tree on a file row sends `open_file` with `filetree = true`. That Project shows the file in its own File Tree. Show in Explorer refuses a file on a Machine, because Explorer shows only this PC's folders.
 This Project's "No matches" status is hidden while other Projects show rows.
 Run `ui/fuzzy_searcher_other_projects.lua`, `ui/fuzzy_searcher_terminals.lua` and the `launch-file-search` shell probe after changes. The probe reports the answer times of both modes.
 Each group has a divider and a small, dim header. Check the `fuzzy-picker-other-projects` and `fuzzy-picker-other-text` render scenarios after visual changes.
@@ -632,6 +633,7 @@ On a Machine, `core.project_files` fills its normal entry from `files.list`, `fi
 After an error, the loop scans the Project again. A scan that fails, for example while the Machine is away, runs again each second, because only a scan gives the loop its sequence.
 `fs.on_machine(path)` tells if a path names a Machine file. `project_files.info(path)` is `system.get_file_info` for local paths. For a Machine file it gives only `{type}` from the file list, without a wait. The file list leaves out ignored files, so `info` then reads the folder listings of `core.machine_folders`.
 `core.text_search.start` starts ripgrep like `core.process_stream.start`. In a Project on a Machine, it gives a stream with the same methods that reads from `search.read`. Text Search uses it for each ripgrep run.
+The Machine stream stops asking for output while 2 MiB waits unread. `read_until` reports the bytes that it takes through the stream's `ack`, as for a local process. The stream then asks again. The server ends a search after 30 seconds without a read.
 A stream that fails, such as while the Machine is away, makes Text Search show "Text Search failed", not "No matches". The next query searches again.
 File Search uses `project_files.info` for its path checks. On a Machine, it skips the local probe before a preview, and its create row makes the file through `core.file_ops`. `core.open_file` opens a Machine file as text.
 A line number in a File Search query does not filter a Machine's files, because their lines are not counted here. With Include Ignored Files, a path query searches the Machine's file list, not this PC's folders or Everything.
@@ -644,7 +646,7 @@ A Client waits on `files.changes` once for each Project. A new wait ends the ear
 On a Machine the File Tree applies its changes in a thread. It then lists the changed folders again (`machine_folders.reload`), without a wait for the change notices.
 While the changes run, the tree takes no edits and no second apply, because the new list replaces its text.
 A restored File Tree on a Machine waits for the listings of its saved folders, then restores them. No metadata tells that a saved folder is gone, so a gone root shows an empty tree. The tree takes no edits until the restore ends.
-Up Directory and other folder changes stay in the Machine's Project. The folder above it is a folder of this PC.
+Up Directory and other folder changes stay in the Machine's Project. The folder above it is a folder of this PC. `sync_path` does not resolve a Machine path on this PC.
 Rename (`editor:rename`) moves a Machine file with `file_ops.move`, then saves the Buffer's unsaved text. Delete and New Directory also use `core.file_ops`. New Directory starts a relative name at the Project.
 Save As of a new Buffer checks the target with `file_ops.info`, so it asks before it writes over a Machine file. A File Tree delete that cannot reach the Machine shows an error and keeps the edit.
 `common.path_suggest` lists Machine folders through `common.machine_listing`, which `fs.use_machine` sets. The listings arrive later, so the first suggestions can be empty.
@@ -653,13 +655,14 @@ The link goes at the selection of the paste. An edit, a close or a new note name
 Live Preview binds no vault index on a Machine, and link completion offers no note names. Both wait for the Index service. The vault index also ignores the load and rename of a Machine Buffer.
 An Image View of a Machine file reads its bytes through `core.fs` and loads them with `canvas.load_image_data`. A restored Image View loads the same way, then applies its saved pan. Autoreload does not watch Machine files, and focus does not change the process's folder to a Machine Project.
 An image in a Machine note loads in a thread (`markdown/images.lua`). It finds the path with Machine stats, in the same order as locally, then reads the bytes. Its subscribers hear when it is ready. A Machine file has no local file ID, so the Git changes baseline keeps none.
+A Machine image has no local file to check, and a Machine note has no vault index. So `markdown/images.lua` subscribes to the Project's file changes. A change loads each failed Machine image again, and each image whose file changed. A reconnect loads all Machine images again. Their subscribers hear the result.
 Run `runtime/machine_files.lua`, `ui/machine_file_search.lua` and `ui/machine_filetree.lua` after changes.
 
 A Project on another Machine has a key: `anvil-machine://<Machine ID>/<path on the Machine>` (`core.machine_project`). The Sidebar, Shell App State, recent Projects and Workspaces use the key as the Project's path. Windows file functions reject it.
 The shell uses the key as the Project's identity and passes it to the Project process with `--project`. That process connects with `fs.use_machine`: to this PC's own server when the ID is its own, or else to the paired Machine's record in `USERDIR/machines`. Inside the process, paths are native paths.
 Code that names this Project to the Sidebar or to other Projects uses `machine_project.root_key(path)`: Workspaces, Untitled recovery, recent Projects, Numbered Panes, Sidebar Tab drags, Pane transfers and Other Project search. Pane requests accept a key in their Project fields. Path normalization would change a key's separators, so Path Search and other code do not normalize a key.
 `core.open_project_in_same_window` and `core.open_project_in_new_window` give a folder of this process's Machine its key (`machine_project.folder_key`).
-A Pane moves only between Projects of the same Machine, or between Projects of this PC. On a Machine, the target Project must hold each file of the Pane.
+A Pane moves only between Projects of the same Machine, or between Projects of this PC. On a Machine, the target Project must hold each file of the Pane: each Buffer's file, each Image View's image and each File Tree's folder.
 A Project on a Machine adds only its own folders as Project Paths, so they are Vendored. External folders are refused.
 `machine:open_project` lists the paired Machines, then the chosen Machine's Projects (`projects.list`).
 A Project on a Machine skips its Project module, Git, Git file changes and the symbol index until their services exist. The guard would show an error for each.

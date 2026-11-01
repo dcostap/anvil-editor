@@ -811,7 +811,8 @@ end
 function FileTreeView:sync_path(path, reason)
   if type(path) ~= "string" or path == "" then return false end
   local expanded = common.home_expand(path)
-  path = common.normalize_path(system.absolute_path(expanded) or expanded)
+  -- A Machine path has no local file to resolve.
+  path = common.normalize_path(not fs.on_machine(expanded) and system.absolute_path(expanded) or expanded)
   if not in_project(path, self.root_dir) then
     local root = core.root_project and core.root_project()
     local resolved = root and common.path_equals(self.root_dir, root.path)

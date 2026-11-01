@@ -8,24 +8,40 @@ local text_search = {}
 local MachineStream = {}
 MachineStream.__index = MachineStream
 
+-- Unread output that a stream keeps before it stops asking the Machine for more.
+local WINDOW = 2 * 1024 * 1024
+
 -- Reads from the Machine until the search ends. Each reply carries the output that the Machine has.
+-- `read_until` reports the bytes that it takes through `ack`, as it does for a local process.
 local function machine_stream(args, cwd)
   local self = setmetatable({done = false, cancelled = false, buffer = "", pos = 1, parts = {},
-    last_output_time = system.get_time()}, MachineStream)
+    last_output_time = system.get_time(), unread = 0}, MachineStream)
   local function finish(code, err)
     if self.done then return end
     self.done, self.exit_code, self.error = true, code, err
   end
-  local function read()
+  local read
+  self.ack = {
+    push = function(_, bytes)
+      self.unread = self.unread - bytes
+      if self.paused and self.unread < WINDOW then
+        self.paused = false
+        read()
+      end
+    end,
+    clear = function() end,
+  }
+  read = function()
     fs.machine:request("search.read", {id = self.id}, nil, function(err, result, bytes)
       if self.cancelled then return end
       if err then return finish(nil, err.message or err.code) end
       if bytes and bytes ~= "" then
         self.parts[#self.parts + 1] = bytes
+        self.unread = self.unread + #bytes
         self.last_output_time = system.get_time()
       end
       if result.done then return finish(result.code, result.error) end
-      read()
+      if self.unread >= WINDOW then self.paused = true else read() end
     end)
   end
   fs.machine:request("search.start", {args = args, cwd = cwd}, nil, function(err, result)

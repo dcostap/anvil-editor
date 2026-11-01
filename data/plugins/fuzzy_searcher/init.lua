@@ -7759,12 +7759,25 @@ end
 function FSView:reveal_selected_in_explorer()
   local path = self:selected_file_path()
   if not path then return end
+  -- Explorer shows only this PC's folders.
+  local r = self:selected_result()
+  if require("core.fs").on_machine(path)
+    or r.other_project and require("core.machine_project").is_key(r.other_project) then
+    core.error("Explorer cannot show a file on another Machine: %s", path)
+    return false
+  end
 
   self:close()
   command.perform("editor:reveal_active_file_in_explorer", path)
 end
 
 function FSView:open_selected_in_filetree()
+  local r = self:selected_result()
+  -- The row's own Project shows it, from its own files.
+  if r and r.other_project and not r.terminal then
+    self:close()
+    return fuzzy_searcher.other_projects.open(r, true)
+  end
   local path = self:selected_file_path()
   local info = path and project_files.info(path)
   if not info or info.type ~= "file" then return false end

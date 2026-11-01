@@ -87,11 +87,18 @@ test.describe("Project files on a Machine", function()
     local notices = 0
     images.subscribe(found, context, function() notices = notices + 1 end)
     wait_until(function() return found.status ~= "loading" and missing.status ~= "loading" end, "The images did not load")
-    images.clear_assets()
     test.equal(found.status, "ready", found.errmsg)
     test.same({ found.image:get_size() }, { 8, 6 })
     test.equal(notices, 1)
     test.equal(missing.status, "error")
+
+    -- A missing image loads when it appears on the Machine, and its note hears it.
+    local heard = false
+    images.subscribe(missing, context, function() heard = missing.status == "ready" end)
+    wait_until(function() return project_files.watch_status(context.project).running end, "The watcher did not start")
+    test.ok(canvas.new(4, 3, { 40, 100, 180, 255 }, true):save_image(machine_copy(context, folder .. PATHSEP .. "gone.png")))
+    wait_until(function() return heard end, "The missing image did not load after it appeared")
+    images.clear_assets()
   end)
 
   test.it("gets the Machine's changes again after the Machine comes back", function(context)
@@ -108,6 +115,31 @@ test.describe("Project files on a Machine", function()
     write_file(machine_copy(context, new), "After\n")
     wait_until(function() return project_files.contains(context.project, new, "file") end,
       "The Project's list did not get the new file")
+  end)
+
+  test.it("keeps a bounded amount of unread Text Search output, and gives all of it to its reader", function(context)
+    local line = "word " .. string.rep("x", 58) .. "\n"
+    write_file(machine_copy(context, context.project .. PATHSEP .. "many.txt"), string.rep(line, 100000))
+    local stream = require("core.text_search").start(
+      { "rg", "--no-config", "--with-filename", "--line-number", "-F", "-e", "word", "--", "." },
+      { cwd = context.project })
+    local function unread()
+      local bytes = 0
+      for _, part in ipairs(stream.parts) do bytes = bytes + #part end
+      return bytes
+    end
+    wait_until(function() return unread() > 0 end, "The search sent no output")
+    -- The output is about 7 MiB. A stream that nobody reads stops asking the Machine for more.
+    coroutine.yield(2)
+    test.not_ok(stream.done, "The unread search took all its output")
+    test.ok(unread() <= 3 * 1024 * 1024, "The unread search kept " .. unread() .. " bytes")
+    local lines = 0
+    wait_until(function()
+      while stream:read_line() do lines = lines + 1 end
+      return stream.done and #stream.parts == 0
+    end, "The search did not end")
+    while stream:read_line() do lines = lines + 1 end
+    test.equal(lines, 100000)
   end)
 
   test.it("reports a change on the Machine to subscribers", function(context)

@@ -513,10 +513,40 @@ local function apply_loaded(entry, loaded)
   entry.size = info and info.size
 end
 
+-- A Machine image has no local file to check. The Project's file watcher reports the Machine's changes,
+-- and a reconnect can hide changes. Then a failed image, or an image whose file changed, loads again.
+local machine_roots = {}
+local refresh_asset
+
+local function retry_machine_images(changed)
+  for _, entry in pairs(assets) do
+    local again = entry.machine and entry.status ~= "loading" and entry.machine_opts
+      and (entry.status == "error" or not changed)
+    if not again and changed and entry.machine and entry.path and entry.status ~= "loading" then
+      for path in pairs(changed) do
+        if common.path_equals(path, entry.path) then again = true break end
+      end
+    end
+    if again then refresh_asset(entry, entry.url, entry.machine_opts) end
+  end
+end
+
+local function watch_machine_root(root)
+  if not root or machine_roots[root] then return end
+  machine_roots[root] = true
+  require("core.project_files").subscribe(root, "markdown-images", function(paths) retry_machine_images(paths) end)
+end
+
+do
+  local fs = require "core.fs"
+  fs.on_reconnect(function() retry_machine_images(nil) end)
+end
+
 -- Each check on a Machine waits for a reply, so the asset loads in a thread. Its subscribers
 -- hear when it is ready.
 local function load_from_machine(entry, url, opts)
-  entry.status, entry.machine = "loading", true
+  entry.status, entry.machine, entry.machine_opts = "loading", true, opts
+  watch_machine_root(opts.project_root)
   require("core").add_thread(function()
     local files = machine_files(opts.project_root)
     local path = images.resolve_local_path(url, opts, files)
@@ -538,7 +568,7 @@ local function load_from_machine(entry, url, opts)
   return entry
 end
 
-local function refresh_asset(entry, url, opts)
+refresh_asset = function(entry, url, opts)
   perf_frame_add("markdown_image_asset_refreshes", 1)
   entry.alt = opts.alt
   entry.url = url
@@ -668,6 +698,8 @@ function images.unsubscribe(entry, owner)
 end
 
 function images.clear_assets()
+  for root in pairs(machine_roots) do require("core.project_files").unsubscribe(root, "markdown-images") end
+  machine_roots = {}
   assets = {}
   asset_request_keys = {}
   asset_clock = 0
