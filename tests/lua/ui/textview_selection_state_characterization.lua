@@ -236,32 +236,36 @@ test.describe("Text View Selection State edit characterization", function()
     test.same(selection(main), original)
   end)
 
-  test.it("internal paste inserts every normal clipboard payload at one caret when counts differ", function(context)
+  test.it("paste separates copied selections with newlines at one caret", function(context)
+    local _, source = new_shared_views(context, "X\nY")
+    core.set_active_view(source)
+    set_view_selections(source, {
+      1, 1, 1, 2,
+      2, 1, 2, 2,
+    }, 2)
+    test.ok(command.perform("core:copy"))
+
     local buffer, main = new_shared_views(context, "ab")
     core.set_active_view(main)
     set_view_selection(main, 1, 2, 1, 2)
-    core.cursor_clipboard = {
-      [1] = "X",
-      [2] = "Y",
-      full = "X\nY",
-    }
-    core.cursor_clipboard_whole_line = {
-      [1] = false,
-      [2] = false,
-    }
-    system.set_clipboard("X\nY")
-    local changes = 0
-    function buffer:on_text_change()
-      changes = changes + 1
-    end
 
     test.ok(command.perform("core:paste"))
 
-    test.equal(text(buffer), "aXYb\n")
-    test.equal(changes, 1)
+    test.equal(text(buffer), "aX\nYb\n")
     test.same(selection(main), {
       1, 3, 1, 3,
-      1, 4, 1, 4,
+      2, 2, 2, 2,
+    })
+
+    test.ok(command.perform("core:undo"))
+    test.equal(text(buffer), "ab\n")
+    test.same(selection(main), { 1, 2, 1, 2 })
+
+    test.ok(command.perform("core:redo"))
+    test.equal(text(buffer), "aX\nYb\n")
+    test.same(selection(main), {
+      1, 3, 1, 3,
+      2, 2, 2, 2,
     })
   end)
 

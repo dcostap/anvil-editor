@@ -1111,7 +1111,8 @@ local function paste_all_normal_clipboards(buffer)
   local edits, final_by_idx = {}, {}
   for idx, line1, col1, line2, col2 in buffer:get_selections(true) do
     local text, final_offsets = "", {}
-    for _, payload in ipairs(payloads) do
+    for payload_idx, payload in ipairs(payloads) do
+      if payload_idx > 1 then text = text .. "\n" end
       text = text .. payload
       final_offsets[#final_offsets + 1] = #text
     end
