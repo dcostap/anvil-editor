@@ -71,14 +71,16 @@ function files.new(server)
     return state
   end
 
-  -- `files.list {root}` gives the Project's files, then its folders, separated by NUL bytes.
-  -- `files` counts the files. `changes` is the sequence to pass to `files.changes`.
+  -- `files.list {root, ignored}` gives the Project's files, then its folders, separated by NUL bytes.
+  -- `files` counts the files. `changes` is the sequence to pass to `files.changes`. `ignored = true` also
+  -- lists the files that the ignore rules hide.
   local function list(client, id, params)
     local root = server.project_root(params.root)
     if not root then return server.fail(client, id, "not_a_project", "The root is not a Project of this Machine") end
     local state = root_state(root)
     core.add_thread(function()
-      local found, err, directories = project_files.list(state.disk_root)
+      local found, err, directories = project_files.list(state.disk_root,
+        {include_ignored = params.ignored == true, refresh = params.ignored == true})
       if client.dead then return end
       if not found then return server.fail(client, id, "list_failed", tostring(err)) end
       local names = {}

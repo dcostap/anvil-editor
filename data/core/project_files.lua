@@ -1,6 +1,7 @@
 local core = require "core"
 local common = require "core.common"
 local DirWatch = require "core.dirwatch"
+local fs = require "core.fs"
 local process_stream = require "core.process_stream"
 local worker_pool = require "core.worker_pool"
 
@@ -155,7 +156,27 @@ local function scan_directories(root, ignored_paths, hidden_paths)
   return directories, searchable, pruned_ignored
 end
 
+-- A Project on a Machine gets the Machine's scan. Its folders are all searchable: the Machine watches them.
+local function machine_scan(root, include_ignored)
+  local err, names, folders, changes = fs.wait(fs.list, root, include_ignored)
+  if err then return nil, err end
+  local files = {}
+  for i, relative in ipairs(names) do
+    files[i] = {relative = relative, path = common.normalize_path(root .. PATHSEP .. relative)}
+  end
+  local directories, searchable = {root}, {[common.path_compare_key(root)] = root}
+  for _, relative in ipairs(folders) do
+    local path = common.normalize_path(root .. PATHSEP .. relative)
+    directories[#directories + 1] = path
+    searchable[common.path_compare_key(path)] = path
+  end
+  cooperative_sort(files, function(a, b) return a.relative < b.relative end)
+  cooperative_sort(directories, function(a, b) return a < b end)
+  return files, nil, directories, searchable, changes
+end
+
 local function scan(root, include_ignored)
+  if fs.machine then return machine_scan(root, include_ignored) end
   local stream, start_error = process_stream.start(project_files.scan_command(include_ignored), {
     cwd = root,
     stderr = true,
@@ -270,7 +291,7 @@ end
 
 local function sync_watches(entry)
   local watcher = entry.watcher
-  if not watcher then return end
+  if not watcher or fs.machine then return end
   local mode = watcher.monitor and watcher.monitor.mode and watcher.monitor:mode()
   if mode == "single" then return end
   entry.watched_dirs = entry.watched_dirs or {}
@@ -305,8 +326,9 @@ end
 local function scan_entry(entry)
   local root = entry.root
   entry.phase = "scanning"
-  local files, err, directories, searchable_directories = scan(root, entry.include_ignored)
+  local files, err, directories, searchable_directories, changes = scan(root, entry.include_ignored)
   if files then
+    entry.machine_changes = changes
     entry.phase = "indexing"
     local snapshot = { root = root, files = files }
     index_paths(snapshot, directories, searchable_directories)
@@ -380,7 +402,17 @@ function project_files.stat_paths(paths)
   local state = cooperative_state()
   local function flush()
     if #batch == 0 then return true end
-    local chunks, err = run_file_worker { operation = "stat", paths = batch }
+    local chunks, err
+    if fs.machine then
+      local found
+      err, found = fs.wait(fs.stat, batch)
+      if found then
+        chunks = {{}}
+        for i, path in ipairs(batch) do chunks[1][path] = found[i] end
+      end
+    else
+      chunks, err = run_file_worker { operation = "stat", paths = batch }
+    end
     if not chunks then return nil, err end
     for _, chunk in ipairs(chunks) do
       for path, info in pairs(chunk) do result[path] = info end
@@ -630,8 +662,45 @@ local function request_watch_rescan(entry, generation)
   end)
 end
 
+-- On a Machine, the Machine watches the folders. Its change notices go through the same batches as local ones.
+-- After an error, such as a disconnect, the Project scans again, because the Client missed notices.
+local function start_machine_watcher(entry)
+  local watcher = {}
+  entry.watcher = watcher
+  entry.pending_watch_paths = {}
+  entry.pending_watch_rescan = false
+  entry.watch_rescan_waiting = false
+  entry.watch_ignored_content_events = 0
+  entry.watch_generation = entry.watch_generation + 1
+  local generation = entry.watch_generation
+  core.add_thread(function()
+    while entry.watcher == watcher and entry.watch_generation == generation do
+      while entry.watcher == watcher and entry.machine_changes == nil do coroutine.yield(0.05) end
+      if entry.watcher ~= watcher then return end
+      local since = entry.machine_changes
+      local err, result = fs.wait(fs.changes, entry.root, since)
+      if entry.watcher ~= watcher or entry.watch_generation ~= generation then return end
+      if err or result.reset then
+        core.log_quiet("Project watcher on a Machine scans again: root=%s error=%s", entry.root, tostring(err))
+        if err then coroutine.yield(1) end
+        entry.machine_changes = nil
+        entry.pending_watch_rescan = true
+      else
+        if entry.machine_changes == since then entry.machine_changes = result.sequence end
+        for _, relative in ipairs(result.paths or {}) do
+          local path = common.normalize_path(entry.root .. PATHSEP .. relative)
+          entry.pending_watch_paths[path] = {precise = true, kind = "unknown"}
+        end
+      end
+      start_watch_processor(entry)
+    end
+  end)
+  core.log_quiet("Project file watcher on a Machine started for %s", tostring(entry.root))
+end
+
 start_watcher = function(entry)
   if entry.watcher or entry.include_ignored then return end
+  if fs.machine then return start_machine_watcher(entry) end
   local ok, watcher = pcall(DirWatch)
   if not ok then
     core.log_quiet("Project file watcher unavailable for %s: %s", tostring(entry.root), tostring(watcher))
@@ -691,6 +760,12 @@ end
 local function stop_watcher(entry)
   local watcher = entry.watcher
   if not watcher then return end
+  if fs.machine then
+    entry.watcher = nil
+    entry.watch_generation = entry.watch_generation + 1
+    entry.watch_processor_running = false
+    return
+  end
   entry.watcher = nil
   entry.watch_generation = entry.watch_generation + 1
   entry.watch_processor_running = false
