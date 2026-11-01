@@ -579,6 +579,8 @@ Each service is a module that returns its methods, such as `core.serve_files`. T
 `files.list {root}` gives the Project's scan from `core.project_files`: files, then folders, relative to the root and separated by NUL bytes. `files` counts the files. Ignore rules apply as in a local Project.
 The first list of a root starts its folder watcher. `files.changes {root, since}` waits until a change after the sequence `since`, then gives the changed relative paths. `reset = true` means: list again. The server keeps the last 64 change batches.
 `files.stat {paths}` gives `{type, size, modified}` or false for each path. `files.list_dir {path}` gives the entries of one folder. Both send JSON in the bytes.
+`search.start {args, cwd}` runs the server's own ripgrep, not `args[1]`. `core.serve_search` accepts only the options on its list, and each path must be in a Project. Add an option there only when it cannot run programs or write files.
+`search.read {id}` waits for output and gives up to 1 MiB of records in the bytes. `done = true` gives ripgrep's exit `code`. A search ends after `search.cancel`, when its Client disconnects, or after 30 seconds without a read.
 Run `runtime/machine_serve.lua` and the `launch-machine-server` shell probe after changes.
 It listens on loopback only. At start it writes `USERDIR/machine/server.json` with its port, token, process ID, Machine ID and epoch. The folder is private.
 The Machine ID is in `USERDIR/machine/id` and stays across restarts. Each start gets a new epoch and a new token.
@@ -610,6 +612,7 @@ It also turns on the Machine guard (`core.machine_guard`). The raw file function
 Worker jobs whose payload names a Project path are refused at submit. Do not send a path that the worker does not read. A new raw function that takes a path needs a wrapper in the guard.
 On a Machine, `core.project_files` fills its normal entry from `files.list`, `files.stat` and a `files.changes` loop. Its subscribers see the same change batches as for a local Project.
 `fs.on_machine(path)` tells if a path names a Machine file. `project_files.info(path)` is `system.get_file_info` for local paths. For a Machine file it gives only `{type}` from the file list, without a wait.
+`core.text_search.start` starts ripgrep like `core.process_stream.start`. In a Project on a Machine, it gives a stream with the same methods that reads from `search.read`. Text Search uses it for each ripgrep run.
 File Search uses `project_files.info` for its path checks. On a Machine, it offers no row that creates a file, and it skips the local probe before a preview. `core.open_file` opens a Machine file as text.
 Run `runtime/machine_files.lua` and `ui/machine_file_search.lua` after changes. The test server's owner is the test process, so a crashed test does not leave a server.
 [The file seam](docs/machines.md#the-file-seam-corefs) lists the Project content sites by feature. Run `runtime/machine_guard.lua` and `runtime/machine_buffer.lua` after changes. The Buffer tests run with the guard on. Test helpers that stand for the Machine keep the raw functions from load time.

@@ -53,6 +53,9 @@ test.describe("File Search on a Machine", function()
     write_file(context.project .. PATHSEP .. "client-only.md", "Client\n")
     write_file(machine_copy(context, context.project .. PATHSEP .. "notes.md"), "Notes\n")
     write_file(machine_copy(context, context.project .. PATHSEP .. "sub" .. PATHSEP .. "plan.md"), "Plan\n")
+    write_file(machine_copy(context, context.project .. PATHSEP .. "sub" .. PATHSEP .. "steps.md"),
+      "one\nfind the needle\n")
+    write_file(context.project .. PATHSEP .. "client-steps.md", "a needle on the Client\n")
     context.projects, context.visited_files = core.projects, core.visited_files
     core.visited_files = {}
     core.projects = { Project(context.project) }
@@ -82,17 +85,42 @@ test.describe("File Search on a Machine", function()
   test.it("finds the Machine's files and opens the chosen file", function(context)
     fuzzy_searcher.open("md")
     local picker = test.not_nil(core.fuzzy_searcher_active_view)
-    test.ok(wait_until(function() return #file_rows(picker) == 2 end),
+    test.ok(wait_until(function() return #file_rows(picker) == 3 end),
       "status=" .. tostring(picker.status) .. " files=" .. table.concat(file_rows(picker), ", "))
-    test.same(file_rows(picker), { "notes.md", "plan.md" })
+    test.same(file_rows(picker), { "notes.md", "plan.md", "steps.md" })
 
     picker.input:set_text("plan")
     test.ok(wait_until(function() return #file_rows(picker) == 1 end), table.concat(file_rows(picker), ", "))
+    test.ok(wait_until(function()
+      local preview = picker.preview_view
+      return preview and preview.buffer and table.concat(preview.buffer.lines) == "Plan\n"
+    end), "The preview did not show the Machine's text")
     test.ok(command.perform("fuzzy:confirm"))
     local plan = context.project .. PATHSEP .. "sub" .. PATHSEP .. "plan.md"
     test.ok(wait_until(function()
       local buffer = core.buffer_registry:find(plan)
       return buffer and not buffer:is_loading() and table.concat(buffer.lines) == "Plan\n"
     end), "The chosen file did not open with the Machine's text")
+  end)
+
+  -- Each query uses a different search path: exact text, fuzzy text, text in the files that match a name, and
+  -- text with a query modifier.
+  test.it("finds the text of the Machine's files", function()
+    for _, query in ipairs({ "#needle", "#find needle", "steps #needle", "#needle sort:name" }) do
+      fuzzy_searcher.open(query)
+      local picker = test.not_nil(core.fuzzy_searcher_active_view)
+      local function lines()
+        local found = {}
+        for _, row in ipairs(picker.results or {}) do
+          if row.kind == "grep" then
+            found[#found + 1] = common.basename(tostring(row.file)) .. ":" .. tostring(row.line) .. ":" .. tostring(row.text)
+          end
+        end
+        return table.concat(found, ", ")
+      end
+      test.ok(wait_until(function() return lines() == "steps.md:2:find the needle" end),
+        query .. ": status=" .. tostring(picker.status) .. " lines=" .. lines())
+      picker:close()
+    end
   end)
 end)

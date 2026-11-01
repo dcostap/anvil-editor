@@ -333,6 +333,32 @@ test.describe("Machine server", function()
     test.equal(call(client, "files.list_dir", {path = context.root}).error.code, "outside_project")
   end)
 
+  test.it("searches a Project's text with ripgrep, and refuses other options and paths outside its Projects", function(context)
+    test.ok(common.mkdirp(context.project .. PATHSEP .. "sub"))
+    write_file(context.project .. PATHSEP .. "sub" .. PATHSEP .. "plan.md", "one\nfind the needle\n")
+    local client = owner(context)
+    local function search(args)
+      local reply = call(client, "search.start", {args = args, cwd = context.project})
+      if reply.error then return nil, reply.error.code end
+      local output = {}
+      repeat
+        local read, bytes = call(client, "search.read", {id = reply.result.id})
+        output[#output + 1] = bytes
+      until read.result.done
+      return table.concat(output)
+    end
+
+    local found = search({"any program", "--line-number", "--column", "--no-heading", "--with-filename", "--color",
+      "never", "-F", "-e", "needle", "."})
+    test.ok(found:find("plan.md:2:10:find the needle", 1, true), found)
+    local _, code = search({"rg", "--pre", "cmd", "-e", "needle", "."})
+    test.equal(code, "invalid_request")
+    _, code = search({"rg", "-e", "needle", "--", context.root .. PATHSEP .. "user"})
+    test.equal(code, "outside_project")
+    _, code = search({"rg", "-e", "needle", ".."})
+    test.equal(code, "outside_project")
+  end)
+
   local function write_sidebar(context, ...)
     local recents = {}
     for i, path in ipairs({...}) do recents[i] = string.format("%q", path) end

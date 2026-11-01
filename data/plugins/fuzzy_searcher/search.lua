@@ -1,10 +1,12 @@
 -- File searches with an explicit source, filter, or order.
 local core = require "core"
 local common = require "core.common"
+local fs = require "core.fs"
 local project_files = require "core.project_files"
 local project_paths = require "core.project_paths"
 local native = require "fuzzy"
 local process = require "core.process"
+local text_search = require "core.text_search"
 local http = require "core.http"
 local git = require "plugins.git.backend"
 local modifiers = require "plugins.fuzzy_searcher.modifiers"
@@ -280,6 +282,34 @@ local function path_candidates(job, spec, visit)
   end
 end
 
+-- In a Project on a Machine, the Machine runs ripgrep (`core.text_search`).
+local function run_on_machine(job, args, cwd, consume)
+  checkpoint(job)
+  local stream = text_search.start(args, { cwd = cwd })
+  job.proc = { terminate = function() stream:cancel() end }
+  local ok, err = pcall(function()
+    while true do
+      checkpoint(job)
+      local line = stream:read_line()
+      if line then
+        consume(line .. "\n")
+      elseif stream.done then
+        break
+      else
+        coroutine.yield(0.004)
+      end
+    end
+  end)
+  job.proc = nil
+  if not ok then
+    stream:cancel()
+    error(err, 0)
+  end
+  if stream.exit_code ~= 0 and stream.exit_code ~= 1 then
+    error(stream.error or ("Search exited with code " .. tostring(stream.exit_code)), 0)
+  end
+end
+
 local function grep_files(job, spec, candidates, visit)
   local batch, bytes = {}, 0
   local function flush()
@@ -309,7 +339,9 @@ local function grep_files(job, spec, candidates, visit)
       args[#args + 1] = path
     end
     local pending = ""
-    run(job, args, nil, function(chunk)
+    local machine = not historical and fs.on_machine(spec.project)
+    local runner = machine and run_on_machine or run
+    runner(job, args, machine and spec.project or nil, function(chunk)
       pending = pending .. chunk
       local first = 1
       while true do

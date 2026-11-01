@@ -10,6 +10,8 @@ local process_stream = {}
 
 local Stream = {}
 Stream.__index = Stream
+-- `core.text_search` reads its Machine streams with the same methods.
+process_stream.Stream = Stream
 
 local channel_sequence = 0
 
@@ -107,7 +109,7 @@ function Stream:read_until(separator)
     self.parts = {}
     -- Acknowledge bytes once they leave the received queue, so one record
     -- longer than the window cannot stall the worker.
-    if not self.done then self.ack:push(#received) end
+    if not self.done and self.ack then self.ack:push(#received) end
     self.buffer = buffer:sub(pos) .. received
     self.pos = 1
   end

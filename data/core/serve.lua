@@ -11,7 +11,7 @@ local net = require "net"
 local core = {threads = {}, background_threads = 0}
 package.loaded.core = core
 local PROTOCOL = 1
-local FEATURES = {"projects.list", "files.list", "files.changes", "files.stat", "files.list_dir", "files.read", "files.write", "files.save_result", "pairing.start", "devices.list", "devices.revoke"}
+local FEATURES = {"projects.list", "files.list", "files.changes", "files.stat", "files.list_dir", "search.start", "search.read", "search.cancel", "files.read", "files.write", "files.save_result", "pairing.start", "devices.list", "devices.revoke"}
 local MAX_CLIENTS, MAX_REQUEST_JSON, MAX_FILE, HELLO_TIMEOUT = 32, 64 * 1024, 16 * 1024 * 1024, 10
 local MAX_SAVES, PAIRING_TIME, PAIRING_ATTEMPTS, MAX_NAME = 1024, 300, 5, 100
 -- A View device only reads. These methods need Full control.
@@ -208,6 +208,17 @@ end
 local function disk_path(path)
   if not test_root then return path end
   return test_root .. PATHSEP .. path:gsub("^(%a):", "%1"):gsub("^[/\\]+", "")
+end
+
+-- The reverse of `disk_path` for text that starts with a disk path, such as a ripgrep record.
+local function machine_path(text)
+  if not test_root then return text end
+  local prefix = test_root .. PATHSEP
+  if text:sub(1, #prefix) ~= prefix then return text end
+  local rest = text:sub(#prefix + 1)
+  if PLATFORM ~= "Windows" then return "/" .. rest end
+  local drive, tail = rest:match("^(%a)([/\\].*)$")
+  return drive and drive .. ":" .. tail or text
 end
 
 -- The Sidebar lists the recent Projects of the user folder's app state, and Scratch first.
@@ -475,8 +486,10 @@ local function start(listed)
     discovery = directory .. PATHSEP .. "server.json", owner_check = system.get_time()}
   server.devices = load_devices(server.devices_path)
   local service_context = {reply = reply, fail = fail, check_path = check_path, disk_path = disk_path,
-    project_root = project_root, log = log}
-  for name, method in pairs(require("core.serve_files").new(service_context)) do services[name] = method end
+    machine_path = machine_path, project_root = project_root, log = log}
+  for _, module in ipairs({"core.serve_files", "core.serve_search"}) do
+    for name, method in pairs(require(module).new(service_context)) do services[name] = method end
+  end
   write_file(server.discovery, json.encode {version = 1, port = port, token = token,
     pid = system.get_process_id(), machine = server.machine, epoch = server.epoch})
   log("Machine server started: port=%d machine=%s epoch=%s projects=%s owner=%s", port, server.machine,

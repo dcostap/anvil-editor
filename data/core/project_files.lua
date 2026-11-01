@@ -159,7 +159,7 @@ end
 -- A Project on a Machine gets the Machine's scan. Its folders are all searchable: the Machine watches them.
 local function machine_scan(root, include_ignored)
   local err, names, folders, changes = fs.wait(fs.list, root, include_ignored)
-  if err then return nil, err end
+  if err then return nil, err.message or err.code end
   local files = {}
   for i, relative in ipairs(names) do
     files[i] = {relative = relative, path = common.normalize_path(root .. PATHSEP .. relative)}

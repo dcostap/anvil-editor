@@ -6,7 +6,7 @@ local keymap = require "core.keymap"
 local style = require "core.style"
 local common = require "core.common"
 local config = require "core.config"
-local process_stream = require "core.process_stream"
+local text_search = require "core.text_search"
 local http = require "core.http"
 local storage = require "core.storage"
 local Buffer = require "core.buffer"
@@ -1777,7 +1777,7 @@ local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored, case_
       else
         args[#args + 1] = "."
       end
-      local stream, start_error = process_stream.start(args, { cwd = root })
+      local stream, start_error = text_search.start(args, { cwd = root })
       job.stream = stream
       if not stream then
         core.log_quiet("Fuzzy grep could not start under %s: %s", tostring(root), tostring(start_error))
@@ -5240,7 +5240,7 @@ fuzzy_searcher.other_projects.search.text = function(query, case_sensitive, limi
     args[#args + 1] = "-F"
     project_files.add_filter_arguments(args, false)
     args[#args + 1], args[#args + 2], args[#args + 3] = "-e", matcher.seed, "."
-    local stream, start_error = process_stream.start(args, { cwd = root.path })
+    local stream, start_error = text_search.start(args, { cwd = root.path })
     if not stream then
       core.log_quiet("Other Project search: Text Search could not start under %s: %s", root.path,
         tostring(start_error))
@@ -6727,7 +6727,7 @@ function FSView:start_grep(base, line, grep)
         else
           args[#args + 1] = "."
         end
-        local stream, start_error = process_stream.start(args, { cwd = root.path })
+        local stream, start_error = text_search.start(args, { cwd = root.path })
         grep_stream = stream
 
         if stream then
