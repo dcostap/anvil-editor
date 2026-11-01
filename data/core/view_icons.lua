@@ -30,10 +30,14 @@ function view_icons.get(prefix)
   return prefix and view_icons.registry[prefix] or nil
 end
 
+-- A View without its own icon that shows a Buffer gets its file type's icon.
 function view_icons.for_view(view)
   if not view then return nil end
   local icon = view.view_icon
   if type(icon) == "string" then return view_icons.get(icon) end
+  if not icon and view.buffer then
+    return view_icons.file(view.buffer.abs_filename or view:get_name())
+  end
   return icon
 end
 
