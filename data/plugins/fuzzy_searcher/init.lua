@@ -494,7 +494,7 @@ end
 local function get_recent_projects()
   local out, seen = {}, {}
   for _, path in ipairs(core.recent_projects or {}) do
-    path = common.normalize_path(path)
+    if not require("core.machine_project").is_key(path) then path = common.normalize_path(path) end
     local key = common.path_compare_key(path)
     if path and path ~= "" and key and not seen[key] then
       out[#out+1] = path
@@ -1779,8 +1779,14 @@ local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored, case_
       end
       local stream, start_error = text_search.start(args, { cwd = root })
       job.stream = stream
+      -- A failed job is not reused, so the next query searches again, for example after a Machine comes back.
+      local function fail(err)
+        job.error = tostring(err)
+        if fuzzy_grep_jobs[key] == job then fuzzy_grep_jobs[key] = nil end
+      end
       if not stream then
         core.log_quiet("Fuzzy grep could not start under %s: %s", tostring(root), tostring(start_error))
+        fail(start_error)
         job.done = true
         job.version = job.version + 1
         for thread_key in pairs(job.wake_threads or {}) do core.wake_thread(thread_key) end
@@ -1808,6 +1814,7 @@ local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored, case_
         elseif stream.done then
           if stream.error and not job.cancelled then
             core.log_quiet("Fuzzy grep failed under %s: %s", tostring(root), tostring(stream.error))
+            fail(stream.error)
           end
           break
         else
@@ -6367,13 +6374,14 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
     end
 
     local function job_stats()
-      local running, truncated, scanned = false, false, 0
+      local running, truncated, scanned, failed = false, false, 0, nil
       for _, s in ipairs(jobs) do
         running = running or not s.done
         truncated = truncated or s.truncated
         scanned = scanned + (s.scanned or 0)
+        failed = failed or s.error
       end
-      return running, truncated, scanned
+      return running, truncated, scanned, failed
     end
 
     local function publish(final)
@@ -6383,7 +6391,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
 
       local selected_key = fuzzy_searcher.grep_order.result_key(self.results and self.results[self.selected])
 
-      local running, truncated, scanned = job_stats()
+      local running, truncated, scanned, failed = job_stats()
       local tail = {}
       for _, candidate in ipairs(candidates) do
         local key = fuzzy_searcher.grep_order.result_key(candidate)
@@ -6417,7 +6425,10 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
       local has_more = matched_candidate_count > limit or running or truncated or scope_pending
       local fuzzy_count = matched_candidate_count
       local status
-      if exact_results then
+      if final and failed then
+        -- A search that did not finish does not tell that no text matches.
+        status = "Text Search failed: " .. failed
+      elseif exact_results then
         if final then
           status = fuzzy_count == 0 and "No exact matches" or truncated
             and string.format("%d exact matches — limited scan from '%s'", fuzzy_count, jobs_label())
@@ -6611,6 +6622,8 @@ function FSView:start_grep(base, line, grep)
     local results_started = false
     local candidates = {}
     local matched_count = 0
+    -- A search that did not finish does not tell that no text matches.
+    local search_error
     local slice_started = system.get_time()
     local slice_yields = 0
     local last_progress_status = 0
@@ -6739,6 +6752,7 @@ function FSView:start_grep(base, line, grep)
             elseif stream.done then
               if stream.error and stream.error ~= "cancelled" then
                 core.log_quiet("Exact grep failed under %s: %s", tostring(root.path), tostring(stream.error))
+                search_error = search_error or tostring(stream.error)
               end
               break
             else
@@ -6751,6 +6765,7 @@ function FSView:start_grep(base, line, grep)
           if grep_stream == stream then grep_stream = nil end
         else
           core.log_quiet("Exact grep could not start under %s: %s", tostring(root.path), tostring(start_error))
+          search_error = search_error or tostring(start_error)
         end
         core.log_quiet(
           "Exact grep batch finished files=%s matches=%d yields=%d",
@@ -6831,7 +6846,8 @@ function FSView:start_grep(base, line, grep)
     self.own_results = out
     self:show_other_projects()
     self.has_more = matched_count > #out
-    self.status = matched_count == 0 and "No exact matches"
+    self.status = search_error and "Text Search failed: " .. search_error
+      or matched_count == 0 and "No exact matches"
       or string.format("%d exact matches", matched_count)
     core.log_quiet(
       "Exact grep: finalized stable prefix=%d shown=%d matches=%d",
@@ -8002,7 +8018,9 @@ function FSView:activate_create_path(r, new_group)
 end
 
 function FSView:confirm_folder_open(r, new_group)
-  local path = common.normalize_path(r.abs_path or r.path or r.project)
+  local path = r.abs_path or r.path or r.project
+  -- A Machine Project's key is not a path on this PC. Normalization would change its separators.
+  if not require("core.machine_project").is_key(path) then path = common.normalize_path(path) end
   if not path then return false end
   -- Normal activation selects the Project here. Alternate activation opens a new Window.
   local shell = system.is_hosted_surface()

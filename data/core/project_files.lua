@@ -394,6 +394,10 @@ function project_files.info(path)
       if entry.searchable_directories[key] then return { type = "dir" } end
     end
   end
+  -- The file list leaves out ignored files. The File Tree's folder listings have them.
+  local folders = package.loaded["core.machine_folders"]
+  local listed = folders and folders.entry(path)
+  if listed then return { type = listed.type } end
 end
 
 function project_files.directories(root, opts)
@@ -692,7 +696,16 @@ local function start_machine_watcher(entry)
   local generation = entry.watch_generation
   core.add_thread(function()
     while entry.watcher == watcher and entry.watch_generation == generation do
-      while entry.watcher == watcher and entry.machine_changes == nil do coroutine.yield(0.05) end
+      -- Only a scan gives a sequence. A scan that fails, such as while the Machine is away, runs again.
+      local retry_at = system.get_time() + 1
+      while entry.watcher == watcher and entry.machine_changes == nil do
+        coroutine.yield(0.05)
+        if not entry.pending_watch_rescan and not entry.watch_processor_running and system.get_time() >= retry_at then
+          retry_at = system.get_time() + 1
+          entry.pending_watch_rescan = true
+          start_watch_processor(entry)
+        end
+      end
       if entry.watcher ~= watcher then return end
       local since = entry.machine_changes
       local err, result = fs.wait(fs.changes, entry.root, since)

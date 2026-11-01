@@ -94,6 +94,22 @@ test.describe("Project files on a Machine", function()
     test.equal(missing.status, "error")
   end)
 
+  test.it("gets the Machine's changes again after the Machine comes back", function(context)
+    project_files.subscribe(context.project, "machine-files-test", function() end)
+    project_files.list(context.project, { refresh = true })
+    wait_until(function() return project_files.watch_status(context.project).running end, "The watcher did not start")
+    machine_server.stop(context.server)
+    wait_until(function() return fs.machine.state == "waiting" end, "The Client did not see the disconnect")
+    -- The recovery scan runs and fails while the Machine is away.
+    coroutine.yield(3)
+    context.server = machine_server.start(context.user, { "--test-root", context.store, context.project })
+    wait_until(function() return fs.machine.state == "ready" end, "The Client did not connect again")
+    local new = context.project .. PATHSEP .. "after.md"
+    write_file(machine_copy(context, new), "After\n")
+    wait_until(function() return project_files.contains(context.project, new, "file") end,
+      "The Project's list did not get the new file")
+  end)
+
   test.it("reports a change on the Machine to subscribers", function(context)
     local changed = {}
     project_files.subscribe(context.project, "machine-files-test", function(paths)

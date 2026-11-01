@@ -47,10 +47,12 @@ end
 function projects.current()
   local root = core.root_project and core.root_project()
   if not root then return nil end
+  -- The Sidebar names a Project on a Machine by its key.
+  local path = require("core.machine_project").root_key(root.path)
   for _, project in ipairs(core.project_sidebar or {}) do
-    if common.path_equals(project.path, root.path) then return project end
+    if common.path_equals(project.path, path) then return project end
   end
-  return {path = root.path, state = "ready", exists = true, scratch = core.is_scratch_project(root.path)}
+  return {path = path, state = "ready", exists = true, scratch = core.is_scratch_project(root.path)}
 end
 
 -- The Window that shows this Project, so its rows name only other Windows.

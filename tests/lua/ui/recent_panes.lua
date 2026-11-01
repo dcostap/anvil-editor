@@ -192,6 +192,28 @@ test.describe("Recent Panes in a Project", function()
     test.equal(panes.active(), one)
   end)
 
+  test.it("replaces the old report of a Project on a Machine, which the Sidebar names by its key", function()
+    local machine_project = require "core.machine_project"
+    local key, current = "anvil-machine://b71feffb0f24799d67c542024d722147/C:/Here", machine_project.current
+    machine_project.current = key
+    local ok, err = pcall(function()
+      local one = panes.create { factory = factory("one") }
+      local two = panes.create { factory = factory("two") }
+      focus(one)
+      core.project_sidebar = {
+        {path = key, panes = {{id = one.id, focused = now + 1000}}},
+        {path = "C:/Other", panes = {{id = "far", focused = now - 1}}},
+      }
+      focus(two)
+      recent_panes.focus(1)
+      test.equal(#requests, 1)
+      local _, path = table.unpack(requests[1])
+      test.equal(path, "C:/Other")
+    end)
+    machine_project.current = current
+    test.ok(ok, err)
+  end)
+
   test.it("fetches the other Projects' stamps each time the Project takes keyboard focus", function()
     panes.create { factory = factory("one") }
     focused = false

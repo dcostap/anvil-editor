@@ -72,6 +72,16 @@ function machine_folders.list(path)
   return listing
 end
 
+-- The listed entry of a path (`{name, type, size, modified}`), or nil when its folder has no listing here.
+-- It does not start a listing. A listing also has the files that the Project's ignore rules hide.
+function machine_folders.entry(path)
+  local folder, name = common.dirname(path), common.basename(path)
+  local listing = folder and listings[key(folder)]
+  for _, item in ipairs(listing or {}) do
+    if common.path_equals(item.name, name) then return item end
+  end
+end
+
 -- Waits in this coroutine until the folder's listing arrives, and returns it.
 function machine_folders.wait(path)
   local listing = machine_folders.list(path)

@@ -123,8 +123,10 @@ local function validate(request)
     local ok, err = position(request.target)
     if not ok then return nil, err end
   end
+  -- A Project is a path, or the key of a Project on a Machine.
   for _, key in ipairs {"to", "source", "from"} do
-    if schema[key] and (not identifier(request[key]) or not common.is_absolute_path(request[key])) then
+    if schema[key] and (not identifier(request[key]) or not (common.is_absolute_path(request[key])
+        or require("core.machine_project").is_key(request[key]))) then
       return nil, "invalid Project path"
     end
   end

@@ -619,8 +619,10 @@ It also turns on the Machine guard (`core.machine_guard`). The raw file function
 Worker jobs whose payload names a Project path are refused at submit. The `bytes` and `text` fields hold file text, so the guard does not check them. Do not send a path that the worker does not read. A new raw function that takes a path needs a wrapper in the guard.
 A Project at a drive root, such as `D:\`, owns all paths on that drive.
 On a Machine, `core.project_files` fills its normal entry from `files.list`, `files.stat` and a `files.changes` loop. Its subscribers see the same change batches as for a local Project.
-`fs.on_machine(path)` tells if a path names a Machine file. `project_files.info(path)` is `system.get_file_info` for local paths. For a Machine file it gives only `{type}` from the file list, without a wait.
+After an error, the loop scans the Project again. A scan that fails, for example while the Machine is away, runs again each second, because only a scan gives the loop its sequence.
+`fs.on_machine(path)` tells if a path names a Machine file. `project_files.info(path)` is `system.get_file_info` for local paths. For a Machine file it gives only `{type}` from the file list, without a wait. The file list leaves out ignored files, so `info` then reads the folder listings of `core.machine_folders`.
 `core.text_search.start` starts ripgrep like `core.process_stream.start`. In a Project on a Machine, it gives a stream with the same methods that reads from `search.read`. Text Search uses it for each ripgrep run.
+A stream that fails, such as while the Machine is away, makes Text Search show "Text Search failed", not "No matches". The next query searches again.
 File Search uses `project_files.info` for its path checks. On a Machine, it skips the local probe before a preview, and its create row makes the file through `core.file_ops`. `core.open_file` opens a Machine file as text.
 `core.machine_folders` keeps folder listings from `files.list_dir` for code that lists folders without a wait. `list(path)` gives nil while a listing loads. Its `watch()` has the methods of `core.dirwatch` and reports a folder when its listing arrives or changes.
 The File Tree uses it on a Machine, so it shows each folder after its listing arrives. Folder counts use the same listings.
@@ -628,6 +630,8 @@ The File Tree uses it on a Machine, so it shows each folder after its listing ar
 These methods need Full control. Their paths must be in a Project. A Project root, or a folder that holds a Project root, cannot move or be deleted. A move or copy fails when its target exists.
 A Client waits on `files.changes` once for each Project. A new wait ends the earlier wait with `replaced`.
 On a Machine the File Tree applies its changes in a thread. It then lists the changed folders again (`machine_folders.reload`), without a wait for the change notices.
+While the changes run, the tree takes no edits and no second apply, because the new list replaces its text.
+A restored File Tree on a Machine waits for the listings of its saved folders, then restores them. No metadata tells that a saved folder is gone, so a gone root shows an empty tree.
 Rename (`editor:rename`) moves a Machine file with `file_ops.move`, then saves the Buffer's unsaved text. Delete and New Directory also use `core.file_ops`. New Directory starts a relative name at the Project.
 Save As of a new Buffer checks the target with `file_ops.info`, so it asks before it writes over a Machine file. A File Tree delete that cannot reach the Machine shows an error and keeps the edit.
 `common.path_suggest` lists Machine folders through `common.machine_listing`, which `fs.use_machine` sets. The listings arrive later, so the first suggestions can be empty.
@@ -639,6 +643,7 @@ Run `runtime/machine_files.lua`, `ui/machine_file_search.lua` and `ui/machine_fi
 
 A Project on another Machine has a key: `anvil-machine://<Machine ID>/<path on the Machine>` (`core.machine_project`). The Sidebar, Shell App State, recent Projects and Workspaces use the key as the Project's path. Windows file functions reject it.
 The shell uses the key as the Project's identity and passes it to the Project process with `--project`. That process connects with `fs.use_machine`: to this PC's own server when the ID is its own, or else to the paired Machine's record in `USERDIR/machines`. Inside the process, paths are native paths.
+Code that names this Project to the Sidebar or to other Projects uses `machine_project.root_key(path)`: Workspaces, recent Projects, Numbered Panes and Other Project search. Pane requests accept a key in their Project fields. Path normalization would change a key's separators, so Path Search and other code do not normalize a key.
 `machine:open_project` lists the paired Machines, then the chosen Machine's Projects (`projects.list`).
 A Project on a Machine skips its Project module, Git, Git file changes and the symbol index until their services exist. The guard would show an error for each.
 Run the `launch-machine-project` shell probe after changes. It opens this PC's own Scratch through its server, opens a file, and checks that no guard refusal shows. The test server's owner is the test process, so a crashed test does not leave a server.

@@ -126,6 +126,19 @@ test.describe("File Search on a Machine", function()
     test.is_nil(raw_info(context.project .. PATHSEP .. "made"))
   end)
 
+  test.it("tells that a Text Search did not reach the Machine", function(context)
+    machine_server.stop(context.server)
+    test.ok(wait_until(function() return fs.machine.state == "waiting" end), "The Client did not see the disconnect")
+    -- Exact and fuzzy text use different searches.
+    for _, query in ipairs({ "#needle", "#find needle" }) do
+      fuzzy_searcher.open(query)
+      local picker = test.not_nil(core.fuzzy_searcher_active_view)
+      test.ok(wait_until(function() return tostring(picker.status):find("failed", 1, true) ~= nil end),
+        query .. ": " .. tostring(picker.status))
+      picker:close()
+    end
+  end)
+
   -- Each query uses a different search path: exact text, fuzzy text, text in the files that match a name, and
   -- text with a query modifier.
   test.it("finds the text of the Machine's files", function()

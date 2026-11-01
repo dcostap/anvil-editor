@@ -84,7 +84,8 @@ end
 
 local function model()
   local project = core.root_project()
-  local path = project and project.path or ""
+  -- The Sidebar names a Project on a Machine by its key.
+  local path = project and require("core.machine_project").root_key(project.path) or ""
   local projects, own = {windows = (core.project_sidebar or {}).windows}, nil
   for _, item in ipairs(core.project_sidebar or {}) do
     if common.path_compare_key(item.path) == common.path_compare_key(path) then own = item

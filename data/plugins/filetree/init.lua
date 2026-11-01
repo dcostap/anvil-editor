@@ -654,9 +654,41 @@ function FileTreeView:set_navigation_state(state)
   return true
 end
 
+local function restore_folders(view, state)
+  view:restore_expanded_paths(state.expanded_paths)
+  if state.selection_paths then view:restore_selection_paths(state.selection_paths) end
+  if state.scroll then
+    view.scroll.x, view.scroll.to.x = state.scroll.x or 0, state.scroll.x or 0
+    view.scroll.y, view.scroll.to.y = state.scroll.y or 0, state.scroll.y or 0
+  end
+end
+
+-- On a Machine the file list and the folder listings arrive later, so no metadata tells that a saved folder is
+-- gone. The tree waits for the listings of its saved folders, then restores them as a local tree does.
+-- A saved root that is gone shows an empty tree.
+local function restore_on_machine(view, state)
+  core.add_thread(function()
+    local current = state.current_dir and common.normalize_path(state.current_dir)
+    if current and in_project(current, view.root_dir) then
+      local info = file_ops.info(current)
+      if info and info.type == "dir" then view.current_dir = current end
+    end
+    machine_folders.wait(view.current_dir)
+    for path in pairs(state.expanded_paths or {}) do machine_folders.wait(path) end
+    view:refresh(false, false)
+    restore_folders(view, state)
+    core.log_quiet("File Tree on a Machine restored: %s", view.current_dir)
+  end)
+end
+
 function FileTreeView.from_state(state)
-  if type(state) ~= "table" or type(state.root) ~= "string"
-      or not project_files.info(state.root) then return nil end
+  if type(state) ~= "table" or type(state.root) ~= "string" then return nil end
+  if fs.on_machine(state.root) then
+    local view = FileTreeView { root = state.root }
+    restore_on_machine(view, state)
+    return view
+  end
+  if not project_files.info(state.root) then return nil end
   local view = FileTreeView { root = state.root }
   local current_info = state.current_dir and project_files.info(state.current_dir)
   if current_info and current_info.type == "dir"
@@ -664,12 +696,7 @@ function FileTreeView.from_state(state)
     view.current_dir = common.normalize_path(state.current_dir)
     view:refresh(false, false)
   end
-  view:restore_expanded_paths(state.expanded_paths)
-  if state.selection_paths then view:restore_selection_paths(state.selection_paths) end
-  if state.scroll then
-    view.scroll.x, view.scroll.to.x = state.scroll.x or 0, state.scroll.x or 0
-    view.scroll.y, view.scroll.to.y = state.scroll.y or 0, state.scroll.y or 0
-  end
+  restore_folders(view, state)
   return view
 end
 
@@ -3180,10 +3207,21 @@ end
 
 ---Applies the plan's changes to the disk, then lists the tree again. `on_done(changed)` runs after it.
 ---On a Machine the changes run in the background, so the result is nil; locally it is `changed`.
+---The tree takes no edits and no second apply until the changes end, because the list that follows replaces its text.
 function FileTreeView:apply_plan(plan, on_done)
+  if self.applying then
+    core.warn("File Tree: the earlier changes are still running")
+    return nil
+  end
   local changed
+  self.applying = true
+  self:add_edit_guard("filetree-apply", function() return false, "File Tree: the changes are still running" end)
   file_ops.run(self.root_dir, function()
-    changed = apply_plan_now(self, plan) or false
+    local ok, result = pcall(apply_plan_now, self, plan)
+    self.applying = nil
+    self:remove_edit_guard("filetree-apply")
+    if not ok then error(result, 0) end
+    changed = result or false
     if on_done then on_done(changed) end
   end)
   return changed

@@ -192,6 +192,34 @@ test.describe("Project File Search in other Projects", function()
     test.ok(common.path_equals(answer.request.rows[1].abs_path, context.local_file))
   end)
 
+  test.it("names a Project on a Machine by its key in a search and its answer", function(context)
+    local machine_project = require "core.machine_project"
+    local own_key = "anvil-machine://b71feffb0f24799d67c542024d722147/" .. context.own:gsub("\\", "/")
+    local other_key = "anvil-machine://0123456789abcdef0123456789abcdef/C:/other"
+    local current = machine_project.current
+    machine_project.current = own_key
+    core.project_sidebar[1].path, core.project_sidebar[2].path = own_key, other_key
+    local ok, err = pcall(function()
+      test.ok(pane_requests.perform(serialize {
+        action = "project_search", from = other_key, id = 8, mode = "files", query = "alpha",
+        case_sensitive = false, limit = 5,
+      }))
+      test.ok(wait_until(function() return #sent(context, "project_results") > 0 end), "no answer was sent")
+      local answer = sent(context, "project_results")[1]
+      test.equal(answer.path, other_key)
+      test.equal(answer.request.source, own_key)
+
+      fuzzy_searcher.open("alpha")
+      test.ok(wait_until(function() return #sent(context, "project_search") > 0 end), "no search was sent")
+      local searches = sent(context, "project_search")
+      test.equal(#searches, 1, "expected one request, to the other loaded Project")
+      test.equal(searches[1].path, other_key)
+      test.equal(searches[1].request.from, own_key)
+    end)
+    machine_project.current = current
+    test.ok(ok, err)
+  end)
+
   test.it("opens a file that another Project chose at its line", function(context)
     test.ok(pane_requests.perform(serialize { action = "open_file", file = context.local_file, line = 2, col = 1 }))
     local view = core.active_view

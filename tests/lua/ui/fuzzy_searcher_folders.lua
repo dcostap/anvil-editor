@@ -354,6 +354,21 @@ test.describe("Project File Search folders", function()
     test.ok(picker_closed, "expected the picker to close before the Project request")
   end)
 
+  test.it("selects a Machine Project by its unchanged key under the shell", function(context)
+    local opened
+    context.is_hosted_surface = system.is_hosted_surface
+    system.is_hosted_surface = function() return true end
+    core.open_project_in_same_window = function(path) opened = path; return true end
+    local key = "anvil-machine://b71feffb0f24799d67c542024d722147/C:/Users/me/notes"
+
+    fuzzy_searcher.open_static_results("Projects", { { kind = "project", label = "notes", project = key } })
+    local picker = assert(core.fuzzy_searcher_active_view)
+    picker.selected = 1
+    picker:confirm(false)
+    test.ok(wait_until(function() return opened ~= nil end))
+    test.equal(opened, key)
+  end)
+
   test.it("opens a Project in a new Anvil Window with alternate activation under the shell", function(context)
     local opened, same_window
     context.is_hosted_surface = system.is_hosted_surface

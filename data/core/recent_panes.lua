@@ -94,7 +94,8 @@ end
 local function model()
   local panes = require "core.panes"
   local project = core.root_project()
-  local path = project and project.path or ""
+  -- The Sidebar names a Project on a Machine by its key.
+  local path = project and require("core.machine_project").root_key(project.path) or ""
   local own = common.path_compare_key(path)
   local projects = {}
   for _, item in ipairs(core.project_sidebar or {}) do

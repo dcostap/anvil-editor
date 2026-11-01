@@ -89,6 +89,44 @@ test.describe("File Tree on a Machine", function()
     test.ok(wait_until(function() return text(tree):find("new.md", 1, true) ~= nil end), text(tree))
   end)
 
+  test.it("opens a file that the Project's ignore rules hide from File Search", function(context)
+    write_file(machine_copy(context, context.project .. PATHSEP .. ".ignore"), "ignored.md\n")
+    write_file(machine_copy(context, context.project .. PATHSEP .. "ignored.md"), "Ignored\n")
+    local tree = open_tree(context)
+    test.ok(wait_until(function() return text(tree):find("ignored.md", 1, true) ~= nil end), text(tree))
+    for _, entry in ipairs(tree:build_entries(false)) do
+      if entry.text == "ignored.md" then tree.buffer:set_selection(entry.line, 1) end
+    end
+    test.ok(tree:open_item(), "The ignored file did not open")
+    local path = context.project .. PATHSEP .. "ignored.md"
+    test.ok(wait_until(function()
+      local buffer = core.buffer_registry:find(path)
+      return buffer and not buffer:is_loading() and table.concat(buffer.lines) == "Ignored\n"
+    end), "The ignored file did not load the Machine's text")
+  end)
+
+  test.it("restores its folders before the Machine's listings arrive", function(context)
+    local tree = open_tree(context)
+    test.ok(wait_until(function() return text(tree):find("sub/", 1, true) ~= nil end), text(tree))
+    for _, entry in ipairs(tree:build_entries(false)) do
+      if entry.text == "sub" then tree.buffer:set_selection(entry.line, 1) end
+    end
+    test.ok(tree:open_item(), "The folder did not expand")
+    test.ok(wait_until(function() return text(tree):find("plan.md", 1, true) ~= nil end), text(tree))
+    local state = tree:get_state()
+    local sub = context.project .. PATHSEP .. "sub"
+
+    -- A Workspace restore runs before the Project process has the Machine's file list or listings.
+    for _, saved in ipairs({ state, { root = sub, current_dir = sub } }) do
+      machine_folders.clear()
+      project_files.invalidate(context.project)
+      local restored = test.not_nil(filetree.from_state(saved), "The File Tree was not restored: " .. saved.root)
+      shown = restored
+      panes.create { factory = function() return restored end }
+      test.ok(wait_until(function() return text(restored):find("plan.md", 1, true) ~= nil end), text(restored))
+    end
+  end)
+
   test.it("opens the Machine's image", function(context)
     local path = context.project .. PATHSEP .. "picture.png"
     test.ok(canvas.new(8, 6, { 40, 100, 180, 255 }, true):save_image(machine_copy(context, path)))
@@ -224,6 +262,27 @@ test.describe("File Tree on a Machine", function()
     test.same(raw_list_dir(context.project), { "client-only.md" })
     test.ok(wait_until(function() return text(tree):find("renamed-notes.md", 1, true) ~= nil end), text(tree))
     test.is_nil(text(tree):find("sub/", 1, true))
+  end)
+
+  test.it("takes no edits while it applies its changes on the Machine", function(context)
+    local tree = open_tree(context)
+    test.ok(wait_until(function() return text(tree):find("notes.md", 1, true) ~= nil end), text(tree))
+    local notes = find_entry(tree, "notes.md")
+    tree.buffer:insert(notes.line, 1, "renamed-")
+    tree:sync_meta()
+    local plan, err = tree:plan_changes()
+    test.not_nil(plan, err)
+    local done, second
+    tree:apply_plan(plan, function(changed) done = changed end)
+    tree:apply_plan(plan, function(changed) second = changed end)
+    local before = text(tree)
+    tree.buffer:set_selection(1, 1)
+    tree:on_text_input("x")
+    test.equal(text(tree), before, "A typed edit reached the tree during the apply")
+    test.ok(wait_until(function() return done ~= nil end), "the File Tree did not finish its changes")
+    test.ok(done)
+    test.is_nil(second, "A second apply ran during the first")
+    test.ok(tree:can_edit("text input"), "The tree stayed read-only")
   end)
 
   test.it("reports a delete that cannot reach the Machine", function(context)

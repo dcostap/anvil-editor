@@ -4,6 +4,7 @@
 local core = require "core"
 local common = require "core.common"
 local look = require "core.project_look"
+local machine_project = require "core.machine_project"
 local projects = require "plugins.fuzzy_searcher.projects"
 
 local other = {}
@@ -122,7 +123,8 @@ function other.request(picker, mode, query, line)
     sent = system.get_time()}
   picker.other_projects = state
   for _, project in ipairs(state.targets) do
-    send("direct", project.path, {action = "project_search", from = root.path, id = state.id, mode = mode,
+    send("direct", project.path, {action = "project_search", from = machine_project.root_key(root.path),
+      id = state.id, mode = mode,
       query = query, case_sensitive = state.case_sensitive, limit = LIMIT})
   end
 end
@@ -176,7 +178,8 @@ function other.answer(request)
       rows and #rows or 0, tostring(more == true))
     if not rows or #rows == 0 then return end
     local root = core.root_project()
-    send("direct", request.from, {action = "project_results", source = root.path, id = id, rows = rows,
+    send("direct", request.from, {action = "project_results", source = machine_project.root_key(root.path),
+      id = id, rows = rows,
       more = more or nil})
   end)
   return true
