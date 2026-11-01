@@ -204,6 +204,19 @@ local function focus_local(pane, step)
   return focus_path(destination.path)
 end
 
+command.add(function()
+  local pane = panes.active()
+  local view = pane and pane.current_view
+  return view and view.terminal_view and view.state == "running" and view.agent_app == "pi"
+    and view.session_id ~= nil, pane
+end, {
+  ["pane:copy_agent_address"] = command.palette(function(pane)
+    system.set_clipboard(require("core.json").encode({project = core.root_project().path,
+      pane = pane.id, terminal = pane.current_view.session_id}))
+    core.log_quiet("Copied agent address: Pane=%s Terminal=%s", pane.id, pane.current_view.session_id)
+  end),
+})
+
 local commands = {
   ["pane:close"] = command.palette(function(pane) return panes.close(pane) end),
   ["pane:close_view"] = function(pane) return panes.close_view(pane) end,

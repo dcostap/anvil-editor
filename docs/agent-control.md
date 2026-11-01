@@ -13,6 +13,10 @@ Start a new Pi in an Anvil Terminal. Its extension registers the `anvil` MCP ser
 3. Set `project` to a listed Project path when controlling another Project.
 4. Use a new `request_id` for each mutation. Reuse it only to retry identical work.
 
+Right-click a running Pi's Tab and choose **Copy Agent Address**. This works in the Project Sidebar and Title Bar. It copies JSON with the `project`, `pane`, and `terminal` IDs, not a navigation number or credentials. Paste it into another agent's conversation to identify the target.
+
+The receiving agent calls `workspace_state` for that `project` and finds the copied `terminal`. It uses that Terminal's current `agent_instance` as `instance` for `agent_send`. The address identifies the Terminal, not a fixed Pi conversation. Inspect state again after a Project move.
+
 The default target is the caller's Project. Operations preserve focus unless `focus: true` requests a change. Close operations use normal confirmations. A confirmation can take focus.
 
 `pi_start` requires `cwd`, `provider`, `model`, and `thinking`. It opens an independent Pi conversation in a visible Terminal Pane. It copies no conversation or model choice from the caller. The starting directory must exist.

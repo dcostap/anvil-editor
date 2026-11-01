@@ -244,17 +244,24 @@ end, {
   ["sidebar:open_project_window"] = function(view, project) view.action("open_window", project.row_id) end,
   ["sidebar:unload_project"] = function(view, project) view.action("unload", project.row_id) end,
   ["sidebar:copy_project_path"] = function(view, project) view.action("copy_path", project.row_id) end,
+  ["sidebar:copy_agent_address"] = function(_, path, pane, session)
+    system.set_clipboard(require("core.json").encode({project = path, pane = pane, terminal = session}))
+  end,
   ["sidebar:show_project_in_folder"] = function(view, project) view.action("show_in_folder", project.row_id) end,
 })
 
 -- The Context Menu items of a row. A Project has New Terminal and New Pi. While it is loaded, it also has Reopen
 -- Closed Pane, Move and Unload, or else Open in New Window. A Tab has Duplicate and Close, and a Terminal Tab also
--- has Snooze times. Other rows have no menu.
+-- has Snooze times. A running Pi Tab also has Copy Agent Address. Other rows have no menu.
 function SidebarView:context_menu(row)
   if row.kind == "tab" then
     local path, pane, items = row.project.path, row.tab.id, {}
     if row.tab.terminal then
       local target = {session = row.tab.terminal.session, pane = pane, path = path}
+      if row.tab.terminal.state == "running" and row.tab.terminal.app == "pi" and target.session then
+        items[#items + 1] = {label = "Copy Agent Address", icon = icons.path, command = "sidebar:copy_agent_address",
+          args = {self, path, pane, target.session}}
+      end
       -- An agent's question needs an answer, not a look.
       if row.attention and row.attention ~= "blocked" then
         items[#items + 1] = {label = "Mark as Read", command = "sidebar:mark_read",

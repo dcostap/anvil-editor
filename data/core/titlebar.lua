@@ -599,6 +599,7 @@ local TAB_MENU = {
   { label = "Split Right", icon = icons.split_right, command = "pane:copy_view_to_split_right" },
   { label = "Split Down", icon = icons.split_down, command = "pane:copy_view_to_split_down" },
   "-",
+  { label = "Copy Agent Address", icon = icons.path, command = "pane:copy_agent_address" },
   { label = "Copy Path", icon = icons.path, command = "editor:copy_absolute_filepath" },
   { label = "Copy Relative Path", icon = icons.path, command = "editor:copy_relative_filepath" },
   { label = "Reveal in Explorer", icon = icons.reveal, command = "editor:reveal_active_file_in_explorer" },

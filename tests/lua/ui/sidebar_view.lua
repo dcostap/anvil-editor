@@ -162,6 +162,31 @@ test.describe("Sidebar title tooltips", function()
 end)
 
 test.describe("Sidebar list actions", function()
+  test.it("copies a Pi Tab's agent address without selecting its Project or Pane", function()
+    local actions, action = recorder()
+    local view = SidebarView(action)
+    view:set_model({{row_id=7,id=31,path="C:/Other Project",state="ready",panes={
+      {id="pi-pane",name="Pi",terminal={session="pi-terminal",state="running",app="pi"}},
+      {id="shell-pane",name="Pi",terminal={session="shell-terminal",state="running"}},
+      {id="ended-pane",name="Pi",terminal={session="ended-terminal",state="ended",app="pi"}},
+      {id="file-pane",name="note.md"}}}})
+    local copied, set = nil, system.set_clipboard
+    system.set_clipboard = function(text) copied = text end
+    local ok, err = pcall(function()
+      view:on_mouse_pressed("right", 100, row_y(view, "tab", 1))
+      choose(actions[1][2], "Copy Agent Address")
+      test.same(require("core.json").decode(copied),
+        {project="C:/Other Project",pane="pi-pane",terminal="pi-terminal"})
+      test.equal(#actions, 1, "Copy selected a Project or Pane")
+      for _, id in ipairs({"shell-pane", "ended-pane", "file-pane"}) do
+        local _, row = row_index(view, function(row) return row.kind == "tab" and row.tab.id == id end)
+        test.not_ok(menu_labels(view:context_menu(row)):find("Copy Agent Address", 1, true))
+      end
+    end)
+    system.set_clipboard = set
+    if not ok then error(err, 0) end
+  end)
+
   test.it("opens a Project's Context Menu at a right-click, and its items move or unload the Project", function()
     local actions, action = recorder()
     local view = SidebarView(action, {["group:week"]=false})

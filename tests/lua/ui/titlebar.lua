@@ -308,6 +308,33 @@ test.describe("Global title bar Pane entries", function()
     test.same(panes.ordered(), { two })
   end)
 
+  test.it("copies the right-clicked Pi Tab's stable agent address", function()
+    local context_menu = require "core.context_menu"
+    local one = panes.create { factory = factory("Pi") }
+    local view = one.current_view
+    view.terminal_view, view.session_id, view.state, view.agent_app = true, "pi-terminal", "running", "pi"
+    panes.create { factory = factory("other") }
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local copied, set = nil, system.set_clipboard
+    system.set_clipboard = function(text) copied = text end
+    local ok, err = pcall(function()
+      local entry = title:get_pane_entries()[1]
+      title:on_mouse_pressed("right", entry.x + 2, entry.y + 2, 1)
+      test.ok(context_menu.choose("Copy Agent Address"), "Pi Tab has no copy action")
+      test.same(require("core.json").decode(copied),
+        {project=core.root_project().path,pane=one.id,terminal="pi-terminal"})
+      view.agent_app = nil
+      test.not_ok(command.is_valid("pane:copy_agent_address"), "A shell offers an agent address")
+      view.agent_app, view.state = "pi", "ended"
+      test.not_ok(command.is_valid("pane:copy_agent_address"), "An ended Pi offers an agent address")
+    end)
+    context_menu.close()
+    system.set_clipboard = set
+    if not ok then error(err, 0) end
+  end)
+
   test.it("uses content-sized Tabs instead of filling the title lane", function()
     panes.create { factory = factory("one") }
     local title = TitleBar()
