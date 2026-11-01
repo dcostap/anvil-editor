@@ -72,7 +72,7 @@ local function newline_indent(buffer, line)
     base_indent = lead, full_indent = lead,
     previous_line_text = line_text, before_text = before,
   }
-  if type(intelligence.newline_continuation(buffer, line + 1, context)) == "string" then
+  if intelligence.newline_continuation(buffer, line + 1, context) then
     -- A blank line ends a Markdown list or quote, so it starts at the margin.
     return is_markdown(buffer) and "" or lead
   end

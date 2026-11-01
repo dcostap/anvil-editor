@@ -269,6 +269,7 @@ function intelligence.block_indent(buffer, line, context, opts)
   return first_value("block_indent", nil, buffer, line, context or {}, opts)
 end
 
+---Returns a continuation with text, delete_after bytes, and a caret_offset within text, or nil.
 function intelligence.newline_continuation(buffer, line, context, opts)
   return first_value("newline_continuation", nil, buffer, line, context or {}, opts)
 end

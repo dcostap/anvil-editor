@@ -299,6 +299,28 @@ local function one_indent(buffer)
   return text
 end
 
+local function continuation(text, delete_after, caret_offset)
+  return { text = text, delete_after = delete_after or 0, caret_offset = caret_offset or #text }, nil, "fresh"
+end
+
+local function comment_start(buffer, line, col, rule)
+  local token_col = 1
+  for _, token_type, text in buffer.highlighter:each_token(line) do
+    local token_end = token_col + #text
+    if col <= token_end then
+      if not token_type:find("^comment") then return nil end
+      local start = token_col + #(text:match("^[\t ]*") or "")
+      local marker = rule.line_comment
+      local source = buffer.lines[line] or ""
+      if source:sub(start, start + #marker - 1) ~= marker or col < start + #marker then return nil end
+      local block = rule.block_comment and rule.block_comment[1]
+      if block and source:sub(start, start + #block - 1) == block then return nil end
+      return start
+    end
+    token_col = token_end
+  end
+end
+
 function smart_indent.newline_continuation(buffer, line, context)
   local rule = smart_indent.rule_for_buffer(buffer)
   if not rule then return nil, "no-rule", "unavailable" end
@@ -312,24 +334,39 @@ function smart_indent.newline_continuation(buffer, line, context)
     local task_indent, task_bullet = before:match(
       "^(%s*)([%-%*%+])%s+%[[ xX]%]%s+%S"
     )
-    if task_indent then return task_indent .. task_bullet .. " [ ] ", nil, "fresh" end
+    if task_indent then return continuation(task_indent .. task_bullet .. " [ ] ") end
     local indent, bullet = before:match("^(%s*)([%-%*%+])%s+%S")
-    if indent then return indent .. bullet .. " ", nil, "fresh" end
+    if indent then return continuation(indent .. bullet .. " ") end
     local ordered_indent, number = before:match("^(%s*)(%d+)%.%s+%S")
-    if ordered_indent and number then return ordered_indent .. tostring(tonumber(number) + 1) .. ". ", nil, "fresh" end
+    if ordered_indent and number then return continuation(ordered_indent .. tostring(tonumber(number) + 1) .. ". ") end
     local paren_indent, paren_number = before:match("^(%s*)(%d+)%)[%s]+%S")
     if paren_indent and paren_number then
-      return paren_indent .. tostring(tonumber(paren_number) + 1) .. ") ", nil, "fresh"
+      return continuation(paren_indent .. tostring(tonumber(paren_number) + 1) .. ") ")
     end
     local quote_indent = before:match("^(%s*>%s*)%S")
-    if quote_indent then return quote_indent, nil, "fresh" end
+    if quote_indent then return continuation(quote_indent) end
   end
 
   local marker = rule.line_comment
   if type(marker) == "string" and marker ~= "" then
-    local escaped = marker:gsub("([^%w])", "%%%1")
-    local indent, body = before:match("^(%s*)" .. escaped .. "%s*(.*%S)")
-    if indent and body then return indent .. marker .. " ", nil, "fresh" end
+    local after = context.after_text or tostring(context.previous_line_text or ""):sub(#before + 1)
+    if not after:find("%S") then return nil, "comment-end", "unavailable" end
+    local start = comment_start(buffer, context.line or line - 1, #before + 1, rule)
+    if not start then return nil, "not-line-comment", "unavailable" end
+    local indent = before:match("^[\t ]*")
+    local only_comment = not before:sub(1, start - 1):find("%S")
+    local source = context.previous_line_text or buffer.lines[context.line or line - 1]
+    local spacing = only_comment and source:sub(start + #marker):match("^[\t ]*") or " "
+    if spacing == "" then spacing = " " end
+    local delete_after = #(after:match("^[\t ]*"))
+    if after:sub(delete_after + 1, delete_after + #marker) == marker then
+      delete_after = delete_after + #marker
+      spacing = after:sub(delete_after + 1):match("^[\t ]*")
+      delete_after = delete_after + #spacing
+      if spacing == "" then spacing = " " end
+    end
+    local prefix = indent .. marker .. spacing
+    return continuation(prefix, delete_after, only_comment and #prefix or #indent)
   end
 
   return nil, "no-continuation", "unavailable"

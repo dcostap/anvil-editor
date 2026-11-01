@@ -88,26 +88,26 @@ test.describe("smart indentation", function()
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
   end)
 
-  test.it("continues Lua comments without applying block-word indentation", function(context)
+  test.it("ends Lua comments without applying block-word indentation", function(context)
     local buffer, view = new_editor(context, "-- if ok then", "sample.lua")
     core.set_active_view(view)
     buffer:set_selection(1, #"-- if ok then" + 1, 1, #"-- if ok then" + 1)
 
     test.ok(command.perform("core:newline"))
 
-    test.equal(text(buffer), "-- if ok then\n-- \n")
-    test.same(view:get_selection_state().selections, { 2, 4, 2, 4 })
+    test.equal(text(buffer), "-- if ok then\n\n")
+    test.same(view:get_selection_state().selections, { 2, 1, 2, 1 })
   end)
 
-  test.it("continues Python comments without applying colon indentation", function(context)
+  test.it("ends Python comments without applying colon indentation", function(context)
     local buffer, view = new_editor(context, "# if ok:", "sample.py")
     core.set_active_view(view)
     buffer:set_selection(1, #"# if ok:" + 1, 1, #"# if ok:" + 1)
 
     test.ok(command.perform("core:newline"))
 
-    test.equal(text(buffer), "# if ok:\n# \n")
-    test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
+    test.equal(text(buffer), "# if ok:\n\n")
+    test.same(view:get_selection_state().selections, { 2, 1, 2, 1 })
   end)
 
   test.it("does not indent after ordinary Ruby statements", function(context)
@@ -285,15 +285,82 @@ test.describe("smart indentation", function()
     test.equal(text(buffer), "x\n  ybb\ncc\n")
   end)
 
-  test.it("continues Lua line comments on Enter", function(context)
-    local buffer, view = new_editor(context, "-- hello", "sample.lua")
+  test.it("leaves the comment at its end, including trailing whitespace", function(context)
+    for _, case in ipairs({
+      { "-- hello", "sample.lua", 9 },
+      { "// hello", "sample.odin", 9 },
+      { "# hello", "sample.py", 8 },
+      { "// hello \t", "sample.odin", 9 },
+      { "//", "sample.odin", 3 },
+    }) do
+      local buffer, view = new_editor(context, case[1], case[2])
+      core.set_active_view(view)
+      buffer:set_selection(1, case[3])
+
+      test.ok(command.perform("core:newline"))
+
+      test.equal(text(buffer), case[1]:sub(1, case[3] - 1) .. "\n" .. case[1]:sub(case[3]) .. "\n")
+      test.same(view:get_selection_state().selections, { 2, 1, 2, 1 })
+      buffer:clean()
+    end
+  end)
+
+  test.it("types at the same indentation after leaving a comment", function(context)
+    local buffer, view = new_editor(context, "  // hello", "sample.odin")
     core.set_active_view(view)
-    buffer:set_selection(1, #"-- hello" + 1, 1, #"-- hello" + 1)
+    buffer:set_selection(1, #"  // hello" + 1)
+
+    test.ok(command.perform("core:newline"))
+    view:update()
+    test.equal(text(buffer), "  // hello\n\n")
+    test.ok(view:on_text_input("next"))
+
+    test.equal(text(buffer), "  // hello\n  next\n")
+  end)
+
+  for _, case in ipairs({
+    { "Lua", "sample.lua", "-- hello| world", "-- hello\n-- world\n", 4 },
+    { "Python", "sample.py", "# hello| world", "# hello\n# world\n", 3 },
+    { "existing spacing", "sample.odin", "  //  hello|   world", "  //  hello\n  //  world\n", 7 },
+    { "the comment marker", "sample.odin", "//|hello", "//\n// hello\n", 4 },
+    { "another marker", "sample.odin", "// hello| //world", "// hello\n// world\n", 4 },
+    { "a trailing comment", "sample.odin", "value := 1 // hello| world", "value := 1 // hello\n// world\n", 1 },
+  }) do
+    test.it("keeps the split text commented after " .. case[1], function(context)
+      local col = assert(case[3]:find("|", 1, true))
+      local buffer, view = new_editor(context, case[3]:gsub("|", ""), case[2])
+      core.set_active_view(view)
+      buffer:set_selection(1, col)
+
+      test.ok(command.perform("core:newline"))
+
+      test.equal(text(buffer), case[4])
+      test.same(view:get_selection_state().selections, { 2, case[5], 2, case[5] })
+    end)
+  end
+
+  test.it("does not treat a Lua block comment as a line comment", function(context)
+    local buffer, view = new_editor(context, "--[[ hello world ]]", "sample.lua")
+    core.set_active_view(view)
+    buffer:set_selection(1, #"--[[ hello" + 1)
 
     test.ok(command.perform("core:newline"))
 
-    test.equal(text(buffer), "-- hello\n-- \n")
-    test.same(view:get_selection_state().selections, { 2, 4, 2, 4 })
+    test.equal(text(buffer), "--[[ hello\n world ]]\n")
+  end)
+
+  test.it("splits one comment and leaves another with multiple carets in one undo step", function(context)
+    local buffer, view = new_editor(context, "-- hello world\n-- done", "sample.lua")
+    core.set_active_view(view)
+    buffer:set_selection(1, #"-- hello" + 1)
+    buffer:add_selection(2, #"-- done" + 1)
+
+    test.ok(command.perform("core:newline"))
+
+    test.equal(text(buffer), "-- hello\n-- world\n-- done\n\n")
+    test.same(view:get_selection_state().selections, { 2, 4, 2, 4, 4, 1, 4, 1 })
+    buffer:undo()
+    test.equal(text(buffer), "-- hello world\n-- done\n")
   end)
 
   test.it("continues Markdown unordered lists on Enter", function(context)

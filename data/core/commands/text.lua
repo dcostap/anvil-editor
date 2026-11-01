@@ -531,15 +531,15 @@ local function one_indent_string(buffer)
   return text
 end
 
-local function syntax_newline_continuation(buffer, line, col, line_text)
-  local continuation = intelligence.newline_continuation(buffer, line + 1, {
+local function syntax_newline_continuation(buffer, line, col, line_text, end_line, end_col)
+  return intelligence.newline_continuation(buffer, line + 1, {
     event = "newline",
     line = line,
     col = col,
     previous_line_text = line_text,
     before_text = tostring(line_text or ""):sub(1, col - 1),
+    after_text = buffer.lines[end_line]:sub(end_col),
   })
-  return type(continuation) == "string" and continuation or nil
 end
 
 local function syntax_newline_indent(buffer, line, col, base_indent, full_indent, line_text)
@@ -1635,8 +1635,10 @@ local commands = {
       else
         local projected_idx = project_selection(idx, line1, col1, line2, col2)
         local insert_indent = indent
+        local continuation
         if not whitespace_only_line then
-          insert_indent = syntax_newline_continuation(dv.buffer, line, col, line_text)
+          continuation = syntax_newline_continuation(dv.buffer, line, col, line_text, line2, col2)
+          insert_indent = continuation and continuation.text
             or syntax_newline_indent(dv.buffer, line, col, indent, full_indent, line_text)
         end
         local text = "\n" .. insert_indent
@@ -1715,6 +1717,16 @@ local commands = {
           normal_edits[#normal_edits + 1] = edit
         else
           local smart_edit = smart_newline_edit(dv.buffer, line1, col1, line2, col2)
+          if not smart_edit and continuation
+            and (continuation.delete_after > 0 or continuation.caret_offset ~= #continuation.text)
+          then
+            smart_edit = {
+              line1 = line1, col1 = col1, line2 = line2,
+              col2 = col2 + continuation.delete_after,
+              text = text, caret_offset = 1 + continuation.caret_offset,
+              reason = "continuation",
+            }
+          end
           if smart_edit then
             has_smart_newline = true
             final_by_idx[projected_idx] = smart_edit.caret_offset
