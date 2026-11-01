@@ -197,6 +197,8 @@ function Buffer:set_language_mode(mode, opts)
 end
 
 
+local forget_machine_record
+
 function Buffer:set_filename(filename, abs_filename)
   local stage = file_open_stage_begin("buffer_set_filename_metadata")
   local old = metadata_snapshot(self)
@@ -207,6 +209,8 @@ function Buffer:set_filename(filename, abs_filename)
   end
   self.filename = filename
   self.abs_filename = abs_filename
+  -- A recovery record names its file. The next write uses the new name.
+  if old.abs_filename and old.abs_filename ~= abs_filename then forget_machine_record(old.abs_filename) end
   language_mode.on_buffer_path_changed(self, old_path, language_mode.buffer_path(self))
   local syntax_changed = self:reset_syntax({ notify = false })
   local filename_changed = old.filename ~= self.filename or old.abs_filename ~= self.abs_filename
@@ -959,6 +963,11 @@ local function write_machine_record(self)
     encoding = self.encoding, bom = self.bom, base = self.machine_version,
     sent = save and save.same_file and save.sent or nil,
   })
+end
+
+-- A Buffer that the user closes without a save, or that has a new name, has no record under its old name.
+forget_machine_record = function(path)
+  if fs.machine and fs.machine.machine then storage.clear("machine_recovery", record_key(path)) end
 end
 
 local function machine_record_due(self)
@@ -3313,6 +3322,8 @@ end
 
 -- For plugins to get notified when a buffer is closed
 function Buffer:on_close()
+  -- A dirty Buffer closes only after the user discards its text. A crash does not get here.
+  if self.abs_filename then forget_machine_record(self.abs_filename) end
   self:cancel_load()
   cancel_pending_save(self)
   language_mode.cancel_content_detection(self)

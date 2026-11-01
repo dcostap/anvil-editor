@@ -369,7 +369,14 @@ local function list_dir_path_variants(path)
   return files, path
 end
 
+-- A Project process on a Machine sets this (`core.fs`). `list(path)` gives the entries of a Machine folder,
+-- or nil for other folders. `root` is the folder of relative paths, because this process's folder is not on
+-- the Machine.
+common.machine_listing = nil
+
 local function list_dir_info_path_variants(path, limit, entry_type, name_prefix)
+  local machine_entries = common.machine_listing and common.machine_listing.list(path)
+  if machine_entries then return machine_entries, path end
   if not system.list_dir_info then return nil, path end
   local native_limit = limit or 2147483647
   local entries = system.list_dir_info(
@@ -412,6 +419,9 @@ end
 ---@param limit? integer Maximum suggestions to return.
 ---@return string[]
 function common.path_suggest(text, root, limit)
+  if not root and common.machine_listing and not common.is_absolute_path(text) then
+    root = common.machine_listing.root
+  end
   if root and ((PLATFORM == "Windows" and not root:match("[/\\]$")) or (PLATFORM ~= "Windows" and root:sub(-1) ~= PATHSEP)) then
     root = root .. PATHSEP
   end

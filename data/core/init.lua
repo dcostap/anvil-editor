@@ -3203,7 +3203,9 @@ function core.step(next_frame_time, options, frame_stats)
   -- Let the Buffer Registry close clean Buffers with no live or retained owner.
   if core.buffer_registry:collect() > 0 then
     core.collect_garbage = true
-    if #core.buffers == 0 then system.chdir(core.projects[1].path) end
+    if #core.buffers == 0 and not require("core.fs").on_machine(core.projects[1].path) then
+      system.chdir(core.projects[1].path)
+    end
   end
 
   -- update window title

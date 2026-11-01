@@ -613,12 +613,16 @@ Worker jobs whose payload names a Project path are refused at submit. Do not sen
 On a Machine, `core.project_files` fills its normal entry from `files.list`, `files.stat` and a `files.changes` loop. Its subscribers see the same change batches as for a local Project.
 `fs.on_machine(path)` tells if a path names a Machine file. `project_files.info(path)` is `system.get_file_info` for local paths. For a Machine file it gives only `{type}` from the file list, without a wait.
 `core.text_search.start` starts ripgrep like `core.process_stream.start`. In a Project on a Machine, it gives a stream with the same methods that reads from `search.read`. Text Search uses it for each ripgrep run.
-File Search uses `project_files.info` for its path checks. On a Machine, it offers no row that creates a file, and it skips the local probe before a preview. `core.open_file` opens a Machine file as text.
+File Search uses `project_files.info` for its path checks. On a Machine, it skips the local probe before a preview, and its create row makes the file through `core.file_ops`. `core.open_file` opens a Machine file as text.
 `core.machine_folders` keeps folder listings from `files.list_dir` for code that lists folders without a wait. `list(path)` gives nil while a listing loads. Its `watch()` has the methods of `core.dirwatch` and reports a folder when its listing arrives or changes.
 The File Tree uses it on a Machine, so it shows each folder after its listing arrives. Folder counts use the same listings.
 `core.file_ops` creates, moves, copies and deletes files and folders, also to the Recycle Bin. For a Machine path each call is a request (`files.mkdir`, `files.move`, `files.copy`, `files.delete`, or `files.write` to create), and the calling coroutine waits. `file_ops.run(path, fn)` runs `fn` in a thread for a Machine path. The server uses the same functions on its own disk.
 These methods need Full control. Their paths must be in a Project, and a Project root cannot move or be deleted. A move or copy fails when its target exists.
 On a Machine the File Tree applies its changes in a thread. It then lists the changed folders again (`machine_folders.reload`), without a wait for the change notices.
+Rename (`editor:rename`) moves a Machine file with `file_ops.move`, then saves the Buffer's unsaved text. Delete and New Directory also use `core.file_ops`. New Directory starts a relative name at the Project.
+`common.path_suggest` lists Machine folders through `common.machine_listing`, which `fs.use_machine` sets. The listings arrive later, so the first suggestions can be empty.
+A Markdown attachment on a Machine uploads the file from this PC into the note's attachment folder. The Obsidian attachment setting comes from the Machine. A file URI link to this PC is refused.
+Live Preview binds no vault index on a Machine, and link completion offers no note names. Both wait for the Index service.
 An Image View of a Machine file reads its bytes through `core.fs` and loads them with `canvas.load_image_data`. Autoreload does not watch Machine files, and focus does not change the process's folder to a Machine Project.
 Run `runtime/machine_files.lua`, `ui/machine_file_search.lua` and `ui/machine_filetree.lua` after changes.
 
@@ -637,8 +641,7 @@ Autosave keeps no local disk state for Machine files. Its disk state is the last
 Each dirty Machine Buffer has a recovery record in `core.storage` (`machine_recovery`, one key for each Machine and path). It holds the text, encoding, line endings, base version and the sent version of the open save.
 An edit writes it after 0.5 seconds. A save writes it before the request leaves. A clean Buffer deletes it. Records are written on the UI thread, as Untitled recovery is.
 When a Machine file loads and has a record, the Buffer takes the record's text as one edit. The Machine's version decides: the same bytes mean clean, the base or the sent version mean dirty, other bytes mean a conflict.
-A record stays when the user closes a dirty Buffer without a save. The close prompt for unconfirmed saves comes later.
-Project lookup, Git and the Markdown vault index still use the local disk. The call-site audit (step 4 in the plan) moves them.
+A Buffer that the user closes without a save deletes its record. A rename deletes the record of the old name.
 Run `runtime/machine_serve.lua`, `runtime/machine_client.lua`, `runtime/machine_buffer.lua`, `anvil:machine-frame` and `anvil:launch-mode` after changes. Tests that need a fixed port must try ports until one opens: Windows reserves whole port ranges, and `get_port()` returns the requested port. Pass one file to each `--test-args`: the runner reads only the first path.
 
 ## Companion (Android)

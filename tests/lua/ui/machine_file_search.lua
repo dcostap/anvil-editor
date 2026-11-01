@@ -14,7 +14,7 @@ local test = require "core.test"
 -- under a private folder (`--test-root`). The Client has other files at the same path, and the Machine
 -- guard refuses raw reads of them.
 test.describe("File Search on a Machine", function()
-  local raw_open = io.open
+  local raw_open, raw_info = io.open, system.get_file_info
 
   local function write_file(path, text)
     common.mkdirp(common.dirname(path))
@@ -91,6 +91,9 @@ test.describe("File Search on a Machine", function()
 
     picker.input:set_text("plan")
     test.ok(wait_until(function() return #file_rows(picker) == 1 end), table.concat(file_rows(picker), ", "))
+    -- As in a local Project, a bare missing name offers its creation first.
+    test.equal(picker.results[1].kind, "create_path")
+    test.ok(command.perform("fuzzy:next"))
     test.ok(wait_until(function()
       local preview = picker.preview_view
       return preview and preview.buffer and table.concat(preview.buffer.lines) == "Plan\n"
@@ -101,6 +104,26 @@ test.describe("File Search on a Machine", function()
       local buffer = core.buffer_registry:find(plan)
       return buffer and not buffer:is_loading() and table.concat(buffer.lines) == "Plan\n"
     end), "The chosen file did not open with the Machine's text")
+  end)
+
+  test.it("creates the file that the query names on the Machine, and opens it", function(context)
+    local path = context.project .. PATHSEP .. "made" .. PATHSEP .. "new.md"
+    fuzzy_searcher.open(path)
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    local function create_row()
+      for _, row in ipairs(picker.results or {}) do
+        if row.create_path then return row end
+      end
+    end
+    test.ok(wait_until(create_row), "status=" .. tostring(picker.status))
+    picker:activate_create_path(create_row())
+    test.ok(wait_until(function() return system.get_file_info(machine_copy(context, path)) ~= nil end),
+      "The Machine has no new file")
+    test.ok(wait_until(function()
+      local buffer = core.buffer_registry:find(path)
+      return buffer and not buffer:is_loading()
+    end), "The new file did not open")
+    test.is_nil(raw_info(context.project .. PATHSEP .. "made"))
   end)
 
   -- Each query uses a different search path: exact text, fuzzy text, text in the files that match a name, and

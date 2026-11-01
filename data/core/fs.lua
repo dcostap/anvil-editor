@@ -1,5 +1,6 @@
 -- Project content for this Project process. A Project on another Machine reaches its files only
 -- through this module. The Buffer's open and save flow and `core.project_files` use it (docs/machines.md).
+local common = require "core.common"
 local json = require "core.json"
 local MachineClient = require "core.machine_client"
 local machine_guard = require "core.machine_guard"
@@ -20,6 +21,13 @@ function fs.use_machine(path, roots)
   fs.use_local()
   machine_guard.enable(roots)
   fs.roots = roots
+  -- Path suggestions list the Machine's folders. The listings arrive later, so a first list can be empty.
+  common.machine_listing = {
+    root = roots[1],
+    list = function(path)
+      if machine_guard.owns(path) then return require("core.machine_folders").list(path) or {} end
+    end,
+  }
   fs.machine = MachineClient.new(path, function(reconnect)
     if not reconnect then return end
     for _, listener in ipairs(reconnect_listeners) do listener() end
@@ -29,6 +37,7 @@ end
 function fs.use_local()
   if fs.machine then fs.machine:close() end
   fs.machine, fs.roots = nil, nil
+  common.machine_listing = nil
   machine_guard.disable()
 end
 

@@ -7536,6 +7536,8 @@ local function bind_link_index(view)
   local owner = view.__markdown_live_owner
   local path = view.buffer.abs_filename or view.buffer.filename
   if not (owner and path) then return end
+  -- The vault index reads the Project's files. A Machine's Project needs the Machine's Index service (step 9).
+  if require("core.fs").on_machine(path) then return end
   local index = vault_index.index_for_path(path)
   local listener_id = owner.listener_id .. ":links"
   if owner.link_index == index and owner.link_listener_id == listener_id then return end

@@ -218,13 +218,34 @@ local function read_file(path)
   return text
 end
 
-local function find_obsidian_vault_root(source_dir, project_root)
+local local_files = { exists = file_exists, read = read_file }
+
+-- The files of a note on a Machine. Only paths in its Project exist. The caller waits in a coroutine
+-- (`file_ops.run`).
+local function machine_files(project_root)
+  local fs = require "core.fs"
+  local file_ops = require "core.file_ops"
+  return {
+    exists = function(path)
+      if not (project_root and common.path_belongs_to(path, project_root)) then return false end
+      local info = file_ops.info(path)
+      return info and info.type == "file"
+    end,
+    read = function(path)
+      local err, bytes = fs.wait(fs.read, path)
+      if not err then return bytes end
+    end,
+  }
+end
+
+local function find_obsidian_vault_root(source_dir, project_root, files)
+  files = files or local_files
   local seen = {}
   local function scan_up(dir)
     while dir and dir ~= "" and not seen[dir] do
       seen[dir] = true
       local app_json = join_path(join_path(dir, ".obsidian"), "app.json")
-      if file_exists(app_json) then return dir end
+      if files.exists(app_json) then return dir end
       local parent = dirname(dir)
       if parent == dir then return nil end
       dir = parent
@@ -233,10 +254,10 @@ local function find_obsidian_vault_root(source_dir, project_root)
   return scan_up(source_dir) or scan_up(project_root)
 end
 
-local function obsidian_attachment_folder(root, source_dir)
+local function obsidian_attachment_folder(root, source_dir, files)
   if not root then return nil end
   local app_json = join_path(join_path(root, ".obsidian"), "app.json")
-  local settings = read_file(app_json)
+  local settings = (files or local_files).read(app_json)
   if not settings then return nil end
   local ok, decoded = pcall(json.decode, settings)
   if not ok then
@@ -266,8 +287,10 @@ end
 function images.attachment_directory(opts)
   opts = opts or {}
   local source_dir = dirname(opts.source_path)
-  local root = find_obsidian_vault_root(source_dir, opts.project_root)
-  local obsidian_folder = obsidian_attachment_folder(root, source_dir)
+  local files = opts.source_path and require("core.fs").on_machine(opts.source_path)
+    and machine_files(opts.project_root) or local_files
+  local root = find_obsidian_vault_root(source_dir, opts.project_root, files)
+  local obsidian_folder = obsidian_attachment_folder(root, source_dir, files)
   if obsidian_folder then return common.normalize_path(obsidian_folder) end
   local configured = opts.configured_folder or "attachments"
   if configured == "." then return common.normalize_path(source_dir or opts.project_root) end

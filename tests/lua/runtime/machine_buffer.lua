@@ -53,9 +53,9 @@ test.describe("Buffer on a Machine", function()
 
   -- A crash loses the Buffer and the connection. Only the recovery record stays.
   local function crash(context, buffer)
+    fs.use_local()
     core.buffer_registry:release(buffer, context)
     core.buffer_registry:remove(buffer, true)
-    fs.use_local()
   end
 
   local function start_server(context, ...)
@@ -229,6 +229,20 @@ test.describe("Buffer on a Machine", function()
     test.equal(read_file(machine_copy(context, context.notes)), "Unsaved Machine copy\n")
     wait_until(function() return record_count() == 0 end, "The saved Buffer kept its recovery record")
     test.is_nil(context.prompt)
+  end)
+
+  test.it("forgets the unsaved text of a Buffer that the user discards", function(context)
+    start_server(context)
+    fs.use_machine(machine_server.discovery_path(context.user), { context.project })
+    local buffer = open(context, context.notes)
+    buffer:insert(1, 1, "Discarded ")
+    wait_until(function() return record_count() == 1 end, "The recovery record was not written")
+    core.buffer_registry:release(buffer, context)
+    core.buffer_registry:remove(buffer, true)
+    test.equal(record_count(), 0)
+    local reopened = open(context, context.notes)
+    test.equal(text(reopened), "Machine copy\n")
+    test.ok(not reopened:is_dirty())
   end)
 
   test.it("after a crash during a save, knows the save from the record", function(context)

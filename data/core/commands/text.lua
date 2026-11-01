@@ -2757,6 +2757,21 @@ local commands = {
         local expanded_filename = common.home_expand(filename)
         local new_filename = core.normalize_to_project_dir(expanded_filename)
         local new_abs_filename = core.project_absolute_path(new_filename)
+        if require("core.fs").on_machine(old_abs_filename) then
+          -- The Machine moves the file, then the Buffer saves its unsaved text, as a local rename does.
+          local file_ops = require("core.file_ops")
+          file_ops.run(old_abs_filename, function()
+            local moved, err = file_ops.move(old_abs_filename, new_abs_filename)
+            if not moved then
+              core.error("Cannot rename \"%s\": %s", old_filename, err)
+              return
+            end
+            dv.buffer:set_filename(new_filename, new_abs_filename)
+            core.log("Renamed \"%s\" to \"%s\"", old_filename, filename)
+            if dv.buffer:is_dirty() then save(nil, dv) end
+          end)
+          return
+        end
         save(expanded_filename, dv)
         if not common.path_equals(dv.buffer.abs_filename, new_abs_filename) then return end
         core.log("Renamed \"%s\" to \"%s\"", old_filename, filename)
@@ -2784,8 +2799,15 @@ local commands = {
       local pane = panes.pane_for_view(textview)
       if pane then panes.close_view(pane, { view = textview, force = true }) end
     end
-    os.remove(filename)
-    core.log("Removed \"%s\"", filename)
+    local file_ops = require("core.file_ops")
+    file_ops.run(filename, function()
+      local removed, err = file_ops.delete({ filename })
+      if not removed then
+        core.error("Cannot remove \"%s\": %s", filename, err)
+        return
+      end
+      core.log("Removed \"%s\"", filename)
+    end)
   end),
 
   ["core:select_to_cursor"] = function(dv, x, y, clicks)

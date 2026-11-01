@@ -3606,8 +3606,6 @@ function path_search.direct_result(text, line, col, case_sensitive)
   end
 
   if not explicit and mode ~= "" then return nil end
-  -- A Project on a Machine cannot create files yet.
-  if require("core.fs").on_machine(path) then return nil end
   local parts = path_search.external_path_parts(path)
   if not parts or parts.blocked or parts.search_terms or not parts.scope then return nil end
   return {
@@ -7961,41 +7959,46 @@ function FSView:activate_create_path(r, new_group)
     return self:open_file_result({ kind = "path", file = path, abs_path = path, line = r.line }, new_group)
   end
 
-  if r.is_folder then
-    local created, err = common.mkdirp(path)
-    if not created then
-      core.error("Cannot create selected folder: %s", path_search.creation_error_label(err))
+  -- On a Machine each change waits for the Machine's reply, so it runs in a thread.
+  local file_ops = require("core.file_ops")
+  local opened
+  file_ops.run(path, function()
+    if r.is_folder then
+      local created, err = file_ops.mkdirp(path)
+      if not created then
+        core.error("Cannot create selected folder: %s", path_search.creation_error_label(err))
+        return
+      end
+      core.log_quiet("Fuzzy Path Search: created folder path_len=%d", #path)
+      self.force_refresh = true
+      self.dirty = true
+      self:refresh(self.input:get_text())
+      self:schedule_update(true)
       return
     end
-    core.log_quiet("Fuzzy Path Search: created folder path_len=%d", #path)
-    self.force_refresh = true
-    self.dirty = true
-    self:refresh(self.input:get_text())
-    self:schedule_update(true)
-    return
-  end
 
-  local parent = common.dirname(path)
-  local parent_info = parent and system.get_file_info(parent)
-  if not parent_info then
-    local created, err = common.mkdirp(parent)
-    if not created then
-      core.error("Cannot create parent folders: %s", path_search.creation_error_label(err))
+    local parent = common.dirname(path)
+    local parent_info = parent and file_ops.info(parent)
+    if not parent_info then
+      local created, err = file_ops.mkdirp(parent)
+      if not created then
+        core.error("Cannot create parent folders: %s", path_search.creation_error_label(err))
+        return
+      end
+    elseif parent_info.type ~= "dir" then
+      core.error("Cannot create file because its parent is not a folder")
       return
     end
-  elseif parent_info.type ~= "dir" then
-    core.error("Cannot create file because its parent is not a folder")
-    return
-  end
 
-  local fp, err = io.open(path, "ab")
-  if not fp then
-    core.error("Cannot create selected file: %s", path_search.creation_error_label(err))
-    return
-  end
-  fp:close()
-  core.log_quiet("Fuzzy Path Search: created file path_len=%d", #path)
-  return self:open_file_result({ kind = "path", file = path, abs_path = path, line = r.line }, new_group)
+    local created, err = file_ops.create(path)
+    if not created then
+      core.error("Cannot create selected file: %s", path_search.creation_error_label(err))
+      return
+    end
+    core.log_quiet("Fuzzy Path Search: created file path_len=%d", #path)
+    opened = self:open_file_result({ kind = "path", file = path, abs_path = path, line = r.line }, new_group)
+  end)
+  return opened
 end
 
 function FSView:confirm_folder_open(r, new_group)

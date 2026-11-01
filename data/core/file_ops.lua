@@ -285,17 +285,20 @@ function file_ops.mkdirp(path)
   return true
 end
 
--- Makes an empty file. It fails when the path exists.
-function file_ops.create(path)
+-- Makes a file with the bytes, or an empty file. It fails when the path exists.
+function file_ops.create(path, bytes)
   if fs.on_machine(path) then
-    local err = fs.wait(fs.write, path, "", nil, nil)
+    local err = fs.wait(fs.write, path, bytes or "", nil, nil)
     if err then return nil, tostring(err.code == "conflict" and "target already exists: " .. path or err.message or err.code) end
     return true
   end
   if system.get_file_info(path) then return nil, "target already exists: " .. path end
   local file, err = io.open(path, "wb")
   if not file then return nil, err end
+  local ok
+  ok, err = file:write(bytes or "")
   file:close()
+  if not ok then os.remove(path); return nil, err end
   return true
 end
 

@@ -1,5 +1,7 @@
 local common = require "core.common"
 local core = require "core"
+local Editor = require "core.editor"
+local command = require "core.command"
 local config = require "core.config"
 local fs = require "core.fs"
 local machine_folders = require "core.machine_folders"
@@ -40,7 +42,7 @@ test.describe("File Tree on a Machine", function()
   local function wait_until(condition)
     local deadline = system.get_time() + 15
     while not condition() and system.get_time() < deadline do
-      shown:update()
+      if shown then shown:update() end
       coroutine.yield(0.02)
     end
     return condition()
@@ -93,6 +95,59 @@ test.describe("File Tree on a Machine", function()
     shown = view
     test.ok(wait_until(function() return view.image ~= nil end), tostring(view.errmsg))
     test.same({ view.image:get_size() }, { 8, 6 })
+  end)
+
+  test.it("makes a folder, and renames and deletes an open file, with the file commands", function(context)
+    local path = context.project .. PATHSEP .. "notes.md"
+    local buffer = core.open_buffer(path)
+    shown = Editor(buffer)
+    panes.focus(panes.create { factory = function() return shown end })
+    test.ok(wait_until(function() return not buffer:is_loading() end), "The Machine's file did not open")
+    buffer:insert(1, 1, "Renamed ")
+
+    test.ok(command.perform("editor:rename"), "Rename did not run")
+    core.global_prompt_bar:set_text("renamed.md")
+    core.global_prompt_bar:submit()
+    local renamed = context.project .. PATHSEP .. "renamed.md"
+    test.ok(wait_until(function()
+      return common.path_equals(buffer.abs_filename, renamed) and not buffer:is_dirty()
+    end), "The file was not renamed and saved: " .. tostring(buffer.abs_filename))
+    local file = assert(raw_open(machine_copy(context, renamed), "rb"))
+    test.equal(file:read("*a"), "Renamed Notes\n")
+    file:close()
+    test.is_nil(system.get_file_info(machine_copy(context, path)))
+
+    command.perform("editor:delete")
+    test.ok(wait_until(function() return system.get_file_info(machine_copy(context, renamed)) == nil end),
+      "The Machine's file was not deleted")
+
+    command.perform("core:create_directory")
+    core.global_prompt_bar:set_text("made" .. PATHSEP .. "deep")
+    core.global_prompt_bar:submit()
+    test.ok(wait_until(function()
+      local info = system.get_file_info(machine_copy(context, context.project .. PATHSEP .. "made" .. PATHSEP .. "deep"))
+      return info and info.type == "dir"
+    end), "The Machine has no new folder")
+    test.same(raw_list_dir(context.project), { "client-only.md" })
+  end)
+
+  test.it("uploads a file from this PC into a note's attachment folder", function(context)
+    local path = context.project .. PATHSEP .. "notes.md"
+    local buffer = core.open_buffer(path)
+    shown = Editor(buffer)
+    panes.focus(panes.create { factory = function() return shown end })
+    test.ok(wait_until(function() return not buffer:is_loading() end), "The Machine's file did not open")
+    local source = context.root .. PATHSEP .. "pasted.png"
+    write_file(source, "image bytes")
+
+    local ok, result = require("core.markdown.attachments").import_file(shown, source)
+    test.ok(ok, result)
+    test.ok(common.path_belongs_to(result.path, context.project), result.path)
+    local file = assert(raw_open(machine_copy(context, result.path), "rb"))
+    test.equal(file:read("*a"), "image bytes")
+    file:close()
+    test.ok(table.concat(buffer.lines):find(result.text, 1, true), table.concat(buffer.lines))
+    test.same(raw_list_dir(context.project), { "client-only.md" })
   end)
 
   local function find_entry(tree, name)

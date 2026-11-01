@@ -119,6 +119,9 @@ function completion.get_completions(view)
   local candidates
   if context.mode == "file" then
     candidates = file_completion.candidates(context, path)
+  elseif require("core.fs").on_machine(path) then
+    -- Note names come from the vault index, which a Machine's Project does not have yet (step 9).
+    return context
   else
     local index = vault_index.index_for_path(path)
     if not index:can_resolve() then

@@ -1,6 +1,8 @@
 local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
+local file_ops = require "core.file_ops"
+local fs = require "core.fs"
 local images = require "core.markdown.images"
 local keymap = require "core.keymap"
 local vault_index = require "core.markdown.vault_index"
@@ -40,7 +42,7 @@ local function unique_destination(directory, basename)
   stem, suffix = stem or basename, suffix or ""
   local candidate = directory .. PATHSEP .. basename
   local number = 1
-  while system.get_file_info(candidate) do
+  while file_ops.info(candidate) do
     candidate = directory .. PATHSEP .. stem .. "-" .. number .. suffix
     number = number + 1
   end
@@ -73,6 +75,7 @@ end
 ---Insert a link to `source` at the selection. Copy files outside the Project into its
 ---attachment folder. `opts.absolute` links any existing file or folder by file URI.
 ---`opts.prefix` is inserted before the link.
+---For a note on a Machine, the copy uploads the file, and the calling coroutine waits (`file_ops.run`).
 function attachments.import_file(view, source, opts)
   opts = opts or {}
   local prefix = opts.prefix or ""
@@ -84,8 +87,11 @@ function attachments.import_file(view, source, opts)
     return false, "Buffer is not editable"
   end
   local target = system.absolute_path(source) or common.normalize_path(source)
+  local remote = fs.on_machine(view.buffer.abs_filename)
 
   if opts.absolute then
+    -- A link to a file of this PC means nothing on the Machine.
+    if remote then return false, "the note is on another Machine" end
     local text = serialized_link(file_uri(target), IMAGE_EXTENSIONS[extension(target) or ""] == true, "markdown")
     view:with_selection_state(function() view.buffer:text_input(prefix .. text) end)
     return true, { path = target, text = text, copied = false, absolute = true }
@@ -94,12 +100,15 @@ function attachments.import_file(view, source, opts)
   if source_info.type ~= "file" then return false, "source is not a file" end
   local project = core.current_project(view.buffer.abs_filename)
   if not project then return false, "Project unavailable" end
-  local project_root = system.absolute_path(project.path) or common.normalize_path(project.path)
-  local source_note = system.absolute_path(view.buffer.abs_filename)
-    or common.normalize_path(view.buffer.abs_filename)
+  local function absolute(path)
+    return not remote and system.absolute_path(path) or common.normalize_path(path)
+  end
+  local project_root = absolute(project.path)
+  local source_note = absolute(view.buffer.abs_filename)
   local copied = false
 
-  if not common.path_belongs_to(target, project_root) then
+  -- A source file is on this PC, so a note on a Machine always gets a copy.
+  if remote or not common.path_belongs_to(target, project_root) then
     local directory = images.attachment_directory({
       source_path = source_note,
       project_root = project_root,
@@ -110,13 +119,22 @@ function attachments.import_file(view, source, opts)
       or common.path_belongs_to(directory, project_root)
     )
     if not directory_in_project then return false, "attachment directory is outside Project" end
-    local info = system.get_file_info(directory)
+    local info = file_ops.info(directory)
     if not (info and info.type == "dir") then
-      local ok, err = common.mkdirp(directory)
+      local ok, err = file_ops.mkdirp(directory)
       if not ok then return false, err end
     end
     target = unique_destination(directory, common.basename(source))
-    local ok, err = copy_file(source, target)
+    local ok, err
+    if remote then
+      local input = io.open(source, "rb")
+      if not input then return false, "cannot read " .. source end
+      local bytes = input:read("*a")
+      input:close()
+      ok, err = file_ops.create(target, bytes)
+    else
+      ok, err = copy_file(source, target)
+    end
     if not ok then return false, err end
     copied = true
   end
@@ -126,7 +144,10 @@ function attachments.import_file(view, source, opts)
   local rel = display_path(common.relative_path(relative_base, target))
   local text = serialized_link(rel, IMAGE_EXTENSIONS[extension(target) or ""] == true, format)
   view:with_selection_state(function() view.buffer:text_input(prefix .. text) end)
-  vault_index.index_for_path(view.buffer.abs_filename):update_path(target, { cooperative = true })
+  -- A Machine's Project has no vault index yet (docs/machines.md, step 9).
+  if not remote then
+    vault_index.index_for_path(view.buffer.abs_filename):update_path(target, { cooperative = true })
+  end
   core.log_quiet("Markdown attachment %s %s -> %s", copied and "copied" or "linked", source, target)
   return true, { path = target, text = text, copied = copied }
 end
@@ -172,14 +193,18 @@ function attachments.paste_provider()
         return false
       end
 
-      local imported, result = attachments.import_file(view, temp_path)
-      common.rm(temp_dir, true)
-      if not imported then
-        core.error("Could not import clipboard image: %s", tostring(result))
-        return false
-      end
-      core.log_quiet("Markdown clipboard image imported from %s", format.mime)
-      return true
+      local imported, result
+      file_ops.run(view.buffer.abs_filename, function()
+        imported, result = attachments.import_file(view, temp_path)
+        common.rm(temp_dir, true)
+        if not imported then
+          core.error("Could not import clipboard image: %s", tostring(result))
+          return
+        end
+        core.log_quiet("Markdown clipboard image imported from %s", format.mime)
+      end)
+      -- On a Machine the upload continues in the background.
+      return imported ~= false
     end,
   }
 end
@@ -195,20 +220,27 @@ function attachments.drop_provider()
         view:set_selection_state({ selections = { line, col, line, col }, last_selection = 1 })
       end
       local absolute = keymap.modkeys["alt"] == true
-      local linked = 0
-      for _, filename in ipairs(files) do
-        local prefix = linked > 0 and "\n" or nil
-        local ok, err = attachments.import_file(view, filename, { absolute = absolute, prefix = prefix })
-        if not ok and not absolute then
-          core.log_quiet("Markdown attachment drop links %s by absolute path: %s", filename, tostring(err))
-          ok, err = attachments.import_file(view, filename, { absolute = true, prefix = prefix })
+      local linked
+      -- On a Machine each file uploads in the background, so the drop counts as accepted.
+      file_ops.run(view.buffer.abs_filename, function()
+        linked = 0
+        for _, filename in ipairs(files) do
+          local prefix = linked > 0 and "\n" or nil
+          local ok, err = attachments.import_file(view, filename, { absolute = absolute, prefix = prefix })
+          if not ok and not absolute and not fs.on_machine(view.buffer.abs_filename) then
+            core.log_quiet("Markdown attachment drop links %s by absolute path: %s", filename, tostring(err))
+            ok, err = attachments.import_file(view, filename, { absolute = true, prefix = prefix })
+          end
+          if ok then
+            linked = linked + 1
+          elseif fs.on_machine(view.buffer.abs_filename) then
+            core.error("Could not upload %s: %s", filename, tostring(err))
+          else
+            core.log_quiet("Markdown attachment drop declined %s: %s", filename, tostring(err))
+          end
         end
-        if ok then
-          linked = linked + 1
-        else
-          core.log_quiet("Markdown attachment drop declined %s: %s", filename, tostring(err))
-        end
-      end
+      end)
+      if linked == nil then return #files > 0 end
       return linked > 0
     end,
   }
