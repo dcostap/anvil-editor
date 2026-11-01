@@ -124,10 +124,17 @@ function MachineClient.pair(host, port, code, name, on_done)
   end)
 end
 
+-- The Machine server closes the connection of a request with more bytes.
+MachineClient.MAX_FILE = 16 * 1024 * 1024
+
 -- Sends one request. `on_reply(err, result, bytes)` runs once: with the result, or with an error
 -- from the Machine (`err.code`). A conflict also sends bytes. Two errors come from the connection:
 -- `offline` when the request was not sent, and `disconnected` when its reply did not arrive.
+-- A request with more than MAX_FILE bytes fails with `too_large` and is not sent.
 function MachineClient:request(method, params, bytes, on_reply)
+  if bytes and #bytes > MachineClient.MAX_FILE then
+    return core.try(on_reply, {code = "too_large", message = "The file is larger than the Machine takes (16 MiB)"})
+  end
   if self.state == "closed" or self.state == "waiting" then
     return core.try(on_reply, {code = "offline", message = self.error or "The Machine is not connected"})
   end

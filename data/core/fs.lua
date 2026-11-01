@@ -29,8 +29,7 @@ function fs.use_machine(path, roots)
     end,
   }
   fs.machine = MachineClient.new(path, function(reconnect)
-    if not reconnect then return end
-    for _, listener in ipairs(reconnect_listeners) do listener() end
+    if reconnect then fs.reconnected() end
   end)
 end
 
@@ -46,9 +45,20 @@ function fs.on_machine(path)
   return machine_guard.owns(path)
 end
 
+-- True when a Buffer of `path` reads and saves through the Machine. Files in this PC's own folders, such
+-- as the User Module, stay on this PC. The Machine refuses other paths outside its Projects.
+function fs.machine_file(path)
+  return fs.machine ~= nil and not machine_guard.local_state(path)
+end
+
 -- `listener()` runs after each reconnect, because the Client missed the Machine's changes.
 function fs.on_reconnect(listener)
   reconnect_listeners[#reconnect_listeners + 1] = listener
+end
+
+-- Runs the reconnect listeners. The Machine Client calls it after each reconnect.
+function fs.reconnected()
+  for _, listener in ipairs(reconnect_listeners) do listener() end
 end
 
 -- `on_done(err, bytes, version)`. A missing file gives the error code `not_found`.

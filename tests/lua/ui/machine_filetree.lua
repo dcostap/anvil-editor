@@ -288,6 +288,16 @@ test.describe("File Tree on a Machine", function()
     ok, result = upload_while(function() buffer:insert(1, 1, "Typed ") end)
     test.not_ok(ok)
     test.equal(table.concat(buffer.lines), "Typed " .. before)
+
+    -- A note that gets a new name during the upload gets no link. A Markdown link is relative to the note's folder.
+    before = table.concat(buffer.lines)
+    local name, path = buffer.filename, buffer.abs_filename
+    ok, result = upload_while(function()
+      buffer:set_filename("sub/renamed.md", context.project .. PATHSEP .. "sub" .. PATHSEP .. "renamed.md")
+    end)
+    buffer:set_filename(name, path)
+    test.not_ok(ok)
+    test.equal(table.concat(buffer.lines), before)
   end)
 
   local function find_entry(tree, name)

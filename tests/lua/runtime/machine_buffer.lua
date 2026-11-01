@@ -156,6 +156,20 @@ test.describe("Buffer on a Machine", function()
     test.ok(buffer:is_dirty())
   end)
 
+  test.it("opens and saves a file of this PC's own folders on this PC", function(context)
+    start_server(context)
+    fs.use_machine(machine_server.discovery_path(context.user), { context.project })
+    -- The User Module is in this PC's user folder, outside the Project.
+    local path = context.root .. PATHSEP .. "init.lua"
+    write_file(path, "-- This PC\n")
+    local buffer = open(context, path)
+    test.equal(text(buffer), "-- This PC\n")
+    buffer:insert(1, 1, "-- Edited\n")
+    buffer:save()
+    wait_until(function() return not buffer:is_dirty() end, "The save did not finish")
+    test.equal(read_file(path), "-- Edited\n-- This PC\n")
+  end)
+
   test.it("opens a file whose text names a Project path", function(context)
     write_file(machine_copy(context, context.idea), context.notes)
     start_server(context)
@@ -362,6 +376,7 @@ test.describe("Buffer on a Machine while a save waits for its reply", function()
 
   test.before_each(function(context)
     context.write, context.enabled = fs.write, autosave_fast.enabled
+    context.read, context.save_result = fs.read, fs.save_result
     autosave_fast.enabled = false
     fs.machine = { machine = "held-replies", close = function() end }
     context.writes = {}
@@ -383,8 +398,11 @@ test.describe("Buffer on a Machine while a save waits for its reply", function()
   end)
 
   test.after_each(function(context)
+    core.buffer_registry:release(context.buffer, context)
+    core.buffer_registry:remove(context.buffer, true)
     if not context.buffer.machine_closed then context.buffer:on_close() end
     fs.write, autosave_fast.enabled = context.write, context.enabled
+    fs.read, fs.save_result = context.read, context.save_result
     fs.use_local()
     storage.clear("machine_recovery")
   end)
@@ -448,6 +466,110 @@ test.describe("Buffer on a Machine while a save waits for its reply", function()
     buffer:on_close()
     reply(context.writes[1])
     test.equal(#context.writes, 1)
+  end)
+
+  test.it("saves later edits to the Save As file, not to the file it came from", function(context)
+    local buffer = context.buffer
+    buffer:insert(1, 1, "A ")
+    buffer:save("copy.md", context.copy)
+    buffer:insert(1, 1, "B ")
+    buffer:save()
+    reply(context.writes[1])
+    test.equal(#context.writes, 2)
+    test.equal(context.writes[2].path, context.copy)
+    reply(context.writes[2])
+    test.ok(common.path_equals(buffer.abs_filename, context.copy), buffer.abs_filename)
+    test.not_ok(buffer:is_dirty())
+  end)
+
+  test.it("keeps a closed Buffer and its record while a save that looks undone waits", function(context)
+    local buffer = context.buffer
+    core.buffer_registry:retain(buffer, context)
+    buffer:insert(1, 1, "A ")
+    buffer:save()
+    buffer:undo()
+    test.not_ok(buffer:is_dirty())
+    -- The last View closes. The Machine can still write A.
+    core.buffer_registry:release(buffer, context)
+    core.buffer_registry:collect()
+    coroutine.yield(1)
+    test.not_ok(buffer.machine_closed)
+    test.equal(#storage.keys("machine_recovery"), 1)
+    reply(context.writes[1])
+    test.ok(buffer:is_dirty())
+  end)
+
+  test.it("sends a Save As again when the Machine did not get it", function(context)
+    local buffer = context.buffer
+    core.buffer_registry:retain(buffer, context)
+    -- The Machine restarted, so it does not know the save. Its files have the versions before the save.
+    fs.save_result = function(_, done) done({ code = "unknown_save" }) end
+    fs.read = function(path, done)
+      if common.path_equals(path, context.copy) then return done({ code = "not_found" }) end
+      done(nil, "Original\n", machine.content_version("Original\n"))
+    end
+    buffer:save("copy.md", context.copy)
+    reply(context.writes[1], { code = "disconnected" })
+    fs.reconnected()
+    test.equal(#context.writes, 2)
+    test.equal(context.writes[2].path, context.copy)
+    reply(context.writes[2])
+    test.ok(common.path_equals(buffer.abs_filename, context.copy), buffer.abs_filename)
+
+    -- A Save As that waits behind a lost save also goes out.
+    buffer:insert(1, 1, "A ")
+    buffer:save()
+    buffer:save("third.md", USERDIR .. PATHSEP .. "third.md")
+    local saved = context.writes[2].bytes
+    fs.read = function(_, done) done(nil, saved, machine.content_version(saved)) end
+    reply(context.writes[3], { code = "disconnected" })
+    fs.reconnected()
+    test.equal(#context.writes, 4)
+    test.equal(context.writes[4].path, context.copy)
+    reply(context.writes[4])
+    test.equal(#context.writes, 5)
+    test.ok(common.path_equals(context.writes[5].path, USERDIR .. PATHSEP .. "third.md"))
+  end)
+
+  test.it("leaves the old file's conflict behind after a Save As", function(context)
+    local buffer = context.buffer
+    buffer:insert(1, 1, "A ")
+    buffer:save()
+    reply(context.writes[1], { code = "conflict", version = "changed on the Machine" })
+    test.ok(context.conflict)
+    buffer:save("copy.md", context.copy)
+    reply(context.writes[2])
+    test.is_nil(buffer.machine_conflict)
+    buffer:insert(1, 1, "B ")
+    buffer:save()
+    test.equal(context.writes[3].base, machine.content_version(context.writes[2].bytes))
+  end)
+
+  test.it("sends a save that waits, also when the first save leaves the text clean", function(context)
+    local buffer = context.buffer
+    buffer:insert(1, 1, "A ")
+    buffer:save()
+    -- An encoding or line ending change does not change the text.
+    buffer.crlf = not buffer.crlf
+    buffer:save()
+    reply(context.writes[1])
+    test.equal(#context.writes, 2)
+    test.not_equal(context.writes[1].bytes, context.writes[2].bytes)
+  end)
+
+  test.it("refuses a file larger than the Machine takes, without a request", function(context)
+    local buffer = context.buffer
+    fs.write = context.write
+    local requests = 0
+    fs.machine.request = function(_, _, _, _, done)
+      requests = requests + 1
+      done({ code = "disconnected" })
+    end
+    buffer:insert(1, 1, string.rep("x", 17 * 1024 * 1024))
+    buffer:save()
+    test.equal(requests, 0)
+    test.is_nil(buffer.machine_save)
+    test.ok(buffer:is_dirty())
   end)
 
   test.it("keeps the file of a Save As that waits for another save", function(context)

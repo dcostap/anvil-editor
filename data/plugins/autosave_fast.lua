@@ -67,7 +67,7 @@ end
 -- On a Machine, the Machine refuses a save over a changed file. Its last refusal is the only
 -- known disk state.
 local function capture_disk_state(buffer)
-  if fs.machine then
+  if fs.machine_file(buffer and buffer.abs_filename) then
     local conflict = buffer and buffer.machine_conflict
     return conflict and { exists = conflict.version ~= nil, version = conflict.version }
   end
@@ -109,7 +109,7 @@ local function disk_states_differ(old, current)
 end
 
 local function save_target_missing(buffer)
-  if fs.machine then
+  if fs.machine_file(buffer and buffer.abs_filename) then
     return buffer and buffer.machine_conflict and buffer.machine_conflict.version == nil or false
   end
   if not buffer or not buffer.abs_filename then return false end
@@ -118,7 +118,7 @@ local function save_target_missing(buffer)
 end
 
 local function disk_changed_since_load_or_save(buffer)
-  if fs.machine then return buffer and buffer.machine_conflict ~= nil or false end
+  if fs.machine_file(buffer and buffer.abs_filename) then return buffer and buffer.machine_conflict ~= nil or false end
   if not buffer or not buffer.abs_filename then return false end
   local old = disk_state[buffer]
   return disk_states_differ(old, capture_disk_state(buffer))
@@ -291,7 +291,7 @@ local function show_conflict_prompt(buffer)
       { font = style.font, text = "Cancel", default_no = true },
     }
     -- A copy opens a second Buffer through the local path, so Machine files do not offer it yet.
-    if fs.machine then table.remove(buttons, 3) end
+    if fs.machine_file(buffer.abs_filename) then table.remove(buttons, 3) end
     return buttons
   end
   local buttons = prompt_buttons()

@@ -401,7 +401,7 @@ function Buffer:load_async(filename, on_finish, opts)
   self:cancel_load()
   cancel_pending_save(self)
   -- Save backups belong to local saves.
-  if prompt_stale_backup and not fs.machine and not (opts and opts.backup_prompt == false) then
+  if prompt_stale_backup and not fs.machine_file(filename) and not (opts and opts.backup_prompt == false) then
     prompt_stale_backup(filename)
   end
   local request = {
@@ -422,7 +422,7 @@ function Buffer:load_async(filename, on_finish, opts)
     request.status, request.error = status, err
     request.total_ms = (system.get_time() - request.started) * 1000
     request.data, request.source_lines, request.finish = nil, nil, nil
-    if status == "loaded" and fs.machine then
+    if status == "loaded" and fs.machine_file(filename) then
       self.machine_version, self.machine_conflict = request.version, nil
       restore_machine_record(self)
     end
@@ -519,7 +519,7 @@ function Buffer:load_async(filename, on_finish, opts)
     if not job then finish("failed", err) end
     return job, err
   end
-  if not fs.machine then
+  if not fs.machine_file(filename) then
     local job, err = submit()
     if not job then return nil, err end
     core.log_quiet("Background load started for %s", filename)
@@ -563,7 +563,7 @@ local reload_from_machine
 ---On a Machine, the reload waits for the file's bytes.
 function Buffer:reload()
   if not self.filename then return end
-  if fs.machine then return reload_from_machine(self) end
+  if fs.machine_file(self.abs_filename) then return reload_from_machine(self) end
   if self:is_loading() or self.load_error or self.binary then
     self:load(self.abs_filename)
     self:clean()
@@ -955,7 +955,10 @@ end
 
 local function write_machine_record(self)
   -- A closed Buffer has no record, also when a write was due or a save replies later.
-  if not fs.machine or not fs.machine.machine or not self.abs_filename or self.machine_closed then return end
+  if not fs.machine_file(self.abs_filename) or not fs.machine.machine or not self.abs_filename
+      or self.machine_closed then
+    return
+  end
   local key = record_key(self.abs_filename)
   local save = self.machine_save
   -- The Machine can have the bytes of an unresolved save, so text that looks saved keeps its record.
@@ -1059,13 +1062,15 @@ end
 
 local save_on_machine
 
--- A save that waited for this one runs now. A closed Buffer sends nothing more.
+-- A save that waited for this one runs now. A closed Buffer sends nothing more. A plain Save has no file:
+-- it saves the Buffer's file, which a Save As can change. It runs also when the text looks saved, because
+-- an encoding or line ending change does not change the text.
 local function save_again(self, request, failed)
   local again = request.again
   if not again or self.machine_closed then return end
-  if not common.path_equals(again.abs_filename, self.abs_filename) then
+  if again.abs_filename and not common.path_equals(again.abs_filename, self.abs_filename) then
     self:save(again.filename, again.abs_filename)
-  elseif not failed and self:is_dirty() then
+  elseif not failed then
     self:save()
   end
 end
@@ -1095,7 +1100,11 @@ local function finish_machine_save(self, request, err, version)
     end
     return save_again(self, request, true)
   end
-  if not request.same_file then self:set_filename(request.filename, request.abs_filename) end
+  -- A conflict of the old file does not hold for the new file.
+  if not request.same_file then
+    self:set_filename(request.filename, request.abs_filename)
+    self.machine_conflict = nil
+  end
   self.machine_version, self.new_file = version, false
   -- Only the sent text is saved. Later edits stay unsaved. After an edit or an undo, the history can hold
   -- other text at the sent undo position, so the Buffer is clean only when its text is the sent text.
@@ -1115,17 +1124,27 @@ end
 -- A Machine save runs in the background. The Buffer stays dirty until the Machine confirms
 -- the text that the save sent. A save during another save waits, with its file, for the reply.
 -- `overwrite` is the version of an existing Save As file that the save replaces.
-save_on_machine = function(self, filename, abs_filename, overwrite)
+-- `plain` is a Save without a file name.
+save_on_machine = function(self, filename, abs_filename, overwrite, plain)
   if self.machine_closed then
     core.log_quiet("Machine save for %s skipped: the Buffer is closed", filename)
     return
   end
   if self.machine_save then
-    self.machine_save.again = { filename = filename, abs_filename = abs_filename }
+    -- A Save As that waits already sends the newest text, so a later plain Save does not replace it.
+    if not plain then
+      self.machine_save.again = { filename = filename, abs_filename = abs_filename }
+    elseif not self.machine_save.again then
+      self.machine_save.again = {}
+    end
     return
   end
   local same_file = common.path_equals(abs_filename, self.abs_filename)
   local bytes = encode_text(self)
+  if #bytes > require("core.machine_client").MAX_FILE then
+    core.error("Cannot save %s on the Machine: the file is larger than 16 MiB", filename)
+    return
+  end
   local request = {
     id = net.random_token():sub(1, 24), change_id = self:get_change_id(), revision = self.text_revision,
     filename = filename, abs_filename = abs_filename, same_file = same_file, overwrite = overwrite,
@@ -1166,12 +1185,21 @@ local function resolve_machine_save(self, request)
       if self.machine_save ~= request then return end
       if read_err and read_err.code ~= "not_found" then return end
       if current == request.sent then return finish_machine_save(self, request, nil, current) end
+      if current ~= request.base then
+        return finish_machine_save(self, request, { code = "conflict", version = current })
+      end
+      -- The save did not happen. Never send its old bytes: send the current text, then the saves that wait.
       self.machine_save = nil
       machine_record_due(self)
-      if current ~= request.base then return machine_conflict(self, current) end
-      -- The save did not happen. Never send its old bytes: save the current text.
-      if self:is_dirty() then
-        if request.same_file then self:save() else self:save(request.filename, request.abs_filename) end
+      if not request.same_file then
+        save_on_machine(self, request.filename, request.abs_filename, request.overwrite)
+      elseif self:is_dirty() then
+        self:save()
+      end
+      if self.machine_save then
+        self.machine_save.again = request.again
+      else
+        save_again(self, request, true)
       end
     end)
   end)
@@ -1202,7 +1230,8 @@ fs.on_reconnect(function()
       -- A Save As to another file sends the current text there. The file it came from does not change.
       buffer.machine_offline_save = nil
       buffer:save(offline.filename, offline.abs_filename)
-    elseif buffer.abs_filename and not buffer:is_loading() and not buffer.load_error then
+    elseif buffer.abs_filename and fs.machine_file(buffer.abs_filename) and not buffer:is_loading()
+        and not buffer.load_error then
       local request = buffer.machine_save
       if request and request.unknown then
         resolve_machine_save(buffer, request)
@@ -1217,6 +1246,7 @@ function Buffer:save(filename, abs_filename)
   assert(not self:is_loading() and not self.load_error, self.load_error or "file is still loading")
   local prepared = self.prepared_save
   if not prepared then cancel_pending_save(self) end
+  local plain = not filename
   if not filename then
     assert(self.filename, "no filename set to default to")
     filename = self.filename
@@ -1230,7 +1260,7 @@ function Buffer:save(filename, abs_filename)
       and not core.buffer_registry:can_use_identity(self, abs_filename) then
     error("another Buffer already has this file identity")
   end
-  if fs.machine then return save_on_machine(self, filename, abs_filename) end
+  if fs.machine_file(abs_filename) then return save_on_machine(self, filename, abs_filename, nil, plain) end
 
   local output
   if not prepared and self:needs_encoding_conversion() then output = encode_text(self) end
@@ -1277,7 +1307,7 @@ end
 
 ---Return whether a worker can prepare this file without changing save rules.
 function Buffer:can_save_async()
-  if fs.machine or self:is_loading() or self.load_error then return false end
+  if fs.machine_file(self.abs_filename) or self:is_loading() or self.load_error then return false end
   if not self.abs_filename or self:needs_encoding_conversion()
     or config.safe_write == false or not system.sync_file
     or not system.atomic_replace_file then return false end

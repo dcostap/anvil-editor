@@ -90,6 +90,7 @@ function attachments.import_file(view, source, opts)
   local target = system.absolute_path(source) or common.normalize_path(source)
   local remote = fs.on_machine(view.buffer.abs_filename)
   local buffer, selection, revision = view.buffer, view:get_selection_state(), view.buffer.text_revision
+  local note_path = buffer.abs_filename
 
   if opts.absolute then
     -- A link to a file of this PC means nothing on the Machine.
@@ -145,7 +146,9 @@ function attachments.import_file(view, source, opts)
   local relative_base = format == "markdown" and common.dirname(source_note) or project_root
   local rel = display_path(common.relative_path(relative_base, target))
   local text = serialized_link(rel, IMAGE_EXTENSIONS[extension(target) or ""] == true, format)
-  if view.textview_closed or view.buffer ~= buffer or buffer.text_revision ~= revision then
+  -- A note with a new name can be in another folder, and a Markdown link is relative to its folder.
+  if view.textview_closed or view.buffer ~= buffer or buffer.text_revision ~= revision
+      or buffer.abs_filename ~= note_path then
     core.warn("Anvil copied %s, but the note changed during the copy. Anvil did not insert its link.", target)
     return false, "the note changed during the copy"
   end

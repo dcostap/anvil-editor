@@ -105,10 +105,13 @@ end
 function BufferRegistry:remove(buffer, force)
   local record = self.records[buffer]
   if not record then return false end
-  -- A discarded Untitled Buffer can still report dirty after its identity is cleared.
+  -- A discarded Untitled Buffer can still report dirty after its identity is cleared. A Machine save that
+  -- waits for its reply can still write text that the Buffer no longer shows, so the Buffer and its
+  -- recovery record stay until the reply.
   if not force
       and (self:reference_count(buffer) > 0
-        or (is_dirty(buffer) and not buffer.intellij_untitled_discarded))
+        or (is_dirty(buffer) and not buffer.intellij_untitled_discarded)
+        or buffer.machine_save)
   then
     return false
   end

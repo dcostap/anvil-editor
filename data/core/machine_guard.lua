@@ -15,6 +15,8 @@ local part_pattern = windows and "[^\\]+" or "[^/]+"
 local roots = nil
 -- This PC's own folders below a root, in normalized form.
 local own_folders = {}
+-- All of this PC's own folders, in normalized form.
+local all_own_folders = {}
 local restore = {}
 
 -- Returns the path in one spelling for comparison, or nil for a relative path.
@@ -52,13 +54,15 @@ local function in_project(normalized)
   return false
 end
 
-local function in_own_folder(normalized)
-  for _, folder in ipairs(own_folders) do
+local function in_folders(normalized, folders)
+  for _, folder in ipairs(folders) do
     local prefix = folder_prefix(folder)
     if normalized == folder or normalized:sub(1, #prefix) == prefix then return true end
   end
   return false
 end
+
+local function in_own_folder(normalized) return in_folders(normalized, own_folders) end
 
 -- True when the raw file functions must refuse the path.
 local function guarded(normalized)
@@ -165,9 +169,10 @@ function machine_guard.enable(project_roots)
   machine_guard.disable()
   roots = {}
   for _, root in ipairs(project_roots) do roots[#roots + 1] = assert(normalize(root), "A Project root must be absolute") end
-  own_folders = {}
+  own_folders, all_own_folders = {}, {}
   for _, folder in ipairs({ USERDIR, DATADIR, EXEDIR, os.getenv("TEMP") or os.getenv("TMPDIR") }) do
     local normalized = type(folder) == "string" and normalize(folder)
+    if normalized then all_own_folders[#all_own_folders + 1] = normalized end
     if normalized and in_project(normalized) then
       local is_root = false
       for _, root in ipairs(roots) do is_root = is_root or root == normalized end
@@ -206,7 +211,15 @@ end
 function machine_guard.disable()
   for i = #restore, 1, -1 do restore[i]() end
   restore = {}
-  roots, own_folders = nil, {}
+  roots, own_folders, all_own_folders = nil, {}, {}
+end
+
+-- True when the guard is on and the path names a file of this PC's own folders, such as the User Module.
+-- A Project path is the Machine's, unless it is in an own folder below a root.
+function machine_guard.local_state(path)
+  if not roots or type(path) ~= "string" then return false end
+  local normalized = normalize(path)
+  return normalized ~= nil and not guarded(normalized) and in_folders(normalized, all_own_folders)
 end
 
 -- True when the guard is on and the path names a file of the Machine.
