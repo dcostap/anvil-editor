@@ -316,19 +316,27 @@ test.describe("Sidebar list actions", function()
       view:toggle("group:week", true)
     end
     a:set_model(model, 7); b:set_model(model, 9)
-    local local_texts, remote_texts = drawn_texts(a, 600, 1000), drawn_texts(b, 600, 1000)
-    for _, label in ipairs {"Alpha", "notes.lua", "recent shell", "OLDER THAN A WEEK", "old shell"} do
-      local normal = test.not_nil(find_text(local_texts, label), label .. " is missing locally")
-      local dimmed = test.not_nil(find_text(remote_texts, label), label .. " is missing remotely")
-      test.ok(dimmed.opacity > 0 and dimmed.opacity < normal.opacity, label .. " is not dimmed remotely")
+    local function check(labels)
+      local local_texts, remote_texts = drawn_texts(a, 600, 1000), drawn_texts(b, 600, 1000)
+      for _, label in ipairs(labels) do
+        local normal = test.not_nil(find_text(local_texts, label), label .. " is missing locally")
+        local dimmed = test.not_nil(find_text(remote_texts, label), label .. " is missing remotely")
+        test.ok(dimmed.opacity > 0 and dimmed.opacity < normal.opacity, label .. " is not dimmed remotely")
+      end
+      return local_texts, remote_texts
     end
+    local local_texts, remote_texts = check {"Alpha"}
     test.equal(find_text(remote_texts, "Dormant").opacity, find_text(local_texts, "Dormant").opacity)
+    -- The remote Project stays collapsed. A search lists its children.
+    for _, view in ipairs {a, b} do
+      view:on_focus(true)
+      view:on_text_input("e")
+    end
+    check {"notes.lua", "recent shell", "old shell"}
     -- Moving the Project changes which Sidebar dims it.
     model[1].window_id = 9
     model.windows = {{id=7,selected_project=0},{id=9,selected_project=11}}
     a:set_model(model, 7); b:set_model(model, 9)
-    -- Expand the row that the move folded to check its children's dimming too.
-    a:toggle("project:C:/Alpha", true)
     test.ok(find_text(drawn_texts(a, 600, 1000), "notes.lua").opacity
       < find_text(drawn_texts(b, 600, 1000), "notes.lua").opacity)
   end)
@@ -360,14 +368,13 @@ test.describe("Sidebar list actions", function()
     test.same(actions, {{"collapsed", "project:C:/A", true}, {"collapsed", "project:C:/A", false}})
   end)
 
-  test.it("selects another Window's Selected Project without collapsing its children", function()
+  test.it("selects another Window's Selected Project when its row is clicked", function()
     local actions, action = recorder()
     local view = SidebarView(action)
     view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,terminals={},
       panes={active=1,{id="pane",name="A.lua"}}},
       windows={{id=5,selected_project=31},{id=8,selected_project=0}}}, 8)
     view:on_mouse_pressed("left", 60, row_y(view, "project"))
-    test.equal(count(view, "tab"), 1)
     test.same(actions, {{"select", 7}})
   end)
 
@@ -548,46 +555,47 @@ local function titles(view)
 end
 
 test.describe("Sidebar Window folding", function()
-  test.it("folds a moved Project only in its old Window and permits manual expansion", function()
+  test.it("keeps another Window's Project collapsed until it comes back", function()
     local function model(owner)
       return {
         {row_id=1,id=11,path="C:/A",state="ready",window_id=owner,
-          panes={active=1,{id="a",name="a.lua"}}},
+          panes={active=1,{id="a",name="a.lua"},{id="t",name="pwsh",terminal={session="t",state="running",bell=1}}}},
         {row_id=2,id=22,path="C:/B",state="ready",window_id=7,
           panes={active=1,{id="b",name="b.lua"}}},
         windows={{id=7,selected_project=owner == 7 and 11 or 22},
           {id=9,selected_project=owner == 9 and 11 or 0}},
       }
     end
+    local function tabs(view)
+      local names = {}
+      for _, row in ipairs(view.rows) do if row.kind == "tab" then names[#names + 1] = row.tab.name end end
+      return table.concat(names, ",")
+    end
     local actions, action = recorder()
+    -- This Window saved A expanded. Another Window's ownership overrides it.
     local saved = {["project:C:/A"]=false}
-    local a, b = SidebarView(action, saved, nil, true), SidebarView(function() end)
-    a:set_model(model(7), 7); b:set_model(model(7), 9)
-    test.equal(count(a, "tab"), 2)
-    a:set_model(model(9), 7); b:set_model(model(9), 9)
-    test.equal(count(a, "tab"), 1, "The old Window still shows the moved Project's Tab")
-    test.equal(a.rows[3].tab.name, "b.lua")
-    test.equal(count(b, "tab"), 2, "The destination folded the moved Project")
-    test.same(actions, {{"collapsed", "project:C:/A", true}})
-
-    -- Model updates and a new frontend keep the saved fold.
+    local a = SidebarView(action, saved, nil, true)
     a:set_model(model(9), 7)
-    a = SidebarView(action, saved, nil, true)
-    a:set_model(model(9), 7)
-    test.equal(count(a, "tab"), 1)
-    test.equal(#actions, 1, "A model update repeats the automatic fold")
+    test.equal(tabs(a), "pwsh,b.lua", "Only the Terminal that needs the user shows")
 
-    -- Manual expansion stays in effect after a model update.
-    a:toggle("project:C:/A", true)
-    a:set_model(model(9), 7)
-    test.equal(count(a, "tab"), 2, "A model update undid manual expansion")
-    test.same(actions[2], {"collapsed", "project:C:/A", false})
+    -- Neither the keyboard nor the arrow area expands it.
+    a:on_focus(true)
+    a.cursor = row_index(a, function(row) return row.kind == "project" and row.project.id == 11 end)
+    a:on_key_pressed("right")
+    a:on_mouse_pressed("left", a.width - 16, row_y(a, "project"))
+    a:on_mouse_released("left", a.width - 16, row_y(a, "project"))
+    test.equal(tabs(a), "pwsh,b.lua")
+    for _, item in ipairs(actions) do test.not_equal(item[1], "collapsed", "A fold was saved") end
 
-    -- Moving back selects and expands A, even after the user folded its remote row.
-    a:toggle("project:C:/A", false)
-    a:set_model(model(7), 7); b:set_model(model(7), 9)
-    test.equal(count(a, "tab"), 2, "The returning Selected Project stayed folded")
-    test.equal(count(b, "tab"), 1, "The second Window did not fold the departing Project")
+    -- A search still lists its Tabs.
+    a:on_text_input("a.lua")
+    test.equal(tabs(a), "a.lua")
+    a:on_focus(false)
+
+    -- Back in this Window, the saved fold applies again.
+    a:set_model(model(7), 7)
+    test.equal(tabs(a), "a.lua,pwsh,b.lua")
+    test.equal(saved["project:C:/A"], false)
   end)
 
   test.it("keeps Project age groups and Terminal age groups separate between Windows", function()
@@ -628,28 +636,28 @@ test.describe("Sidebar Window folding", function()
       return table.concat(names, ",")
     end
     a:set_model(model, 7); b:set_model(model, 9)
-    test.equal(tabs(a), "a.lua,b.lua,c.lua")
-    test.equal(tabs(b), "a.lua,b.lua,c.lua")
-    -- Collapse A in A's Window and B in B's Window. Each choice stays local.
+    test.equal(tabs(a), "a.lua,c.lua")
+    test.equal(tabs(b), "b.lua")
+    -- Collapse A in A's Window and B in B's Window.
     b:toggle("project:C:/B", false)
     a:toggle("project:C:/A", false)
-    test.equal(tabs(a), "b.lua,c.lua")
-    test.equal(tabs(b), "a.lua,c.lua")
+    test.equal(tabs(a), "c.lua")
+    test.equal(tabs(b), "")
     a:set_model(model, 7); b:set_model(model, 9)
-    test.equal(tabs(a), "b.lua,c.lua")
-    test.equal(tabs(b), "a.lua,c.lua")
+    test.equal(tabs(a), "c.lua")
+    test.equal(tabs(b), "")
     -- A fresh frontend restores the manual folds, including the Selected Project's fold.
     a = SidebarView(function() end, saved_a, nil, true)
     b = SidebarView(function() end, saved_b, nil, true)
     a:set_model(model, 7); b:set_model(model, 9)
-    test.equal(tabs(a), "b.lua,c.lua")
-    test.equal(tabs(b), "a.lua,c.lua")
+    test.equal(tabs(a), "c.lua")
+    test.equal(tabs(b), "")
     model.windows[1].selected_project = 33
     a:set_model(model, 7)
-    test.equal(tabs(a), "b.lua,c.lua", "Changing selection folded another Project")
+    test.equal(tabs(a), "c.lua", "Changing selection folded another Project")
     model.windows[1].selected_project = 11
     a:set_model(model, 7)
-    test.equal(tabs(a), "a.lua,b.lua,c.lua", "Selecting the folded Project again did not expand it")
+    test.equal(tabs(a), "a.lua,c.lua", "Selecting the folded Project again did not expand it")
   end)
 end)
 
@@ -1594,10 +1602,16 @@ test.describe("Sidebar pending Pane numbers", function()
   end)
 
   test.it("draws the numbers beside the Tabs, so they move no row content", function()
+    -- B shows its Tabs in this Window only while it is this Window's Project.
+    local function here(stamped)
+      local projects = model(stamped)
+      projects[2].window_id = 1
+      return projects
+    end
     local view = SidebarView(function() end)
-    view:set_model(model(false), 1)
+    view:set_model(here(false), 1)
     local plain = drawn_texts(view, 400, 800)
-    view:set_model(model(true), 1)
+    view:set_model(here(true), 1)
     local numbered = drawn_texts(view, 400, 800)
     for _, name in ipairs {"current.lua", "never.lua", "older.lua", "previous.lua"} do
       test.equal(find_text(numbered, name).x, find_text(plain, name).x, name .. " moved for the numbers")

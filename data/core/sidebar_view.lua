@@ -84,8 +84,6 @@ function SidebarView:new(action, collapsed, seen, restore_folds, snoozes)
   self.snoozes = snoozes or {}
   -- The Projects selected at the last layout.
   self.was_selected = {}
-  -- Snapshot ownership separately: callers can update the same model table after a move.
-  self.owned_projects = {}
   self.width, self.view_h = 240, 600
   self.main_h, self.bottom_h = 0, 0
   -- The search field's text, caret and selection. `query` is its text.
@@ -526,19 +524,6 @@ end
 
 function SidebarView:set_model(projects, window_id)
   self.projects, self.window_id = projects, window_id
-  local owned = {}
-  for _, project in ipairs(projects) do
-    local owner = project.window_id
-    if window_id and owner == window_id then
-      owned[project.path] = true
-    elseif window_id and owner and owner ~= 0 and self.owned_projects[project.path] then
-      -- Fold once when a Project leaves this Window. Later manual expansion still acts.
-      local key = "project:" .. project.path
-      self.collapsed[key] = true
-      self.action("collapsed", key, true)
-    end
-  end
-  self.owned_projects = owned
   -- A Tab moved inside its Project shows its result in the next report.
   if self.pending and not self.pending.transfer then self.pending = nil end
   self:rebuild_rows()
@@ -680,7 +665,10 @@ function SidebarView:rebuild_rows()
     local seen_active = (selected_projects[project.id] or not window_id and project.selected) and panes.active
     -- The Selected Project's active Tab takes the highlight.
     local active = is_selected and panes[panes.active or 0] and panes.active
-    local key = (#panes > 0 or #(project.terminals or {}) > 0) and ("project:" .. project.path) or nil
+    -- Another Window's Project stays collapsed and has no fold key, so it shows no chevron and does not toggle.
+    local owner = project.window_id
+    local elsewhere = window_id and owner and owner ~= 0 and owner ~= window_id
+    local key = not elsewhere and (#panes > 0 or #(project.terminals or {}) > 0) and ("project:" .. project.path) or nil
     -- A Project expands when it becomes selected, and stays expanded after it loses the selection.
     if key then
       if is_selected and not self.was_selected[key] then
@@ -693,7 +681,7 @@ function SidebarView:rebuild_rows()
       end
       selected_keys[key] = is_selected or nil
     end
-    local collapsed = key and self:is_collapsed(key, false) or false
+    local collapsed = elsewhere or key and self:is_collapsed(key, false) or false
     local project_row = {kind = "project", project = project, key = key, collapsed = collapsed, tabs = #panes,
       id_key = "project:" .. project.path, current = is_selected,
       selected = is_selected and (not active or collapsed and not searching)}
