@@ -7521,10 +7521,7 @@ function TextView:update()
   local update_start = perf_active and system.get_time()
   local file_open_update = file_open_view_update_begin(self)
 
-  if self.buffer.empty_line_indent_due and core.active_view == self then
-    self.buffer.empty_line_indent_due = nil
-    require("core.empty_line_indent").clean(self)
-  end
+  if core.active_view == self then require("core.empty_line_indent").update(self) end
 
   local regions = self.__horizontal_scroll_regions
   if regions then

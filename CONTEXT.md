@@ -337,8 +337,8 @@ An editing action that keeps selected text selected while placing matching delim
 _Avoid_: auto-pairing, wrapper conversion
 
 **Shown Indentation**:
-The indentation at which a caret on an empty line shows. The empty line holds no whitespace; the first edit at the caret writes this indentation.
-_Avoid_: virtual indent, virtual space, phantom indentation
+The indentation at which a caret on an empty line shows: where Enter would put it, or a level the user chose for that caret. The empty line holds no whitespace; the first edit at the caret writes this indentation.
+_Avoid_: virtual indent, virtual space, phantom indentation, ghost indent
 
 **Current Line Highlight**:
 A background highlight that marks the visual row containing the active caret in a Text View.

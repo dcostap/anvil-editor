@@ -40,6 +40,10 @@ local function caret_dx(view, line, col)
   return x - view:get_line_screen_position(line, 1)
 end
 
+local function near(actual, expected)
+  test.ok(math.abs(actual - expected) < 0.01, ("expected x %.3f but got %.3f"):format(expected, actual))
+end
+
 test.describe("empty line indentation", function()
   test.before_each(function(context)
     context.buffers = {}
@@ -75,7 +79,7 @@ test.describe("empty line indentation", function()
 
     test.equal(text(buffer), "if ok then\n\nend\n")
     test.same(caret(view), { 2, 1, 2, 1 })
-    test.equal(caret_dx(view, 2, 1), view:get_font():get_width("  "))
+    near(caret_dx(view, 2, 1), view:get_font():get_width("  "))
   end)
 
   test.it("typing on an empty line writes its indentation first, and one undo removes both", function(context)
@@ -104,6 +108,19 @@ test.describe("empty line indentation", function()
     test.equal(text(buffer), "if ok then\n\nend\n")
   end)
 
+  test.it("follows the line above after an undo and a different edit", function(context)
+    local buffer, view = new_editor(context, "a\n\nb", "notes.txt")
+    buffer:set_selection(1, 1, 1, 1)
+    test.ok(view:on_text_input("  "))
+    near(caret_dx(view, 2, 1), view:get_font():get_width("  "))
+
+    buffer:undo()
+    buffer:set_selection(1, 1, 1, 1)
+    test.ok(view:on_text_input("x"))
+
+    near(caret_dx(view, 2, 1), 0)
+  end)
+
   test.it("Up and Down keep the goal column through an empty line", function(context)
     local buffer, view = new_editor(context, "abcdefghij\n\nabcdefghij", "notes.txt")
     buffer:set_selection(1, 9, 1, 9)
@@ -123,15 +140,126 @@ test.describe("empty line indentation", function()
     test.same(caret(view), { 4, 3, 4, 3 })
   end)
 
-  test.it("Tab on an empty line indents one level past its indentation", function(context)
+  test.it("Tab and Shift+Tab on an empty line move its caret by one level without writing whitespace", function(context)
+    local buffer, view = new_editor(context, "if ok then\n\nend", "sample.lua")
+    buffer:set_selection(2, 1, 2, 1)
+    local space = view:get_font():get_width(" ")
+
+    command.perform("core:indent")
+    view:update()
+    test.equal(text(buffer), "if ok then\n\nend\n")
+    near(caret_dx(view, 2, 1), 4 * space)
+
+    command.perform("core:unindent")
+    command.perform("core:unindent")
+    view:update()
+    test.equal(text(buffer), "if ok then\n\nend\n")
+    near(caret_dx(view, 2, 1), 0)
+
+    command.perform("core:indent")
+    command.perform("core:indent")
+    test.ok(view:on_text_input("x"))
+    test.equal(text(buffer), "if ok then\n    x\nend\n")
+  end)
+
+  test.it("a caret that leaves an empty line forgets its chosen level", function(context)
     local buffer, view = new_editor(context, "if ok then\n\nend", "sample.lua")
     buffer:set_selection(2, 1, 2, 1)
 
     command.perform("core:indent")
     view:update()
+    command.perform("core:move_to_next_line")
+    view:update()
+    buffer:set_selection(2, 1, 2, 1)
+    view:update()
 
-    test.equal(text(buffer), "if ok then\n    \nend\n")
-    test.same(caret(view), { 2, 5, 2, 5 })
+    near(caret_dx(view, 2, 1), view:get_font():get_width("  "))
+  end)
+
+  test.it("End and Backspace on an empty line move its caret to the block's indentation without writing whitespace", function(context)
+    -- The empty line shows the indentation of `b)`, deeper than the block's.
+    local buffer, view = new_editor(context, "f {\n  g(a,\n    b)\n\n}", "sample.odin")
+    local block = view:get_font():get_width("  ")
+
+    buffer:set_selection(4, 1, 4, 1)
+    command.perform("core:move_to_end_of_line")
+    view:update()
+    test.equal(text(buffer), "f {\n  g(a,\n    b)\n\n}\n")
+    near(caret_dx(view, 4, 1), block)
+
+    buffer:set_selection(3, 1, 3, 1)
+    view:update()
+    buffer:set_selection(4, 1, 4, 1)
+    command.perform("core:backspace")
+    view:update()
+    test.equal(text(buffer), "f {\n  g(a,\n    b)\n\n}\n")
+    near(caret_dx(view, 4, 1), block)
+
+    command.perform("core:backspace")
+    test.equal(text(buffer), "f {\n  g(a,\n    b)\n}\n")
+  end)
+
+  test.it("a line that an edit leaves holding only whitespace becomes empty, and its caret stays in place", function(context)
+    local buffer, view = new_editor(context, "if ok then\n      foo\nend", "sample.lua")
+    buffer:set_selection(2, 10, 2, 7)
+
+    command.perform("core:backspace")
+    view:update()
+
+    test.equal(text(buffer), "if ok then\n\nend\n")
+    test.same(caret(view), { 2, 1, 2, 1 })
+    near(caret_dx(view, 2, 1), view:get_font():get_width("      "))
+    buffer:undo()
+    test.equal(text(buffer), "if ok then\n      foo\nend\n")
+  end)
+
+  test.it("Enter on an empty line keeps its caret's chosen level", function(context)
+    local buffer, view = new_editor(context, "if ok then\n\nend", "sample.lua")
+    buffer:set_selection(2, 1, 2, 1)
+    command.perform("core:indent")
+
+    command.perform("core:newline")
+    view:update()
+
+    test.equal(text(buffer), "if ok then\n\n\nend\n")
+    test.same(caret(view), { 3, 1, 3, 1 })
+    near(caret_dx(view, 3, 1), view:get_font():get_width("    "))
+  end)
+
+  test.it("a line that an edit leaves holding only whitespace becomes empty when the caret leaves it", function(context)
+    local buffer, view = new_editor(context, "if ok then\n      foo\nend", "sample.lua")
+    buffer:set_selection(2, 10, 2, 7)
+
+    command.perform("core:backspace")
+    buffer:set_selection(2, 3, 2, 3)
+    view:update()
+    test.equal(text(buffer), "if ok then\n      \nend\n")
+
+    command.perform("core:move_to_next_line")
+    view:update()
+    test.equal(text(buffer), "if ok then\n\nend\n")
+
+    buffer:undo()
+    test.equal(text(buffer), "if ok then\n      foo\nend\n")
+  end)
+
+  test.it("waits for new edits before it empties a line while redo is available", function(context)
+    local buffer, view = new_editor(context, "if ok then\n      foo\nend", "sample.lua")
+    buffer:set_selection(2, 10, 2, 7)
+    command.perform("core:backspace")
+    buffer:set_selection(2, 3, 2, 3)
+    view:update()
+    buffer:set_selection(3, 4, 3, 4)
+    test.ok(view:on_text_input("x"))
+    buffer:undo()
+
+    command.perform("core:move_to_previous_line")
+    command.perform("core:move_to_previous_line")
+    view:update()
+
+    test.equal(text(buffer), "if ok then\n      \nend\n")
+    buffer:redo()
+    test.equal(text(buffer), "if ok then\n      \nendx\n")
   end)
 
   test.it("a multi-line paste on an empty line starts at its indentation", function(context)
@@ -172,7 +300,7 @@ test.describe("empty line indentation", function()
     local buffer, view = new_editor(context, "  - a\n\n- b", "notes.md")
     buffer:set_selection(2, 1, 2, 1)
 
-    test.equal(caret_dx(view, 2, 1), 0)
+    near(caret_dx(view, 2, 1), 0)
     test.ok(view:on_text_input("x"))
     test.equal(text(buffer), "  - a\nx\n- b\n")
   end)

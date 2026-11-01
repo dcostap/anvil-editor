@@ -779,9 +779,13 @@ Run `ui/buffer_reload.lua` and `runtime/buffer_apply_lines.lua` after changes.
 
 An empty line holds no whitespace. Its caret shows at the indentation that Enter at the end of the line above writes (`core.empty_line_indent`).
 The Buffer keeps the caret at column 1. Only the drawn caret, the Up/Down goal column and the next edit use the Shown Indentation.
-Typing, Tab and paste first write the Shown Indentation. One undo reverts it with the edit (`Buffer:join_undo_since`).
-After a user edit, a caret line that holds only its Shown Indentation, with the caret at its end, becomes empty. That edit undoes with the edit before it. Undo, redo and reload do not start it.
+Tab, Shift+Tab, End and Backspace on an empty line only change the caret's level. The level stays until the caret leaves the line or the text changes. Enter carries it to the new line.
+Typing and paste first write the Shown Indentation. One undo reverts it with the edit (`Buffer:join_undo_since`).
+The module tracks the lines that user edits leave holding only whitespace. It moves them through later edits with `changed_ranges`.
+A tracked line becomes empty when no selection touches it. With the caret at its end, it becomes empty at once, and its whitespace becomes the caret's level, so the caret does not move.
+The cleanup undoes with the edit before it. It waits while redo is available. Undo, redo, load and reload add no tracked lines.
 Whitespace-only lines that no edit touches stay. `config.keep_newline_whitespace` turns the cleanup off.
+Caches use `buffer.text_revision`. `get_change_id()` is the undo position, which repeats after an undo and a new edit.
 In Markdown, a blank line after a list item or a quote shows at the margin.
 Keep `newline_indent` in step with `core:newline`. Run `ui/empty_line_indent.lua` and `ui/smart_indent.lua` after changes.
 

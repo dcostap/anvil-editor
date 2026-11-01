@@ -1350,16 +1350,17 @@ local function smart_indent_backspace(buffer)
   return true
 end
 
--- End on a blank line moves to the block's indentation. An empty line whose
--- caret already shows that indentation stays empty.
+-- End on a blank line moves to the block's indentation. On an empty line only
+-- the caret moves; the line stays empty.
 local function smart_end_on_blank_line(buffer)
   local line = single_caret(buffer)
   if not line then return false end
   local leading = (buffer.lines[line] or ""):gsub("\n$", "")
   if not leading:match("^[\t ]*$") then return false end
   local expected = block_indent(buffer, line)
-  if not expected or expected == leading then return false end
-  if leading == "" and expected == empty_line_indent.get(buffer, line) then return false end
+  if not expected then return false end
+  if leading == "" and empty_line_indent.end_at(buffer, expected) then return true end
+  if expected == leading then return false end
   buffer:apply_edits({
     { line1 = line, col1 = 1, line2 = line, col2 = #leading + 1, text = expected },
   }, {
@@ -2038,6 +2039,11 @@ local commands = {
         end
       end
       return
+    end
+    local caret_line, caret_col = single_caret(dv.buffer)
+    if caret_col == 1 and dv.buffer.lines[caret_line] == "\n" then
+      local expected = block_indent(dv.buffer, caret_line)
+      if expected and empty_line_indent.backspace(dv.buffer, expected) then return end
     end
     if smart_indent_backspace(dv.buffer) then return end
     local _, indent_size = dv.buffer:get_indent_info()
@@ -3041,10 +3047,26 @@ local function move_char_batch(dv, move_fn, collapse_to_end)
   buffer:set_selection_list(selections, last_selection, { merge_cursors = true, sanitized = true })
 end
 
--- Tab on an empty line indents from the line's shown indentation.
+-- Tab and Shift+Tab on empty lines only move the carets a level. Tab with
+-- other selections first writes the shown indentation of empty lines.
 local indent_selections = commands["core:indent"]
 commands["core:indent"] = function(dv)
+  if not can_edit(dv, "indent") then return end
+  if empty_line_indent.shift_level(dv.buffer, false) then return end
   return empty_line_indent.write_then(dv, function() return indent_selections(dv) end)
+end
+
+local unindent_selections = commands["core:unindent"]
+commands["core:unindent"] = function(dv)
+  if not can_edit(dv, "unindent") then return end
+  if empty_line_indent.shift_level(dv.buffer, true) then return end
+  return unindent_selections(dv)
+end
+
+-- Enter on an empty line carries the level that the user chose to the new line.
+local newline = commands["core:newline"]
+commands["core:newline"] = function(dv)
+  return empty_line_indent.write_then(dv, function() return newline(dv) end, true)
 end
 
 commands["core:move_to_previous_char"] = function(dv)
