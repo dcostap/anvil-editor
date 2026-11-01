@@ -1,4 +1,5 @@
--- `anvil serve <project>...`: the Machine server. It runs Anvil's Lua without a window.
+-- `anvil serve [<project>...]`: the Machine server. It runs Anvil's Lua without a window.
+-- Without Projects, it serves the Projects of this user folder's Sidebar. One server runs for each user folder.
 -- It listens on loopback only. Each Client sends `hello` first: the local owner with the token from the
 -- discovery file, a paired device with its own token, and a new device with a pairing code.
 local common = require "core.common"
@@ -8,12 +9,14 @@ local net = require "net"
 
 local core = {}
 local PROTOCOL = 1
-local FEATURES = {"files.read", "files.write", "files.save_result", "pairing.start", "devices.list", "devices.revoke"}
+local FEATURES = {"projects.list", "files.read", "files.write", "files.save_result", "pairing.start", "devices.list", "devices.revoke"}
 local MAX_CLIENTS, MAX_REQUEST_JSON, MAX_FILE, HELLO_TIMEOUT = 32, 64 * 1024, 16 * 1024 * 1024, 10
 local MAX_SAVES, PAIRING_TIME, PAIRING_ATTEMPTS, MAX_NAME = 1024, 300, 5, 100
 -- A View device only reads. These methods need Full control.
 local FULL_CONTROL = {["files.write"] = true, ["pairing.start"] = true, ["devices.list"] = true, ["devices.revoke"] = true}
-local server, test_root, lose_reply, fixed_port
+-- Tailscale Serve and other forwarders need a port that stays the same across restarts.
+local DEFAULT_PORT, OWNER_CHECK_SECONDS = 7690, 1
+local server, test_root, lose_reply, fixed_port, owner, waiting
 
 -- A server often ends by a forced stop, and it logs little. So each record goes to disk at once.
 local function log(...)
@@ -106,12 +109,17 @@ end
 local function open_listener(token)
   local address = assert(net.resolve_address("127.0.0.1"))
   assert(address:wait_until_resolved(5000) == "success", "Cannot resolve the loopback address")
-  if fixed_port then
+  if fixed_port and fixed_port ~= 0 then
     local listener, err = net.create_server(address, fixed_port)
     if not listener then error("Cannot listen on port " .. fixed_port .. ": " .. tostring(err)) end
     return listener, fixed_port
   end
   local listener, port, err
+  if not fixed_port then
+    listener, err = net.create_server(address, DEFAULT_PORT)
+    if listener then return listener, DEFAULT_PORT end
+    log("Machine server cannot use port %d, so it uses another port: %s", DEFAULT_PORT, tostring(err))
+  end
   for i = 1, 128 do
     -- Spread attempts across the range: Windows can exclude many adjacent ports.
     port = 49152 + (tonumber(token:sub(1, 4), 16) + i * 127) % 16384
@@ -144,6 +152,38 @@ local function disk_path(path)
   return test_root .. PATHSEP .. path:gsub("^(%a):", "%1"):gsub("^[/\\]+", "")
 end
 
+-- The Sidebar lists the recent Projects of the user folder's app state, and Scratch first.
+-- The server reads the list again when the app state file changes.
+local function sidebar_projects()
+  local state_path = USERDIR .. PATHSEP .. "appstate.lua"
+  local info = system.get_file_info(state_path)
+  local stamp = info and info.modified .. ":" .. info.size or false
+  if server.sidebar and server.sidebar_stamp == stamp then return server.sidebar end
+  local recents = {}
+  local chunk = info and loadfile(state_path, "t", {})
+  local ok, state = pcall(chunk or function() end)
+  if ok and type(state) == "table" and type(state.recents) == "table" then recents = state.recents end
+  local projects, seen = {}, {}
+  local function add(path, scratch)
+    path = type(path) == "string" and common.is_absolute_path(path) and common.normalize_volume(path)
+    local key = path and common.path_compare_key(path)
+    local found = path and system.get_file_info(disk_path(path))
+    if key and not seen[key] and found and found.type == "dir" then
+      seen[key] = true
+      projects[#projects + 1] = {path = path, scratch = scratch or nil}
+    end
+  end
+  add(USERDIR .. PATHSEP .. "scratch", true)
+  for _, path in ipairs(recents) do add(path) end
+  server.sidebar, server.sidebar_stamp = projects, stamp
+  log("Machine server read the Sidebar list: %d Projects", #projects)
+  return projects
+end
+
+local function projects()
+  return server.projects or sidebar_projects()
+end
+
 -- Returns the absolute Machine path of a request, or nothing after it sends the error.
 local function request_path(client, id, params)
   local path = params.path
@@ -151,7 +191,8 @@ local function request_path(client, id, params)
     return fail(client, id, "invalid_path", "The path must be absolute")
   end
   path = system.absolute_path(path) or path
-  for _, root in ipairs(server.projects) do
+  for _, project in ipairs(projects()) do
+    local root = project.path
     if common.path_equals(path, root) or common.path_belongs_to(path, root) then return path end
   end
   fail(client, id, "outside_project", "The path is not in a Project of this Machine")
@@ -236,6 +277,10 @@ local function start_pairing(client, id, params)
   reply(client, id, {result = {code = code, expires_in = PAIRING_TIME}})
 end
 
+local function list_projects(client, id)
+  reply(client, id, {result = {projects = projects()}})
+end
+
 local function list_devices(client, id)
   local devices = {}
   for _, device in ipairs(server.devices) do
@@ -295,6 +340,7 @@ local function handle(client, id, body, bytes)
   if FULL_CONTROL[request.method] and client.level ~= "full" then
     return fail(client, id, "forbidden", "This device has View access")
   end
+  if request.method == "projects.list" then return list_projects(client, id) end
   if request.method == "files.read" then return read_file(client, id, params) end
   if request.method == "files.write" then return write_file_request(client, id, params, bytes) end
   if request.method == "files.save_result" then return save_result(client, id, params) end
@@ -343,27 +389,46 @@ local function poll()
   end
 end
 
+local function start(listed)
+  local directory = USERDIR .. PATHSEP .. "machine"
+  local token = net.random_token()
+  local listener, port = open_listener(token)
+  server = {listener = listener, port = port, token = token, projects = listed, clients = {},
+    saves = {}, save_order = {}, devices_path = directory .. PATHSEP .. "devices.json",
+    machine = machine_id(directory), epoch = net.random_token():sub(1, 16),
+    discovery = directory .. PATHSEP .. "server.json", owner_check = system.get_time()}
+  server.devices = load_devices(server.devices_path)
+  write_file(server.discovery, json.encode {version = 1, port = port, token = token,
+    pid = system.get_process_id(), machine = server.machine, epoch = server.epoch})
+  log("Machine server started: port=%d machine=%s epoch=%s projects=%s owner=%s", port, server.machine,
+    server.epoch, listed and #listed or "Sidebar", tostring(owner))
+  io.stdout:write("Anvil Machine server on 127.0.0.1:" .. port .. "\n")
+  io.stdout:flush()
+end
+
 function core.init()
   common.mkdirp(USERDIR)
   core.session_log = require("core.session_log").start(USERDIR .. PATHSEP .. "logs")
-  local projects, first = {}, 3
+  local first = 3
   while true do
     if ARGS[first] == "--test-root" then
       test_root = system.absolute_path(ARGS[first + 1] or ".")
     elseif ARGS[first] == "--test-lose-reply" then
       lose_reply = ARGS[first + 1]
-    elseif ARGS[first] == "--port" then
-      -- Tailscale Serve and other forwarders need a port that stays the same.
-      fixed_port = tonumber(ARGS[first + 1])
-      if not fixed_port then
-        io.stderr:write("--port needs a number\n")
+    elseif ARGS[first] == "--port" or ARGS[first] == "--owner" then
+      local value = tonumber(ARGS[first + 1])
+      if not value then
+        io.stderr:write(ARGS[first] .. " needs a number\n")
         os.exit(1)
       end
+      -- `--port 0` takes any free port. `--owner <pid>` ends the server with that process.
+      if ARGS[first] == "--port" then fixed_port = value else owner = value end
     else
       break
     end
     first = first + 2
   end
+  local listed
   for i = first, #ARGS do
     local path = system.absolute_path(ARGS[i])
     local info = path and system.get_file_info(disk_path(path))
@@ -371,27 +436,26 @@ function core.init()
       io.stderr:write("Not a folder: " .. ARGS[i] .. "\n")
       os.exit(1)
     end
-    projects[#projects + 1] = path
+    listed = listed or {}
+    listed[#listed + 1] = {path = path}
   end
   local directory = USERDIR .. PATHSEP .. "machine"
   net.private_directory(directory)
-  local token = net.random_token()
-  local listener, port = open_listener(token)
-  server = {listener = listener, port = port, token = token, projects = projects, clients = {},
-    saves = {}, save_order = {}, devices_path = directory .. PATHSEP .. "devices.json",
-    machine = machine_id(directory), epoch = net.random_token():sub(1, 16),
-    discovery = directory .. PATHSEP .. "server.json"}
-  server.devices = load_devices(server.devices_path)
-  write_file(server.discovery, json.encode {version = 1, port = port, token = token,
-    pid = system.get_process_id(), machine = server.machine, epoch = server.epoch})
-  log("Machine server started: port=%d machine=%s epoch=%s projects=%d", port, server.machine, server.epoch, #projects)
-  io.stdout:write("Anvil Machine server on 127.0.0.1:" .. port .. "\n")
-  io.stdout:flush()
+  if machine.claim(directory .. PATHSEP .. "server.lock") then return start(listed) end
+  if not owner then
+    io.stderr:write("A Machine server already runs for this user folder\n")
+    os.exit(1)
+  end
+  -- Anvil starts a server with `--owner`. It waits while another server runs, such as an older Anvil's
+  -- server during an update, and takes over when that server ends.
+  log("Machine server waits: another server runs for this user folder")
+  waiting = {listed = listed, lock = directory .. PATHSEP .. "server.lock"}
 end
 
 function core.run() end
 
 local function shutdown()
+  if not server then return end
   for _, client in ipairs(server.clients) do client.socket:close() end
   server.listener:close()
   -- Another server can have replaced the discovery file. Remove only this server's file.
@@ -408,6 +472,24 @@ function core.run_step()
     local name = system.poll_event()
     if not name then break end
     if name == "quit" then shutdown(); return false end
+  end
+  if owner and (not server or system.get_time() >= server.owner_check) then
+    if not machine.process_alive(owner) then
+      log("Machine server ends: its Anvil ended")
+      shutdown()
+      return false
+    end
+    if server then server.owner_check = system.get_time() + OWNER_CHECK_SECONDS end
+  end
+  if waiting then
+    if machine.claim(waiting.lock) then
+      local listed = waiting.listed
+      waiting = nil
+      start(listed)
+    else
+      system.wait_event(OWNER_CHECK_SECONDS)
+      return true
+    end
   end
   poll()
   -- The transport polls its sockets. Poll often only while a Client is connected.

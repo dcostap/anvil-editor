@@ -66,6 +66,8 @@ test.describe("Machine server", function()
 
   test.after_each(function(context)
     stop_server(context)
+    machine_server.stop(context.restore_anvil)
+    machine_server.stop(context.waiting)
     test.ok(test.remove_tree(context.root))
   end)
 
@@ -272,5 +274,55 @@ test.describe("Machine server", function()
     context.server, context.discovery = machine_server.start(context.user, { "--port", tostring(port), context.project })
     test.equal(context.discovery.port, port)
     owner(context).socket:close()
+  end)
+
+  local function write_sidebar(context, ...)
+    local recents = {}
+    for i, path in ipairs({...}) do recents[i] = string.format("%q", path) end
+    write_file(context.user .. PATHSEP .. "appstate.lua", "return { recents = { " .. table.concat(recents, ", ") .. " } }\n")
+  end
+
+  test.it("serves the Projects of its user folder's Sidebar without a Project list", function(context)
+    stop_server(context)
+    local scratch, other = context.user .. PATHSEP .. "scratch", context.root .. PATHSEP .. "other"
+    test.ok(common.mkdirp(scratch))
+    test.ok(common.mkdirp(other))
+    write_file(other .. PATHSEP .. "todo.md", "- [ ] Todo\n")
+    write_sidebar(context, context.project, context.root .. PATHSEP .. "missing")
+    context.server, context.discovery = machine_server.start(context.user, {})
+    local client = owner(context)
+
+    test.same(call(client, "projects.list", {}).result.projects,
+      {{path = scratch, scratch = true}, {path = context.project}})
+    local _, bytes = call(client, "files.read", {path = context.project .. PATHSEP .. "notes.md"})
+    test.equal(bytes, "# Notes\n")
+    test.equal(call(client, "files.read", {path = other .. PATHSEP .. "todo.md"}).error.code, "outside_project")
+
+    write_sidebar(context, other, context.project)
+    test.same(call(client, "projects.list", {}).result.projects,
+      {{path = scratch, scratch = true}, {path = other}, {path = context.project}})
+    _, bytes = call(client, "files.read", {path = other .. PATHSEP .. "todo.md"})
+    test.equal(bytes, "- [ ] Todo\n")
+  end)
+
+  test.it("runs one server for each user folder, and an Anvil's server ends with its Anvil", function(context)
+    local second = machine_server.spawn(context.user, {})
+    test.equal(second:wait(10000, 0.01), 1)
+
+    -- A server of another user folder stands for the Anvil that owns the next server.
+    local anvil = machine_server.start(context.root .. PATHSEP .. "anvil-user", {})
+    context.restore_anvil = anvil
+    local waiting = machine_server.spawn(context.user, {"--owner", tostring(anvil:pid()), context.project})
+    context.waiting = waiting
+    local deadline = system.get_time() + 1.5
+    while system.get_time() < deadline do coroutine.yield(0.05) end
+    test.ok(waiting:running())
+
+    stop_server(context)
+    context.discovery = machine_server.wait_discovery(context.user, waiting)
+    owner(context).socket:close()
+
+    machine_server.stop(anvil)
+    test.equal(waiting:wait(10000, 0.01), 0)
   end)
 end)

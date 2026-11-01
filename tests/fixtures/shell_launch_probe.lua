@@ -99,6 +99,24 @@ if path:match("/driver$") then
    assert(item:returncode() == 0, label .. " shell ended with a failure")
   end
   local ok, err = pcall(function()
+   if action == "launch-machine-server" then
+    -- The shell starts the Machine server of its user folder. The server ends with the shell.
+    local shell = launch(root .. "/Project")
+    wait(function() return ready("a")[1] end, 30)
+    local discovery = wait(function()
+     local file = io.open(root .. "/user/machine/server.json", "rb")
+     if not file then return end
+     local found = require("core.json").decode(file:read("*a") or ""); file:close()
+     return type(found) == "table" and found.pid and found
+    end, 30, "the shell did not start a Machine server")
+    local server = open(discovery.pid)
+    assert(running(server), "the Machine server is not running")
+    close_shell(shell, "Machine server")
+    wait(function() return not running(server) end, 10, "the Machine server did not end with its shell")
+    detail = {port = discovery.port}
+    return
+   end
+
    if action == "launch-terminal-editor" then
     local shell = launch(root .. "/Project")
     wait(function() return ready("a")[1] end, 30)

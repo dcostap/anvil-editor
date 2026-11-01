@@ -7905,6 +7905,35 @@ static void init_scratch(const wchar_t *userdir) {
   SDL_Log("Shell Scratch Project: %s", shell.scratch_path ? shell.scratch_path : "unavailable");
 }
 
+/* Process creation can block, so a thread starts the Machine server (`core.serve`). `--owner` ends it with
+   this shell. When another server already runs for this user folder, the new server waits for it to end. */
+static int SDLCALL machine_server_thread(void *data) {
+  (void)data;
+  static wchar_t exe[MAX_PATH * 4], line[MAX_PATH * 4 + 64];
+  DWORD length = GetModuleFileNameW(NULL, exe, (DWORD)SDL_arraysize(exe));
+  if (!length || length >= SDL_arraysize(exe) ||
+      _snwprintf(line, SDL_arraysize(line), L"\"%ls\" serve --owner %lu", exe, GetCurrentProcessId()) <= 0) {
+    SDL_Log("Shell could not start the Machine server: no executable path");
+    return 0;
+  }
+  STARTUPINFOW startup = {.cb = sizeof(startup)};
+  PROCESS_INFORMATION process;
+  if (!CreateProcessW(exe, line, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &startup, &process)) {
+    SDL_Log("Shell could not start the Machine server: Windows error=%lu", GetLastError());
+    return 0;
+  }
+  SDL_Log("Shell started the Machine server: pid=%lu", (unsigned long)process.dwProcessId);
+  CloseHandle(process.hThread);
+  CloseHandle(process.hProcess);
+  return 0;
+}
+
+static void start_machine_server(void) {
+  SDL_Thread *thread = SDL_CreateThread(machine_server_thread, "anvil-machine-server", NULL);
+  if (thread) SDL_DetachThread(thread);
+  else SDL_Log("Shell could not start the Machine server: SDL=%s", SDL_GetError());
+}
+
 SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   *appstate = &shell;
   anvil_surface_log_init("shell");
@@ -7962,6 +7991,7 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
     if (!shell.state_enabled) SDL_Log("Shell Window state writer unavailable; Windows will not be restored");
   } else SDL_Log("Shell user directory unavailable; Windows will not be restored");
   if (userdir) init_scratch(userdir);
+  if (userdir) start_machine_server();
   shell.next_window = saved.last_window_id;
   shell.sidebar_points = saved.sidebar_points
                              ? SDL_clamp(saved.sidebar_points, SHELL_SIDEBAR_MIN_POINTS, SHELL_SIDEBAR_MAX_POINTS)

@@ -94,11 +94,13 @@ On a Machine, split `core.control` into two parts:
 
 ### Server lifetime
 
-- Anvil starts `anvil serve` when it starts. One server runs for each executable and user folder. If that server already runs, Anvil uses it.
+- Anvil starts `anvil serve` when it starts. One server runs for each user folder. If a server already runs, Anvil uses it.
 - The local shell connects to the server like any other Client.
 - A server that Anvil started ends when Anvil ends. Terminal Sessions keep running, as they do today, but other devices cannot reach them until Anvil starts again.
 - For a Machine that other devices must always reach, the user runs `anvil serve` alone. That server runs without a UI and does not end with Anvil.
-- Connections from other devices are a setting, off by default. Without it, the server accepts only local connections.
+- Without a Project list, the server serves the Projects of its user folder's Sidebar: Scratch and the recent Projects.
+- The server listens on loopback only. Other devices reach it only through a forwarder that the user sets up, such as Tailscale Serve, and only after pairing. So it needs no separate setting for connections from other devices.
+- The server uses port 7690 when it can, so a forwarder's configuration stays correct across restarts.
 
 ## Identity
 

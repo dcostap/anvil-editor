@@ -5,6 +5,14 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <dpapi.h>
+#include <SDL3/SDL.h>
+#include "../utfconv.h"
+#else
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/file.h>
+#include <unistd.h>
 #endif
 
 #define API_TYPE_MACHINE_DECODER "MachineDecoder"
@@ -138,12 +146,46 @@ static int protect_data(lua_State *L, int unprotect) {
 static int f_protect(lua_State *L) { return protect_data(L, 0); }
 static int f_unprotect(lua_State *L) { return protect_data(L, 1); }
 
+/* machine.claim(path) keeps the lock file open without sharing until the process ends, also after a crash.
+   Returns true when this process holds it, false when another process holds it. */
+static int f_claim(lua_State *L) {
+  const char *path = luaL_checkstring(L, 1);
+#ifdef _WIN32
+  LPWSTR wide = utfconv_utf8towc(path);
+  if (!wide) return luaL_error(L, UTFCONV_ERROR_INVALID_CONVERSION);
+  HANDLE file = CreateFileW(wide, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+  SDL_free(wide);
+  lua_pushboolean(L, file != INVALID_HANDLE_VALUE);
+#else
+  int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+  int held = fd >= 0 && flock(fd, LOCK_EX | LOCK_NB) == 0;
+  if (fd >= 0 && !held) close(fd);
+  lua_pushboolean(L, held);
+#endif
+  return 1;
+}
+
+/* machine.process_alive(pid) tells if a process with this ID runs. */
+static int f_process_alive(lua_State *L) {
+  lua_Integer pid = luaL_checkinteger(L, 1);
+#ifdef _WIN32
+  HANDLE process = pid > 0 ? OpenProcess(SYNCHRONIZE, FALSE, (DWORD)pid) : NULL;
+  lua_pushboolean(L, process && WaitForSingleObject(process, 0) == WAIT_TIMEOUT);
+  if (process) CloseHandle(process);
+#else
+  lua_pushboolean(L, pid > 0 && (kill((pid_t)pid, 0) == 0 || errno == EPERM));
+#endif
+  return 1;
+}
+
 static const luaL_Reg machine_lib[] = {
   { "frame",           f_frame           },
   { "decoder",         f_decoder         },
   { "content_version", f_content_version },
   { "protect",         f_protect         },
   { "unprotect",       f_unprotect       },
+  { "claim",           f_claim           },
+  { "process_alive",   f_process_alive   },
   { NULL, NULL }
 };
 

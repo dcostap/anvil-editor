@@ -569,7 +569,12 @@ When adding a new first-party style key, ensure the base style schema remains co
 
 ## Machine server
 
-`anvil serve <project>...` is the Machine server from [Machines](docs/machines.md). It runs Anvil's Lua (`core.serve`) without a window. It does not forward its launch to a running editor.
+`anvil serve [<project>...]` is the Machine server from [Machines](docs/machines.md). It runs Anvil's Lua (`core.serve`) without a window. It does not forward its launch to a running editor.
+The shell starts `anvil serve --owner <shell pid>` at startup. That server ends within 1 second after its shell ends.
+One server runs for each user folder: a server keeps `USERDIR/machine/server.lock` open (`machine.claim`). A second `anvil serve` fails. A server with `--owner` waits until the other server ends, then takes over. A dev update needs this, because the old server ends after the new shell starts.
+Without Projects, the server serves the Sidebar's Projects: `USERDIR/scratch` and the `recents` of `USERDIR/appstate.lua`. It reads the file again when its time or size changes. `projects.list` gives `{path, scratch}` for each Project.
+The server listens on port 7690 when it can, and takes another port when that port is in use. `--port 0` takes any free port. Tests use it.
+Run `runtime/machine_serve.lua` and the `launch-machine-server` shell probe after changes.
 It listens on loopback only. At start it writes `USERDIR/machine/server.json` with its port, token, process ID, Machine ID and epoch. The folder is private.
 The Machine ID is in `USERDIR/machine/id` and stays across restarts. Each start gets a new epoch and a new token.
 `src/machine_frame.c` is the frame codec. It has no Lua or SDL headers, because the Companion uses it too. `src/api/machine.c` exposes it to Lua as `machine`.
