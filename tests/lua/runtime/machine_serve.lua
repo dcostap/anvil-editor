@@ -276,6 +276,63 @@ test.describe("Machine server", function()
     owner(context).socket:close()
   end)
 
+  local function sorted(list)
+    table.sort(list)
+    return list
+  end
+
+  test.it("lists a Project's files and folders with its ignore rules, and reports changes", function(context)
+    local function path(...) return table.concat({context.project, ...}, PATHSEP) end
+    test.ok(common.mkdirp(path("sub")))
+    test.ok(common.mkdirp(path("empty")))
+    test.ok(common.mkdirp(path("build")))
+    write_file(path("sub", "a.txt"), "a\n")
+    write_file(path("build", "out.txt"), "out\n")
+    write_file(path(".ignore"), "build/\n")
+    local client = owner(context)
+
+    local reply, bytes = call(client, "files.list", {root = context.project})
+    local names = {}
+    for name in (bytes .. "\0"):gmatch("(.-)%z") do names[#names + 1] = name end
+    local found_files = {table.unpack(names, 1, reply.result.files)}
+    local found_folders = {table.unpack(names, reply.result.files + 1)}
+    test.same(sorted(found_files), {"notes.md", "sub" .. PATHSEP .. "a.txt"})
+    -- As in a local Project, an ignored folder shows, but its files do not.
+    test.same(sorted(found_folders), {"build", "empty", "sub"})
+    test.equal(call(client, "files.list", {root = path("sub")}).error.code, "not_a_project")
+
+    write_file(path("sub", "new.md"), "new\n")
+    local changed = call(client, "files.changes", {root = context.project, since = reply.result.changes}).result
+    test.ok(changed.sequence > reply.result.changes)
+    local listed = false
+    for _, name in ipairs(changed.paths) do listed = listed or name == "sub" .. PATHSEP .. "new.md" end
+    test.ok(listed, table.concat(changed.paths, ", "))
+  end)
+
+  test.it("stats many paths and lists a folder in one request each", function(context)
+    test.ok(common.mkdirp(context.project .. PATHSEP .. "sub"))
+    local client = owner(context)
+    local notes = context.project .. PATHSEP .. "notes.md"
+    local reply, bytes = call(client, "files.stat",
+      {paths = {notes, context.project .. PATHSEP .. "missing.md", context.project .. PATHSEP .. "sub"}})
+    test.equal(reply.result.count, 3)
+    local stats = json.decode(bytes)
+    test.equal(stats[1].type, "file")
+    test.equal(stats[1].size, #"# Notes\n")
+    test.equal(stats[2], false)
+    test.equal(stats[3].type, "dir")
+    test.equal(call(client, "files.stat", {paths = {notes, context.root .. PATHSEP .. "secret.txt"}}).error.code,
+      "outside_project")
+
+    local entries
+    reply, bytes = call(client, "files.list_dir", {path = context.project})
+    entries = json.decode(bytes)
+    local kinds = {}
+    for _, entry in ipairs(entries) do kinds[entry.name] = entry.type end
+    test.same(kinds, {["notes.md"] = "file", sub = "dir"})
+    test.equal(call(client, "files.list_dir", {path = context.root}).error.code, "outside_project")
+  end)
+
   local function write_sidebar(context, ...)
     local recents = {}
     for i, path in ipairs({...}) do recents[i] = string.format("%q", path) end

@@ -574,6 +574,11 @@ The shell starts `anvil serve --owner <shell pid>` at startup. That server ends 
 One server runs for each user folder: a server keeps `USERDIR/machine/server.lock` open (`machine.claim`). A second `anvil serve` fails. A server with `--owner` waits until the other server ends, then takes over. A dev update needs this, because the old server ends after the new shell starts.
 Without Projects, the server serves the Sidebar's Projects: `USERDIR/scratch` and the `recents` of `USERDIR/appstate.lua`. It reads the file again when its time or size changes. `projects.list` gives `{path, scratch}` for each Project.
 The server listens on port 7690 when it can, and takes another port when that port is in use. `--port 0` takes any free port. Tests use it.
+The server has a small headless runtime: `package.loaded.core` is the server's `core`, with `add_thread`, `try` and quiet logs. Each step runs the due threads and drains the worker pools. So shared modules, such as `core.project_files`, run in the server unchanged.
+Each service is a module that returns its methods, such as `core.serve_files`. The JSON part of a frame is limited to 1 MiB, so large answers put JSON or NUL-separated text in the bytes.
+`files.list {root}` gives the Project's scan from `core.project_files`: files, then folders, relative to the root and separated by NUL bytes. `files` counts the files. Ignore rules apply as in a local Project.
+The first list of a root starts its folder watcher. `files.changes {root, since}` waits until a change after the sequence `since`, then gives the changed relative paths. `reset = true` means: list again. The server keeps the last 64 change batches.
+`files.stat {paths}` gives `{type, size, modified}` or false for each path. `files.list_dir {path}` gives the entries of one folder. Both send JSON in the bytes.
 Run `runtime/machine_serve.lua` and the `launch-machine-server` shell probe after changes.
 It listens on loopback only. At start it writes `USERDIR/machine/server.json` with its port, token, process ID, Machine ID and epoch. The folder is private.
 The Machine ID is in `USERDIR/machine/id` and stays across restarts. Each start gets a new epoch and a new token.

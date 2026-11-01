@@ -7,9 +7,11 @@ local json = require "core.json"
 local machine = require "machine"
 local net = require "net"
 
-local core = {}
+-- Shared modules, such as `core.project_files`, require "core". In the server they get this headless core.
+local core = {threads = {}, background_threads = 0}
+package.loaded.core = core
 local PROTOCOL = 1
-local FEATURES = {"projects.list", "files.read", "files.write", "files.save_result", "pairing.start", "devices.list", "devices.revoke"}
+local FEATURES = {"projects.list", "files.list", "files.changes", "files.stat", "files.list_dir", "files.read", "files.write", "files.save_result", "pairing.start", "devices.list", "devices.revoke"}
 local MAX_CLIENTS, MAX_REQUEST_JSON, MAX_FILE, HELLO_TIMEOUT = 32, 64 * 1024, 16 * 1024 * 1024, 10
 local MAX_SAVES, PAIRING_TIME, PAIRING_ATTEMPTS, MAX_NAME = 1024, 300, 5, 100
 -- A View device only reads. These methods need Full control.
@@ -23,6 +25,60 @@ local function log(...)
   if not core.session_log then return end
   core.session_log:write("INFO", string.format(...), "Machine")
   core.session_log:flush()
+end
+
+-- The part of the editor's runtime that shared modules use: logs, errors and scheduler threads.
+core.log, core.log_quiet, core.warn = log, log, log
+function core.error(...)
+  log(...)
+  return {}
+end
+
+function core.try(fn, ...)
+  local ok, result = xpcall(fn, debug.traceback, ...)
+  if ok then return true, result end
+  log("Machine server error: %s", tostring(result))
+  return false, result
+end
+
+local next_thread = 0
+local function add_thread(f, key, background, ...)
+  if not key then
+    next_thread = next_thread + 1
+    key = next_thread
+  end
+  local args = table.pack(...)
+  core.threads[key] = {cr = coroutine.create(function() return core.try(f, table.unpack(args, 1, args.n)) end),
+    wake = 0, background = background}
+  return key
+end
+
+function core.add_thread(f, key, ...) return add_thread(f, key, false, ...) end
+function core.add_background_thread(f, key, ...) return add_thread(f, key, true, ...) end
+
+-- Runs the due threads and returns the time until the next one is due.
+local function run_threads()
+  local now, due = system.get_time(), {}
+  -- A thread can add threads, so the walk over the table does not resume them.
+  for key, thread in pairs(core.threads) do
+    if thread.wake <= now then due[#due + 1] = key end
+  end
+  for _, key in ipairs(due) do
+    local thread = core.threads[key]
+    if thread then
+      local _, wait = coroutine.resume(thread.cr)
+      if coroutine.status(thread.cr) == "dead" then
+        if core.threads[key] == thread then core.threads[key] = nil end
+      else
+        thread.wake = system.get_time() + math.max(tonumber(wait) or 0, 0.001)
+      end
+    end
+  end
+  local next_wake = math.huge
+  for _, thread in pairs(core.threads) do next_wake = math.min(next_wake, thread.wake) end
+  local pools = package.loaded["core.worker_pool"]
+  for _, pool in ipairs(pools and pools.open_pools() or {}) do pool:drain {max_ms = 4, max_messages = 256} end
+  return next_wake - system.get_time()
 end
 
 local function write_file(path, text)
@@ -136,6 +192,8 @@ local function reply(client, id, value, bytes)
     log("Machine server lost the reply to %s for a test", client.method)
     return
   end
+  -- A service can reply after its Client went away.
+  if client.dead then return end
   client.socket:write(machine.frame("reply", id, json.encode(value), bytes))
 end
 
@@ -184,18 +242,32 @@ local function projects()
   return server.projects or sidebar_projects()
 end
 
--- Returns the absolute Machine path of a request, or nothing after it sends the error.
-local function request_path(client, id, params)
-  local path = params.path
+-- Returns the absolute Machine path, or nil, an error code and a message.
+local function check_path(path)
   if type(path) ~= "string" or not common.is_absolute_path(path) then
-    return fail(client, id, "invalid_path", "The path must be absolute")
+    return nil, "invalid_path", "The path must be absolute"
   end
   path = system.absolute_path(path) or path
   for _, project in ipairs(projects()) do
     local root = project.path
     if common.path_equals(path, root) or common.path_belongs_to(path, root) then return path end
   end
-  fail(client, id, "outside_project", "The path is not in a Project of this Machine")
+  return nil, "outside_project", "The path is not in a Project of this Machine"
+end
+
+-- Returns the Project root that `path` names, or nil.
+local function project_root(path)
+  if type(path) ~= "string" then return end
+  for _, project in ipairs(projects()) do
+    if common.path_equals(path, project.path) then return project.path end
+  end
+end
+
+-- Returns the absolute Machine path of a request, or nothing after it sends the error.
+local function request_path(client, id, params)
+  local path, code, message = check_path(params.path)
+  if not path then return fail(client, id, code, message) end
+  return path
 end
 
 -- Returns the file's bytes, or nil, an error code and a message.
@@ -303,6 +375,8 @@ local function revoke_device(client, id, params)
   reply(client, id, {result = true})
 end
 
+local services = {}
+
 local function handle(client, id, body, bytes)
   local ok, request = pcall(json.decode, body)
   local params = ok and type(request) == "table" and (request.params or {})
@@ -347,6 +421,7 @@ local function handle(client, id, body, bytes)
   if request.method == "pairing.start" then return start_pairing(client, id, params) end
   if request.method == "devices.list" then return list_devices(client, id) end
   if request.method == "devices.revoke" then return revoke_device(client, id, params) end
+  if services[request.method] then return services[request.method](client, id, params, bytes) end
   fail(client, id, "unknown_method", "This Machine has no method " .. request.method)
 end
 
@@ -384,6 +459,7 @@ local function poll()
     if client.dead or not client.authorized and now > client.deadline
         or client.closing and (client.socket:get_pending_writes() or 0) == 0 then
       client.socket:close()
+      client.dead = true
       table.remove(server.clients, i)
     end
   end
@@ -398,6 +474,9 @@ local function start(listed)
     machine = machine_id(directory), epoch = net.random_token():sub(1, 16),
     discovery = directory .. PATHSEP .. "server.json", owner_check = system.get_time()}
   server.devices = load_devices(server.devices_path)
+  local service_context = {reply = reply, fail = fail, check_path = check_path, disk_path = disk_path,
+    project_root = project_root, log = log}
+  for name, method in pairs(require("core.serve_files").new(service_context)) do services[name] = method end
   write_file(server.discovery, json.encode {version = 1, port = port, token = token,
     pid = system.get_process_id(), machine = server.machine, epoch = server.epoch})
   log("Machine server started: port=%d machine=%s epoch=%s projects=%s owner=%s", port, server.machine,
@@ -492,8 +571,9 @@ function core.run_step()
     end
   end
   poll()
+  local due = run_threads()
   -- The transport polls its sockets. Poll often only while a Client is connected.
-  system.wait_event(#server.clients > 0 and 0.005 or 0.05)
+  system.wait_event(math.max(0, math.min(due, #server.clients > 0 and 0.005 or 0.05)))
   return true
 end
 
