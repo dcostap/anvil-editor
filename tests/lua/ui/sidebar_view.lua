@@ -215,6 +215,34 @@ test.describe("Sidebar list actions", function()
     test.equal(#actions, 1)
   end)
 
+  test.it("copies the cursor row's name: a file's path, a Terminal's shown title, or a Project's path", function()
+    local view = SidebarView(function() end, {["group:week"]=false})
+    view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,terminals={
+      {id="detached",title="\u{2819} Thinking",state="running"}},panes={
+      {id="pane-1",name="doc.odin*",dir="src\\",path="src\\doc.odin"},
+      {id="pane-2",name=[[C:\Program Files\PowerShell\7\pwsh.exe]],terminal={session="shown",state="running"}}}},
+      windows={{id=5,selected_project=31}}}, 5)
+    local copied
+    local set = system.set_clipboard
+    system.set_clipboard = function(text) copied = text end
+    local function copy(predicate)
+      copied = nil
+      view.cursor = row_index(view, predicate)
+      view:copy_cursor_name()
+      return copied
+    end
+    local ok, err = pcall(function()
+      test.equal(copy(function(row) return row.kind == "project" end), nil, "An unfocused Sidebar copied")
+      view:on_focus(true)
+      test.equal(copy(function(row) return row.kind == "project" end), "C:" .. PATHSEP .. "A")
+      test.equal(copy(function(row) return row.kind == "tab" and row.tab.id == "pane-1" end), "src\\doc.odin")
+      test.equal(copy(function(row) return row.kind == "tab" and row.tab.id == "pane-2" end), "PowerShell")
+      test.equal(copy(function(row) return row.kind == "terminal" end), "Thinking")
+    end)
+    system.set_clipboard = set
+    if not ok then error(err, 0) end
+  end)
+
   test.it("unloads a Project when a middle-click releases on it", function()
     local actions, action = recorder()
     local view = SidebarView(action)

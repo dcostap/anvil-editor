@@ -43,6 +43,14 @@ test.describe("File Tabs", function()
     test.equal(describe_file(root .. PATHSEP .. "main.odin").dir, nil)
   end)
 
+  test.it("names the file's path relative to the Project root, or absolute outside the Project Paths", function()
+    local root = core.root_project().path
+    local nested = describe_file(table.concat({ root, "odin_core", "doc.odin" }, PATHSEP))
+    test.equal(nested.path, "odin_core" .. PATHSEP .. "doc.odin")
+    local outside = table.concat({ "Z:", "elsewhere", "notes.txt" }, PATHSEP)
+    test.equal(describe_file(outside).path, outside)
+  end)
+
   test.it("cuts leading folders before the name when space is short", function()
     local sep = PATHSEP
     local item = { id = 1, name = "doc.odin", dir = "odin_core" .. sep .. "testing" .. sep }

@@ -233,6 +233,7 @@ Run `ui/pending_panes.lua`, `ui/recent_panes.lua`, `ui/titlebar.lua` and `ui/sid
 The Sidebar process has no Buffer or Text View. Its search field uses `core.line_input`.
 The Sidebar reads the user's bindings for the editor's line commands, such as `core:select_to_start_of_indentation`.
 The Sidebar keeps list navigation, search-field editing, Sidebar focus, and Numbered Panes.
+Copy (`core:copy`'s keys) copies the cursor row's name: a file Tab's path as File Search shows it, absolute outside the Project Paths, a Terminal's shown title, or a Project's path. The search field's copy goes first while it has a query.
 It sends each other key with Ctrl or Alt, and each function key, to the cursor row's Pane, or else to its Project.
 A row without a Project sends the key to the Selected Project. Do not add Sidebar copies of editor commands.
 A sent key gives the keyboard to the Project. The keys of Close Pane, Close Others and Reopen Closed Pane keep it in the Sidebar.

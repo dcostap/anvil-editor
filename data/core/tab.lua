@@ -1,6 +1,7 @@
 -- One Tab's content: its Pane number, View Icon or agent icon, name, and note. The Title Bar and the
 -- Project Sidebar draw Tabs with this module, so both show the same thing.
 -- A Tab item is plain data. The Project describes its Panes, and the Pane report sends the items to the Sidebar.
+local common = require "core.common"
 local style = require "core.style"
 local view_icons = require "core.view_icons"
 local agent_icons = require "core.agent_icons"
@@ -61,9 +62,12 @@ function tab.describe(pane, number)
   if icon then item.icon = icon.kind == "file" and {kind = "file", path = icon.path} or {kind = "ui", glyph = icon.glyph} end
   local path_tree = require "plugins.path_tree"
   local path = require("core.file_context").view_file_path(view)
-  -- The file's folder as File Search shows it, with a separator at its end. A file at the Project root has none.
-  local display = path and require("core.project_paths").display_path(path)
-  item.dir = display and display.text:match("^(.*[/\\])[^/\\]*$") or nil
+  -- The file's path as File Search shows it, or its absolute path outside the Project Paths. The Sidebar copies it.
+  local display = path and require("core.project_paths").display_path(path, {home_encode = false})
+  item.path = display and display.text
+  -- The file's folder, with a separator at its end. A file at the Project root has none.
+  local shown = display and (display.root_label and display.text or common.home_encode(display.text))
+  item.dir = shown and shown:match("^(.*[/\\])[^/\\]*$") or nil
   local git = path and path_tree.git_info_for_file(path)
   local color = path_tree.git_text_color(git and git.kind)
   if color then item.color = {color[1], color[2], color[3], color[4]} end
@@ -228,6 +232,13 @@ local TERMINAL_ICON = {kind = "ui", glyph = "t"}
 local function program_identity(item)
   if not item.terminal or item.terminal.state ~= "running" then return nil end
   return item.agent and item.agent.app or item.terminal.app, item.agent and item.agent.model or item.terminal.model
+end
+
+-- The Tab's name as text to copy: a file's path, or else its shown name without a spinner frame.
+function tab.copy_text(item)
+  if item.path then return item.path end
+  local name = tab.display_name(item)
+  return has_spinner(name) and (name:sub(4):gsub("^%s+", "")) or name
 end
 
 -- Remove executable-path noise only for Terminal Tabs. Keep the original name for hover and persistence.

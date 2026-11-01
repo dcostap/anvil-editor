@@ -423,6 +423,18 @@ function SidebarView:forward_key(stroke, keep_sidebar)
   return true
 end
 
+-- Copies the cursor row's name: a Tab's name, with a file's path, or a Project's path.
+function SidebarView:copy_cursor_name()
+  if not self.focused or self.hours then return false end
+  local row = self:get_cursor()
+  local text = row and (row.tab and tab.copy_text(row.tab)
+    or row.kind == "project" and row.project.path:gsub("/", PATHSEP))
+  if not text then return false end
+  system.set_clipboard(text)
+  core.log_quiet("Sidebar copied the name of a %s row", row.kind)
+  return true
+end
+
 -- The Pane close command unloads a Project header. Other rows keep their normal key forwarding.
 function SidebarView:unload_cursor_project(repeating)
   if not self.focused or self.hours then return false end

@@ -418,6 +418,10 @@ function core.init()
       end}
     end
   end
+  -- Copy puts the cursor row's name on the clipboard. The search field's copy goes first while it has a query.
+  for _, binding in ipairs(bindings_for("core:copy")) do
+    keymap.add {[binding] = function() return current ~= nil and current.view:copy_cursor_name() end}
+  end
   -- Numbered Panes can be in any Project. Focusing one gives the keyboard back to the Projects.
   for number = 1, numbered_panes.COUNT do
     local name = "pane:focus_number_" .. number
