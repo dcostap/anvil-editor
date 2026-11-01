@@ -109,19 +109,26 @@ function SessionLog:_prune()
   prune(self.root, self.session_id, self.max_total_bytes, self.now)
 end
 
-function SessionLog:write(level, text, source)
-  if not self.file then return false end
-  -- Input traces can write many records within one second. Keep their format
-  -- without repeating the Windows calendar conversion for every record.
+-- Input traces can write many records within one second. Keep their format
+-- without repeating the Windows calendar conversion for every record.
+local function format_line(self, level, text, source)
   local second = os.time()
   if self.timestamp_second ~= second then
     self.timestamp_second = second
     self.timestamp_text = os.date("%Y-%m-%d %H:%M:%S", second)
   end
-  local line = string.format(
+  return string.format(
     "%s [%s] %s at %s\n",
     self.timestamp_text, tostring(level), tostring(text), tostring(source or "unknown")
   )
+end
+
+local function urgent(level)
+  return level == "ERROR" or level == "WARN"
+end
+
+function SessionLog:_write_line(line, flush)
+  if not self.file then return false end
   if self.bytes > 0 and self.bytes + #line > self.max_file_bytes then
     local rolled = self:_roll()
     if not rolled then return false end
@@ -130,15 +137,17 @@ function SessionLog:write(level, text, source)
   if not written then return false end
   self.bytes = self.bytes + #line
   self.pending_bytes = self.pending_bytes + #line
-  local now = system.get_time()
-  if level == "ERROR" or level == "WARN"
-      or self.pending_bytes >= FLUSH_PENDING_BYTES
-      or now - self.last_flush >= FLUSH_INTERVAL_SECONDS then
-    self.file:flush()
-    self.pending_bytes = 0
-    self.last_flush = now
+  if flush or self.pending_bytes >= FLUSH_PENDING_BYTES then
+    self:flush()
+  else
+    self:flush_if_due()
   end
   return true
+end
+
+function SessionLog:write(level, text, source)
+  if not self.file then return false end
+  return self:_write_line(format_line(self, level, text, source), urgent(level))
 end
 
 function SessionLog:flush()
@@ -146,6 +155,14 @@ function SessionLog:flush()
   self.file:flush()
   self.pending_bytes = 0
   self.last_flush = system.get_time()
+  return true
+end
+
+---Flush lines that have waited for the flush interval.
+function SessionLog:flush_if_due()
+  if self.pending_bytes > 0 and system.get_time() - self.last_flush >= FLUSH_INTERVAL_SECONDS then
+    return self:flush()
+  end
   return true
 end
 
@@ -185,8 +202,154 @@ function SessionLog.start(root, options)
   }, SessionLog)
   local opened, err = self:_open_part(1)
   if not opened then return nil, err end
-  self:_prune()
+  if not options.defer_prune then self:_prune() end
   return self
+end
+
+-- Background Session Log: a thread writes the file, so a slow disk cannot stop the UI.
+-- The UI formats each line, so its timestamp is the time of the call.
+-- A warning or an error reaches the disk at once. Other lines reach it within the flush interval.
+-- `flush` and `close` wait until the thread has written every earlier line.
+
+local Background = {}
+Background.__index = Background
+
+local REPLY_TIMEOUT_SECONDS = 5
+local background_count = 0
+
+-- The writer replies `failed` when it cannot write. The log stops, as a direct log stops.
+local function stop_on_failure(self, reply)
+  if not reply.failed then return false end
+  self.input = nil
+  self.failed = reply.err or "session log write failed"
+  return true
+end
+
+local function wait_reply(self, id)
+  local deadline = system.get_time() + REPLY_TIMEOUT_SECONDS
+  while true do
+    local reply = self.reply:first()
+    if reply then
+      self.reply:pop()
+      if reply.path then self.path = reply.path end
+      if stop_on_failure(self, reply) then return nil, self.failed end
+      if reply.id == id then return reply end
+    elseif system.get_time() > deadline then
+      return nil, "session log thread did not reply"
+    else
+      system.sleep(0.001)
+    end
+  end
+end
+
+function Background:write(level, text, source)
+  local reply = self.input and self.reply:first()
+  if reply and stop_on_failure(self, reply) then self.reply:pop() end
+  if not self.input then return false end
+  local line = format_line(self, level, text, source)
+  if urgent(level) then
+    self.input:push({ type = "line", line = line, flush = true })
+  else
+    self.input:push(line)
+  end
+  return true
+end
+
+function Background:flush()
+  if not self.input then return false end
+  self.request_id = self.request_id + 1
+  self.input:push({ type = "flush", id = self.request_id })
+  local reply = wait_reply(self, self.request_id)
+  return reply ~= nil and reply.ok
+end
+
+-- The thread flushes by itself.
+function Background:flush_if_due()
+  return true
+end
+
+function Background:close()
+  if self.input then self.input:push({ type = "close" }) end
+  self.input = nil
+  local writer = self.thread
+  self.thread = nil
+  if writer then writer:wait() end
+end
+
+local function start_background(root, options)
+  local pid = system.get_process_id and system.get_process_id() or 0
+  background_count = background_count + 1
+  local session_id = options.session_id or string.format(
+    "anvil-%s-p%s", os.date("%Y%m%d-%H%M%S"), tostring(pid)
+  )
+  local channel = string.format("session-log-%s-%d", session_id, background_count)
+  local input, reply = thread.get_channel(channel .. "-in"), thread.get_channel(channel .. "-reply")
+  input:clear()
+  reply:clear()
+  local writer, err = thread.create("session-log", function(writer_options)
+    return require("core.session_log").serve(writer_options)
+  end, {
+    root = root, input = channel .. "-in", reply = channel .. "-reply", session_id = session_id,
+    max_file_bytes = options.max_file_bytes, max_total_bytes = options.max_total_bytes, now = options.now,
+  })
+  if not writer then return nil, err end
+  local self = setmetatable({
+    root = root, session_id = session_id, pid = pid, background = true,
+    input = input, reply = reply, thread = writer, request_id = 0,
+  }, Background)
+  local started, wait_err = wait_reply(self, 0)
+  if not started or not started.ok then
+    self:close()
+    return nil, started and started.err or wait_err
+  end
+  return self
+end
+
+---Run a background writer in its own thread until a `close` message.
+function SessionLog.serve(options)
+  local input, reply = thread.get_channel(options.input), thread.get_channel(options.reply)
+  local logger, err = SessionLog.start(options.root, {
+    session_id = options.session_id, max_file_bytes = options.max_file_bytes,
+    max_total_bytes = options.max_total_bytes, now = options.now, defer_prune = true,
+  })
+  reply:push({ id = 0, ok = logger ~= nil, err = err, path = logger and logger.path })
+  if not logger then return end
+  logger:_prune()
+  while true do
+    local message = input:first()
+    if message == nil then
+      if logger.pending_bytes > 0 then
+        logger:flush_if_due()
+        system.sleep(0.05)
+      else
+        input:wait()
+      end
+    else
+      input:pop()
+      local plain = type(message) == "string"
+      if plain or message.type == "line" then
+        if not logger:_write_line(plain and message or message.line, not plain and message.flush) then
+          reply:push({ failed = true, err = "cannot write " .. tostring(logger.path) })
+          logger:close()
+          return
+        end
+      elseif message.type == "flush" then
+        reply:push({ id = message.id, ok = logger:flush(), path = logger.path })
+      elseif message.type == "close" then
+        logger:close()
+        return
+      end
+    end
+  end
+end
+
+local start = SessionLog.start
+
+---Start a Session Log. `options.background` writes it on a thread.
+function SessionLog.start(root, options)
+  options = options or {}
+  if options.background then return start_background(root, options) end
+  return start(root, options)
 end
 
 return SessionLog

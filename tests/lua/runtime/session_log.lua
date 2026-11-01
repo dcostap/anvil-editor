@@ -115,6 +115,74 @@ test.describe("session log", function()
     remove_tree(root)
   end)
 
+  test.it("writes a warning to disk from the background thread without a flush", function()
+    local SessionLog = require "core.session_log"
+    local root = join(USERDIR, "session-log-background-warning")
+    remove_tree(root)
+    local logger = assert(SessionLog.start(root, {
+      background = true, session_id = "anvil-20261101-120000-p123",
+    }))
+    test.ok(logger:write("INFO", "before", "input.lua:1"))
+    test.ok(logger:write("WARN", "background warning", "input.lua:2"))
+    local text = ""
+    local deadline = system.get_time() + 5
+    while not text:find("background warning", 1, true) and system.get_time() < deadline do
+      system.sleep(0.01)
+      local file = io.open(logger.path, "rb")
+      if file then text = file:read("*a"); file:close() end
+    end
+    logger:close()
+    test.ok(text:find("before at input.lua:1\n.-%[WARN%] background warning at input.lua:2\n"),
+      "the warning and every earlier line must reach the file in order")
+    remove_tree(root)
+  end)
+
+  test.it("stops a background log that cannot write, as a direct log stops", function()
+    local SessionLog = require "core.session_log"
+    local root = join(USERDIR, "session-log-background-failure")
+    remove_tree(root)
+    local session_id = "anvil-20261101-120002-p123"
+    -- A folder in place of the next part makes the roll fail.
+    common.mkdirp(join(root, session_id .. "-part02.log"))
+    local logger = assert(SessionLog.start(root, {
+      background = true, session_id = session_id, max_file_bytes = 300,
+    }))
+    local written, deadline = true, system.get_time() + 5
+    while written and system.get_time() < deadline do
+      written = logger:write("INFO", string.rep("x", 100), "input.lua:1")
+      system.sleep(0.01)
+    end
+    test.not_ok(written, "a write after the failure must report it")
+    test.not_ok(logger:flush())
+    local started = system.get_time()
+    logger:close()
+    test.ok(system.get_time() - started < 1, "close must not wait for a stopped writer")
+    remove_tree(root)
+  end)
+
+  test.it("writes every background line before close returns", function()
+    local SessionLog = require "core.session_log"
+    local root = join(USERDIR, "session-log-background-close")
+    remove_tree(root)
+    local logger = assert(SessionLog.start(root, {
+      background = true, session_id = "anvil-20261101-120001-p123",
+    }))
+    local path = logger.path
+    for index = 1, 2000 do logger:write("INFO", "line " .. index, "input.lua:1") end
+    logger:close()
+    local file = assert(io.open(path, "rb"))
+    local text = file:read("*a")
+    file:close()
+    local count = 0
+    for index in text:gmatch("%] line (%d+) at") do
+      count = count + 1
+      test.equal(tonumber(index), count)
+    end
+    test.equal(count, 2000)
+    test.ok(text:find("==== Anvil session ended", 1, true))
+    remove_tree(root)
+  end)
+
   test.it("keeps every recent log, however many processes wrote them", function()
     local SessionLog = require "core.session_log"
     local root = join(USERDIR, "session-log-recent")

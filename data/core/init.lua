@@ -555,9 +555,18 @@ function core.init()
     core.log_items = {}
     local loaded_session_log, SessionLog = pcall(require, "core.session_log")
     if loaded_session_log then
-      local started, logger, err = pcall(SessionLog.start, USERDIR .. PATHSEP .. "logs")
+      -- A thread writes the log, so a slow disk cannot stop the UI.
+      local started, logger, err = pcall(SessionLog.start, USERDIR .. PATHSEP .. "logs", { background = true })
       if started then
         core.session_log, session_log_error = logger, err
+        -- CLI commands end with os.exit. Write the queued lines first.
+        local exit = os.exit
+        os.exit = function(...)
+          local log = core.session_log
+          core.session_log = nil
+          if log then pcall(log.close, log) end
+          return exit(...)
+        end
       else
         session_log_error = logger
       end
@@ -3040,10 +3049,7 @@ end
 function core.step(next_frame_time, options, frame_stats)
   options = options or {}
   local session_log = core.session_log
-  if session_log and session_log.pending_bytes > 0
-      and system.get_time() - session_log.last_flush >= 1 then
-    pcall(session_log.flush, session_log)
-  end
+  if session_log and session_log.flush_if_due then pcall(session_log.flush_if_due, session_log) end
   core.ui_snapshot_id = (core.ui_snapshot_id or 0) + 1
   core.ui_snapshot_active = true
   local step_stats = {
