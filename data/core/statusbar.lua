@@ -18,7 +18,8 @@ local PaneStatusBar = require "core.pane_status_bar"
 
 ---Shared Status Bar state. Each Pane draws its own Pane Status Bar from the
 ---items registered here, evaluated against that Pane's Current View.
----Temporary messages and widget tooltips show in the focused Pane's bar.
+---A temporary message shows in the bar of the Pane that had focus when it
+---appeared. Widget tooltips show in the focused Pane's bar.
 ---Access the global instance via `core.status_bar`.
 ---@class core.statusbar : core.object
 ---@field items core.statusbar.item[] All registered items
@@ -808,10 +809,12 @@ end
 ---@param text string Message text
 function StatusBar:show_message(icon, icon_color, text)
   if not self.visible or self.hide_messages then return end
+  local panes = core.panes or require "core.panes"
   self.message = {
     icon = icon,
     icon_color = icon_color,
-    text = text
+    text = text,
+    pane = panes.active(),
   }
   local now = system.get_time()
   self.message_timeout = now + message_timeout_duration(text)

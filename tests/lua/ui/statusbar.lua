@@ -253,16 +253,21 @@ test.describe("Pane Status Bars", function()
     test.equal(context.performed[1].name, "editor:go_to_line")
   end)
 
-  test.it("shows a message only in the focused Pane's bar", function(context)
+  test.it("keeps a message in the bar of the Pane that showed it", function(context)
     local left, right = two_panes()
     core.status_bar:show_message("i", style.text, "Saved the file")
     root:update()
-    context.drawn = {}
-    bar_of(left):draw()
-    test.ok(not table.concat(context.drawn):find("Saved the file", 1, true), "the unfocused bar showed the message")
-    context.drawn = {}
-    bar_of(right):draw()
-    test.ok(table.concat(context.drawn):find("Saved the file", 1, true), "the focused bar did not show the message")
+    local function shows(pane)
+      context.drawn = {}
+      bar_of(pane):draw()
+      return table.concat(context.drawn):find("Saved the file", 1, true) ~= nil
+    end
+    test.ok(not shows(left), "an unfocused bar showed the message")
+    test.ok(shows(right), "the focused bar did not show the message")
+    panes.focus(left)
+    root:update()
+    test.ok(not shows(left), "the message moved with focus")
+    test.ok(shows(right), "the message left its Pane when focus moved")
   end)
 
   test.it("does not open the log when empty space is clicked during a message", function(context)

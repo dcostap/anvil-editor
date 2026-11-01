@@ -9,7 +9,8 @@ local Object = require "core.object"
 ---Status Bar along the bottom of one Pane. It draws the shared Status Bar
 ---items for the Pane's Current View as chips. Hovering a chip shows its
 ---tooltip; a chip with an action highlights and runs it on a left click.
----The focused Pane's bar also shows temporary messages and widget tooltips.
+---A bar shows the temporary messages that appeared while its Pane had focus.
+---The focused Pane's bar also shows widget tooltips.
 ---@class core.pane_status_bar : core.view
 ---@field super core.view
 ---@field controller core.statusbar Shared Status Bar state
@@ -148,6 +149,19 @@ function PaneStatusBar:is_focused()
   return panes.active() == self.pane
 end
 
+---Whether this bar shows the current message. A message stays in the Pane
+---that had focus when it appeared. After that Pane closes, the focused bar
+---shows it.
+---@return boolean
+function PaneStatusBar:shows_message()
+  local controller = self.controller
+  if not controller:message_active() then return false end
+  local panes = core.panes or require "core.panes"
+  local owner = controller.message.pane
+  if owner and panes.contains(owner) then return owner == self.pane end
+  return self:is_focused()
+end
+
 ---Find the laid-out chip of an item.
 ---@param name string
 ---@return table|nil entry
@@ -204,7 +218,7 @@ function PaneStatusBar:layout()
 
   self.message_entry = nil
   local controller = self.controller
-  if focused and controller:message_active() then
+  if self:shows_message() then
     local w = styled_width(rendered_message(controller.message)) + m.chip * 2
     self.message_entry = {
       item = controller.message_item, x = m.edge, w = w,
