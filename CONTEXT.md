@@ -415,6 +415,18 @@ _Avoid_: open file badge, tab number
 A contiguous sequence of one or more Panes shown together. A one-Pane group fills the available work area.
 _Avoid_: tab group, split group, workspace
 
+**Pane Column**:
+One of the parts of a Pane Group that sit side by side. It holds one Pane, or Panes stacked above and below each other.
+_Avoid_: split, column group, strip
+
+**Minimum Column Width**:
+The narrowest width, in terminal cells, that a Pane Group gives its shown Pane Columns. Zoom changes how many Pane Columns fit.
+_Avoid_: split minimum, Pane minimum
+
+**Column Overflow**:
+The state of a Pane Group whose Pane Columns do not all fit at the Minimum Column Width. It shows only the columns that fit, and slides by one column to keep the focused Pane in view.
+_Avoid_: dynamic group, auto group, page, scroll
+
 **Pane Group Rotation**:
 An action that moves each Pane clockwise to the next visual position in its Pane Group. The split geometry does not change. Focus follows the moved Pane.
 _Avoid_: rotate split panes, rotate tabs

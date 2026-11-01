@@ -10,6 +10,7 @@ local test = require "core.test"
 local autocomplete = require "plugins.autocomplete"
 local Widget = require "widget"
 local config = require "core.config"
+local style = require "core.style"
 
 local FakeView = View:extend()
 
@@ -93,11 +94,14 @@ test.describe("Root Panel Pane presentation", function()
       redraw = core.redraw,
       app_overlay = core.app_overlay,
       wallpaper = config.wallpaper,
+      column_min_width = config.pane_column_min_width,
       push_clip_rect = core.push_clip_rect,
       pop_clip_rect = core.pop_clip_rect,
     }
     -- These tests draw without a window; the wallpaper image and clip rects need one.
     config.wallpaper = "none"
+    -- The window is small, so all Pane Columns fit unless a test sets a wider minimum.
+    config.pane_column_min_width = 1
     core.title_bar = FakeView("title", 10)
     core.nag_view = FakeView("nag", 5)
     core.global_prompt_bar = GlobalPromptBar()
@@ -121,7 +125,8 @@ test.describe("Root Panel Pane presentation", function()
     saved.draw_rect = nil
     saved.set_cursor = nil
     config.wallpaper = saved.wallpaper
-    saved.wallpaper = nil
+    config.pane_column_min_width = saved.column_min_width
+    saved.wallpaper, saved.column_min_width = nil, nil
     for key, value in pairs(saved) do core[key] = value end
   end)
 
@@ -181,6 +186,28 @@ test.describe("Root Panel Pane presentation", function()
     panes.focus(one)
     root:update()
     test.equal(#root:pane_views(), 2)
+  end)
+
+  test.it("slides Pane Columns into view as focus moves and the minimum width changes", function()
+    local cell = (style.terminal_font or style.code_font):get_width("M")
+    config.pane_column_min_width = math.ceil(200 / cell)
+    local one = panes.create { factory = pane_factory("one") }
+    local two = panes.split(one, "right", { factory = pane_factory("two") })
+    root:update()
+    test.same(root:pane_views(), { two.current_view })
+    test.equal(two.size.x, 300)
+    test.not_ok(panes.is_visible(one))
+    test.equal(root:view_at(10, 100), two.current_view)
+
+    panes.focus_direction("left")
+    root:update()
+    test.same(root:pane_views(), { one.current_view })
+    test.ok(panes.is_visible(one))
+    test.not_ok(panes.is_visible(two))
+
+    config.pane_column_min_width = math.floor(140 / cell)
+    root:update()
+    test.same(root:pane_views(), { one.current_view, two.current_view })
   end)
 
   test.it("draws the shell with zero Panes", function()

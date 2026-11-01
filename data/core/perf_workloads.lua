@@ -155,7 +155,9 @@ function Workload:setup()
     end
     if settings.action == "caret-burst" then
       self.editor_views = { self.view }
-      -- One tall Pane beside two stacked Panes, as in the reported recording.
+      -- One tall Pane beside two stacked Panes, as in the reported recording. Both Pane Columns show at any
+      -- window width.
+      require("core.config").pane_column_min_width = 1
       for _, direction in ipairs { "right", "down" } do
         assert(command.perform("pane:copy_view_to_split_" .. direction))
         self.view = require("core.panes").active().current_view

@@ -484,6 +484,14 @@ settings.add("User Interface",
       min = 1
     },
     {
+      label = "Minimum Column Width",
+      description = "Pane Columns that do not fit at this width, in terminal cells, slide out of view.",
+      path = "pane_column_min_width",
+      type = settings.type.NUMBER,
+      default = 100,
+      min = 1
+    },
+    {
       label = "Always Hide Title Bar Tabs",
       description = "Hide Title Bar Tabs even when the Project Sidebar is hidden.",
       path = "hide_tabs",
