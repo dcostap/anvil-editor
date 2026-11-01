@@ -104,6 +104,9 @@ local function zoom_ratio(scale)
   return math.floor(scale / base_scale() * 1000000000000 + 0.5) / 1000000000000
 end
 
+-- Keep the chosen ratios separate from font sizes limited for the current display.
+local interface_zoom, code_zoom = zoom_ratio(current_scale), zoom_ratio(current_code_scale)
+
 local function logical_font_size(scale)
   return common.round(scale / base_scale() * base_font_size)
 end
@@ -118,7 +121,7 @@ end
 
 -- The shell sends the Zoom to the other Projects and the Sidebar. New processes read the saved Zoom.
 local function save_zoom()
-  local interface, code = zoom_ratio(current_scale), zoom_ratio(current_code_scale)
+  local interface, code = interface_zoom, code_zoom
   zoom.save(interface, code)
   local shared = system.zoom_saved(interface, code)
   core.log_quiet("Zoom saved: interface=%.4f code=%.4f shared=%s", interface, code, tostring(shared))
@@ -128,13 +131,28 @@ local function apply_zoom(reason, interface, code)
   local base = base_scale()
   scale.set(common.clamp(base * interface, MIN_SCALE, MAX_SCALE))
   scale.set_code(common.clamp(base * code, MIN_SCALE, MAX_SCALE))
+  interface_zoom, code_zoom = interface, code
   core.log_quiet("Zoom applied (%s): interface=%.4f code=%.4f base=%.4f", reason, interface, code, base)
 end
 
-function scale.set(scale)
-  if current_scale == scale then return end
+function scale.set_display_scale(new_scale)
+  -- Reject unavailable, non-finite and implausible platform reports before changing the base.
+  if type(new_scale) ~= "number" or not (new_scale >= 0.25 and new_scale <= 16) then
+    core.log_quiet("Display scale ignored: %s", tostring(new_scale))
+    return
+  end
+  if DEFAULT_SCALE == new_scale then return end
+  core.log_quiet("Display scale changed: %.4f -> %.4f", DEFAULT_SCALE, new_scale)
+  DEFAULT_SCALE = new_scale
+  if not configured_scale and config.plugins.scale.autodetect then
+    apply_zoom("display scale", interface_zoom, code_zoom)
+  end
+end
 
+function scale.set(scale)
   scale = common.clamp(scale, MIN_SCALE, MAX_SCALE)
+  interface_zoom = zoom_ratio(scale)
+  if current_scale == scale then return end
 
   local active_center = capture_active_textview_center()
 
@@ -216,9 +234,9 @@ function scale.set(scale)
 end
 
 function scale.set_code(scale)
-  if current_code_scale == scale then return end
-
   scale = common.clamp(scale, MIN_SCALE, MAX_SCALE)
+  code_zoom = zoom_ratio(scale)
+  if current_code_scale == scale then return end
 
   local active_center = capture_active_textview_center()
 

@@ -327,6 +327,14 @@ image_scale_test = executable('image_scale_test',
 )
 test('image-scale', image_scale_test, env: anvil_test_env, suite: 'anvil')
 
+display_scale_test = executable('display_scale_test',
+    ['../tests/native/display_scale_test.c'],
+    include_directories: anvil_includes,
+    dependencies: [sdl_dep],
+    c_args: anvil_cargs,
+)
+test('display-scale', display_scale_test, env: anvil_test_env, suite: 'anvil')
+
 drop_events_test = executable('drop_events_test',
     ['../tests/native/drop_events_test.c', 'system_events.c', 'resize_diagnostics.c', 'input_latency_probe.c'],
     include_directories: anvil_includes,

@@ -4,6 +4,17 @@ local config = require "core.config"
 local style = require "core.style"
 local test = require "core.test"
 
+-- Display changes enter through the platform event queue, not core.on_event.
+local function display_changed(value)
+  local poll_event, pending = system.poll_event, true
+  system.poll_event = function()
+    if pending then pending = false; return "scalechanged", value end
+  end
+  local ok, err = pcall(core.step, system.get_time(), { immediate = true })
+  system.poll_event = poll_event
+  if not ok then error(err) end
+end
+
 test.describe("font scaling", function()
   test.after_each(function(context)
     if context.original_status_message then
@@ -13,6 +24,7 @@ test.describe("font scaling", function()
     if context.interface_scale then scale.set(context.interface_scale) end
     if context.code_scale then scale.set_code(context.code_scale) end
     if context.use_mousewheel ~= nil then config.plugins.scale.use_mousewheel = context.use_mousewheel end
+    if context.autodetect ~= nil then config.plugins.scale.autodetect = context.autodetect end
   end)
 
   test.it("applies a Zoom that another Project reports", function(context)
@@ -80,6 +92,64 @@ test.describe("font scaling", function()
 
     test.near(scale.get(), 2 * ratio, 0.000001)
     test.near(scale.get_code(), 2 * ratio, 0.000001)
+  end)
+
+  test.it("keeps Zoom through invalid sleep and wake display reports", function(context)
+    context.interface_scale, context.code_scale = scale.get(), scale.get_code()
+    context.default_scale, context.autodetect = DEFAULT_SCALE, config.plugins.scale.autodetect
+    config.plugins.scale.autodetect = true
+    DEFAULT_SCALE = 1
+    core.on_event("zoomchanged", 15 / 14, 1.5)
+    local ui_size, code_size = style.font:get_size(), style.code_font:get_size()
+
+    -- The sleep report from the incident, then invalid numeric reports.
+    for _, value in ipairs { 1 / 16, 0, -1, math.huge, 0 / 0 } do
+      display_changed(value)
+      test.equal(DEFAULT_SCALE, 1)
+      test.near(style.font:get_size(), ui_size, 0.001)
+      test.near(style.code_font:get_size(), code_size, 0.001)
+    end
+    display_changed(1)
+    test.near(style.font:get_size(), ui_size, 0.001)
+    test.near(style.code_font:get_size(), code_size, 0.001)
+  end)
+
+  test.it("restores independent Zoom ratios after display changes reach size limits", function(context)
+    context.interface_scale, context.code_scale = scale.get(), scale.get_code()
+    context.default_scale, context.autodetect = DEFAULT_SCALE, config.plugins.scale.autodetect
+    config.plugins.scale.autodetect = true
+    DEFAULT_SCALE = 1
+    core.on_event("zoomchanged", 0.5, 2)
+    local ui_size, code_size = style.font:get_size(), style.code_font:get_size()
+
+    display_changed(2)
+    test.near(scale.get(), 1, 0.000001)
+    test.near(scale.get_code(), 4, 0.000001)
+
+    -- Reach the lower and upper size limits, repeat reports, then return.
+    for _, value in ipairs { 0.25, 0.25, 4, 4, 1, 2, 1 } do
+      display_changed(value)
+      test.equal(DEFAULT_SCALE, value)
+    end
+    test.near(scale.get(), 0.5, 0.000001)
+    test.near(scale.get_code(), 2, 0.000001)
+    test.near(style.font:get_size(), ui_size, 0.001)
+    test.near(style.code_font:get_size(), code_size, 0.001)
+
+    -- A shared Zoom received at a size limit must also survive the return.
+    display_changed(4)
+    core.on_event("zoomchanged", 0.75, 3)
+    display_changed(1)
+    test.near(scale.get(), 0.75, 0.000001)
+    test.near(scale.get_code(), 3, 0.000001)
+
+    -- Changing only text Zoom must not save the limited interface size as its Zoom.
+    display_changed(0.25)
+    scale.increase_code()
+    local saved_interface = require("core.zoom").load()
+    test.near(saved_interface, 0.75, 0.000001)
+    display_changed(1)
+    test.near(scale.get(), 0.75, 0.000001)
   end)
 
   test.it("scales shared interface fallbacks once", function(context)

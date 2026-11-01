@@ -19,6 +19,7 @@ struct RenWindow {
   RenCache cache;
   float scale_x;
   float scale_y;
+  float display_scale;
   HitTestInfo hit_test_info;
 #if defined(_WIN32)
   struct Win32FrameData *win32_frame;

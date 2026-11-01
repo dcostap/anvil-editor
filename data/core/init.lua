@@ -2270,23 +2270,6 @@ function core.try(fn, ...)
   return false, err
 end
 
----This function rescales the interface to the system default scale
----while preserving the user's global zoom ratio.
----@param new_scale number
-local function update_scale(new_scale)
-  local prev_default = DEFAULT_SCALE
-  DEFAULT_SCALE = new_scale
-  if SCALE == prev_default or config.plugins.scale.autodetect then
-    if new_scale == SCALE then return end
-    local display_ratio = new_scale / prev_default
-    local target = scale.get() * display_ratio
-    local target_code = scale.get_code() * display_ratio
-    -- do not scale smaller than new_scale
-    scale.set(target < new_scale and new_scale or target)
-    scale.set_code(target_code < new_scale and new_scale or target_code)
-  end
-end
-
 local function modifier_summary(event)
   if type(event) ~= "table" then return "none" end
   local modifiers = {}
@@ -3094,7 +3077,7 @@ function core.step(next_frame_time, options, frame_stats)
     elseif type == "moved" then
       core.refresh_display_timing("moved")
     elseif type == "scalechanged" then
-      update_scale(a)
+      scale.set_display_scale(a)
       core.refresh_display_timing("scalechanged")
     else
       local _, res = core.try(core.on_event, type, a, b, c, d)

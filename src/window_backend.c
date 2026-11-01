@@ -2,6 +2,7 @@
 #include "renwindow.h"
 #include "hosted_surface.h"
 #include "win32_frame.h"
+#include "display_scale.h"
 #include <SDL3_image/SDL_image.h>
 #include <string.h>
 
@@ -30,7 +31,9 @@ bool anvil_window_show_dialog(RenWindow *ren, uint32_t id, SDL_FileDialogType ty
   return true;
 }
 float anvil_window_display_scale(RenWindow *ren) {
-  return anvil_window_hosted(ren) ? anvil_hosted_surface_display_scale() : SDL_GetWindowDisplayScale(ren->cache.window);
+  if (anvil_window_hosted(ren)) return anvil_hosted_surface_display_scale();
+  ren->display_scale = anvil_display_scale(ren->cache.window, ren->display_scale);
+  return ren->display_scale;
 }
 
 float anvil_window_scale(RenWindow *ren) {

@@ -15,6 +15,7 @@
 #include "shell_adoption.h"
 #include "shell_compose_shader.h"
 #include "alt_navigation.h"
+#include "display_scale.h"
 
 #include <windowsx.h>
 #include <commctrl.h>
@@ -1563,8 +1564,13 @@ static bool layout_sidebar(ShellWindow *window) {
 }
 
 static void update_scale(ShellWindow *window) {
-  float scale = SDL_GetWindowDisplayScale(window->window);
-  window->scale = scale > 0 ? scale : 1.0f;
+  float previous = window->scale;
+  float reported = SDL_GetWindowDisplayScale(window->window);
+  window->scale = anvil_display_scale(window->window, previous);
+  if (window->scale != previous || reported != window->scale) {
+    SDL_Log("Shell display scale: Window=%u reported=%g previous=%g applied=%g",
+            window->id, reported, previous, window->scale);
+  }
   layout_sidebar(window);
 }
 

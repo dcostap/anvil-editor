@@ -506,6 +506,14 @@ After the rebuild, the shell sends a new configuration epoch, so each visible su
 A hosted process that loses its own device creates a new device and a new shared texture on its next frame.
 Run the `fault-present`, `fault-resize`, `fault-release`, `fault-device`, `sidebar-gpu` and `windows-close-gpu` shell probes after changes.
 
+## Display scale and Zoom
+
+On Windows, shell and direct mode read the monitor's content scale through `src/display_scale.h`. Do not multiply it by SDL's window pixel-density ratio. A minimized Window can give a temporary ratio of 1/16 during lock or wake. Invalid native scale reports keep the previous scale, or use 1 at startup.
+
+`plugins.scale` keeps the chosen interface and text Zoom ratios separate from the applied size limits. Display changes apply those ratios again; they do not derive Zoom from limited font sizes. Display events do not save Zoom. Explicit scale configuration takes priority over display changes.
+
+Run `anvil:display-scale`, `ui/scale_fonts.lua` and the `zoom-global` shell probe after changes.
+
 ## Renderer selection
 
 The dev portable app defaults to the D3D11 command renderer on Windows. Do not use the old two-flag test setup (`ANVIL_D3D11` plus `ANVIL_D3D11_COMMANDS`) for normal launches.

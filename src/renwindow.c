@@ -151,6 +151,7 @@ RenWindow* renwin_create(SDL_Window *win) {
 
   rencache_init(&window_renderer->cache);
   window_renderer->cache.window = win;
+  window_renderer->display_scale = anvil_window_display_scale(window_renderer);
   init_surface(window_renderer);
   renwin_clip_to_surface(window_renderer);
 
