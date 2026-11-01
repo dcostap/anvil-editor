@@ -617,7 +617,13 @@ File Search uses `project_files.info` for its path checks. On a Machine, it offe
 `core.machine_folders` keeps folder listings from `files.list_dir` for code that lists folders without a wait. `list(path)` gives nil while a listing loads. Its `watch()` has the methods of `core.dirwatch` and reports a folder when its listing arrives or changes.
 The File Tree uses it on a Machine, so it shows each folder after its listing arrives. Its Buffer is read-only there until writes exist. Folder counts use the same listings.
 An Image View of a Machine file reads its bytes through `core.fs` and loads them with `canvas.load_image_data`. Autoreload does not watch Machine files, and focus does not change the process's folder to a Machine Project.
-Run `runtime/machine_files.lua`, `ui/machine_file_search.lua` and `ui/machine_filetree.lua` after changes. The test server's owner is the test process, so a crashed test does not leave a server.
+Run `runtime/machine_files.lua`, `ui/machine_file_search.lua` and `ui/machine_filetree.lua` after changes.
+
+A Project on another Machine has a key: `anvil-machine://<Machine ID>/<path on the Machine>` (`core.machine_project`). The Sidebar, Shell App State, recent Projects and Workspaces use the key as the Project's path. Windows file functions reject it.
+The shell uses the key as the Project's identity and passes it to the Project process with `--project`. That process connects with `fs.use_machine`: to this PC's own server when the ID is its own, or else to the paired Machine's record in `USERDIR/machines`. Inside the process, paths are native paths.
+`machine:open_project` lists the paired Machines, then the chosen Machine's Projects (`projects.list`).
+A Project on a Machine skips its Project module, Git, Git file changes and the symbol index until their services exist. The guard would show an error for each.
+Run the `launch-machine-project` shell probe after changes. It opens this PC's own Scratch through its server, opens a file, and checks that no guard refusal shows. The test server's owner is the test process, so a crashed test does not leave a server.
 [The file seam](docs/machines.md#the-file-seam-corefs) lists the Project content sites by feature. Run `runtime/machine_guard.lua` and `runtime/machine_buffer.lua` after changes. The Buffer tests run with the guard on. Test helpers that stand for the Machine keep the raw functions from load time.
 On a Machine, `core.open_buffer` loads each file in the background. The Machine sends the bytes, and the `buffer_read` worker decodes them from its payload. A missing file opens as a new file.
 `Buffer:save` sends the whole file with the version that the Buffer loaded or saved last. The Buffer stays dirty until the Machine confirms. A save during another save sends again after the reply.

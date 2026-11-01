@@ -5794,6 +5794,13 @@ static wchar_t *canonical_project_identity(const char *path) {
     SetLastError(ERROR_NOT_ENOUGH_MEMORY);
     return NULL;
   }
+  /* A Machine Project's key is its identity. Its folder is on the Machine. */
+  if (anvil_is_machine_project(path)) {
+    wchar_t *identity = _wcsdup(wide);
+    SDL_free(wide);
+    if (!identity) SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+    return identity;
+  }
   HANDLE directory =
       CreateFileW(wide, FILE_READ_ATTRIBUTES,
                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,

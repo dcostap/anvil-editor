@@ -112,6 +112,9 @@ end
 
 local function normalize_project_path(path)
   if type(path) ~= "string" then return end
+  if require("core.machine_project").is_key(path) then return path end
+  -- A Machine's path is absolute, and the guard refuses a local lookup.
+  if require("core.fs").on_machine(path) then return common.normalize_volume(path) end
   local abs_path = system.absolute_path(path)
   return common.normalize_volume(abs_path or path)
 end
@@ -193,7 +196,8 @@ function core.set_project(project)
   core.visited_files = {}
   while #core.projects > 0 do core.remove_project(core.projects[#core.projects], true) end
   local project_object = core.add_project(project)
-  system.chdir(project_object.path)
+  -- A Project on a Machine has no local folder to change to.
+  if not require("core.fs").on_machine(project_object.path) then system.chdir(project_object.path) end
   return project_object
 end
 
@@ -201,9 +205,12 @@ end
 function core.open_project_in_same_window(project)
   if system.is_hosted_surface() then
     local path = type(project) == "table" and project.path or project
-    path = type(path) == "string" and system.absolute_path(path)
-    local info = path and system.get_file_info(path)
-    if not info or info.type ~= "dir" then return false end
+    -- The shell checks a Machine Project's key itself.
+    if not require("core.machine_project").is_key(path) then
+      path = type(path) == "string" and system.absolute_path(path)
+      local info = path and system.get_file_info(path)
+      if not info or info.type ~= "dir" then return false end
+    end
     core.log_quiet("Request Project selection without closing this Workspace: %s", path)
     return system.select_project(path)
   end
@@ -217,7 +224,7 @@ end
 
 function core.unload_project(project)
   if not system.is_hosted_surface() then return false end
-  local path = project or core.root_project().path
+  local path = project or require("core.machine_project").root_key(core.root_project().path)
   if type(path) == "table" then path = path.path end
   if type(path) ~= "string" or path == "" then return false end
   core.log_quiet("Request Project unload with the normal Close policy: %s", path)
@@ -622,7 +629,8 @@ function core.init()
       if
         normalized_project_dir
         and not seen[key]
-        and system.get_file_info(normalized_project_dir)
+        and (require("core.machine_project").is_key(normalized_project_dir)
+          or system.get_file_info(normalized_project_dir))
       then
         projects[#projects + 1] = normalized_project_dir
         seen[key] = true
@@ -644,8 +652,12 @@ function core.init()
       end
       for _, argument in ipairs(system.get_startup_path_arguments(ARGS)) do
         local arg_filename = strip_trailing_slash(argument)
-        local info = system.get_file_info(arg_filename) or {}
-        if info.type == "dir" then
+        local machine_key = require("core.machine_project").is_key(argument)
+        local info = not machine_key and system.get_file_info(arg_filename) or {}
+        if machine_key then
+          project_dir = argument
+          project_dir_explicit = true
+        elseif info.type == "dir" then
           project_dir = arg_filename
           project_dir_explicit = true
         else
@@ -729,6 +741,9 @@ function core.init()
   startup_measure("load_core_poi", function() return require "core.poi" end)
 
   local project_dir_abs = startup_measure("resolve_initial_project_path", function()
+    -- A Project on another Machine reads its files through core.fs from here on.
+    local machine_project = require "core.machine_project"
+    if machine_project.is_key(project_dir) then return machine_project.use(project_dir) end
     return system.absolute_path(project_dir)
   end, "project_dir=" .. tostring(project_dir))
   -- We prevent set_project below to effectively add and scan the directory because the
@@ -742,7 +757,7 @@ function core.init()
   )) end
   if project_set then
     if project_dir_explicit then
-      update_recents_project("add", project_dir_abs)
+      update_recents_project("add", require("core.machine_project").root_key(project_dir_abs))
     end
   else
     if not project_dir_explicit then
@@ -1091,6 +1106,11 @@ end
 
 
 local function load_lua_plugin_if_exists(plugin)
+  -- A Project module on a Machine does not run on this PC.
+  if require("core.fs").on_machine(plugin.file) then
+    core.log_quiet("Skipped the Project module of a Project on a Machine: %s", plugin.file)
+    return
+  end
   if system.get_file_info(plugin.file) then
     return dofile(plugin.file)
   end

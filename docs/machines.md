@@ -343,7 +343,7 @@ Pi runs in a Terminal Session on the Machine, so its tools act on that Machine. 
 These features act on the local PC by nature. For a Project on another Machine:
 
 - **The clipboard works as usual.** Buffers are local, so copy and paste move local text. A Terminal program's clipboard write goes to the Controller's clipboard.
-- **These do nothing and show a short message:** native file dialogs, drag and drop of files from the local PC, Show in File Explorer, and Open with the default app. Anvil's own pickers, such as File Search, still work, because they read the Machine's file list.
+- **These do nothing and show a short message:** native file dialogs, drag and drop of files from the local PC, and Show in File Explorer. Menus hide Open with the default app. Anvil's own pickers, such as File Search, still work, because they read the Machine's file list.
 
 ### Disconnects
 
@@ -543,7 +543,7 @@ These decisions come before code. This doc answers identity, ownership and the a
 2. **One file, end to end.** Done: see "Machine server" in `AGENTS.md`. The Buffer load and save flow uses a minimal `core.fs`. The test server maps its paths into a private folder (`--test-root`), and the tests fail if code reads the Client's copy. They cover an open, edit and conditional save, a conflict, a save with an unknown result, a disconnect with a change on the Machine and a reconnect, and a crash with a restart from the recovery record. The record keeps the base version, not the base text: the dirty merge adds the text.
 3. **Pairing and transport** between real PCs, before any service that runs commands. Pairing codes, device tokens, View and Full control, revocation and a fixed port exist: see "Machine server" in `AGENTS.md`. **Done.** On 2026-10-31, a second Windows PC paired through Tailscale Serve with the standalone `anvil.exe`. The Machine listed it, then revoked it. The test showed that an expired code gave the same error as a wrong code, so an expired code now gets its own error.
 4. **The full call-site audit**, then the Machine guard. Users see no change. Done: see [The file seam](#the-file-seam-corefs). Each Project content site moves to `core.fs` with its service, not before, because most must also become asynchronous.
-5. **Files and Search services**, the Machine's Project list and Project configuration, the local metadata copy, and the picker data sources. Read-only Projects on another Machine ship here.
+5. **Files and Search services**, the Machine's Project list and Project configuration, the local metadata copy, and the picker data sources. Read-only Projects on another Machine ship here. Done: see "Machine server" in `AGENTS.md`. Anvil starts its own Machine server, or uses the one that runs for its user folder. `machine:open_project` opens a Project of a paired Machine as a separate Sidebar Project with a Machine key. File Search, Text Search, previews, the File Tree, images and Buffer saves work. File Tree changes (create, rename, delete) wait for step 6. The Project module (`.anvil_project.lua`), Git, the symbol index and the vault index wait for step 9. Size filters and the preview size limit do not work yet, because the metadata copy has only the path type.
 6. **Writes** with recovery and today's conflict prompt.
 7. **Terminal service** with Controller and Viewers.
 8. **Agent service** and the split of `core.control`.

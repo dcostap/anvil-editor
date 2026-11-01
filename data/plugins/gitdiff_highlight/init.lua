@@ -633,6 +633,12 @@ schedule_base_reload = function(buffer, reason)
 			finish_base_worker(buffer, state)
 			return
 		end
+		-- File changes in a Project on a Machine need the Machine's Git service (docs/machines.md, step 9).
+		if require("core.fs").on_machine(full_path) then
+			clear_state(buffer, "Project on a Machine")
+			finish_base_worker(buffer, state)
+			return
+		end
 
 		local foreground = state.foreground_reload
 		state.foreground_reload = false

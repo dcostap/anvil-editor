@@ -34,6 +34,15 @@ local function disabled_error()
   return { kind = "disabled", message = "Git integration is disabled" }
 end
 
+-- Git in a Project on a Machine needs the Machine's Git service (docs/machines.md, step 9).
+local function on_machine(path)
+  return path and path ~= "" and require("core.fs").on_machine(path)
+end
+
+local function machine_error()
+  return { kind = "disabled", message = "Git does not run in a Project on a Machine yet" }
+end
+
 function backend.is_enabled()
   return config.plugins.git ~= false
 end
@@ -1010,6 +1019,14 @@ function backend.run_git(repo, args, opts, callback)
     finish_later(disabled_error())
     return job
   end
+  local folder = root
+  for i, arg in ipairs(args or {}) do
+    if arg == "-C" then folder = args[i + 1] end
+  end
+  if on_machine(folder) then
+    finish_later(machine_error())
+    return job
+  end
   local command = { executable, "--no-optional-locks" }
   if root and root ~= "" then
     command[#command + 1] = "-C"
@@ -1154,6 +1171,7 @@ local function run_git_sync(cwd, args, max_output)
 end
 
 local function repo_input_for_path(path)
+  if on_machine(path) then return nil, machine_error() end
   local abs = system.absolute_path(path)
   if not abs then return nil, { kind = "invalid_path", message = "invalid path" } end
   abs = common.normalize_path(abs)

@@ -605,11 +605,13 @@ local function submit_native_run(index, generation, opts, phase)
     end
   end
   cancel_index_work(index)
-  if not project_native then
+  -- A Project on a Machine needs the Machine's Index service (docs/machines.md, step 9).
+  local machine = require("core.fs").on_machine(index.root)
+  if not project_native or machine then
     index.status = "failed"
     index.symbol_status = "failed"
     index.usage_status = "failed"
-    index.reason = "native-project-builder-unavailable"
+    index.reason = machine and "project-on-machine" or "native-project-builder-unavailable"
     return false, index.reason
   end
   index.status = "indexing"
@@ -1981,6 +1983,7 @@ local function reject_open_buffer_revision(index, buffer, path, change_id, reaso
 end
 
 local function submit_open_buffer_overlay(index, buffer, path, reason)
+  if require("core.fs").on_machine(path) then return false, "project-on-machine" end
   local ts = buffer.treesitter
   local language = ts.language
   if not language then return false, "missing-language" end

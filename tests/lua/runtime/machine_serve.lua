@@ -302,11 +302,19 @@ test.describe("Machine server", function()
     test.equal(call(client, "files.list", {root = path("sub")}).error.code, "not_a_project")
 
     write_file(path("sub", "new.md"), "new\n")
-    local changed = call(client, "files.changes", {root = context.project, since = reply.result.changes}).result
-    test.ok(changed.sequence > reply.result.changes)
-    local listed = false
-    for _, name in ipairs(changed.paths) do listed = listed or name == "sub" .. PATHSEP .. "new.md" end
-    test.ok(listed, table.concat(changed.paths, ", "))
+    -- The watcher can report the folder in one batch and the file in the next.
+    local since, listed, seen = reply.result.changes, false, {}
+    local deadline = system.get_time() + 20
+    while not listed and system.get_time() < deadline do
+      local changed = call(client, "files.changes", {root = context.project, since = since}).result
+      test.ok(changed.sequence > since)
+      since = changed.sequence
+      for _, name in ipairs(changed.paths) do
+        seen[#seen + 1] = name
+        listed = listed or name == "sub" .. PATHSEP .. "new.md"
+      end
+    end
+    test.ok(listed, table.concat(seen, ", "))
   end)
 
   test.it("stats many paths and lists a folder in one request each", function(context)

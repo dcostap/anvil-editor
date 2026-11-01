@@ -4,6 +4,7 @@ local command = require "core.command"
 local common = require "core.common"
 local storage = require "core.storage"
 local project_paths = require "core.project_paths"
+local machine_project = require "core.machine_project"
 local language_mode = require "core.language_mode"
 local panes = require "core.panes"
 local diffview = require "plugins.diffview"
@@ -293,7 +294,8 @@ local function save_workspace(during_use)
   if not (project and project.path) then return end
 
   local save_started = system.get_time()
-  local project_dir = project.path
+  -- A Project on another Machine saves its key, so a local folder with the same path keeps its own Workspace.
+  local project_dir = machine_project.root_key(project.path)
   local key = loaded_key_for(project_dir)
   if not (during_use and key) then
     local entries = matching_workspace_entries(project_dir)
@@ -412,7 +414,7 @@ local function load_workspace()
         return
       end
 
-      local workspace = consume_workspace(core.root_project().path)
+      local workspace = consume_workspace(machine_project.root_key(core.root_project().path))
       diffview.load_workspace_state(workspace and workspace.diff_layout)
       language_mode.load_workspace_state(workspace and workspace.language_modes)
       local _, project_paths_changed = project_paths.load_workspace_state(
@@ -539,7 +541,7 @@ function core.run(...)
   else
     -- Files opened at startup replace the saved Workspace; the exit save
     -- already treats this session as the current state.
-    local workspace = not empty_window_requested() and consume_workspace(core.root_project().path)
+    local workspace = not empty_window_requested() and consume_workspace(machine_project.root_key(core.root_project().path))
     diffview.load_workspace_state(workspace and workspace.diff_layout)
     workspace_restored = true
   end

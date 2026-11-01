@@ -124,7 +124,8 @@ bool anvil_hosted_surface_parse_args(int *argc, char **argv) {
     DWORD attrs = INVALID_FILE_ATTRIBUTES;
     if (path && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, argv[2], -1, path, count)) attrs = GetFileAttributesW(path);
     free(path);
-    if (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY)) hosted.valid = false;
+    if (!anvil_is_machine_project(argv[2]) && (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY)))
+      hosted.valid = false;
     int removed = original_arguments ? 2 : 1;
     for (int j = 1; j < *argc - removed; j++) argv[j] = argv[j + removed];
     *argc -= removed; argv[*argc] = NULL;

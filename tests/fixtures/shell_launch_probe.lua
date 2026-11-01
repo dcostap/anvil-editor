@@ -68,6 +68,8 @@ local function quit() core.exit(function() core.quit_request = true end, true) e
 -- Measurements that the driver reports with its result.
 local detail
 local names = {[root .. "/Project"] = "a", [root .. "/Replacement"] = "b", [root .. "/user/scratch"] = "s"}
+-- A Project on a Machine has the folder's native path inside its process.
+if require("core.machine_project").current then names[path] = "m" end
 
 if path:match("/driver$") then
  core.add_background_thread(function()
@@ -115,6 +117,19 @@ if path:match("/driver$") then
     wait(function() return not running(server) end, 10, "the Machine server did not end with its shell")
     detail = {port = discovery.port}
     return
+   end
+
+   if action == "launch-machine-project" then
+    -- Project selects the Machine key of Scratch on this PC's own server. A new Project process reads it from there.
+    local shell = launch(root .. "/Project")
+    local a = wait(function() return ready("a")[1] end, 30)
+    local m = wait(function() return ready("m")[1] end, 60, "the Machine Project did not load")
+    assert(m.machine, "the Machine Project did not connect to its Machine")
+    assert(m.window_id == a.window_id, "the Machine Project opened in another Window")
+    local files = wait(function() return load("m-files") end, 30, "the Machine Project did not list its files")
+    assert(files.ok, files.error)
+    assert(#ready("s") == 0, "the Machine key loaded the local Scratch Project")
+    return close_shell(shell, "Machine Project")
    end
 
    if action == "launch-terminal-editor" then
@@ -338,7 +353,7 @@ elseif names[path] then
  core.add_background_thread(function()
   coroutine.yield(.2)
   save(names[path] .. "-ready-" .. pid, {pid=pid, shell_pid=system.get_window_process_id(),
-   window_id=system.get_anvil_window_id()})
+   window_id=system.get_anvil_window_id(), machine=require("core.fs").machine ~= nil})
   if action == "launch-terminal-editor" and names[path] == "a" then
    local terminal, panes = require "plugins.terminal", require "core.panes"
    local Editor = require "core.editor"
@@ -544,6 +559,40 @@ elseif names[path] then
   if action == "launch-handoff" and names[path] == "b" then
    local request = wait(function() return load("select") end, 30)
    assert(system.select_project(request.path), "Replacement could not select Project")
+  end
+  if action == "launch-machine-project" and names[path] == "a" then
+   local scratch = root .. "/user/scratch"
+   local note = assert(io.open(scratch .. "/machine-note.md", "wb")); note:write("note\n"); note:close()
+   -- A Git repository makes the Git plugin run in the Machine Project.
+   local git = assert(process.start({"git", "init", "-q", scratch}, {stdin=process.REDIRECT_DISCARD}))
+   wait(function() return not git:running() end, 20, "git init did not finish")
+   local id = wait(function()
+    local file = io.open(root .. "/user/machine/id", "rb")
+    local text = file and file:read("*a"); if file then file:close() end
+    return io.open(root .. "/user/machine/server.json", "rb") and text
+   end, 30, "the shell did not start a Machine server")
+   local key = require("core.machine_project").key(id, (scratch:gsub("/", "\\")))
+   assert(core.open_project_in_same_window(key), "Project could not select the Machine Project")
+  end
+  if action == "launch-machine-project" and names[path] == "m" then
+   local ok, err = pcall(function()
+    local files = wait(function()
+     local list = require("core.project_files").list(path)
+     for _, file in ipairs(list or {}) do
+      if file.path:match("machine%-note%.md$") then return list end
+     end
+    end, 30, "the Machine's file list has no machine-note.md")
+    -- A refusal of the guard is an error that the user sees. Startup and an open file must not cause one.
+    local note = path:gsub("/", "\\") .. "\\machine-note.md"
+    core.open_file(note)
+    local buffer = wait(function() return core.buffer_registry:find(note) end, 10, "the Machine's file did not open")
+    wait(function() return buffer.lines[1] == "note\n" end, 20, "the Machine's file did not load")
+    coroutine.yield(3)
+    for _, item in ipairs(core.log_items) do
+     assert(item.level ~= "ERROR" or not item.text:find("refused", 1, true), item.text)
+    end
+   end)
+   save("m-files", {ok=ok, error=ok and nil or tostring(err)})
   end
  end)
 end

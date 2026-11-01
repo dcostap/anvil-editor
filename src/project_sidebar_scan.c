@@ -5,6 +5,7 @@
 #include <luajit.h>
 #endif
 #include "terminal_host.h"
+#include "surface_protocol.h"
 #include <windows.h>
 #include <stdlib.h>
 #include <string.h>
@@ -171,8 +172,8 @@ static bool recent_paths(AnvilSidebarScan *job, lua_State *L) {
   for (size_t i = 0; ok && i < job->result.count; i++) {
     wchar_t *path = wide(job->result.projects[i]->path);
     DWORD attributes = path ? GetFileAttributesW(path) : INVALID_FILE_ATTRIBUTES;
-    job->result.projects[i]->exists =
-        attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY);
+    job->result.projects[i]->exists = anvil_is_machine_project(job->result.projects[i]->path) ||
+        (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY));
     free(path);
   }
   return ok;

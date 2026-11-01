@@ -10,6 +10,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 #include <SDL3/SDL.h>
 
 #define ANVIL_SURFACE_PROTOCOL_VERSION 42u
@@ -22,6 +23,13 @@
 #define ANVIL_PROJECT_ARG "--project"
 #define ANVIL_PROJECT_RESTART_ARG "--anvil-project-restart"
 #define ANVIL_PROJECT_ARGUMENTS_ARG "--anvil-project-arguments"
+/* A Project on another Machine has a key, not a folder: anvil-machine://<Machine ID>/<path on the Machine>.
+ * The shell uses the key as the Project's path and identity. Windows file functions reject it. */
+#define ANVIL_MACHINE_PROJECT_PREFIX "anvil-machine://"
+
+static inline bool anvil_is_machine_project(const char *path) {
+  return path && !strncmp(path, ANVIL_MACHINE_PROJECT_PREFIX, sizeof(ANVIL_MACHINE_PROJECT_PREFIX) - 1);
+}
 
 typedef enum {
   /* Shell to surface process. */
