@@ -76,6 +76,7 @@ end
 ---attachment folder. `opts.absolute` links any existing file or folder by file URI.
 ---`opts.prefix` is inserted before the link.
 ---For a note on a Machine, the copy uploads the file, and the calling coroutine waits (`file_ops.run`).
+---The link goes at the selection of the paste. After an edit or a close during the wait, no link goes in.
 function attachments.import_file(view, source, opts)
   opts = opts or {}
   local prefix = opts.prefix or ""
@@ -88,6 +89,7 @@ function attachments.import_file(view, source, opts)
   end
   local target = system.absolute_path(source) or common.normalize_path(source)
   local remote = fs.on_machine(view.buffer.abs_filename)
+  local buffer, selection, revision = view.buffer, view:get_selection_state(), view.buffer.text_revision
 
   if opts.absolute then
     -- A link to a file of this PC means nothing on the Machine.
@@ -143,6 +145,11 @@ function attachments.import_file(view, source, opts)
   local relative_base = format == "markdown" and common.dirname(source_note) or project_root
   local rel = display_path(common.relative_path(relative_base, target))
   local text = serialized_link(rel, IMAGE_EXTENSIONS[extension(target) or ""] == true, format)
+  if view.textview_closed or view.buffer ~= buffer or buffer.text_revision ~= revision then
+    core.warn("Anvil copied %s, but the note changed during the copy. Anvil did not insert its link.", target)
+    return false, "the note changed during the copy"
+  end
+  if remote then view:set_selection_state(selection) end
   view:with_selection_state(function() view.buffer:text_input(prefix .. text) end)
   -- A Machine's Project has no vault index yet (docs/machines.md, step 9).
   if not remote then

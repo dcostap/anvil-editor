@@ -223,6 +223,41 @@ test.describe("File Tree on a Machine", function()
     file:close()
     test.ok(table.concat(buffer.lines):find(result.text, 1, true), table.concat(buffer.lines))
     test.same(raw_list_dir(context.project), { "client-only.md" })
+
+    -- The upload waits for the Machine. The test holds its first reply, and acts on the note meanwhile.
+    local function upload_while(act)
+      local stat, held = fs.stat, nil
+      fs.stat = function(paths, done)
+        if held == nil then held = function() stat(paths, done) end else stat(paths, done) end
+      end
+      local finished, upload_ok, upload_result
+      core.add_thread(function()
+        upload_ok, upload_result = require("core.markdown.attachments").import_file(shown, source)
+        finished = true
+      end)
+      local waited = wait_until(function() return held ~= nil end)
+      fs.stat = stat
+      test.ok(waited, "The upload did not ask the Machine")
+      act()
+      held()
+      test.ok(wait_until(function() return finished end), "The upload did not finish")
+      return upload_ok, upload_result
+    end
+
+    -- A selection that moves during the upload keeps its text. The link goes where the user pasted it.
+    local before = table.concat(buffer.lines)
+    shown:set_selection_state({ selections = { 1, 1, 1, 1 }, last_selection = 1 })
+    ok, result = upload_while(function()
+      shown:set_selection_state({ selections = { 1, 1, 1, 3 }, last_selection = 1 })
+    end)
+    test.ok(ok, result)
+    test.equal(table.concat(buffer.lines), result.text .. before)
+
+    -- Text typed during the upload stays, and gets no link. The upload keeps the file.
+    before = table.concat(buffer.lines)
+    ok, result = upload_while(function() buffer:insert(1, 1, "Typed ") end)
+    test.not_ok(ok)
+    test.equal(table.concat(buffer.lines), "Typed " .. before)
   end)
 
   local function find_entry(tree, name)

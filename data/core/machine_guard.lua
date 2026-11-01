@@ -2,7 +2,9 @@
 -- makes the raw file functions refuse those paths, so code cannot use the Client's disk by mistake.
 -- It also refuses relative paths, because they resolve against this process's folder.
 -- All other absolute paths are local state: the Machine serves only paths inside its Projects.
--- This guard stops mistakes. It is not a security boundary.
+-- A root can hold this PC's own folders, such as a Project at `C:\` or at the home folder. The guard
+-- does not refuse paths in those folders, so the Client keeps its state there. They are still Machine
+-- files for `owns`. This guard stops mistakes. It is not a security boundary.
 local machine_guard = {}
 
 local windows = PLATFORM == "Windows"
@@ -11,6 +13,8 @@ local part_pattern = windows and "[^\\]+" or "[^/]+"
 
 -- The Project's roots in normalized form while the guard is on, or nil.
 local roots = nil
+-- This PC's own folders below a root, in normalized form.
+local own_folders = {}
 local restore = {}
 
 -- Returns the path in one spelling for comparison, or nil for a relative path.
@@ -48,6 +52,19 @@ local function in_project(normalized)
   return false
 end
 
+local function in_own_folder(normalized)
+  for _, folder in ipairs(own_folders) do
+    local prefix = folder_prefix(folder)
+    if normalized == folder or normalized:sub(1, #prefix) == prefix then return true end
+  end
+  return false
+end
+
+-- True when the raw file functions must refuse the path.
+local function guarded(normalized)
+  return in_project(normalized) and not in_own_folder(normalized)
+end
+
 local function refuse(name, kind, path)
   error(string.format("%s refused %s in a Project on a Machine: %s", name, kind, path), 0)
 end
@@ -57,7 +74,7 @@ local function check_path(name, path)
   local normalized = normalize(path)
   if not normalized then
     refuse(name, "a relative path", path)
-  elseif in_project(normalized) then
+  elseif guarded(normalized) then
     refuse(name, "a Project path", path)
   end
 end
@@ -66,14 +83,15 @@ end
 local function check_text(name, text)
   if type(text) ~= "string" then return end
   local normalized = normalize(text)
-  if normalized and in_project(normalized) then refuse(name, "a Project path", text) end
+  if normalized and guarded(normalized) then refuse(name, "a Project path", text) end
   local spelled = windows and text:gsub("/", "\\"):lower() or text
   for _, root in ipairs(roots) do
     local first, last = spelled:find(root, 1, true)
     while first do
       -- `C:\project-old` holds the text of the root `C:\project`, but it is not inside it.
       local after = spelled:sub(last + 1, last + 1)
-      if after == "" or after == sep or after:match("[%s\"']") or root:sub(-1) == sep then
+      local own = in_own_folder(normalize(spelled:sub(first):match("^[^\"'\n]*")) or "")
+      if not own and (after == "" or after == sep or after:match("[%s\"']") or root:sub(-1) == sep) then
         refuse(name, "a Project path", text)
       end
       first, last = spelled:find(root, last + 1, true)
@@ -88,7 +106,7 @@ local function check_values(name, value, depth)
   if type(value) == "string" then
     if #value < 4096 and not value:find("\n", 1, true) then
       local normalized = normalize(value)
-      if normalized and in_project(normalized) then refuse(name, "a Project path", value) end
+      if normalized and guarded(normalized) then refuse(name, "a Project path", value) end
     end
   elseif type(value) == "table" and depth < 8 then
     for key, item in pairs(value) do
@@ -147,6 +165,15 @@ function machine_guard.enable(project_roots)
   machine_guard.disable()
   roots = {}
   for _, root in ipairs(project_roots) do roots[#roots + 1] = assert(normalize(root), "A Project root must be absolute") end
+  own_folders = {}
+  for _, folder in ipairs({ USERDIR, DATADIR, EXEDIR, os.getenv("TEMP") or os.getenv("TMPDIR") }) do
+    local normalized = type(folder) == "string" and normalize(folder)
+    if normalized and in_project(normalized) then
+      local is_root = false
+      for _, root in ipairs(roots) do is_root = is_root or root == normalized end
+      if not is_root then own_folders[#own_folders + 1] = normalized end
+    end
+  end
 
   wrap(io, "io", "open", first_path)
   wrap(io, "io", "lines", first_path_if_any)
@@ -179,7 +206,7 @@ end
 function machine_guard.disable()
   for i = #restore, 1, -1 do restore[i]() end
   restore = {}
-  roots = nil
+  roots, own_folders = nil, {}
 end
 
 -- True when the guard is on and the path names a file of the Machine.

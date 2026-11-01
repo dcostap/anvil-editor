@@ -60,6 +60,12 @@ test.describe("Machine guard", function()
     local file = drive .. "notes.md"
     test.ok(fs.on_machine(file), file)
     refused(process.start, { "rg", "Client", file })
+    -- The root holds this PC's user folder. The Client keeps its state and credentials there.
+    local state = context.root .. PATHSEP .. "state.txt"
+    write_file(state, "Client state\n")
+    local read = assert(io.open(state, "rb"))
+    test.equal(read:read("*a"), "Client state\n")
+    read:close()
     fs.use_local()
   end)
 

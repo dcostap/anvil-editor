@@ -957,8 +957,9 @@ local function write_machine_record(self)
   -- A closed Buffer has no record, also when a write was due or a save replies later.
   if not fs.machine or not fs.machine.machine or not self.abs_filename or self.machine_closed then return end
   local key = record_key(self.abs_filename)
-  if not self:is_dirty() then return storage.clear("machine_recovery", key) end
   local save = self.machine_save
+  -- The Machine can have the bytes of an unresolved save, so text that looks saved keeps its record.
+  if not self:is_dirty() and not save then return storage.clear("machine_recovery", key) end
   storage.save("machine_recovery", key, {
     path = self.abs_filename, text = table.concat(self.lines), crlf = self.crlf,
     encoding = self.encoding, bom = self.bom, base = self.machine_version,
@@ -1056,11 +1057,33 @@ reload_from_machine = function(self)
   end)
 end
 
+local save_on_machine
+
+-- A save that waited for this one runs now. A closed Buffer sends nothing more.
+local function save_again(self, request, failed)
+  local again = request.again
+  if not again or self.machine_closed then return end
+  if not common.path_equals(again.abs_filename, self.abs_filename) then
+    self:save(again.filename, again.abs_filename)
+  elseif not failed and self:is_dirty() then
+    self:save()
+  end
+end
+
 local function finish_machine_save(self, request, err, version)
   self.machine_save = nil
   machine_record_due(self)
   if err then
-    if err.code == "conflict" then
+    -- The user chose this Save As file, so the save replaces it, as a local Save As does. A file that
+    -- changes again stops the Save As. The conflict choice would act on the Buffer's own file.
+    if err.code == "conflict" and not request.same_file and err.version and not request.overwrite
+        and not self.machine_closed then
+      save_on_machine(self, request.filename, request.abs_filename, err.version)
+      if self.machine_save then self.machine_save.again = request.again end
+      return
+    elseif err.code == "conflict" and not request.same_file then
+      core.error("Cannot save %s on the Machine: the file changed there", request.filename)
+    elseif err.code == "conflict" then
       machine_conflict(self, err.version)
     elseif err.code == "offline" then
       -- The save did not leave this PC. It runs again after the reconnect, to the same file.
@@ -1070,36 +1093,43 @@ local function finish_machine_save(self, request, err, version)
     else
       core.error("Cannot save %s on the Machine: %s", request.filename, err.message or err.code)
     end
-    return
+    return save_again(self, request, true)
   end
   if not request.same_file then self:set_filename(request.filename, request.abs_filename) end
   self.machine_version, self.new_file = version, false
-  -- Only the sent text is saved. Later edits stay unsaved. An undo and a new edit can reach the same undo
-  -- position with other text, as a local background save also checks.
-  self.clean_change_id = request.change_id
-  if self:get_change_id() == request.change_id and self.text_revision ~= request.revision
-      and machine.content_version(encode_text(self)) ~= request.sent then
+  -- Only the sent text is saved. Later edits stay unsaved. After an edit or an undo, the history can hold
+  -- other text at the sent undo position, so the Buffer is clean only when its text is the sent text.
+  if self.text_revision == request.revision then
+    self.clean_change_id = request.change_id
+  elseif machine.content_version(encode_text(self)) == request.sent then
+    self.clean_change_id = self:get_change_id()
+  else
     self.clean_change_id = -1
   end
   core.log_quiet("Machine save finished for %s at revision %d", request.filename, request.revision)
   if core.set_recent_file_edited then core.set_recent_file_edited(self.abs_filename) end
   core.redraw = true
-  if request.again and self:is_dirty() then self:save() end
+  save_again(self, request)
 end
 
 -- A Machine save runs in the background. The Buffer stays dirty until the Machine confirms
--- the text that the save sent. A save during another save sends again after the reply.
-local function save_on_machine(self, filename, abs_filename)
+-- the text that the save sent. A save during another save waits, with its file, for the reply.
+-- `overwrite` is the version of an existing Save As file that the save replaces.
+save_on_machine = function(self, filename, abs_filename, overwrite)
+  if self.machine_closed then
+    core.log_quiet("Machine save for %s skipped: the Buffer is closed", filename)
+    return
+  end
   if self.machine_save then
-    self.machine_save.again = true
+    self.machine_save.again = { filename = filename, abs_filename = abs_filename }
     return
   end
   local same_file = common.path_equals(abs_filename, self.abs_filename)
   local bytes = encode_text(self)
   local request = {
     id = net.random_token():sub(1, 24), change_id = self:get_change_id(), revision = self.text_revision,
-    filename = filename, abs_filename = abs_filename, same_file = same_file,
-    base = same_file and not self.new_file and self.machine_version or nil,
+    filename = filename, abs_filename = abs_filename, same_file = same_file, overwrite = overwrite,
+    base = overwrite or same_file and not self.new_file and self.machine_version or nil,
     sent = machine.content_version(bytes),
   }
   self.machine_save, self.machine_offline_save = request, nil

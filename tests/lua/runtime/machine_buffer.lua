@@ -346,3 +346,119 @@ test.describe("Buffer on a Machine", function()
     test.is_nil(context.prompt)
   end)
 end)
+
+-- Seam: the Buffer's save flow, with the Machine's write replies held at the transport. The test
+-- sends each reply, so edits, undos and closes can come before it.
+test.describe("Buffer on a Machine while a save waits for its reply", function()
+  local Buffer = require "core.buffer"
+  local machine = require "machine"
+
+  local function text(buffer) return table.concat(buffer.lines) end
+
+  local function reply(write, err)
+    if err then return write.done(err) end
+    write.done(nil, machine.content_version(write.bytes))
+  end
+
+  test.before_each(function(context)
+    context.write, context.enabled = fs.write, autosave_fast.enabled
+    autosave_fast.enabled = false
+    fs.machine = { machine = "held-replies", close = function() end }
+    context.writes = {}
+    fs.write = function(path, bytes, base, _, done)
+      context.writes[#context.writes + 1] = { path = path, bytes = bytes, base = base, done = done }
+    end
+    context.path = USERDIR .. PATHSEP .. "source.md"
+    context.copy = USERDIR .. PATHSEP .. "copy.md"
+    local buffer = Buffer(nil, nil, true)
+    buffer:set_filename("source.md", context.path)
+    buffer:insert(1, 1, "Original")
+    buffer.new_file = false
+    buffer:clean()
+    buffer.machine_version = machine.content_version("Original\n")
+    buffer.on_machine_conflict = function(self) context.conflict = self.machine_conflict end
+    context.buffer = buffer
+    -- Edits within the undo merge time join one undo step.
+    coroutine.yield(config.undo_merge_timeout + 0.1)
+  end)
+
+  test.after_each(function(context)
+    if not context.buffer.machine_closed then context.buffer:on_close() end
+    fs.write, autosave_fast.enabled = context.write, context.enabled
+    fs.use_local()
+    storage.clear("machine_recovery")
+  end)
+
+  test.it("does not call text clean that the Machine did not save", function(context)
+    local buffer = context.buffer
+    buffer:insert(1, 1, "A ")
+    buffer:save()
+    buffer:undo()
+    buffer:insert(1, 1, "B ")
+    coroutine.yield(config.undo_merge_timeout + 0.1)
+    buffer:insert(1, 1, "C ")
+    reply(context.writes[1])
+    buffer:undo()
+    test.equal(text(buffer), "B Original\n")
+    test.ok(buffer:is_dirty())
+  end)
+
+  test.it("keeps the recovery record of text that differs from an unresolved save", function(context)
+    local buffer = context.buffer
+    buffer:insert(1, 1, "A ")
+    buffer:save()
+    buffer:undo()
+    coroutine.yield(1)
+    test.equal(#storage.keys("machine_recovery"), 1)
+    -- The Machine saved A, so the undone text is unsaved.
+    reply(context.writes[1])
+    test.ok(buffer:is_dirty())
+    coroutine.yield(1)
+    test.equal(#storage.keys("machine_recovery"), 1)
+  end)
+
+  test.it("replaces an existing file that a Save As names", function(context)
+    local buffer = context.buffer
+    buffer:insert(1, 1, "Edited ")
+    buffer:save("copy.md", context.copy)
+    reply(context.writes[1], { code = "conflict", version = "copy version" })
+    test.equal(#context.writes, 2)
+    test.equal(context.writes[2].path, context.copy)
+    test.equal(context.writes[2].base, "copy version")
+    reply(context.writes[2])
+    test.not_ok(buffer:is_dirty())
+    test.ok(common.path_equals(buffer.abs_filename, context.copy), buffer.abs_filename)
+
+    -- A file that changes again during the Save As stops it, without the conflict choice of the open file.
+    buffer:insert(1, 1, "Again ")
+    buffer:save("third.md", USERDIR .. PATHSEP .. "third.md")
+    reply(context.writes[3], { code = "conflict", version = "third version" })
+    reply(context.writes[4], { code = "conflict", version = "changed again" })
+    test.equal(#context.writes, 4)
+    test.is_nil(context.conflict)
+    test.ok(common.path_equals(buffer.abs_filename, context.copy), buffer.abs_filename)
+  end)
+
+  test.it("sends no save after the user discards the Buffer", function(context)
+    local buffer = context.buffer
+    buffer:insert(1, 1, "A ")
+    buffer:save()
+    buffer:insert(1, 1, "B ")
+    buffer:save()
+    buffer:on_close()
+    reply(context.writes[1])
+    test.equal(#context.writes, 1)
+  end)
+
+  test.it("keeps the file of a Save As that waits for another save", function(context)
+    local buffer = context.buffer
+    buffer:insert(1, 1, "A ")
+    buffer:save()
+    buffer:save("copy.md", context.copy)
+    reply(context.writes[1])
+    test.equal(#context.writes, 2)
+    test.equal(context.writes[2].path, context.copy)
+    reply(context.writes[2])
+    test.ok(common.path_equals(buffer.abs_filename, context.copy), buffer.abs_filename)
+  end)
+end)
