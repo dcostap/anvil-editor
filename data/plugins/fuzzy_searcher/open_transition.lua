@@ -24,7 +24,7 @@ local function enabled()
 end
 
 local function ready(view)
-  return not view.loading_feedback_pending
+  return view:holds_saved_screen() or not view.loading_feedback_pending
     and not view.everything_loading_pending
 end
 

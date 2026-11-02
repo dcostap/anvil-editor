@@ -3941,6 +3941,7 @@ function FSView:new(prefix, opts)
   self:layout()
   ensure_input_focus(self)
   fuzzy_focus_log("open", self, "prefix_len=" .. tostring(#tostring(prefix or "")))
+  self:start_restore()
   self:refresh(self.input:get_text())
 end
 
@@ -4167,7 +4168,7 @@ function FSView:result_limit()
 end
 
 function FSView:can_load_more()
-  return self.has_more and self:result_limit() < self:max_result_limit()
+  return self.has_more and self:result_limit() < self:max_result_limit() and not self:holds_saved_screen()
 end
 
 function FSView:load_more(select_next)
@@ -4266,16 +4267,17 @@ function FSView:scroll_results(delta)
   if #self.results == 0 or delta == 0 then return end
   local rows = self:list_metrics().result_rows
   self.manual_list_scroll = true
-  self.saved_position = nil
+  self:end_restore_for_move()
   if delta > 0 then self:load_ahead(self.viewport_offset + rows - 1 + delta) end
   self.viewport_offset = common.clamp(self.viewport_offset + delta, 1,
     math.max(1, #self.results - rows + 1))
+  self:follow_move_in_saved_screen()
   self:schedule_update(true)
 end
 
 function FSView:select_delta(delta, extend)
   if #self.results == 0 then self.selected = 1; self.viewport_offset = 1; return end
-  self.saved_position = nil
+  self:end_restore_for_move()
   if delta > 0 and self.selected >= #self.results and self.has_more then
     if self:load_more(true) then return end
   end
@@ -4297,6 +4299,7 @@ function FSView:select_delta(delta, extend)
     self.range_anchor = nil
   end
   self:ensure_selection_visible(true)
+  self:follow_move_in_saved_screen()
   if delta > 0 then self:load_ahead(self.selected) end
 end
 
@@ -4311,33 +4314,99 @@ function FSView:select_last()
   self:select_delta(#self.results)
 end
 
--- The selected row of each search mode at close, so that the same query opens at the same row.
-fuzzy_searcher.saved_positions = {}
+-- The Saved Screen of each browsed query, newest first: its rows down to the bottom of the screen and its selected
+-- row. The picker opens a query on its Saved Screen, also from the prompt history.
+fuzzy_searcher.saved_screens = {}
+local SAVED_SCREEN_LIMIT = 50
 
-function FSView:save_position()
+-- The status of each running search ends with "…".
+function FSView:search_running()
+  local status = self.status or ""
+  return self.loading_feedback_pending or self.loading_more or status:sub(-#"…") == "…"
+end
+
+function FSView:save_screen()
   if self.static_mode or self.file_picker or not self.input then return end
+  -- The rows of a running search can belong to the previous query.
+  if self:search_running() and not self:holds_saved_screen() then return end
   local text = self.input:get_text()
+  local screens = fuzzy_searcher.saved_screens
+  for index = #screens, 1, -1 do
+    if screens[index].text == text then table.remove(screens, index) end
+  end
   local _, query = split_mode_prefix(text)
   local result = self:selected_result()
   -- An empty File Search keeps its first row, which is usually the previous file.
-  fuzzy_searcher.saved_positions[fuzzy_searcher.prompt_mode(text)] = result and query ~= "" and {
-    text = text, key = self:result_selection_key(result), screen_row = self.selected - self.viewport_offset,
+  if not result or query == "" then return end
+  local rows = {}
+  for index = 1, math.min(#self.results, self.viewport_offset + self:list_metrics().result_rows - 1) do
+    rows[index] = self.results[index]
+  end
+  table.insert(screens, 1, {
+    text = text, rows = rows, selected = self.selected, viewport_offset = self.viewport_offset,
     limit = self:result_limit(),
-  } or nil
+  })
+  screens[SAVED_SCREEN_LIMIT + 1] = nil
 end
 
--- Selects the saved row again, at its place on the screen. Loads pages up to the saved page count. Ends when the row
--- shows, when the user moves the selection or changes the query, or when the search ends without the row.
+-- Starts to restore the Saved Screen of the query, if it has one.
+function FSView:start_restore()
+  self.restore = nil
+  if self.static_mode or self.file_picker or not self.input then return end
+  local text = self.input:get_text()
+  for _, screen in ipairs(fuzzy_searcher.saved_screens) do
+    if screen.text == text then
+      self.restore = {
+        text = text, screen = screen, key = self:result_selection_key(screen.rows[screen.selected]),
+        screen_row = screen.selected - screen.viewport_offset,
+      }
+      return
+    end
+  end
+end
+
+-- True while the list shows the Saved Screen. A search then keeps its rows until it ends, so the screen does not move.
+function FSView:holds_saved_screen()
+  return self.restore ~= nil and self.results == self.restore.screen.rows
+end
+
+-- A move during the restore selects the new row when the search ends. A move after the Saved Screen ends the restore.
+function FSView:end_restore_for_move()
+  if not self:holds_saved_screen() then self.restore = nil end
+end
+
+function FSView:follow_move_in_saved_screen()
+  local restore = self.restore
+  if not restore then return end
+  restore.key = self:result_selection_key(self.results[self.selected])
+  restore.screen_row = self.selected - self.viewport_offset
+end
+
+-- Shows the Saved Screen in place of the rows of the previous query.
+function FSView:show_saved_screen()
+  local screen = self.restore.screen
+  self.results = screen.rows
+  self.has_more = false
+  self.hovered_result = nil
+  self.selected, self.viewport_offset = screen.selected, screen.viewport_offset
+  self.list_scroll.y = (self.viewport_offset - 1) * self:list_metrics().lh
+  self.list_scroll.move_data_y = nil
+  self.loaded_limit = screen.limit
+  core.log_quiet("Fuzzy Searcher: showing the Saved Screen of %q until its search ends", self.restore.text)
+end
+
+-- When the search ends, selects the saved row again at its place on the screen. Loads pages up to the saved page
+-- count. Ends when the row shows, when the user moves the selection or changes the query, or when the search ends
+-- without the row.
 function FSView:restore_position()
-  local saved = self.saved_position
-  if not saved then return end
-  if self.input:get_text() ~= saved.text then self.saved_position = nil; return end
+  local restore = self.restore
+  if not restore or self:holds_saved_screen() then return end
+  local metrics = self:list_metrics()
   for index, result in ipairs(self.results) do
-    if not result.header and self:result_selection_key(result) == saved.key then
-      self.saved_position = nil
-      local metrics = self:list_metrics()
+    if not result.header and self:result_selection_key(result) == restore.key then
+      self.restore = nil
       self.selected = index
-      self.viewport_offset = common.clamp(index - saved.screen_row, 1,
+      self.viewport_offset = common.clamp(index - restore.screen_row, 1,
         math.max(1, #self.results - metrics.result_rows + 1))
       self:ensure_selection_visible(true)
       self.list_scroll.y = (self.viewport_offset - 1) * metrics.lh
@@ -4345,17 +4414,15 @@ function FSView:restore_position()
       return
     end
   end
-  -- The status of each running search ends with "…".
-  local status = self.status or ""
-  if self.loading_feedback_pending or self.loading_more or status:sub(-#"…") == "…" then return end
-  if self:result_limit() < saved.limit and self:load_more(false) then return end
-  core.log_quiet("Fuzzy Searcher: the saved row is not in the results of %q", saved.text)
-  self.saved_position = nil
+  if self:search_running() then return end
+  if self:result_limit() < restore.screen.limit and self:load_more(false) then return end
+  core.log_quiet("Fuzzy Searcher: the saved row is not in the results of %q", restore.text)
+  self.restore = nil
 end
 
 function FSView:select_result(index, extend, toggle)
   if not self.results[index] or self.results[index].header then return false end
-  self.saved_position = nil
+  self:end_restore_for_move()
   local previous = self.selected
   if toggle and self:can_mark_result(index) then
     local previous_key = self:can_mark_result(previous) and self:result_selection_key(self.results[previous])
@@ -4371,6 +4438,7 @@ function FSView:select_result(index, extend, toggle)
   end
   self.selected = index
   self:ensure_selection_visible(true)
+  self:follow_move_in_saved_screen()
   self:schedule_update(true)
   return true
 end
@@ -5425,7 +5493,7 @@ end
 
 -- Shows the rows that other Projects sent, after this Project's rows. The selected row stays selected.
 function FSView:show_other_projects()
-  if not self.own_results then return end
+  if not self.own_results or self:holds_saved_screen() then return end
   local selected = self.results[self.selected]
   self.results = fuzzy_searcher.other_projects.with_rows(self, self.own_results)
   for index, result in ipairs(self.results) do
@@ -5434,6 +5502,36 @@ function FSView:show_other_projects()
   if self.results[self.selected] and self.results[self.selected].header then self:select_delta(1) end
   self:schedule_update(true)
   core.redraw = true
+end
+
+-- Shows the last rows of a search in place of the Saved Screen. `restore_position` then selects the saved row.
+function FSView:show_final_rows()
+  if self:holds_saved_screen() then
+    self.results = fuzzy_searcher.other_projects.with_rows(self, self.own_results)
+  end
+  self:show_other_projects()
+end
+
+-- The Text Search rows of the Saved Screen that the search found again, in their saved order. They count as rows
+-- that the user saw, so they keep their places.
+function FSView:seen_saved_rows(...)
+  if not self:holds_saved_screen() then return {} end
+  local found = {}
+  for _, rows in ipairs({ ... }) do
+    for _, result in ipairs(rows) do
+      local key = fuzzy_searcher.grep_order.result_key(result)
+      if key then found[key] = found[key] or result end
+    end
+  end
+  local seen = {}
+  for _, saved in ipairs(self.results) do
+    local key = not saved.header and fuzzy_searcher.grep_order.result_key(saved)
+    if key and found[key] then
+      seen[#seen + 1] = found[key]
+      found[key] = nil
+    end
+  end
+  return seen
 end
 
 function FSView:start_file_search(query, line, reset_selection)
@@ -5450,7 +5548,8 @@ function FSView:start_file_search(query, line, reset_selection)
 
   -- A new query starts at the top. A refresh of the same query keeps the selected row, wherever it moves.
   local keep_selection = not reset_selection
-  local function apply_results(out, has_more)
+  local function apply_results(out, has_more, final)
+    if not final and self:holds_saved_screen() then return end
     self:cancel_deferred_loading_feedback()
     local selected = keep_selection and self:result_selection_key(self.results[self.selected])
     keep_selection = true
@@ -5529,7 +5628,7 @@ function FSView:start_file_search(query, line, reset_selection)
           status = fuzzy_searcher.matches_label(#recent_matches + #general_matches, has_more) .. " · "
             .. fuzzy_searcher.index_label(file_index_count(), folder_index_count())
         end
-        apply_results(out, has_more)
+        apply_results(out, has_more, true)
         self.status = status
         self:schedule_update(true)
         local finished = system.get_time()
@@ -5578,7 +5677,7 @@ function FSView:start_file_search(query, line, reset_selection)
         status = string.format("%s · scanning %d of %d files…",
           fuzzy_searcher.matches_label(#recent_matches + matched_general), scanned, #items)
       end
-      apply_results(out, has_more)
+      apply_results(out, has_more, final)
       self.status = status
       self:schedule_update(true)
       last_publish = system.get_time()
@@ -6530,6 +6629,16 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
     local function publish(final)
       if gen ~= grep_generation or active_view ~= self then return false end
       if not initial_publish_ready(final) then return true end
+      if self:holds_saved_screen() then
+        if not final then return true end
+        for _, r in ipairs(self:seen_saved_rows(candidates)) do
+          local key = fuzzy_searcher.grep_order.result_key(r)
+          if not committed_keys[key] then
+            committed_keys[key] = true
+            committed_results[#committed_results+1] = r
+          end
+        end
+      end
       if first_publish_done then commit_visible_prefix() end
 
       local selected_key = fuzzy_searcher.grep_order.result_key(self.results and self.results[self.selected])
@@ -6774,7 +6883,7 @@ function FSView:start_grep(base, line, grep)
     -- This Project's rows. Other Projects' rows follow them.
     local shown = {}
     local function remember_visible_prefix()
-      if #shown == 0 then return end
+      if #shown == 0 or self:holds_saved_screen() then return end
       local visible_bottom = math.min(
         #shown,
         (self.viewport_offset or 1) + self:list_metrics().result_rows - 1
@@ -6799,12 +6908,13 @@ function FSView:start_grep(base, line, grep)
       results_started = true
       self:cancel_deferred_loading_feedback()
       self.own_results = shown
+      self.has_more = false
+      self.status = "Searching exact text matches…"
+      if self:holds_saved_screen() then return end
       self.results = fuzzy_searcher.other_projects.with_rows(self, shown)
       self.selected = 1
       self.viewport_offset = 1
       self.hovered_result = nil
-      self.has_more = false
-      self.status = "Searching exact text matches…"
     end
 
     local function add_result(r, seen, exact)
@@ -6842,7 +6952,10 @@ function FSView:start_grep(base, line, grep)
       begin_results()
       matched_count = matched_count + 1
       fuzzy_searcher.grep_order.retain_top(candidates, r, limit)
-      if #shown < limit then
+      if #shown < limit and self:holds_saved_screen() then
+        -- The Saved Screen shows until the search ends.
+        shown[#shown+1] = r
+      elseif #shown < limit then
         shown[#shown+1] = r
         if #shown == 1 then self.selected = 1; self.viewport_offset = 1 end
         if self.pending_select_index and #shown >= self.pending_select_index then
@@ -6970,10 +7083,14 @@ function FSView:start_grep(base, line, grep)
     -- tail so completion improves later results without moving visible rows.
     remember_visible_prefix()
     local out, committed = {}, {}
+    for _, result in ipairs(self:seen_saved_rows(shown, candidates)) do
+      out[#out+1] = result
+      committed[fuzzy_searcher.grep_order.result_key(result)] = true
+    end
     for i = 1, stable_prefix_count do
       local result = shown[i]
       local key = fuzzy_searcher.grep_order.result_key(result)
-      out[#out+1] = result
+      if not (key and committed[key]) then out[#out+1] = result end
       if key then committed[key] = true end
     end
     local ranked_tail = {}
@@ -6987,7 +7104,7 @@ function FSView:start_grep(base, line, grep)
       out[#out+1] = result
     end
     self.own_results = out
-    self:show_other_projects()
+    self:show_final_rows()
     self.has_more = matched_count > #out
     self.status = search_error and "Text Search failed: " .. search_error
       or matched_count == 0 and "No exact matches"
@@ -7388,7 +7505,7 @@ function FSView:start_modifier_search(base, line, col, grep, reset_selection)
     refresh_files = not self.modifier_first_scan,
   }, function(results, status, has_more, done)
     if self.modifier_job ~= job or active_view ~= self or self.closing then return end
-    if not done and #results == 0 then
+    if not done and (#results == 0 or self:holds_saved_screen()) then
       self.status = status
       self:schedule_update(true)
       return
@@ -7647,6 +7764,9 @@ function FSView:refresh(text)
     self.revision_open_token = nil
     self.current_query_key = query_key
     self:reset_pagination()
+    -- A Saved Screen belongs to its query.
+    if self.restore and self.restore.text ~= text then self.restore = nil end
+    if self.restore then self:show_saved_screen() end
   end
 
   if not self.force_refresh and not self.dirty and not files_changed and not files_scope_changed then return end
@@ -7723,11 +7843,12 @@ function FSView:on_text_input(text)
   return true
 end
 
-function fuzzy_searcher.apply_prompt_history_text(view, text, select_query)
+function fuzzy_searcher.apply_prompt_history_text(view, text, select_query, restore)
   text = tostring(text or "")
   view._applying_prompt_history = true
   view.input:set_text(text)
   view._applying_prompt_history = false
+  if restore then view:start_restore() end
 
   local buffer = view.input and view.input.textview and view.input.textview.buffer
   if buffer then
@@ -7767,7 +7888,8 @@ function FSView:navigate_prompt_history(delta)
   local index = common.clamp(session.index + delta, 1, #session.entries)
   if index == session.index then return false end
   session.index = index
-  fuzzy_searcher.apply_prompt_history_text(self, session.entries[index], false)
+  self:save_screen()
+  fuzzy_searcher.apply_prompt_history_text(self, session.entries[index], false, true)
   return true
 end
 
@@ -7788,7 +7910,7 @@ function FSView:close(reason)
   self.close_input_view = self.input and self.input.textview
   core.root_panel:pop_modal_input(self)
   core.root_panel:hide_app_overlay(self)
-  self:save_position()
+  self:save_screen()
   self:record_prompt_history()
   self:cancel_deferred_loading_feedback()
   self:cancel_deferred_everything_loading()
@@ -9228,8 +9350,6 @@ function open(prefix, opts)
   end
   active_view = FSView(initial_text, opts)
   core.fuzzy_searcher_active_view = active_view
-  local saved = fuzzy_searcher.saved_positions[fuzzy_searcher.prompt_mode(initial_text)]
-  if saved and saved.text == initial_text then active_view.saved_position = saved end
   if select_seeded_query then
     -- Keep the saved file scope and marker outside the selected search text.
     active_view.input.textview.buffer:set_selection(
@@ -9523,6 +9643,7 @@ return {
     clear_prompt_history = function()
       fuzzy_searcher.prompt_history_loaded = true
       fuzzy_searcher.prompt_history = {}
+      fuzzy_searcher.saved_screens = {}
       storage.save("fuzzy_searcher", "prompt_history", {
         version = 2,
         modes = fuzzy_searcher.prompt_history,

@@ -278,7 +278,7 @@ Run `ui/fuzzy_searcher_other_projects.lua`, `ui/fuzzy_searcher_terminals.lua` an
 Each group has a divider and a small, dim header. Check the `fuzzy-picker-other-projects` and `fuzzy-picker-other-text` render scenarios after visual changes.
 
 File Search shows all its rows at once. Paged lists load the next page one screen before their end. A refresh keeps the selected row.
-Each non-empty query keeps a Saved Screen: its rows down to the bottom of the screen and its selected row. The picker saves it at close and when the prompt history moves away from the query. It keeps the newest 50 in memory. An empty File Search starts at its first row.
+Each non-empty query keeps a Saved Screen: its rows down to the bottom of the screen and its selected row. The picker saves it at close and when the prompt history moves away from the query, but not while a search runs, because its rows can belong to the previous query. It keeps the newest 50 in memory. An empty File Search starts at its first row.
 A picker that opens a query with a Saved Screen, or that the prompt history moves to, shows that screen in its first frame. It does not wait for the search.
 While the Saved Screen shows, searches keep their rows back (`holds_saved_screen`). Their last rows replace it, and `restore_position` selects the saved row at its place on the screen. Text Search keeps the found rows of the Saved Screen first, in their order, as rows that the user saw.
 A move during the Saved Screen changes the row that the restore selects. Pages do not load until the search ends.

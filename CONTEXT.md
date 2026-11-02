@@ -564,6 +564,10 @@ _Avoid_: constructor command, open badge
 The floating picker used for fuzzy navigation and search modes, such as files, projects, grep, symbols, and commands.
 _Avoid_: fuzzy searcher popup
 
+**Saved Screen**:
+The Fuzzy Searcher rows that a query showed when the user last left it, with its selected row. The query opens on that screen again, also from the prompt history.
+_Avoid_: saved position, scroll memory
+
 **Navigation History Search**:
 A Fuzzy Searcher mode for finding Navigation Places in its source Pane's Navigation History.
 Activating a result restores that exact Navigation Place, including its View state.

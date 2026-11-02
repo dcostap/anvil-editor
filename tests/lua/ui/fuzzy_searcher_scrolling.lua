@@ -40,6 +40,8 @@ test.describe("Fuzzy Searcher scrolling and selection", function()
     context.visited_files = core.visited_files
     context.cwd = system.getcwd()
     context.everything_state = helpers.everything_state()
+    -- Each test opens its queries without the history and Saved Screens of earlier tests.
+    helpers.clear_prompt_history()
     helpers.set_everything_state("unavailable")
     context.root = USERDIR .. PATHSEP .. "fuzzy-scrolling-" .. system.get_process_id()
       .. "-" .. math.floor(system.get_time() * 1000000)
@@ -135,16 +137,43 @@ test.describe("Fuzzy Searcher scrolling and selection", function()
     test.equal(picker.selected, start)
   end)
 
-  test.it("selects the same row at the same place when the picker opens again with the same query", function()
+  local function visible_keys(picker)
+    local keys = {}
+    for index = picker.viewport_offset, picker.viewport_offset + picker:list_metrics().result_rows - 1 do
+      local result = picker.results[index]
+      if result then keys[#keys + 1] = picker:result_selection_key(result) end
+    end
+    return keys
+  end
+
+  local function text_search_done(picker)
+    return tostring(picker.status):match("^%d+ exact matches$") ~= nil
+  end
+
+  -- Selects a row on the second screen of a Text Search, and returns the screen that shows it.
+  local function browse_text_search(picker, moves)
+    picker:set_size(1400, 600)
+    test.ok(wait_until(function() return text_search_done(picker) and #picker.results >= 60 end),
+      "expected a line from each file: " .. tostring(picker.status))
+    for _ = 1, moves do picker:select_delta(1) end
+    return {
+      key = picker:result_selection_key(picker:selected_result()),
+      screen_row = picker.selected - picker.viewport_offset,
+      rows = visible_keys(picker),
+    }
+  end
+
+  local function shows_screen(picker, screen)
+    test.equal(picker:result_selection_key(picker:selected_result()), screen.key)
+    test.equal(picker.selected - picker.viewport_offset, screen.screen_row)
+    test.same(visible_keys(picker), screen.rows)
+  end
+
+  test.it("opens again with the same query on the same screen, before the search ends", function()
     fuzzy_searcher.open("#test")
     local picker = test.not_nil(core.fuzzy_searcher_active_view)
-    picker:set_size(1400, 600)
-    test.ok(wait_until(function() return #picker.results >= 60 end), "expected a line from each file")
-    -- A row on the second screen.
-    for _ = 1, picker:list_metrics().result_rows + 5 do picker:select_delta(1) end
-    local saved = picker:selected_result()
-    local screen_row = picker.selected - picker.viewport_offset
-    test.ok(screen_row > 0, "the selected row is at the top of the screen")
+    local screen = browse_text_search(picker, picker:list_metrics().result_rows + 5)
+    test.ok(screen.screen_row > 0, "the selected row is at the top of the screen")
     picker:close()
     test.ok(wait_until(function() return core.fuzzy_searcher_active_view ~= picker end))
 
@@ -152,10 +181,35 @@ test.describe("Fuzzy Searcher scrolling and selection", function()
     local reopened = test.not_nil(core.fuzzy_searcher_active_view)
     reopened:set_size(1400, 600)
     test.equal(reopened.input:get_text(), "#test")
-    test.ok(wait_until(function()
-      local result = reopened:selected_result()
-      return result and common.path_equals(result.abs_path, saved.abs_path) and result.line == saved.line
-    end), "the picker did not select the same row again")
-    test.equal(reopened.selected - reopened.viewport_offset, screen_row)
+    -- The first frame shows the screen of the last close.
+    reopened:update()
+    shows_screen(reopened, screen)
+    -- The search ends without a change on the screen.
+    test.ok(wait_until(function() return text_search_done(reopened) end), tostring(reopened.status))
+    shows_screen(reopened, screen)
+  end)
+
+  test.it("keeps the browsed row of each query in the prompt history", function()
+    fuzzy_searcher.open("#test")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    local test_screen = browse_text_search(picker, picker:list_metrics().result_rows + 5)
+    picker:close()
+    test.ok(wait_until(function() return core.fuzzy_searcher_active_view ~= picker end))
+
+    fuzzy_searcher.open("#tes")
+    picker = test.not_nil(core.fuzzy_searcher_active_view)
+    local tes_screen = browse_text_search(picker, 3)
+
+    test.ok(command.perform("fuzzy:prompt_history_previous"))
+    test.equal(picker.input:get_text(), "#test")
+    picker:update()
+    shows_screen(picker, test_screen)
+
+    test.ok(command.perform("fuzzy:prompt_history_next"))
+    test.equal(picker.input:get_text(), "#tes")
+    picker:update()
+    shows_screen(picker, tes_screen)
+    test.ok(wait_until(function() return text_search_done(picker) end), tostring(picker.status))
+    shows_screen(picker, tes_screen)
   end)
 end)
