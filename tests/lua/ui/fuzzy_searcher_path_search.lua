@@ -542,6 +542,34 @@ test.describe("Fuzzy Searcher Path Search", function()
     end
   end)
 
+  test.it("keeps a file's size and edited time while the user types", function(context)
+    local file = join_path(context.project_root, "notes", "sized.txt")
+    mkdirp(common.dirname(file))
+    write_file(file, string.rep("x", 2048))
+    helpers.set_file_cache_for_test({ assert(helpers.file_display_item(file)) })
+    local function size_text(picker)
+      for _, result in ipairs(picker.results) do
+        if result.file and common.path_equals(helpers.fullpath(result), file) then
+          for _, part in ipairs(helpers.file_metadata_parts(result)) do
+            if part.id == "size" then return part.text end
+          end
+        end
+      end
+    end
+
+    fuzzy_searcher.open("size")
+    local picker = core.fuzzy_searcher_active_view
+    test.ok(wait_until(function() return (size_text(picker) or "") ~= "" end), "the size did not show")
+    -- A new query makes new rows. The same file keeps its labels in each frame.
+    picker:on_text_input("d")
+    for frame = 1, 10 do
+      local text = size_text(picker)
+      test.ok(text == nil or text ~= "", string.format("frame %d: the size went away", frame))
+      coroutine.yield(0)
+    end
+    test.not_nil(size_text(picker), "the file did not match the new query")
+  end)
+
   test.it("uses an existing exact bare file instead of offering creation", function(context)
     local file = join_path(context.project_root, "existing.txt")
     write_file(file)

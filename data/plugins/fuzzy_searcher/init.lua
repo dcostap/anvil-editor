@@ -2463,9 +2463,15 @@ end
 -- Rows that appear in one frame share one job.
 fuzzy_searcher.file_info_requests = {}
 
+-- The last information that a worker read for each path. Each query makes new rows, and a new row of the same file
+-- shows it at once, so its labels do not go away while the user types. The worker reads the file again.
+fuzzy_searcher.file_infos, fuzzy_searcher.file_info_count = {}, 0
+
 function fuzzy_searcher.request_file_info(r, path)
   if r.file_info_requested then return end
   r.file_info_requested = true
+  local known = fuzzy_searcher.file_infos[common.path_compare_key(path) or path]
+  if known then r.file_size, r.file_modified = known.size, known.modified end
   fuzzy_searcher.file_info_requests[#fuzzy_searcher.file_info_requests + 1] = { result = r, path = path }
   if #fuzzy_searcher.file_info_requests > 1 then return end
   core.add_thread(function()
@@ -2478,6 +2484,14 @@ function fuzzy_searcher.request_file_info(r, path)
         local info = infos[index]
         request.result.file_size = info and info.size or false
         request.result.file_modified = info and info.modified or nil
+        local key = common.path_compare_key(request.path) or request.path
+        if not fuzzy_searcher.file_infos[key] then
+          if fuzzy_searcher.file_info_count >= 4096 then
+            fuzzy_searcher.file_infos, fuzzy_searcher.file_info_count = {}, 0
+          end
+          fuzzy_searcher.file_info_count = fuzzy_searcher.file_info_count + 1
+        end
+        fuzzy_searcher.file_infos[key] = { size = request.result.file_size, modified = request.result.file_modified }
       end
       core.redraw = true
     end
