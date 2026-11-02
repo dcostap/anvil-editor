@@ -344,7 +344,6 @@ if macos then
 end
 
 keymap.add_direct {
-  ["ctrl+,"] = "core:open_user_module",
   ["ctrl+alt+r"] = "core:restart",
   ["ctrl+alt+z"] = "editor:revert_file_change",
   ["ctrl+shift+r"] = "core:restart",

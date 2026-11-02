@@ -2,7 +2,6 @@ local function keymap_macos(keymap)
   keymap.add_direct {
     ["cmd+shift+p"] = "fuzzy:open_commands",
     ["cmd+o"] = "core:pick_file",
-    ["cmd+,"] = "core:open_user_module",
     ["cmd+shift+c"] = "core:change_project_folder",
     ["cmd+shift+o"] = "core:open_project_folder",
     ["cmd+option+r"] = "core:restart",
