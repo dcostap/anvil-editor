@@ -4130,10 +4130,6 @@ command.add_toggle("editor:toggle_line_wrapping", {
 })
 
 
-keymap.add {
-  ["f10"] = "editor:toggle_line_wrapping",
-}
-
 keymap.add_direct {
   ["ctrl+shift+-"] = "editor:fold_at_caret",
   ["ctrl+shift+="] = "editor:unfold_at_caret",

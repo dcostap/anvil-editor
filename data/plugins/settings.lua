@@ -2910,10 +2910,6 @@ command.add(nil, {
   }),
 })
 
-keymap.add {
-  ["ctrl+alt+p"] = "settings:open"
-}
-
 --------------------------------------------------------------------------------
 -- Overwrite View:new to allow setting force scrollbar status globally
 --------------------------------------------------------------------------------
