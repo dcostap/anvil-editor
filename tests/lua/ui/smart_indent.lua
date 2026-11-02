@@ -363,6 +363,21 @@ test.describe("smart indentation", function()
     test.equal(text(buffer), "f {\n  x()\n  y()\n}\n")
   end)
 
+  test.it("external text with one line for each caret pastes one line at each caret", function(context)
+    local buffer, view = new_editor(context, "a\nb\nc", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(3, 2, 3, 2)
+    buffer:add_selection(1, 2, 1, 2)
+    buffer:add_selection(2, 2, 2, 2)
+    system.set_clipboard("1\n2\n3\n")
+    core.cursor_clipboard = { full = "different" }
+    core.cursor_clipboard_whole_line = {}
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), "a1\nb2\nc3\n")
+  end)
+
   test.it("leaves the comment at its end, including trailing whitespace", function(context)
     for _, case in ipairs({
       { "-- hello", "sample.lua", 9 },
@@ -682,6 +697,56 @@ test.describe("smart indentation", function()
     test.ok(command.perform("editor:join_lines"))
 
     test.equal(text(buffer), "- first second\nafter\n")
+  end)
+
+  test.it("Join Lines makes one comment of joined line comments", function(context)
+    local buffer, view = new_editor(context, "x = 1 -- a  \n  --  b", "sample.lua")
+    core.set_active_view(view)
+    buffer:set_selection(1, 1)
+
+    test.ok(command.perform("editor:join_lines"))
+
+    test.equal(text(buffer), "x = 1 -- a b\n")
+  end)
+
+  test.it("Join Lines puts no space inside brackets", function(context)
+    local buffer, view = new_editor(context, "f(\n  a,\n  b\n)", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(1, 1, 4, 2)
+
+    test.ok(command.perform("editor:join_lines"))
+
+    test.equal(text(buffer), "f(a, b)\n")
+  end)
+
+  test.it("Move Lines gives moved lines the indentation of the block that they enter", function(context)
+    local original = "f {\n  x()\n  g {\n    y()\n  }\n}"
+    local buffer, view = new_editor(context, original, "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(2, 4)
+
+    test.ok(command.perform("editor:move_lines_down"))
+    test.equal(text(buffer), "f {\n  g {\n    x()\n    y()\n  }\n}\n")
+    test.same(view:get_selection_state().selections, { 3, 6, 3, 6 })
+    test.ok(command.perform("core:undo"))
+    test.equal(text(buffer), original .. "\n")
+
+    test.ok(command.perform("editor:move_lines_down"))
+    test.ok(command.perform("editor:move_lines_down"))
+    test.equal(text(buffer), "f {\n  g {\n    y()\n    x()\n  }\n}\n")
+
+    test.ok(command.perform("editor:move_lines_down"))
+    test.equal(text(buffer), "f {\n  g {\n    y()\n  }\n  x()\n}\n")
+  end)
+
+  test.it("Move Lines moves a closing brace with the line that it passes", function(context)
+    local buffer, view = new_editor(context, "if a {\n}\nx()", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(2, 1)
+
+    test.ok(command.perform("editor:move_lines_down"))
+
+    test.equal(text(buffer), "if a {\n  x()\n}\n")
   end)
 
   test.it("continues Markdown list items ending in a colon", function(context)

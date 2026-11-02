@@ -18,3 +18,26 @@ bool key_name_from_ascii_keycode(SDL_Keycode key, char out[2]) {
   out[1] = '\0';
   return true;
 }
+
+#ifdef _WIN32
+#include <windows.h>
+
+bool key_layout_text(void *layout, unsigned scancode, bool shift, bool altgr, char out[16]) {
+  HKL hkl = (HKL)layout;
+  UINT vk = MapVirtualKeyExW(scancode, MAPVK_VSC_TO_VK, hkl);
+  if (!vk) return false;
+  BYTE state[256] = { 0 };
+  if (shift) state[VK_SHIFT] = state[VK_LSHIFT] = 0x80;
+  if (altgr) state[VK_CONTROL] = state[VK_LCONTROL] = state[VK_MENU] = state[VK_RMENU] = 0x80;
+  WCHAR text[8];
+  /* Flag 4 keeps the keyboard state, so a dead key does not wait for the next key the user types. */
+  int count = ToUnicodeEx(vk, scancode, state, text, SDL_arraysize(text), 4, hkl);
+  /* A dead key gives its own character with a negative count. */
+  if (count < 0) count = 1;
+  if (count == 0 || text[0] < 0x20 || text[0] == 0x7f) return false;
+  int length = WideCharToMultiByte(CP_UTF8, 0, text, count, out, 15, NULL, NULL);
+  if (length <= 0) return false;
+  out[length] = '\0';
+  return true;
+}
+#endif

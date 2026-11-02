@@ -18,6 +18,7 @@ int luaopen_treesitter(lua_State *L);
 int luaopen_fuzzy(lua_State *L);
 int luaopen_layout_rows(lua_State *L);
 int luaopen_worker_pool_native(lua_State *L);
+int luaopen_keyboard(lua_State *L);
 
 #ifdef _WIN32
   int luaopen_terminal_native(lua_State *L);
@@ -95,6 +96,7 @@ static const luaL_Reg libs[] = {
   { "fuzzy",      luaopen_fuzzy      },
   { "layout_rows", luaopen_layout_rows },
   { "worker_pool_native", luaopen_worker_pool_native },
+  { "keyboard",   luaopen_keyboard   },
   LUA_TERMINAL
   LUA_NET
   LUA_REPL

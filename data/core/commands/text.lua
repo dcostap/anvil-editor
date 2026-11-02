@@ -781,34 +781,6 @@ local function markdown_list_marker_delete_end(buffer, line, line_text, col)
   end
 end
 
-local function markdown_join_lines_text(buffer, line1, line2)
-  local result = ""
-  for line = line1, line2 do
-    local raw = buffer.lines[line] or ""
-    local current = raw:gsub("\n$", "")
-    if line == line1 then
-      result = current
-    else
-      local previous_raw = buffer.lines[line - 1] or ""
-      local next_content_col = markdown_list_join_content_col(
-        buffer, line - 1, previous_raw, raw
-      )
-      if next_content_col then
-        local separator = result:sub(-1):match("[ \t]") and "" or " "
-        result = result .. separator .. current:sub(next_content_col)
-      else
-        local leading = current:match("^[\t ]*") or ""
-        if previous_raw:gsub("\n$", ""):match("^%s*$") then
-          result = result .. current:sub(#leading + 1)
-        else
-          result = result .. " " .. current:sub(#leading + 1)
-        end
-      end
-    end
-  end
-  return result
-end
-
 local function token_at(buffer, line, col)
   local column = 0
   for _, token_type, token_text in buffer.highlighter:each_token(line) do
@@ -1047,24 +1019,71 @@ local function insertion_indent(buffer, line, text)
   return empty_line_indent.indent_before(buffer, line)
 end
 
+-- Changes the indentation width of each line with text in `lines` by `delta`.
+local function shift_lines_by(buffer, lines, delta)
+  if delta == 0 then return lines end
+  local _, indent_size = buffer:get_indent_info()
+  for i, line in ipairs(lines) do
+    if line:find("%S") then
+      local lead = leading_whitespace(line)
+      local width = indent_visual_width(lead, indent_size) + delta
+      lines[i] = indentation_of_width(buffer, math.max(0, width)) .. line:sub(#lead + 1)
+    end
+  end
+  return lines
+end
+
 -- Moves `lines` so that their first line with text starts at `target`. The
 -- other lines keep their indentation relative to it.
 local function shift_lines_to(buffer, lines, target)
   local _, indent_size = buffer:get_indent_info()
-  local delta
-  for i, line in ipairs(lines) do
+  for _, line in ipairs(lines) do
     if line:find("%S") then
-      local lead = leading_whitespace(line)
-      local width = indent_visual_width(lead, indent_size)
-      if not delta then
-        delta = indent_visual_width(target, indent_size) - width
-        lines[i] = target .. line:sub(#lead + 1)
-      elseif delta ~= 0 then
-        lines[i] = indentation_of_width(buffer, math.max(0, width + delta)) .. line:sub(#lead + 1)
-      end
+      local width = indent_visual_width(leading_whitespace(line), indent_size)
+      return shift_lines_by(buffer, lines, indent_visual_width(target, indent_size) - width)
     end
   end
   return lines
+end
+
+-- The block indentation of the first line with text in `line1`..`line2`.
+local function group_block_indent(buffer, line1, line2)
+  for line = line1, line2 do
+    if (buffer.lines[line] or ""):find("%S") then return block_indent(buffer, line) end
+  end
+end
+
+-- After Move Lines, shifts each group of lines by the change of its block
+-- indentation, so lines that enter or leave a block take its indentation and
+-- hanging indentation keeps its offset. `groups` lists `{ line1, line2,
+-- before }` in document order. `before` is the group's block indentation
+-- before the move.
+local function reindent_moved_lines(buffer, groups)
+  local _, indent_size = buffer:get_indent_info()
+  for _, group in ipairs(groups) do
+    local after = group.before and group_block_indent(buffer, group.line1, group.line2)
+    local delta = after
+      and indent_visual_width(after, indent_size) - indent_visual_width(group.before, indent_size)
+    if delta and delta ~= 0 then
+      local edits = {}
+      for line = group.line1, group.line2 do
+        local text = buffer.lines[line]
+        local lead = leading_whitespace(text)
+        local new_lead = leading_whitespace(shift_lines_by(buffer, { text }, delta)[1])
+        if new_lead ~= lead then
+          edits[#edits + 1] = { line1 = line, col1 = 1, line2 = line, col2 = #lead + 1, text = new_lead, idx = 0 }
+        end
+      end
+      if #edits > 0 then
+        local selections, last_selection = buffer:selections_after_edits(edits, nil, buffer.last_selection)
+        buffer:apply_edits(edits, {
+          type = "insert", selections = selections, last_selection = last_selection, merge_cursors = false,
+        })
+        core.log_quiet("Move Lines shifted lines %d-%d by %d columns in %s",
+          group.line1, group.line2, delta, buffer:get_name())
+      end
+    end
+  end
 end
 
 local function split_lines(text)
@@ -1412,6 +1431,45 @@ local function joined_lines_spacing(before, after)
   return " "
 end
 
+-- Joins `line1` through `line2` into one line. Each joined line loses its
+-- indentation, a Markdown list marker, or a line comment marker that
+-- continues a comment on the line before it.
+local function join_lines_text(buffer, line1, line2)
+  local marker = buffer.syntax and buffer.syntax.comment
+  if type(marker) ~= "string" or marker == "" then marker = nil end
+  local result = ""
+  for line = line1, line2 do
+    local raw = buffer.lines[line] or ""
+    local current = raw:gsub("\n$", "")
+    if line == line1 then
+      result = current
+    else
+      local previous_raw = buffer.lines[line - 1] or ""
+      local next_content_col = markdown_list_join_content_col(
+        buffer, line - 1, previous_raw, raw
+      )
+      if next_content_col then
+        local separator = result:sub(-1):match("[ \t]") and "" or " "
+        result = result .. separator .. current:sub(next_content_col)
+      else
+        local content = current:sub(#(current:match("^[\t ]*") or "") + 1)
+        local previous = previous_raw:gsub("\n$", "")
+        if marker and content:sub(1, #marker) == marker and previous:find("%S")
+        and token_at(buffer, line - 1, #previous) == "comment" then
+          content = content:sub(#marker + 1):gsub("^[\t ]*", "")
+        end
+        if previous:match("^%s*$") then
+          result = result .. content
+        elseif content ~= "" then
+          result = result:gsub("[\t ]+$", "")
+          result = result .. joined_lines_spacing(result, content) .. content
+        end
+      end
+    end
+  end
+  return result
+end
+
 -- Backspace in a line's indentation first moves the line to its block's
 -- indentation. At or before that indentation it joins the line to the
 -- previous one.
@@ -1559,6 +1617,21 @@ local function coalesce_duplicate_replacements(edits)
   return result, original_to_coalesced
 end
 
+-- Maps each selection index to one of `lines`, in the carets' document order.
+local function lines_by_caret_position(buffer, lines)
+  local carets = {}
+  for idx, line1, col1 in buffer:get_selections(true) do
+    carets[#carets + 1] = { idx = idx, line = line1, col = col1 }
+  end
+  table.sort(carets, function(a, b)
+    if a.line ~= b.line then return a.line < b.line end
+    return a.col < b.col
+  end)
+  local by_idx = {}
+  for i, caret in ipairs(carets) do by_idx[caret.idx] = lines[i] end
+  return by_idx
+end
+
 local function paste_clipboard(dv, clipboard)
   local transaction
   -- If the clipboard has changed since our last look, use that instead
@@ -1566,8 +1639,14 @@ local function paste_clipboard(dv, clipboard)
     core.cursor_clipboard = {}
     core.cursor_clipboard_whole_line = {}
     local text = clipboard:gsub("\r", "")
-    transaction = dv.buffer:text_input_by_selection(function(_, line1, col1)
-      return smart_paste_text(dv.buffer, line1, col1, text)
+    local lines = split_lines((text:gsub("\n$", "")))
+    local line_for_idx = #lines > 1 and #lines == #dv.buffer.selections / 4
+      and lines_by_caret_position(dv.buffer, lines)
+    if line_for_idx then
+      core.log_quiet("Pasted one clipboard line at each of %d carets", #lines)
+    end
+    transaction = dv.buffer:text_input_by_selection(function(idx, line1, col1)
+      return smart_paste_text(dv.buffer, line1, col1, line_for_idx and line_for_idx[idx] or text)
     end, nil, { type = "paste" })
   else
     -- Use internal clipboard(s)
@@ -2260,7 +2339,7 @@ local commands = {
 
     local edits = {}
     for _, action in ipairs(merged) do
-      action.text = markdown_join_lines_text(dv.buffer, action.line1, action.line2)
+      action.text = join_lines_text(dv.buffer, action.line1, action.line2)
       edits[#edits + 1] = {
         line1 = action.line1,
         col1 = 1,
@@ -2565,11 +2644,19 @@ local commands = {
       end
     end
 
-    local edits, line_mapping = {}, {}
+    local edits, line_mapping, groups = {}, {}, {}
     local selections = { table.unpack(dv.buffer.selections) }
     for _, block in ipairs(blocks) do
       local delta = block.line1 > 1 and -1 or 0
       if delta ~= 0 then
+        groups[#groups + 1] = {
+          line1 = block.line1 - 1, line2 = block.line2 - 1,
+          before = group_block_indent(dv.buffer, block.line1, block.line2),
+        }
+        groups[#groups + 1] = {
+          line1 = block.line2, line2 = block.line2,
+          before = group_block_indent(dv.buffer, block.line1 - 1, block.line1 - 1),
+        }
         line_mapping[block.line1 - 1] = block.line2
         for line = block.line1, block.line2 do line_mapping[line] = line - 1 end
         local parts = {}
@@ -2597,7 +2684,10 @@ local commands = {
       end
     end
     if #edits > 0 then
+      local undo_idx = dv.buffer.undo_stack.idx
       dv.buffer:apply_edits(edits, { type = "batch", line_mapping = line_mapping, selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = false })
+      reindent_moved_lines(dv.buffer, groups)
+      dv.buffer:join_undo_since(undo_idx)
     else
       dv.buffer:set_selection_list(selections, dv.buffer.last_selection)
     end
@@ -2623,10 +2713,20 @@ local commands = {
       end
     end
 
-    local edits, line_mapping = {}, {}
+    local edits, line_mapping, groups = {}, {}, {}
     local selections = { table.unpack(dv.buffer.selections) }
     for _, block in ipairs(blocks) do
       local delta = 1
+      if block.line2 < #dv.buffer.lines then
+        groups[#groups + 1] = {
+          line1 = block.line1, line2 = block.line1,
+          before = group_block_indent(dv.buffer, block.line2 + 1, block.line2 + 1),
+        }
+      end
+      groups[#groups + 1] = {
+        line1 = block.line1 + 1, line2 = block.line2 + 1,
+        before = group_block_indent(dv.buffer, block.line1, block.line2),
+      }
       for line = block.line1, block.line2 do line_mapping[line] = line + 1 end
       if block.line2 < #dv.buffer.lines then line_mapping[block.line2 + 1] = block.line1 end
       if block.line2 == #dv.buffer.lines then
@@ -2660,7 +2760,10 @@ local commands = {
       end
     end
     if #edits > 0 then
+      local undo_idx = dv.buffer.undo_stack.idx
       dv.buffer:apply_edits(edits, { type = "batch", line_mapping = line_mapping, selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = false })
+      reindent_moved_lines(dv.buffer, groups)
+      dv.buffer:join_undo_since(undo_idx)
     else
       dv.buffer:set_selection_list(selections, dv.buffer.last_selection)
     end

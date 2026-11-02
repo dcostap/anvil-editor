@@ -12,4 +12,11 @@ bool key_text_from_keycode(SDL_Keycode key, char out[5]);
  * Returns false for other keys, which need SDL's key or scancode names. */
 bool key_name_from_ascii_keycode(SDL_Keycode key, char out[2]);
 
+#ifdef _WIN32
+/* Writes the text that a physical key types in the Windows keyboard layout `layout` (an HKL), as NUL-terminated
+ * UTF-8. `scancode` is the key's set 1 scan code. A dead key gives its own character.
+ * Returns false when the key types no text with these modifiers. */
+bool key_layout_text(void *layout, unsigned scancode, bool shift, bool altgr, char out[16]);
+#endif
+
 #endif

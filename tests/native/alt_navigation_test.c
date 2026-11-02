@@ -154,5 +154,17 @@ int main(void) {
       CHECK(count <= ANVIL_ALT_NAVIGATION_MAX_KEYS);
       if (count) CHECK(keys[count - 1].mod == held[h]);
     }
+
+  /* The chord list describes what each chord types. */
+  AnvilAltNavigationChord chord;
+  size_t chords = 0;
+  for (; anvil_alt_navigation_chord(chords, &chord); chords++) {
+    SDL_Scancode to = SDL_SCANCODE_UNKNOWN;
+    SDL_Keymod to_mod = 0;
+    size_t presses;
+    CHECK(result(chord.from, A | (chord.ctrl ? C : 0) | (chord.shift ? S : 0), &to, &to_mod, &presses));
+    CHECK(to == chord.to && to_mod == chord.mod && (int)presses == chord.count);
+  }
+  CHECK(chords > 0);
   return 0;
 }

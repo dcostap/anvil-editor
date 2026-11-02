@@ -1157,6 +1157,15 @@ local function scenario_is_ready()
     updater.open()
     return false
   end
+  if benchmark.scenario == "keyboard-map" then
+    -- The Keyboard Map on the Alt layer, where Alt Navigation chords show the keys that they type.
+    local KeyboardMap = require "plugins.keyboard_map"
+    if core.active_view and core.active_view:is(KeyboardMap) then return true end
+    config.transitions = false
+    command.perform("keyboard_map:open")
+    core.active_view:show_key({ id = "j" }, 4)
+    return false
+  end
   if benchmark.scenario == "file-types-dialog" then
     -- The File Types Dialog with checked, clear and Another Anvil rows. The rows are fixed, so the scene
     -- does not read or change this machine's registry.

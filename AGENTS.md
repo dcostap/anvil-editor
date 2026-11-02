@@ -859,13 +859,15 @@ Caches use `buffer.text_revision`. `get_change_id()` is the undo position, which
 In Markdown, a blank line after a list item or a quote shows at the margin.
 Keep `newline_indent` in step with `core:newline`. Run `ui/empty_line_indent.lua` and `ui/smart_indent.lua` after changes.
 
-## Paste indentation
+## Paste and move indentation
 
 The lines after the first line of a multi-line paste start at the caret's indentation. They keep their shape relative to the first line.
 Parts copied from several carets and pasted at one caret go on separate lines. Each part starts at the caret's indentation.
 Whole lines, and complete lines pasted at column 1, go where a new line belongs there: the brace block's indentation (`block_indent`), or else the Shown Indentation of a new empty line. Lines copied together keep their shape.
 After pasted complete lines, the rest of the caret's line keeps its indentation.
 Markdown keeps the indentation of pasted whole lines, because lists and quotes own it.
+Text from outside this process with one line for each caret pastes one line at each caret, in document order. A last newline does not count as a line.
+Move Lines shifts the moved lines, and the line that they pass, by the change of their brace block indentation (`block_indent`). A move inside one block changes no indentation, so hanging indentation keeps its offset. Languages without brace blocks keep their indentation. One undo reverts the move and the shift.
 Run `ui/smart_indent.lua` after changes.
 
 ## Autocomplete searches

@@ -58,6 +58,14 @@ static const struct { SDL_Keymod mod; SDL_Scancode scancode; } modifiers[] = {
   {SDL_KMOD_LALT, SDL_SCANCODE_LALT}, {SDL_KMOD_RALT, SDL_SCANCODE_RALT},
 };
 
+bool anvil_alt_navigation_chord(size_t index, AnvilAltNavigationChord *chord) {
+  if (index >= SDL_arraysize(chords)) return false;
+  const Chord *c = &chords[index];
+  *chord = (AnvilAltNavigationChord){c->from, (c->chord & CTRL) != 0, (c->chord & SHIFT) != 0, c->to, c->mod,
+                                     c->count ? c->count : 1};
+  return true;
+}
+
 static void add(AnvilAltNavigationKey *keys, size_t *count, SDL_Scancode scancode, SDL_Keymod mod, bool down,
                 bool space) {
   keys[(*count)++] = (AnvilAltNavigationKey){scancode, mod, down, space};

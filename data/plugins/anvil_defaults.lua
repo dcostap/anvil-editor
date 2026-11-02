@@ -34,6 +34,7 @@ local core_plugins = {
   intellij_actions = true,
   intellij_find = true,
   keyboard_input_checker = true,
+  keyboard_map = true,
   anvil_language_json = true,
   anvil_language_rust = true,
   scale_debug_log = true,
@@ -146,6 +147,8 @@ plugin_defaults("diffview", {
   fold_context_lines = 6,
   fold_min_lines = 16,
 })
+-- The Keyboard Map shows Alt chords as the keys that Alt Navigation, or the same AutoHotkey script, types.
+plugin_defaults("keyboard_map", { alt_navigation = true })
 -- The file types in the File Types Dialog. Each one registers its extensions together.
 plugin_defaults("file_types", {
   types = {

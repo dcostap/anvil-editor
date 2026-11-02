@@ -19,6 +19,18 @@ typedef struct {
 
 #define ANVIL_ALT_NAVIGATION_MAX_KEYS 64
 
+/* One chord: Alt, with `ctrl` and `shift` as held, and the physical key `from` type `to` with `mod`, `count` times. */
+typedef struct {
+  SDL_Scancode from;
+  bool ctrl, shift;
+  SDL_Scancode to;
+  SDL_Keymod mod;
+  int count;
+} AnvilAltNavigationChord;
+
+/* Reads the chord at `index`. Returns false after the last chord. */
+bool anvil_alt_navigation_chord(size_t index, AnvilAltNavigationChord *chord);
+
 /* Writes the key events that replace one press of `scancode` with the modifier state `mod`, and returns their
  * count. Returns 0 when the press is not an Alt Navigation chord, so it passes unchanged.
  * Like AutoHotkey's Send, the events release the held modifiers that the result does not use, press the

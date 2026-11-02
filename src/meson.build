@@ -17,6 +17,7 @@ anvil_sources = [
     'api/fuzzy.c',
     'api/layout_rows.c',
     'api/worker_pool.c',
+    'api/keyboard.c',
     'fuzzy.c',
     'git_status_index.c',
     'worker_pool.c',
@@ -378,7 +379,7 @@ test('machine-frame', machine_frame_test, env: anvil_test_env, suite: 'anvil')
 
 if host_machine.system() == 'windows'
     keymap_layout_test = executable('keymap_layout_test',
-        ['../tests/native/keymap_layout_test.c'],
+        ['../tests/native/keymap_layout_test.c', 'key_text.c'],
         include_directories: anvil_includes, dependencies: [sdl_dep], c_args: anvil_cargs)
     test('keymap-layout', keymap_layout_test, env: anvil_test_env, suite: 'anvil')
 
