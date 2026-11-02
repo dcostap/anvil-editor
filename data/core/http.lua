@@ -304,6 +304,17 @@ local function resolve_redirect_url(parsed, location)
   return origin .. resolve_relative_path(base_path, location_path) .. location_suffix
 end
 
+-- Sleep `delay` seconds, then return the next delay. Socket waits start
+-- without a sleep and double up to `max`, so a local server answers within a
+-- few milliseconds and a slow transfer still wakes rarely.
+---@param delay number
+---@param max number
+---@return number
+local function poll_wait(delay, max)
+  coroutine.yield(delay)
+  return math.min(math.max(delay * 2, 0.001), max)
+end
+
 -- Resolve hostname
 ---@param hostname string
 ---@param should_abort? fun():string?
@@ -313,6 +324,7 @@ local function resolve_host(hostname, should_abort)
   local addr, err = net.resolve_address(hostname)
   if not addr then return nil, err end
 
+  local delay = 0
   while true do
     local abort_err = should_abort and should_abort()
     if abort_err then return nil, abort_err end
@@ -320,7 +332,7 @@ local function resolve_host(hostname, should_abort)
     local status, err2 = addr:get_status()
     if status == "success" then return addr end
     if status == "failure" then return nil, err2 or "failed to resolve host" end
-    coroutine.yield(0.05)
+    delay = poll_wait(delay, 0.05)
   end
 end
 
@@ -371,25 +383,27 @@ end
 ---@return boolean?, string?
 local function write_all(conn, data, should_abort)
   local total_sent = 0
+  local delay = 0
   while total_sent < #data do
     local abort_err = should_abort and should_abort()
     if abort_err then return nil, abort_err end
 
     local ok = conn:write(data:sub(total_sent + 1))
     if not ok then
-      coroutine.yield(0.05)
+      delay = poll_wait(delay, 0.05)
     else
       total_sent = #data
     end
   end
 
+  delay = 0
   while true do
     local abort_err = should_abort and should_abort()
     if abort_err then return nil, abort_err end
 
     local pending = conn:wait_until_drained(0)
     if pending == 0 then break end
-    coroutine.yield(0.05)
+    delay = poll_wait(delay, 0.05)
   end
 
   return true
@@ -402,6 +416,7 @@ local function make_reader(conn, should_abort)
   local buffer = ""
 
   local function wait_for_data(size)
+    local delay = 0
     while #buffer < size do
       local abort_err = should_abort and should_abort()
       if abort_err then return nil, abort_err end
@@ -411,8 +426,9 @@ local function make_reader(conn, should_abort)
 
       if chunk and #chunk > 0 then
         buffer = buffer .. chunk
+        delay = 0
       else
-        coroutine.yield(0.01)
+        delay = poll_wait(delay, 0.01)
       end
     end
 
@@ -430,6 +446,7 @@ local function make_reader(conn, should_abort)
     end,
 
     read_line = function(_)
+      local delay = 0
       while true do
         local idx = buffer:find("\r\n", 1, true)
         if idx then
@@ -446,8 +463,9 @@ local function make_reader(conn, should_abort)
 
         if chunk and #chunk > 0 then
           buffer = buffer .. chunk
+          delay = 0
         else
-          coroutine.yield(0.01)
+          delay = poll_wait(delay, 0.01)
         end
       end
     end,
@@ -459,6 +477,7 @@ local function make_reader(conn, should_abort)
         return data
       end
 
+      local delay = 0
       while true do
         local abort_err = should_abort and should_abort()
         if abort_err then return nil, abort_err end
@@ -474,7 +493,7 @@ local function make_reader(conn, should_abort)
         if status == "failure" then
           return nil
         end
-        coroutine.yield(0.01)
+        delay = poll_wait(delay, 0.01)
       end
     end
   }
@@ -605,6 +624,7 @@ function http.request(method, url, options)
       return
     end
 
+    local delay = 0
     while true do
       local abort_err = should_abort()
       if abort_err then
@@ -620,7 +640,7 @@ function http.request(method, url, options)
         on_done(false, errstatus or "failed to connect")
         return
       end
-      coroutine.yield(0.05)
+      delay = poll_wait(delay, 0.05)
     end
 
     local req_str = build_request(
