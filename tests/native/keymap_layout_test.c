@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include "key_text.h"
 
 #define CHECK(condition) do { \
   if (!(condition)) { \
@@ -46,6 +47,17 @@ int main(void) {
     CHECK(SDL_GetKeyFromScancode(SDL_SCANCODE_GRAVE, SDL_KMOD_NONE, false) == 0xba);
     SDL_Quit();
   }
+
+  /* The Keyboard Map labels each physical key with the text that the layout types. */
+  char text[16];
+  CHECK(key_layout_text(spanish, 0x27, false, false, text) && SDL_strcmp(text, "\xc3\xb1") == 0);
+  CHECK(key_layout_text(spanish, 0x27, true, false, text) && SDL_strcmp(text, "\xc3\x91") == 0);
+  CHECK(key_layout_text(spanish, 0x08, true, false, text) && SDL_strcmp(text, "/") == 0);
+  CHECK(key_layout_text(spanish, 0x1a, false, true, text) && SDL_strcmp(text, "[") == 0);
+  /* A dead key gives its own accent, and does not change the next key's text. */
+  CHECK(key_layout_text(spanish, 0x28, false, false, text) && SDL_strcmp(text, "\xc2\xb4") == 0);
+  CHECK(key_layout_text(spanish, 0x12, false, false, text) && SDL_strcmp(text, "e") == 0);
+  CHECK(!key_layout_text(spanish, 0x0e, false, false, text));
 
   if (!was_loaded) UnloadKeyboardLayout(spanish);
   return failed ? 1 : 0;

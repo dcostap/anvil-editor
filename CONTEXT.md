@@ -385,6 +385,10 @@ _Avoid_: priority interaction, modal popup, input-stealing View
 A dialog that captures received keyboard input and shows key events, modifiers, and text without running editor commands.
 The operating system can reserve combinations that do not reach the dialog.
 
+**Keyboard Map**:
+A View that draws the physical keyboard with the commands that the live keymap binds to each key on the shown Ctrl, Alt and Shift layer.
+Key labels come from the current keyboard layout. With Alt Navigation on, an Alt chord shows the stroke that it types, and the chord's own bindings show as not reached.
+
 **Mouse-Complete Interaction**:
 An interaction rule where visible keyboard-selectable or activatable items also provide mouse hover, press, selection, and activation feedback.
 _Avoid_: mouse-friendly UI, basic mouse support
