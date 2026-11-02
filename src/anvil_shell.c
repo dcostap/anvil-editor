@@ -359,7 +359,7 @@ struct ShellWindow {
   /* The colours of the drawn controls layer; a change repaints it. */
   AnvilSurfaceShellColors ui_colors;
   bool ui_focused;
-  RECT controls, restart_button, close_button, open_button;
+  RECT controls, restart_button, close_button;
   RECT lifecycle_card, logged_card;
 };
 
@@ -2210,10 +2210,6 @@ static wchar_t *project_name(const ShellProject *project) {
   return wide;
 }
 
-static bool no_project_selected(ShellWindow *window) {
-  return !window->selected->id && !window->selected->project_path;
-}
-
 /* Recovery replaces only the visible button's caption area. The rest still drags the Window. */
 static bool sidebar_restart_offered(void) {
   return shell.sidebar_restart_limited || !shell.sidebar_process || shell.sidebar_process->state == SHELL_FAILED;
@@ -2239,7 +2235,7 @@ static void draw_lifecycle_titlebar(ShellWindow *window, HDC dc, const AnvilSurf
   bar.right -= (LONG)(12 * window->scale);
   SetTextColor(dc, colors->inactive_text & 0xffffff);
   wchar_t *name = project_name(window->selected);
-  DrawTextW(dc, name ? name : L"Anvil", -1, &bar, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+  if (name) DrawTextW(dc, name, -1, &bar, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
   SDL_free(name);
   SetTextColor(dc, colors->text & 0xffffff);
 }
@@ -2298,15 +2294,12 @@ static void draw_lifecycle(ShellWindow *window, HDC dc, const AnvilSurfaceShellC
   ShellProject *project = window->selected;
   window->restart_button = (RECT){0};
   window->close_button = (RECT){0};
-  window->open_button = (RECT){0};
   window->lifecycle_card = (RECT){0};
   draw_notice(window, dc, colors);
-  bool empty = no_project_selected(window);
-  if (!empty && project->state != SHELL_STARTING && project->state != SHELL_FAILED &&
-      project->state != SHELL_DORMANT)
-    return;
+  /* A Window without a Project shows an empty area. Its Sidebar lists the Projects to select. */
+  if (project->state != SHELL_STARTING && project->state != SHELL_FAILED) return;
   RECT area = {window->sidebar_w, window->controls.bottom, window->buffer_w, window->buffer_h};
-  if (!empty && project->state == SHELL_STARTING) {
+  if (project->state == SHELL_STARTING) {
     wchar_t *name = project_name(project), label[512];
     _snwprintf(label, SDL_arraysize(label), L"Starting %ls\x2026", name ? name : L"Project");
     label[SDL_arraysize(label) - 1] = 0;
@@ -2322,22 +2315,8 @@ static void draw_lifecycle(ShellWindow *window, HDC dc, const AnvilSurfaceShellC
   GetTextMetricsW(dc, &metrics);
   int pad = (int)(20 * s), gap = (int)(8 * s), button_h = metrics.tmHeight + (int)(14 * s + 0.5f);
   int button_pad = (int)(14 * s), button_min = (int)(76 * s), radius = (int)(10 * s);
-  int mid = (area.left + area.right) / 2;
-  /* A Window without a Project shows only its one action. */
-  if (empty) {
-    const wchar_t *label = L"Open Project\x2026";
-    int button_w = SDL_min(SDL_max(button_min, ui_text_width(dc, label) + 2 * button_pad),
-                           area.right - area.left - 2 * pad);
-    int button_y = (area.top + area.bottom - button_h) / 2;
-    window->open_button = window->lifecycle_card =
-        (RECT){mid - button_w / 2, button_y, mid + button_w / 2, button_y + button_h};
-    draw_native_button(window, dc, colors, colors->background, window->open_button, 6, label, true);
-    return;
-  }
-  /* The card names the Project and its state. Its actions sit at the lower right, the primary action first. */
-  bool dormant = project->state == SHELL_DORMANT;
-  const wchar_t *load = dormant ? L"Load Project" : L"Restart Project";
-  const wchar_t *close = dormant ? L"Close Window" : L"Unload Project";
+  /* The card names the failed Project. Its actions sit at the lower right, the primary action first. */
+  const wchar_t *load = L"Restart Project", *close = L"Unload Project";
   int load_w = SDL_max(button_min, ui_text_width(dc, load) + 2 * button_pad);
   int close_w = SDL_max(button_min, ui_text_width(dc, close) + 2 * button_pad);
   HFONT title = ui_font(window, 14, FW_BOLD);
@@ -2345,7 +2324,7 @@ static void draw_lifecycle(ShellWindow *window, HDC dc, const AnvilSurfaceShellC
   GetTextMetricsW(dc, &metrics);
   int title_h = (int)(metrics.tmHeight * 1.2f + 0.5f);
   /* A long name loses its end, not the state. */
-  const wchar_t *state = dormant ? L" is Dormant" : L" failed";
+  const wchar_t *state = L" failed";
   wchar_t *name = project_name(project), fitted[512];
   _snwprintf(fitted, SDL_arraysize(fitted) - 4, L"%ls", name ? name : L"Project");
   fitted[SDL_arraysize(fitted) - 5] = 0;
@@ -2512,7 +2491,7 @@ static void paint_failed_window(ShellWindow *window, HDC dc) {
   DeleteObject(font);
 }
 
-/* The Project area shows the native starting, dormant or failed card while no Project frame covers it. A held
+/* The Project area shows the native starting text, empty area or failed card while no Project frame covers it. A held
  * frame of the previous Project covers it until the selected Project presents. */
 static bool project_area_covered(ShellWindow *window) {
   ShellProject *project = window->selected;
@@ -2652,7 +2631,7 @@ static void update_ui(ShellWindow *window) {
   RECT titlebar = {window->sidebar_w, 0, window->controls.left, window->controls.bottom};
   RECT dirty[] = {{0, 0, window->sidebar_w, window->buffer_h}, window->controls, window->lifecycle_card, titlebar};
   bool full = window->ui_dirty;
-  int dirty_count = (no_project_selected(window) || project->state == SHELL_FAILED || project->state == SHELL_DORMANT) ? 4 : 2;
+  int dirty_count = (project->state == SHELL_FAILED || project->state == SHELL_DORMANT) ? 4 : 2;
   /* The composite reads the full Project area only while no Project frame covers it, and the notice toast. */
   bool cover = project_area_covered(window);
   HRGN clip = CreateRectRgn(0, 0, 0, 0);
@@ -4617,13 +4596,12 @@ static int control_at(ShellWindow *window, float x, float y) {
     int width = SDL_max(1, (window->controls.right - window->controls.left) / 3);
     return SDL_min(2, ((int)x - window->controls.left) / width);
   }
-  if (project->state == SHELL_FAILED || project->state == SHELL_DORMANT) {
+  if (project->state == SHELL_FAILED) {
     if (PtInRect(&window->restart_button, point))
       return 3;
     if (PtInRect(&window->close_button, point))
       return 4;
   }
-  if (no_project_selected(window) && PtInRect(&window->open_button, point)) return 6;
   return -1;
 }
 
@@ -4631,10 +4609,6 @@ static void perform_control(ShellWindow *window, int control) {
   ShellProject *project = window->selected;
   SDL_Log("Shell native control: %d state=%d", control, project->state);
   window->resize_wait_disabled = true;
-  if (control == 6) {
-    show_project_picker(window);
-    return;
-  }
   if (control == 5) {
     if (shell.sidebar_restart_timer) KillTimer(shell.service_hwnd, shell.sidebar_restart_timer);
     shell.sidebar_restart_timer = 0;
@@ -4658,10 +4632,6 @@ static void perform_control(ShellWindow *window, int control) {
     else
       SDL_MaximizeWindow(window->window);
   } else if (control == 3) {
-    if (project->state == SHELL_DORMANT) {
-      select_project_path(window, project->project_path);
-      return;
-    }
     if (!project->project_path) {
       SDL_Log("Shell Restart unavailable: no Project path");
       return;
@@ -4685,7 +4655,7 @@ static void perform_control(ShellWindow *window, int control) {
       focus_sidebar(window, false);
       composite_and_present(window);
     }
-  } else if (control == 4 && project->state != SHELL_DORMANT) {
+  } else if (control == 4) {
     begin_unload(project);
   } else {
     begin_window_close(window);
@@ -4730,7 +4700,7 @@ static void route_motion(ShellWindow *window, SDL_Event *event) {
       (control >= 0 || window->pressed_control >= 0 || project->state == SHELL_STARTING ||
        project->state == SHELL_FAILED || project->state == SHELL_DORMANT)) {
     leave_surface(window);
-    if (control >= 3 && control <= 6) apply_cursor(ANVIL_SURFACE_CURSOR_HAND);
+    if (control >= 3) apply_cursor(ANVIL_SURFACE_CURSOR_HAND);
     return;
   }
   bool inside = surface_contains(window, event->motion.x, event->motion.y) && control < 0;
@@ -6301,8 +6271,8 @@ static void select_project(ShellProject *project, bool keep_sidebar_focus) {
   window->project_presentation.shared_name[0] = 0;
   close_memory_frame(&window->project_presentation);
   /* Keep the previous Project's last frame on screen until the selected Project presents, so the switch shows no
-   * empty frames. A Project that does not present soon gets its normal starting area. Dormant and failed Projects
-   * present nothing, so their cards show at once. */
+   * empty frames. A Project that does not present soon gets its normal starting area. An empty Window and a failed
+   * Project present nothing, so their areas show at once. */
   ShellPresentation *content = &window->project_presentation;
   content->held = content->have_surface && (project->state == SHELL_READY || project->state == SHELL_STARTING);
   if (content->held) {
@@ -6906,8 +6876,6 @@ static void select_after_close(ShellProject *project) {
     select_project(above ? above : below, true);
     return;
   }
-  free(window->empty->project_path);
-  window->empty->project_path = project->project_path ? _strdup(project->project_path) : NULL;
   select_project(window->empty, true);
 }
 
@@ -6931,8 +6899,6 @@ static void complete_unload(ShellProject *project) {
     link = &(*link)->next;
   *link = project->next;
   windows_changed();
-  if (window->selected == window->empty)
-    SDL_SetWindowTitle(window->window, "Anvil - Dormant Project");
   project->connected = false;
   stop_close_timer(project);
   if (project->startup_timer)

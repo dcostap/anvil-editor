@@ -90,15 +90,17 @@ if directory:match("/driver$") then
       local a = wait_for(function() return read("a-ready") end, 15)
       local ah = kernel.OpenProcess(0x100000, 0, a.pid); assert(ah ~= nil); handles[#handles + 1] = ah
       if action == "dormant-last" or action == "dormant-last-close" then
+        wait_for(function() return surface_log():find("Shell Sidebar hidden: Window=", 1, true) end, 10,
+          "The Project did not hide the Sidebar")
         local unloaded = #surface_log()
         save("unload-a", {continue = true})
         wait_for(function() return kernel.WaitForSingleObject(ah, 0) == 0 end, 12)
         assert(subject:running(), "Unloading the last Project closed the Window")
         local window = assert(shell_window(a.shell_pid))
-        -- The Dormant Project has no process, so the Sidebar keeps the keyboard. Escape cannot leave keys without
-        -- a receiver.
+        -- The Window has no Project process, so the hidden Sidebar takes the keyboard and shows. Escape cannot
+        -- leave keys without a receiver.
         wait_for(function() return surface_log():find("Shell Sidebar focus: Window=%d+ focused=1", unloaded + 1) end, 10,
-          "The Sidebar did not take the keyboard from the Dormant Project")
+          "The Sidebar did not take the keyboard from the unloaded Project")
         local escaped = #surface_log()
         user32.PostMessageW(window, 0x804a, 9, 27)
         user32.PostMessageW(window, 0x804a, 10, 27)
@@ -115,7 +117,9 @@ if directory:match("/driver$") then
           wait_for(function() return not subject:running() end, 5, "Native Close retained a Window with no loaded Project")
           return
         end
-        user32.PostMessageW(window, 0x804c, 3, 0)
+        -- The Sidebar lists the Dormant Project. A launch of its folder selects it as a Sidebar click does.
+        local launch = assert(process.start({EXEFILE, "--shell", root .. "/Project"}, {
+          stdin = process.REDIRECT_DISCARD, stdout = process.REDIRECT_DISCARD, stderr = process.REDIRECT_DISCARD}))
         local restored = wait_for(function() return read("a-restored") end, 15)
         assert(restored.pid ~= a.pid and restored.shell_pid == a.shell_pid, "Load replaced the Window or reused the unloaded process")
         assert(restored.text == "PERSIST_A_on disk" and restored.selection == "1,3,1,8", "Last Project load lost Workspace state")
@@ -237,7 +241,9 @@ if directory:match("/driver$") then
         wait_for(function() return user32.IsIconic(window) ~= 0 end, 1, "B's failure blocked native Minimize")
         user32.PostMessageW(window, 0x112, 0xF120, 0)
         wait_for(function() return user32.IsIconic(window) == 0 end, 1)
-        user32.PostMessageW(window, 0x804c, 3, 0)
+        -- The Sidebar lists the Dormant Project. A launch of its folder selects it as a Sidebar click does.
+        local launch = assert(process.start({EXEFILE, "--shell", root .. "/Project"}, {
+          stdin = process.REDIRECT_DISCARD, stdout = process.REDIRECT_DISCARD, stderr = process.REDIRECT_DISCARD}))
         local restored = wait_for(function() return read("b-restored") end, 15)
         assert(restored.pid ~= b.pid and restored.shell_pid == a.shell_pid, "Restart replaced A's Window or reused B's process")
         assert(restored.text == "PERSIST_B_on disk", "Restart did not use B's saved file")
@@ -361,6 +367,7 @@ else
           local editor = core.open_file(directory .. "/edited.txt")
           editor.buffer:insert(1, 1, "PERSIST_A_"); editor.buffer:save()
           editor.buffer:set_selection(1, 3, 1, 8)
+          require("core.command").perform("core:toggle_project_sidebar")
           save("a-ready", state())
           wait_for(function() return read("unload-a") end, 10)
           assert(require("core.command").perform("core:unload_project"))

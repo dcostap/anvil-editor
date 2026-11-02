@@ -304,7 +304,7 @@ def main() -> int:
                         config["environment"]["ANVIL_INPUT_ROUTING_PROBE"] = "1"
                     if action == "dialog-error":
                         config["environment"]["SDL_FILE_DIALOG_DRIVER"] = "invalid-probe-driver"
-                    if action in ("windows-picker", "windows-picker-command", "windows-picker-late", "shell-empty"):
+                    if action in ("windows-picker", "windows-picker-command", "windows-picker-late"):
                         config["environment"]["ANVIL_SHELL_PICKER_PROBE"] = "1"
                     if action.startswith(("windows-", "fault-", "startup-", "loaded-", "dormant-", "sidebar-")) or action in ("dialog-blocked-close", "hidden-startup"):
                         config["environment"]["ANVIL_SURFACE_FAULT_PROBE"] = "1"

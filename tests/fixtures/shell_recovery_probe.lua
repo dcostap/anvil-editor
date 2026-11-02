@@ -1,6 +1,6 @@
 -- mod-version:3
 -- Seam: an owned native Window on a private desktop. Failed Projects keep a draggable Title Bar.
--- Native buttons show pointer feedback and cancel a dragged-out press. Empty Windows open Projects;
+-- Native buttons show pointer feedback and cancel a dragged-out press. Empty Windows show an empty area;
 -- Sidebar recovery restores its process without taking drag space from the rest of the Title Bar.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if action ~= "recovery" and action ~= "shell-empty" and action ~= "shell-sidebar" then return end
@@ -101,49 +101,53 @@ if path:match("/driver$") then
     user32.ClientToScreen(window, p)
     return tonumber(user32.SendMessageW(window, 0x84, 0, point(p.x, p.y)))
    end
-   if action == "shell-empty" or action == "shell-sidebar" then
-    local x, y, target, marker
-    if action == "shell-empty" then
-     -- New Window takes Scratch. A second New Window takes it from Window 2, which stays open without a Project.
-     user32.SendMessageW(window, 0x112, 0xe010, 0)
-     wait(function()
-      local scratch = trace():match("Shell selected loaded Project: id=(%d+) pid=%d+ path=[^\n]-\\user\\scratch")
-      return scratch and trace():find("Shell Project runtime ready: Project=" .. scratch .. " ", 1, true)
-     end, 30, "New Window did not start Scratch")
-     user32.SendMessageW(window, 0x112, 0xe010, 0)
-     wait(function() return trace():find("Shell keeps Window emptied by Move: id=2", 1, true) end, 10,
-      "The shell did not keep an empty Window")
-     local hex = assert(trace():match("Shell Window record: id=2 SDL=%d+ hwnd=(%x+)"))
-     window = ffi.cast("void *", tonumber(hex, 16))
-     wait(function() return trace():find("Shell Sidebar surface Ready: Window=2", 1, true) end, 15)
-     local rect = ffi.new("RecoveryRect")
-     assert(user32.GetClientRect(window, rect) ~= 0)
-     x, y = (layout.content_x + rect.right) / 2, (layout.title_h + rect.bottom) / 2
-     marker = "Shell Open Project picker started: Window=2"
-     target = point(x, y)
-     assert(hit(layout.content_x + 60 * scale, layout.title_h / 2) == 2, "The empty Title Bar blocks dragging")
-    else
-     local function sidebar_pid()
-      local pid
-      for value in trace():gmatch("Shell Sidebar connected: pid=(%d+)") do pid = tonumber(value) end
-      return pid
-     end
-     for _ = 1, 8 do
-      local pid, mark = assert(sidebar_pid()), #trace()
-      kill(pid)
-      local state = wait(function()
-       local text = trace():sub(mark + 1)
-       if text:find("automatic restart limit reached", 1, true) then return "stopped" end
-       if sidebar_pid() ~= pid and text:find("Shell Sidebar surface Ready", 1, true) then return "ready" end
-      end, 15, "Sidebar neither recovered nor offered Restart")
-      if state == "stopped" then break end
-     end
-     assert(trace():find("automatic restart limit reached", 1, true), "Sidebar recovery did not stop")
-     x, y = layout.content_x / 2, layout.title_h / 2
-     target, marker = point(x, y), "Shell native control: 5"
-     assert(hit(x, y) == 1, "Restart Sidebar is a window drag target")
-     assert(hit(12 * scale, y) == 2, "Restart Sidebar took the surrounding Title Bar's drag space")
+   if action == "shell-empty" then
+    -- New Window takes Scratch. A second New Window takes it from Window 2, which stays open without a Project.
+    user32.SendMessageW(window, 0x112, 0xe010, 0)
+    wait(function()
+     local scratch = trace():match("Shell selected loaded Project: id=(%d+) pid=%d+ path=[^\n]-\\user\\scratch")
+     return scratch and trace():find("Shell Project runtime ready: Project=" .. scratch .. " ", 1, true)
+    end, 30, "New Window did not start Scratch")
+    user32.SendMessageW(window, 0x112, 0xe010, 0)
+    wait(function() return trace():find("Shell keeps Window emptied by Move: id=2", 1, true) end, 10,
+     "The shell did not keep an empty Window")
+    local hex = assert(trace():match("Shell Window record: id=2 SDL=%d+ hwnd=(%x+)"))
+    window = ffi.cast("void *", tonumber(hex, 16))
+    wait(function() return trace():find("Shell Sidebar surface Ready: Window=2", 1, true) end, 15)
+    local rect = ffi.new("RecoveryRect")
+    assert(user32.GetClientRect(window, rect) ~= 0)
+    local x, y = (layout.content_x + rect.right) / 2, (layout.title_h + rect.bottom) / 2
+    assert(hit(layout.content_x + 60 * scale, layout.title_h / 2) == 2, "The empty Title Bar blocks dragging")
+    local function pixels(bytes, dy) return button_pixels(bytes, x, y + dy) end
+    local bytes = capture(window)
+    assert(pixels(bytes, 0) == pixels(bytes, 100 * scale), "The empty Project area is not empty")
+    local mark = #trace()
+    input(0, point(x, y)); input(1, point(x, y)); input(2, point(x, y))
+    coroutine.yield(.3)
+    assert(not trace():find("Shell native control:", mark + 1, true), "The empty Project area has a control")
+    return
+   end
+   if action == "shell-sidebar" then
+    local function sidebar_pid()
+     local pid
+     for value in trace():gmatch("Shell Sidebar connected: pid=(%d+)") do pid = tonumber(value) end
+     return pid
     end
+    for _ = 1, 8 do
+     local pid, mark = assert(sidebar_pid()), #trace()
+     kill(pid)
+     local state = wait(function()
+      local text = trace():sub(mark + 1)
+      if text:find("automatic restart limit reached", 1, true) then return "stopped" end
+      if sidebar_pid() ~= pid and text:find("Shell Sidebar surface Ready", 1, true) then return "ready" end
+     end, 15, "Sidebar neither recovered nor offered Restart")
+     if state == "stopped" then break end
+    end
+    assert(trace():find("automatic restart limit reached", 1, true), "Sidebar recovery did not stop")
+    local x, y = layout.content_x / 2, layout.title_h / 2
+    local target, marker = point(x, y), "Shell native control: 5"
+    assert(hit(x, y) == 1, "Restart Sidebar is a window drag target")
+    assert(hit(12 * scale, y) == 2, "Restart Sidebar took the surrounding Title Bar's drag space")
     local away = point(layout.content_x + 60 * scale, layout.title_h + 100 * scale)
     local function pixels(bytes) return button_pixels(bytes, x, y) end
     input(0, away)
@@ -158,18 +162,8 @@ if path:match("/driver$") then
     assert(not trace():find(marker, mark + 1, true), "A dragged-out release performed the action")
     input(0, target); input(1, target); input(2, target)
     wait(function() return trace():find(marker, mark + 1, true) end, 5, "The button did not perform its action")
-    if action == "shell-empty" then
-     local service = ffi.cast("void *", tonumber(assert(trace():match("Shell service notifications hwnd=(%x+)")), 16))
-     user32.SendMessageW(service, 0x8050, 3, 2)
-     wait(function() return trace():find("Shell Open Project picker cancelled: Window=2", 1, true) end, 5)
-     input(0, target); input(1, target); input(2, target)
-     user32.SendMessageW(service, 0x8050, 1, 2)
-     local loaded = wait(function() return load("replacement") end, 15, "Open Project did not load the chosen folder")
-     assert(loaded.window_id == 2, "Open Project used another Window")
-    else
-     wait(function() return trace():find("Shell Sidebar surface Ready", mark + 1, true) end, 15,
-      "Restart Sidebar did not restore the Sidebar")
-    end
+    wait(function() return trace():find("Shell Sidebar surface Ready", mark + 1, true) end, 15,
+     "Restart Sidebar did not restore the Sidebar")
     capture(window)
     return
    end
@@ -235,12 +229,12 @@ if path:match("/driver$") then
   if shell and shell:running() then shell:terminate(); shell:wait(2) end
   quit()
  end)
-elseif path == root .. "/Project" or path == root .. "/Replacement" then
+elseif path == root .. "/Project" then
  core.add_background_thread(function()
   coroutine.yield(.5)
   local width, height = core.window:get_size()
   local controls_x, _, _, title_h = system.get_window_controls()
-  save(path == root .. "/Project" and "layout" or "replacement",
+  save("layout",
    {pid=tonumber(kernel.GetCurrentProcessId()), width=width, height=height,
     content_x=system.get_window_content_x(), controls_x=controls_x, title_h=title_h,
     window_id=system.get_anvil_window_id()})
