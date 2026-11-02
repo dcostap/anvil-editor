@@ -3546,7 +3546,7 @@ function FileTreeView:context_menu(x, y)
     { label = "Copy Path", icon = icons.path, command = "editor:copy_absolute_filepath" },
     { label = "Copy Relative Path", icon = icons.path, command = "editor:copy_relative_filepath" },
     { label = "Reveal in Explorer", icon = icons.reveal, command = "editor:reveal_active_file_in_explorer" },
-    { label = "Open Terminal Here", icon = icons.terminal, command = "terminal:open" },
+    { label = "Open Terminal Here", icon = icons.terminal, command = "terminal:open_at_current_path" },
     { label = "Add to Project Paths", icon = icons.new_folder, command = "filetree:add_to_project_paths" },
     "-",
     { label = "Sort", icon = icons.sort, items = {

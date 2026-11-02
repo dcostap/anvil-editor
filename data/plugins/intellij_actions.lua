@@ -1414,7 +1414,7 @@ keymap.add({
   ["ctrl+shift+t"] = "core:reopen_last_closed_pane",
   ["ctrl+shift+w"] = "pane:close_others",
   ["ctrl+shift+l"] = "editor:reveal_active_file_in_explorer",
-  ["ctrl+alt+t"] = "terminal:open",
+  ["ctrl+alt+t"] = "terminal:open_at_project_root",
   ["ctrl+up"] = "editor:move_caret_previous_paragraph",
   ["ctrl+down"] = "editor:move_caret_next_paragraph",
 }, true)

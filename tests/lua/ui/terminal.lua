@@ -268,7 +268,7 @@ test.describe("Terminal View", function()
     core.projects = { Project(scratch) }
     local ok, err = pcall(function()
       panes.present(Editor(Buffer()))
-      test.ok(command.perform("terminal:open"))
+      test.ok(command.perform("terminal:open_at_current_path"))
       local cwd = context.sessions[1].options.cwd
       test.ok(common.path_equals(cwd, HOME), "the Terminal started in " .. tostring(cwd))
     end)
@@ -476,7 +476,7 @@ test.describe("Terminal View", function()
   end)
 
   test.it("opens and focuses a Terminal View in Pane 1", function(context)
-    test.ok(command.perform("terminal:open"))
+    test.ok(command.perform("terminal:open_at_project_root"))
 
     local view = core.active_view
     test.ok(view and view.terminal_view)
@@ -1049,7 +1049,7 @@ test.describe("Terminal View", function()
   end)
 
   test.it("sends text and unhandled keys to the focused terminal", function(context)
-    test.ok(command.perform("terminal:open"))
+    test.ok(command.perform("terminal:open_at_project_root"))
     local session = context.sessions[1]
 
     core.on_event("textinput", "echo hello")

@@ -2785,7 +2785,7 @@ command.add(nil, {
     keywords = { "terminal", "focus", "next", "session" },
     opens_view = true,
   }),
-  ["terminal:open"] = command.palette(function()
+  ["terminal:open_at_current_path"] = command.palette(function()
     local context = command.get_invocation_context() or {}
     local pane = panes.find(context.source_pane or panes.active())
     local source_view = context.source_view or (pane and pane.current_view)

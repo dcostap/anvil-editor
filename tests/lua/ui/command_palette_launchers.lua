@@ -380,6 +380,20 @@ test.describe("Command Palette View launchers", function()
     test.ok(entry and common.path_equals(entry.abs, context.folder))
   end)
 
+  test.it("distinguishes the current file folder from the Project root for Terminal launches", function(context)
+    local source = Editor(core.open_buffer(context.file))
+    local pane = panes.create { factory = function() return source end }
+    local options
+    terminal.open = function(value) options = value; return View() end
+    local invocation = { source_pane = pane, source_view = source, placement = "current" }
+
+    test.ok(command.perform_with_context("terminal:open_at_current_path", invocation))
+    test.ok(common.path_equals(options.cwd, context.folder))
+
+    test.ok(command.perform_with_context("terminal:open_at_project_root", invocation))
+    test.ok(common.path_equals(options.cwd, context.root))
+  end)
+
   test.it("opens a Terminal at a selected folder with new Pane Group placement", function(context)
     local source = View()
     local pane = panes.create { factory = function() return source end }
