@@ -78,6 +78,25 @@ static void setup_renderer(RenWindow *ren, int w, int h) {
 #endif
 
 
+#ifdef ANVIL_USE_SDL_RENDERER
+/* SDL_CreateSurface writes zeros to every pixel, so all of it takes RAM at once. A large calloc gets fresh zero
+   pages from the OS, which take RAM only when the software renderer draws there. D3D11 frames never draw here. */
+static SDL_Surface *create_window_surface(int w, int h, SDL_PixelFormat format) {
+  int pitch = (w * SDL_BYTESPERPIXEL(format) + 3) & ~3;
+  void *pixels = w > 0 && h > 0 ? SDL_calloc((size_t) h, (size_t) pitch) : NULL;
+  SDL_Surface *surface = SDL_CreateSurfaceFrom(w, h, format, pixels, pitch);
+  if (!surface) SDL_free(pixels);
+  return surface;
+}
+
+static void destroy_window_surface(SDL_Surface *surface) {
+  if (!surface) return;
+  void *pixels = surface->pixels;
+  SDL_DestroySurface(surface);
+  SDL_free(pixels);
+}
+#endif
+
 static void init_surface(RenWindow *ren) {
   ren->scale_x = ren->scale_y = 1;
 #ifdef ANVIL_USE_SDL_RENDERER
@@ -92,7 +111,7 @@ static void init_surface(RenWindow *ren) {
   if (ren->cache.rensurface.surface) {
     destroy_start_ns = SDL_GetTicksNS();
     anvil_d3d11_forget_surface(ren->cache.rensurface.surface);
-    SDL_DestroySurface(ren->cache.rensurface.surface);
+    destroy_window_surface(ren->cache.rensurface.surface);
     destroy_end_ns = SDL_GetTicksNS();
   }
   int w, h;
@@ -101,7 +120,7 @@ static void init_surface(RenWindow *ren) {
   SDL_PixelFormat format = SDL_GetWindowPixelFormat(ren->cache.window);
   query_end_ns = SDL_GetTicksNS();
   create_start_ns = SDL_GetTicksNS();
-  ren->cache.rensurface.surface = SDL_CreateSurface(
+  ren->cache.rensurface.surface = create_window_surface(
     w, h, format == SDL_PIXELFORMAT_UNKNOWN ? SDL_PIXELFORMAT_BGRA32 : format
   );
   create_end_ns = SDL_GetTicksNS();
@@ -257,7 +276,7 @@ void renwin_free(RenWindow *ren) {
   SDL_DestroyTexture(ren->cache.texture);
   SDL_DestroyRenderer(ren->cache.renderer);
   anvil_d3d11_forget_surface(ren->cache.rensurface.surface);
-  SDL_DestroySurface(ren->cache.rensurface.surface);
+  destroy_window_surface(ren->cache.rensurface.surface);
 #endif
   anvil_hosted_surface_unregister_window(ren->cache.window);
   SDL_DestroyWindow(ren->cache.window);

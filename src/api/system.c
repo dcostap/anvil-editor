@@ -1916,12 +1916,18 @@ static int f_get_time(lua_State *L) {
   return 1;
 }
 
-// Bytes of private memory that this process has committed, or nil where the platform does not tell.
+// Bytes of this process's private memory in RAM, as Task Manager's Memory column shows them,
+// or nil where the platform does not tell.
 static int f_get_private_memory(lua_State *L) {
 #ifdef _WIN32
-  PROCESS_MEMORY_COUNTERS_EX counters = { .cb = sizeof(counters) };
+  // PROCESS_MEMORY_COUNTERS_EX2, which the MinGW headers do not have.
+  struct {
+    PROCESS_MEMORY_COUNTERS_EX base;
+    SIZE_T PrivateWorkingSetSize;
+    ULONG64 SharedCommitUsage;
+  } counters = { .base.cb = sizeof(counters) };
   if (K32GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS *) &counters, sizeof(counters))) {
-    lua_pushinteger(L, (lua_Integer) counters.PrivateUsage);
+    lua_pushinteger(L, (lua_Integer) counters.PrivateWorkingSetSize);
     return 1;
   }
 #endif
