@@ -764,6 +764,47 @@ test.describe("Markdown Interactive Table Editing", function()
     return #(rects[SELECTION_FILL] or {}), #(rects[SELECTION_OUTLINE] or {})
   end
 
+  test.it("keeps cell selection while dragging across the header separator", function()
+    local view, buffer = make_view(
+      "| A | B |\n| --- | --- |\n| one | two |\n| four | five |\n\nplain"
+    )
+    view:set_wrapping_enabled(true)
+    buffer:set_selection(6, 1)
+    refresh(view)
+    local start_x, start_y = cell_center(view, 4, 2)
+    local x, y = cell_center(view, 3, 1)
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      test.equal(command.perform("core:set_cursor", start_x, start_y), true)
+      view:on_mouse_moved(x, y, x - start_x, y - start_y)
+      local body_selection = view:get_selection_state().selections
+      test.equal(#body_selection, 16)
+
+      local _, separator_y = view:get_line_screen_position(2)
+      local separator_height = view:get_position_visual_row_height(2, 1)
+      y = separator_y + separator_height / 2
+      test.equal(view:resolve_screen_position(x, y), 2)
+      view:on_mouse_moved(x, y, 0, 0)
+      test.same(view:get_selection_state().selections, body_selection,
+        "the header separator replaced cell selection with source selection")
+      local rects = paint_rects(view, { 1, 2, 3, 4 })
+      test.equal(#(rects[style.selection] or {}), 0,
+        "the header separator drew ordinary text selection")
+
+      x, y = cell_center(view, 1, 1)
+      view:on_mouse_moved(x, y, 0, 0)
+      test.same(view:get_selection_state().selections, {
+        1, 4, 1, 3, 1, 8, 1, 7,
+        3, 6, 3, 3, 3, 12, 3, 9,
+        4, 7, 4, 3, 4, 14, 4, 10,
+      })
+      view:on_mouse_released("left", x, y)
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
   test.it("shows a lone selection of a cell's whole text as text selection", function()
     with_cell_selection_colors(function()
       local view, buffer = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")

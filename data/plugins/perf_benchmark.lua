@@ -1617,6 +1617,37 @@ local function record_video()
       error("table tour line not found: " .. pattern)
     end
     for _ = 1, 3 do capture("idle") end
+    do
+      -- Extend a bottom-up cell drag through the header. Capture the first
+      -- frames on each side of the partial-to-complete selection boundary.
+      local function cell_center(line, column)
+        local render = assert(view:get_line_render(line))
+        for _, fragment in ipairs(render.fragments or {}) do
+          if fragment.table_cell and fragment.table_column == column then
+            local x, y = view:get_line_screen_position(line)
+            return x + fragment.layout_x + fragment.width / 2,
+              y + (render.first_row_content_y_offset or 0)
+                + (render.table_content_height or render.table_row_height) / 2
+          end
+        end
+        error("table tour cell not found")
+      end
+      local header, last = find_line("Task"), find_line("Ship")
+      local start_x, start_y = cell_center(last, 4)
+      local x, y = cell_center(header + 2, 1)
+      assert(command.perform("core:set_cursor", start_x, start_y))
+      view:on_mouse_moved(x, y, x - start_x, y - start_y)
+      for _ = 1, 3 do capture("drag-selected-body") end
+      local _, separator_y = view:get_line_screen_position(header + 1)
+      local separator_height = view:get_position_visual_row_height(header + 1, 1)
+      view:on_mouse_moved(x, separator_y + separator_height / 2, 0, 0)
+      for _ = 1, 3 do capture("drag-across-table-separator") end
+      local header_x, header_y = cell_center(header, 1)
+      view:on_mouse_moved(header_x, header_y, header_x - x, header_y - y)
+      for _ = 1, 5 do capture("drag-selected-table") end
+      view:on_mouse_released("left", header_x, header_y)
+      for _ = 1, 3 do capture("released-selected-table") end
+    end
     local body = find_line("Write the parser")
     view.buffer:set_selection(body, view.buffer.lines[body]:find("parser") + 6)
     for _ = 1, 3 do capture("active-cell") end

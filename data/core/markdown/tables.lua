@@ -1202,6 +1202,9 @@ end
 
 function tables.select_rectangle(view, anchor_line, anchor_col, line, col)
   local anchor = context_at(view, anchor_line, anchor_col, false)
+  -- The delimiter has no cells. Keep the last cell selection while the
+  -- pointer crosses it, instead of falling back to source text selection.
+  if anchor and line == anchor.delimiter_line then return true end
   local target = context_at(view, line, col, false)
   if not same_table(anchor, target) then return false end
   if anchor.grid_row == target.grid_row and anchor.column == target.column then
