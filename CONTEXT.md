@@ -90,7 +90,7 @@ A search over named code symbols and Markdown headings across a loaded Project.
 _Avoid_: global symbol search
 
 **Project Usage Search**:
-A search for syntactic usages of a named code symbol across a loaded Project.
+A search for syntactic usages of a named code symbol across a loaded Project. It does not search External Project Directories.
 _Avoid_: semantic references, global references
 
 **Contextual Member Completion**:

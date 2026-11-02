@@ -83,6 +83,15 @@ local function normalize_root(root)
   return common.normalize_path(root)
 end
 
+-- An External Project Directory is usually a library outside the Project, such as a language's standard library.
+-- Its index records symbols only. Project Usage Search lists usages in the Project's own files.
+-- Usages in Odin's core library alone took about 170 MB.
+local function records_usages(root)
+  local resolved = project_paths_module().resolve(root)
+  local entry = resolved and resolved.entry
+  return not (entry and entry.role == "external" and common.path_equals(entry.path, root))
+end
+
 local function new_index(root)
   return {
     root = root,
@@ -625,6 +634,10 @@ local function submit_native_run(index, generation, opts, phase)
     index.usage_status = "indexing"
   end
   index.reason = opts.reason
+  index.records_usages = records_usages(index.root)
+  if not index.records_usages then
+    log_quiet("Tree-sitter Project index: %s is an External Project Directory; recording symbols only", index.root)
+  end
   index.finished_at = nil
   index.files_total = 0
   index.files_scanned = 0
@@ -676,7 +689,7 @@ local function submit_native_run(index, generation, opts, phase)
         remove_paths = opts.remove_paths or {},
         languages = native_project_run_languages_payload(index.header_mode),
         project_mixed_headers = index.header_mode == "mixed",
-        project_usage_cap = index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP,
+        project_usage_cap = index.records_usages and (index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP) or 0,
         project_progress_files = opts.progress_files or 64,
         publish_partial_snapshots = phase == "combined",
         max_file_bytes = MAX_FILE_BYTES,
@@ -818,6 +831,10 @@ function symbol_index.ensure_scan(root, opts)
   opts = opts or {}
   local index = index_for_root(root)
   start_project_watcher(index)
+  -- A Project Path Role change adds or drops the index's usages.
+  if index.records_usages ~= nil and index.records_usages ~= records_usages(index.root) then
+    opts = common.merge(opts, { force = true, reason = "usage-recording-changed" })
+  end
   if index.status == "indexing" and not opts.force then return index end
   if (index.status == "failed" or index.status == "cancelled") and not opts.force then
     return index
@@ -842,7 +859,9 @@ local function project_path_roots(kind, opts)
     roots[1] = normalize_root(opts.root or opts.project)
   else
     for _, entry in ipairs(project_paths_module().search_roots(root_kind)) do
-      if entry and entry.path then roots[#roots + 1] = normalize_root(entry.path) end
+      if entry and entry.path and not (root_kind == "usages" and entry.role == "external") then
+        roots[#roots + 1] = normalize_root(entry.path)
+      end
     end
   end
   return roots

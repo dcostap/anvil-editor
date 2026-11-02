@@ -723,7 +723,7 @@ int RGE_Base_Game::setup_blank_screen() { return 0; }
     common.rm(root, true)
   end)
 
-  test.it("Tree-sitter Project search includes External and Vendored Project Directories", function()
+  test.it("Tree-sitter Project search includes External and Vendored Project Directories, without External usages", function()
     symbol_index.reset_for_tests()
     local original_projects = core.projects
     local root = USERDIR .. PATHSEP .. "treesitter-project-paths-root-"
@@ -736,10 +736,14 @@ int RGE_Base_Game::setup_blank_screen() { return 0; }
     write_file(root .. PATHSEP .. "Root.kt", [[package demo
 
 class RootThing
+
+fun useExternal(item: ExternalThing): ExternalThing = item
 ]])
     write_file(external .. PATHSEP .. "External.kt", [[package demo
 
 class ExternalThing
+
+fun useRoot(item: RootThing): RootThing = item
 ]])
     write_file(root .. PATHSEP .. "src" .. PATHSEP .. "vendor" .. PATHSEP .. "library1" .. PATHSEP .. "Vendor.kt", [[package demo
 
@@ -784,6 +788,21 @@ class VendorThing
       or vendor_symbol.file == "src" .. PATHSEP .. "vendor" .. PATHSEP .. "library1" .. PATHSEP .. "Vendor.kt",
       "unexpected vendored display path: " .. tostring(vendor_symbol.file)
     )
+
+    -- An External Project Directory records no usages: usages of its symbols come from the Project's own files.
+    local usages, usage_reason, usage_status = wait_workspace_usages("ExternalThing", { include_declaration = false, limit = 20 })
+    test.equal(usage_status, "fresh", usage_reason)
+    test.equal(#usages, 2)
+    for _, usage in ipairs(usages) do test.equal(usage.relpath, "Root.kt") end
+    usages, usage_reason, usage_status = wait_workspace_usages("RootThing", { include_declaration = false, limit = 20 })
+    test.equal(usage_status, "fresh", usage_reason)
+    test.equal(#usages, 0, common.serialize(usages))
+    usages, usage_reason, usage_status = wait_workspace_usages("RootThing", { root = external, limit = 20 })
+    test.equal(#(usages or {}), 0, common.serialize(usages))
+    test.ok(project_paths.change_role(external, "vendored"))
+    usages, usage_reason, usage_status = wait_workspace_usage_count("RootThing", { include_declaration = false, limit = 20 }, 2)
+    test.equal(usage_status, "fresh", usage_reason)
+    test.equal(#usages, 2, common.serialize(usages))
     project_paths.configure_workspace {}
     core.projects = original_projects
     common.rm(root, true)
