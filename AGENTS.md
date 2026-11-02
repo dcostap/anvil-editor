@@ -282,7 +282,8 @@ Each non-empty query keeps a Saved Screen: its rows down to the bottom of the sc
 A picker that opens a query with a Saved Screen, or that the prompt history moves to, shows that screen in its first frame. It does not wait for the search.
 While the Saved Screen shows, searches keep their rows back (`holds_saved_screen`). Their last rows replace it, and `restore_position` selects the saved row at its place on the screen. Text Search keeps the found rows of the Saved Screen first, in their order, as rows that the user saw.
 A move during the Saved Screen changes the row that the restore selects. Pages do not load until the search ends.
-A typed path that does not exist gets a Create Path Result at the top. It is not the default selection: the next row is, if one exists (`skip_create_path_row`). The user selects it with a move, and a refresh keeps that choice. Run `ui/fuzzy_searcher_path_search.lua` after changes.
+A typed path that does not exist gets a Create Path Result at the top. It is not the default selection: the next row is, if one exists (`skip_create_path_row`). The user selects it with a move, and a refresh keeps that choice.
+Each typed character makes a new path, which a worker reads. While the top row is a Create Path Result, the new path's Create Path Result takes its place during the read, so the rows do not move. The read's result then replaces it. Enter during the read reads the path first, so it never creates an existing path. Run `ui/fuzzy_searcher_path_search.lua` after changes.
 Run `ui/fuzzy_searcher_scrolling.lua` after changes.
 
 Text Search also searches the Terminal Sessions of this Project. Other Projects search their own Terminals.

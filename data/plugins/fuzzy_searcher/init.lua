@@ -3643,7 +3643,8 @@ function path_search.forget_direct_info(path)
   if key then path_search.direct_infos[key] = nil end
 end
 
----Return the result for a typed path, or nil and true while its information is read.
+---Return the result for a typed path, or nil and true while its information is read. While it is read, the third
+---value is the Create Path Result that the path gets when it does not exist.
 function path_search.direct_result(text, line, col, case_sensitive, wait)
   local mode, query = split_mode_prefix(tostring(text or ""))
   if mode ~= "" and mode ~= "@" then return nil end
@@ -3695,12 +3696,8 @@ function path_search.direct_result(text, line, col, case_sensitive, wait)
     }
   end
 
-  -- Offer to create the path only after its read shows that it does not exist.
-  if not known then return nil, true end
-  if not explicit and mode ~= "" then return nil end
-  local parts = path_search.external_path_parts(path)
-  if not parts or parts.blocked or parts.search_terms or not parts.scope then return nil end
-  return {
+  if not explicit and mode ~= "" then return nil, not known end
+  local create = {
     kind = "create_path",
     label = common.home_encode(path),
     path = path,
@@ -3714,6 +3711,11 @@ function path_search.direct_result(text, line, col, case_sensitive, wait)
     size_label = "",
     modified_label = "",
   }
+  -- Offer to create the path only after its read shows that it does not exist.
+  if not known then return nil, true, create end
+  local parts = path_search.external_path_parts(path)
+  if not parts or parts.blocked or parts.search_terms or not parts.scope then return nil end
+  return create
 end
 
 function path_search.prepend_direct(results, direct)
@@ -4088,6 +4090,7 @@ function FSView:reset_pagination()
   self.range_anchor = nil
   self.pending_select_index = nil
   self.create_path_chosen = nil
+  self:skip_create_path_row()
 end
 
 -- The Create Path Result at the top is not a default selection, so Enter does not create a file by accident. A
@@ -6057,7 +6060,11 @@ end
 
 ---Return the result for a typed path, true while its information is read, and the path plan.
 function FSView:direct_path_for(base, line, col, wait)
-  local direct, pending = path_search.direct_result(base, line, col, self.case_sensitive, wait)
+  local direct, pending, create = path_search.direct_result(base, line, col, self.case_sensitive, wait)
+  -- While the user types a new name, each new path is read. Its Create Path Result stays in place during the read,
+  -- so the rows do not move. Enter reads the path before it acts.
+  local top = self.results[1]
+  if pending and top and top.create_path then direct = create end
   local path_plan = path_search.plan(base, { include_ignored = self.include_ignored })
   if direct and direct.exact_path and direct.is_folder and not path_plan.external then
     direct.kind = "folder"
@@ -8388,7 +8395,9 @@ function FSView:confirm(new_group)
   -- A selection below the first row shows that the user chose another row.
   local function first_row()
     local index = 1
-    while self.results[index] and self.results[index].header do index = index + 1 end
+    while self.results[index] and (self.results[index].header or self.results[index].create_path) do
+      index = index + 1
+    end
     return index
   end
   if self.direct_path_pending and self.selected <= first_row() then

@@ -512,6 +512,36 @@ test.describe("Fuzzy Searcher Path Search", function()
     test.equal(picker:selected_result().kind, "create_path")
   end)
 
+  test.it("keeps the Create Path Result in place while the user types", function(context)
+    local items = {}
+    mkdirp(join_path(context.project_root, "notes"))
+    for _, name in ipairs { "missing.txt", "missing-two.txt", "mist.txt" } do
+      local file = join_path(context.project_root, "notes", name)
+      write_file(file)
+      items[#items + 1] = assert(helpers.file_display_item(file))
+    end
+    helpers.set_file_cache_for_test(items)
+    fuzzy_searcher.open("mis")
+    local picker = core.fuzzy_searcher_active_view
+    test.ok(wait_until(function()
+      return picker.results[1] and picker.results[1].kind == "create_path" and not picker:search_running()
+    end), tostring(picker.status))
+
+    -- Each new name is a new path, which a worker reads. The rows must not move while it reads.
+    for _, char in ipairs { "s", "i", "n", "g" } do
+      picker:on_text_input(char)
+      local text = picker.input:get_text()
+      for frame = 1, 10 do
+        local first, selected = picker.results[1], picker:selected_result()
+        test.equal(first and first.kind, "create_path", string.format("%q, frame %d: the first row", text, frame))
+        test.not_equal(selected and selected.kind, "create_path",
+          string.format("%q, frame %d: the selected row", text, frame))
+        coroutine.yield(0)
+      end
+      test.ok(common.path_equals(picker.results[1].abs_path, join_path(context.project_root, text)))
+    end
+  end)
+
   test.it("uses an existing exact bare file instead of offering creation", function(context)
     local file = join_path(context.project_root, "existing.txt")
     write_file(file)
