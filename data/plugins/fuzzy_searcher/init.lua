@@ -4087,6 +4087,22 @@ function FSView:reset_pagination()
   self.marked_results_snapshot = nil
   self.range_anchor = nil
   self.pending_select_index = nil
+  self.create_path_chosen = nil
+end
+
+-- The Create Path Result at the top is not a default selection, so Enter does not create a file by accident. A
+-- default selection on it moves to the next row, if one exists. A user move onto it selects it.
+function FSView:skip_create_path_row()
+  local result = self.results[self.selected]
+  if self.create_path_chosen or not (result and result.create_path) then return end
+  for index = self.selected + 1, #self.results do
+    if not self.results[index].header then self.selected = index return end
+  end
+end
+
+function FSView:remember_create_path_choice()
+  local result = self.results[self.selected]
+  self.create_path_chosen = result and result.create_path or nil
 end
 
 function FSView:cancel_deferred_loading_feedback()
@@ -4300,6 +4316,7 @@ function FSView:select_delta(delta, extend)
   end
   self:ensure_selection_visible(true)
   self:follow_move_in_saved_screen()
+  self:remember_create_path_choice()
   if delta > 0 then self:load_ahead(self.selected) end
 end
 
@@ -4439,6 +4456,7 @@ function FSView:select_result(index, extend, toggle)
   self.selected = index
   self:ensure_selection_visible(true)
   self:follow_move_in_saved_screen()
+  self:remember_create_path_choice()
   self:schedule_update(true)
   return true
 end
@@ -5570,6 +5588,7 @@ function FSView:start_file_search(query, line, reset_selection)
       self:select_delta(1)
       if self.results[self.selected] and self.results[self.selected].header then self:select_delta(-1) end
     end
+    self:skip_create_path_row()
     self:ensure_selection_visible()
   end
 
@@ -6277,6 +6296,7 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
     self.selected = common.clamp(self.selected, 1, math.max(1, #out))
   end
   if self.results[self.selected] and self.results[self.selected].header then self:select_delta(1) end
+  self:skip_create_path_row()
   self:ensure_selection_visible()
 end
 
@@ -8377,6 +8397,7 @@ function FSView:confirm(new_group)
     if direct then
       self.results = path_search.prepend_direct(self.results, direct)
       self.selected = 1
+      self:skip_create_path_row()
     end
   end
   if self:can_mark_result(self.selected) then

@@ -475,11 +475,16 @@ test.describe("Fuzzy Searcher Path Search", function()
       join_path(context.project_root, "missing.txt")))
   end)
 
-  test.it("offers bare file creation before a fuzzy file match", function(context)
+  test.it("offers bare file creation before a fuzzy file match, but selects the match", function(context)
     local file = join_path(context.project_root, "notes", "missing.txt")
     mkdirp(common.dirname(file))
     write_file(file)
     helpers.set_file_cache_for_test({ assert(helpers.file_display_item(file)) })
+    -- A path that was read recently shows its row with the first rows.
+    test.ok(wait_until(function()
+      local result = helpers.path_search.direct_result("missing.txt")
+      return result and result.kind == "create_path"
+    end), "the typed path was not read")
 
     fuzzy_searcher.open("missing.txt")
     local picker = core.fuzzy_searcher_active_view
@@ -495,6 +500,16 @@ test.describe("Fuzzy Searcher Path Search", function()
       "expected the Create Path Result first")
     test.ok(common.path_equals(picker.results[1].abs_path,
       join_path(context.project_root, "missing.txt")))
+    test.ok(common.path_equals(helpers.fullpath(picker:selected_result()), file),
+      "the Create Path Result must not be the default selection")
+
+    -- The user selects it explicitly, and a refresh keeps it.
+    picker:select_delta(-1)
+    test.equal(picker:selected_result().kind, "create_path")
+    picker.force_refresh, picker.dirty = true, true
+    picker:refresh(picker.input:get_text())
+    test.ok(wait_until(function() return not picker:search_running() end), tostring(picker.status))
+    test.equal(picker:selected_result().kind, "create_path")
   end)
 
   test.it("uses an existing exact bare file instead of offering creation", function(context)

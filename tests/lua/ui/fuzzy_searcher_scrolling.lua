@@ -122,7 +122,8 @@ test.describe("Fuzzy Searcher scrolling and selection", function()
 
   test.it("moves the selection one screen with the page commands", function()
     local picker = open_files()
-    test.ok(wait_until(function() return file_rows(picker) == 60 end))
+    -- The row that offers to create "item" shows after the typed path is read.
+    test.ok(wait_until(function() return file_rows(picker) == 60 and not picker.direct_path_pending end))
     local rows = picker:list_metrics().result_rows
     local start = picker.selected
     test.ok(command.perform("fuzzy:page_next"))
@@ -134,7 +135,7 @@ test.describe("Fuzzy Searcher scrolling and selection", function()
     test.ok(command.perform("fuzzy:last"))
     test.equal(picker.selected, #picker.results)
     test.ok(command.perform("fuzzy:first"))
-    test.equal(picker.selected, start)
+    test.equal(picker.selected, 1)
   end)
 
   local function visible_keys(picker)
