@@ -481,7 +481,7 @@ The editing rules are Lua today, in `data/core/markdown`. Under the C policy, th
 4. Block formatting rules: the prefix rules in `format.lua` for headings, lists, quotes and callouts
 5. The Live Preview decisions in `live_render.lua`: which ranges to hide and which to style at the caret
 
-The first Companion test needs only the presentation rules for headings, bold text and wikilinks. It can write them in a quick form. That code is thrown away after the test.
+The first Companion test needs only the presentation rules for headings, bold text and wikilinks. It can write them in a quick form.
 
 Item 5 is also part of the layout pipeline target in `AGENTS.md`. The desktop draws the styled ranges with its own renderer. The Companion applies them as Android text styles. Wrapping and row heights stay separate on each platform.
 
@@ -552,8 +552,8 @@ These decisions come before code. This doc answers identity, ownership and the a
 
 The first test runs in parallel with the desktop work.
 
-1. **First test:** in `android/`, a minimal NDK library with `markdown_parser.c` and its dependencies, and a Compose screen that edits a note with Live Preview for headings, bold text and wikilinks. Type into it with Gboard, with swipe typing and Spanish accents, while it hides and shows syntax at the caret. If the styles and the caret stay correct, the native approach works. Done: see "Companion (Android)" in `AGENTS.md`. On a phone with Gboard, typing, swipe typing and Spanish accents kept the styles and the caret correct. Gboard sent no composing region. The older Compose text field let the keyboard cover the tapped line, so the editor uses `TextFieldState`. Compose's word selection takes the punctuation before a word when a long-press moves. Live Preview does not cause it, and the real editor must handle it.
-2. **Machines and Projects** with Agent Status, read only.
+1. **First test:** in `android/`, a minimal NDK library with `markdown_parser.c` and its dependencies, and a Compose screen that edits a note with Live Preview for headings, bold text and wikilinks. Type into it with Gboard, with swipe typing and Spanish accents, while it hides and shows syntax at the caret. If the styles and the caret stay correct, the native approach works. Done. On a phone with Gboard, typing, swipe typing and Spanish accents kept the styles and the caret correct. Gboard sent no composing region. The older Compose text field let the keyboard cover the tapped line, so the editor uses `TextFieldState`. Compose's word selection takes the punctuation before a word when a long-press moves. Live Preview does not cause it, and the real editor must handle it.
+2. **Machines and Projects** with Agent Status, read only. Done: see "Companion (Android)" in `AGENTS.md`. The Companion pairs with a code and lists the Projects of each Machine, with their Terminal Sessions and Agent Status. The server needed no change.
 3. **Terminal view**, first as a Viewer, then as a Controller.
 4. **Files and code** with highlighting, and File Search.
 5. **Markdown editing**, on the phone and on Machines, with recovery. Editing on Machines needs step 3 of [Shared editing](shared-editing.md#order-of-work).

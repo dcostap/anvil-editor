@@ -718,17 +718,17 @@ Run `runtime/machine_serve.lua`, `runtime/machine_client.lua`, `runtime/machine_
 
 ## Companion (Android)
 
-`android/` is the Companion's Gradle project (`io.github.dcostap.anvil`). Today it holds the first test from [Machines](docs/machines.md): a note editor with Live Preview for headings, bold text and wikilinks. Its styling code is a quick form. Throw it away after the test.
-Its CMake build compiles the shared C files from `src/` and the grammars from `subprojects/`. It copies no files. Configure the desktop build first, so the Meson subprojects exist with their patches.
-`android/app/src/main/cpp/sdl` gives the shared modules the few SDL calls that they use. The Companion does not build SDL.
-The text stays the same. Live Preview only styles it, and markers outside the caret's element get a transparent, almost zero-width style. There is no offset mapping, so the keyboard always sees the real text.
-The editor uses `BasicTextField` with a `TextFieldState` and styles through an `OutputTransformation`. The older `TextFieldValue` field let the keyboard cover the tapped line.
-Compose's word selection takes the punctuation before a word when a long-press moves: `(niño)` becomes `(niño`, and `**niño**` becomes `**niño`. A plain field does the same, so Live Preview does not cause it.
-`markdown_styles.c` returns spans in UTF-16 units. Its instrumented test checks Spanish accents and an emoji.
+`android/` is the Companion's Gradle project (`io.github.dcostap.anvil`). It is a Client of the Machine server, with View access. See [Machines](docs/machines.md).
+The app opens to the paired Machines with their connection state. "Pair a Machine" takes the host, the port (default 7690) and a code from `anvil machine code`. It sends `hello` with the code and `Build.MODEL` as the device name.
+`machines.json` in the app's private storage keeps each Machine's ID, host, port and device ID. The device token is encrypted with an AES/GCM key in Android Keystore. Pairing the same Machine again replaces its record.
+A Machine screen lists its Projects and their Terminal Sessions, with the Agent Status as the desktop Sidebar says it, such as "Waiting for you". It sends `projects.list` and `terminal.list` again every 2 seconds while it shows.
+Connections run only while the app shows. A lost connection retries with a growing delay, up to 5 seconds.
+The frames use the desktop's codec, `src/machine_frame.c`, through the JNI binding `machine_frames.c`. CMake compiles it from `src/` and copies no files. Kotlin owns the socket, the JSON and the screens.
 Tools: the Android SDK in `%LOCALAPPDATA%\Android\Sdk`, NDK 30.0.16248370, CMake 4.1.2, platform 37 and JDK 17 or later in `JAVA_HOME`. Set `sdk.dir` in the ignored `android/local.properties`. The Gradle wrapper checks the distribution's SHA-256.
-Build with `./gradlew assembleDebug` in `android/`. Test on the emulator, not on the user's phone. Start the AVD `anvil-test-36` (Android 36 with Gboard) with `emulator -avd anvil-test-36 -no-window`, then run `./gradlew connectedDebugAndroidTest`.
-`NoteEditorTouchTest` drives the editor with touch input and the emulator's real keyboard. Add a scenario there for each touch or keyboard bug.
-The editor logs each selection and composing range. Read them with `adb logcat -s AnvilEditor`.
+Build with `./gradlew assembleDebug` in `android/`. Test on the emulator, not on the user's phone. Start the AVD `anvil-test-36` with `emulator -avd anvil-test-36 -no-window`.
+Install the app and its test APK with `./gradlew installDebug installDebugAndroidTest`. Then run `tests/lua/companion/machines.lua` through `anvil:lua-runtime --test-args`. It starts a real server and a Terminal with a waiting agent, and runs `MachinesTest` on the emulator through `adb`. The emulator reaches the PC's loopback address as `10.0.2.2`.
+The default suites do not run it. It skips when no emulator has both APKs. Run it after changes to the app or to `hello`, `projects.list` or `terminal.list`.
+The connection logs with the tag `AnvilMachine`. Read them with `adb logcat -s AnvilMachine`.
 
 ## Agent control
 
