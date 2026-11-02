@@ -416,7 +416,7 @@ function TerminalView:new(options)
   if pi_ready then self.start_pi = nil end
   local start_error, transport_error
   if fs.machine then
-    session, start_error = self:new_remote_session(native_options, options.session_id)
+    session, start_error = self:new_remote_session(native_options, options.session_id, options.restore)
   elseif not session then
     session, start_error, transport_error = native.new(native_options)
   end
@@ -701,7 +701,7 @@ end
 function TerminalView.from_state(state)
   if type(state) ~= "table" then return nil end
   if state.kind == "text_capture" then return TerminalTextCaptureView(nil, state.capture) end
-  local view = TerminalView { cwd = state.cwd, shell = state.shell, session_id = state.session_id }
+  local view = TerminalView { cwd = state.cwd, shell = state.shell, session_id = state.session_id, restore = true }
   view.input_used = true
   return view
 end
@@ -730,10 +730,11 @@ function TerminalView:create_session()
 end
 
 -- A Project on a Machine runs its shells there (`core.machine_terminal`). Its sessions have no record on this PC.
--- A nil `id`, or an `id` that the Machine no longer has, starts a new shell in `options.cwd`.
-function TerminalView:new_remote_session(options, id)
-  local start = {project = options.project_path, cwd = options.cwd, shell = options.shell or "",
-    scrollback_lines = options.scrollback_lines}
+-- A nil `id` starts a new shell in `options.cwd`. With `restore`, an `id` that the Machine no longer has does too,
+-- as a local restore does.
+function TerminalView:new_remote_session(options, id, restore)
+  local start = (not id or restore) and {project = options.project_path, cwd = options.cwd,
+    shell = options.shell or "", scrollback_lines = options.scrollback_lines} or nil
   -- The paths name the Machine's folders. Only the Machine uses them.
   options.remote, options.project_path, options.cwd, options.shell = true, nil, nil, nil
   local session, err = terminal_native().new(options)
@@ -3058,12 +3059,17 @@ end
 
 -- Closed Panes restore only through Reopen, not session discovery.
 function M.session_available(id)
+  if fs.machine then return require("core.machine_terminal").listed(id) end
   return session_record(id) ~= nil and not system.get_file_info(closed_session_path(id))
 end
 
 -- Opens a Terminal Session that the Project Sidebar lists. A session that cannot reattach or
 -- revive opens nothing, because a new shell under that row would hide the lost session.
 function M.open_session(id)
+  if fs.machine then
+    if not require("core.machine_terminal").listed(id) then return nil, "The Machine has no such Terminal Session" end
+    return M.open { session_id = id, focus = true, placement = "current", reason = "sidebar-terminal-focus" }
+  end
   local record, err = session_record(id)
   if not record then return nil, err end
   if system.get_file_info(closed_session_path(id)) then return nil, "Terminal Pane is closed" end

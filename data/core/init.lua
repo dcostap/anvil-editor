@@ -2649,6 +2649,19 @@ function core.on_event(type, ...)
           terminals[#terminals + 1] = item
         end
       end
+      -- A Project on a Machine reports its Machine's Terminal Sessions. This PC has no records of them.
+      for _, project in ipairs(projects) do
+        local listed = _G.type(project.panes.terminals) == "table" and project.panes.terminals or {}
+        local known = {}
+        for _, terminal in ipairs(project.terminals) do known[terminal.id] = true end
+        for _, terminal in ipairs(listed) do
+          if _G.type(terminal) == "table" and _G.type(terminal.id) == "string" and not known[terminal.id] then
+            known[terminal.id] = true
+            terminal.kind, terminal.row_id = "terminal", project.row_id
+            project.terminals[#project.terminals + 1] = terminal
+          end
+        end
+      end
       projects.status_limited, projects.revision = page.status_limited, page.revision
       projects.windows = request.windows
       core.project_sidebar, core.project_sidebar_request = projects, nil

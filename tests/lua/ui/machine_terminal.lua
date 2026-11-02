@@ -109,6 +109,30 @@ test.describe("Terminal on a Machine", function()
     -- The test's teardown checks that closing the View ends the shell.
   end)
 
+  test.it("lists the Machine's sessions that no Pane shows, and opens them", function(context)
+    local view = open(context, {})
+    wait_text(view, "ANVIL_ECHO_READY:project")
+    test.ok(view:write_input("before\r"))
+    wait_text(view, "ECHO:before")
+    local id = view.session_id
+    -- The shell keeps running on the Machine.
+    view:detach_session()
+
+    local listed
+    wait_until(view, function()
+      for _, item in ipairs(require("core.pane_report").build().terminals or {}) do
+        if item.id == id then listed = item end
+      end
+      return listed
+    end, "The Pane report does not list the Machine's session")
+    test.equal(listed.state, "running")
+
+    local opened = assert(terminal.open_session(id))
+    context.views[#context.views + 1] = opened
+    wait_text(opened, "ECHO:before")
+    test.is_nil(terminal.open_session(string.rep("0", 32)), "A session that the Machine does not list opened")
+  end)
+
   test.it("starts a new shell on the Machine when the restored session is gone", function(context)
     local gone = string.rep("0", 32)
     local view = terminal.from_state { cwd = context.project, shell = ECHO_SHELL, session_id = gone }

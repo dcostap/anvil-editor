@@ -39,6 +39,11 @@ local function device_name(name)
   return table.concat(parts)
 end
 
+-- The session record fields of `terminal.list`.
+local LISTED = {"title", "cwd", "shell", "busy", "attached", "activity", "command_started", "command_finished",
+  "command_exit", "agent_state", "agent_kind", "agent_app", "agent_message", "agent_since", "agent_step",
+  "agent_step_since", "agent_model"}
+
 local function size_param(params, name, high)
   local value = params[name]
   return type(value) == "number" and value % 1 == 0 and value >= 1 and value <= high
@@ -101,7 +106,8 @@ function terminal.new(server)
     end
   end
 
-  -- `terminal.list {project}` lists the running Terminal Sessions of a Project.
+  -- `terminal.list {project}` lists the running Terminal Sessions of a Project, newest first, with the record
+  -- fields that the Project Sidebar shows.
   local function list(client, id, params)
     local root = server.project_root(params.project)
     if not root then return server.fail(client, id, "outside_project", "This Machine has no such Project") end
@@ -111,9 +117,9 @@ function terminal.new(server)
       if record and record.status == "running" and common.path_equals(record.project_path, root)
           and terminal_link.host_alive(record.host_pid, record.host_creation_time)
           and not system.get_file_info(closed_marker(record.session_id)) then
-        sessions[#sessions + 1] = {id = record.session_id, title = record.title, cwd = record.cwd,
-          shell = record.shell, busy = record.busy, activity = record.activity,
-          agent_state = record.agent_state, agent_app = record.agent_app, agent_model = record.agent_model}
+        local session = {id = record.session_id}
+        for _, field in ipairs(LISTED) do session[field] = record[field] end
+        sessions[#sessions + 1] = session
       end
     end
     table.sort(sessions, function(a, b) return (a.activity or 0) > (b.activity or 0) end)

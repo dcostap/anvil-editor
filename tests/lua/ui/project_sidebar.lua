@@ -38,14 +38,21 @@ test.describe("Project Sidebar snapshots", function()
   end)
   test.it("reads each loaded Project's Pane report and ignores a broken one", function()
     test.ok(core.request_project_sidebar())
-    core.on_event("projectsidebar", [[return {revision=1,offset=0,next=2,total=2,items={
+    core.on_event("projectsidebar", [[return {revision=1,offset=0,next=3,total=3,items={
       {kind="project",row_id=1,path="C:/A",state="ready",panes="{active=1,visible=1,{id=\034pane-1\034,number=1,group=1,name=\034a.lua\034}}"},
-      {kind="project",row_id=2,path="C:/B",state="ready",panes="{broken"}
+      {kind="project",row_id=2,path="C:/B",state="ready",panes="{broken"},
+      {kind="project",row_id=3,path="anvil-machine://ab/C:/M",state="ready",
+        panes="{terminals={{id='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',state='running',title='pi',agent_state='working'}}}"}
     }}]])
-    local a, b = core.project_sidebar[1], core.project_sidebar[2]
+    local a, b, machine = core.project_sidebar[1], core.project_sidebar[2], core.project_sidebar[3]
     test.equal(a.panes.active, 1)
     test.equal(a.panes[1].name, "a.lua")
     test.equal(#b.panes, 0)
+    -- A Project on a Machine reports its Machine's Terminal Sessions. They list as the scan's records do.
+    test.equal(#machine.terminals, 1)
+    test.equal(machine.terminals[1].id, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    test.equal(machine.terminals[1].agent_state, "working")
+    test.equal(#a.terminals, 0)
   end)
   test.it("does not combine pages from different model revisions", function()
     test.ok(core.request_project_sidebar())

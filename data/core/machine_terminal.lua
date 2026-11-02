@@ -2,6 +2,7 @@
 -- a local pipe as if a host were there. This module carries the pipe's records through the Machine's Terminal
 -- service (`core.serve_terminal`). After a disconnect, it attaches again, and the session gets a new snapshot.
 local core = require "core"
+local common = require "core.common"
 
 local machine_terminal = {}
 
@@ -104,6 +105,84 @@ function machine_terminal.connect(client, session, id, start)
     end
   end)
   return remote
+end
+
+-- Text fields of a listed session, with their byte limits.
+local TEXT = {title = 256, cwd = 1024, agent_state = 32, agent_kind = 32, agent_app = 64, agent_model = 128,
+  agent_message = 256, agent_step = 256}
+local TIMES = {"activity", "command_started", "command_finished", "agent_since", "agent_step_since"}
+local LIST_INTERVAL = 2
+
+-- Shortens text at a UTF-8 boundary.
+local function cut(text, limit)
+  if #text <= limit then return text end
+  local size = limit
+  while size > 0 and (text:byte(size + 1) or 0) >= 0x80 and (text:byte(size + 1) or 0) < 0xC0 do size = size - 1 end
+  return text:sub(1, size)
+end
+
+-- A session of `terminal.list` as a Project Sidebar Terminal item, as the shell's scan makes from a record.
+local function sidebar_item(session)
+  if type(session) ~= "table" or type(session.id) ~= "string" or #session.id ~= 32 or session.id:find("[^0-9a-f]") then
+    return nil
+  end
+  local item = {id = session.id, state = "running", attached = session.attached == true,
+    busy = session.busy == true and 1 or session.busy == false and 0 or -1,
+    command_exit = (tonumber(session.command_exit) or 0) ~= 0 and 1 or 0}
+  for field, limit in pairs(TEXT) do
+    local value = session[field]
+    if type(value) == "string" and not value:find("%c") then item[field] = cut(value, limit) end
+  end
+  item.title, item.cwd = item.title or "", item.cwd or ""
+  for _, field in ipairs(TIMES) do
+    local value = tonumber(session[field])
+    item[field] = value and value > 0 and value < 1e12 and math.floor(value) or 0
+  end
+  return item
+end
+
+local listed, watched
+
+-- The Terminal Sessions that the Machine of `client` lists for `project`, newest first, as Project Sidebar items.
+-- The first call starts a list every 2 seconds while the Machine is connected. Returns nil before the first list.
+-- A Machine without a Terminal service lists nothing.
+function machine_terminal.sessions(client, project)
+  if watched == client then return listed end
+  watched, listed = client, nil
+  core.add_thread(function()
+    while watched == client and client.state ~= "closed" do
+      if client.state == "ready" then
+        local err, result = call(client, "terminal.list", {project = project})
+        if watched ~= client then return end
+        if err and not TRANSPORT[err.code] then
+          core.log_quiet("Machine Terminal Sessions are not listed: %s %s", tostring(err.code), tostring(err.message))
+          return
+        end
+        if not err then
+          local items = {}
+          for _, session in ipairs(type(result.sessions) == "table" and result.sessions or {}) do
+            items[#items + 1] = sidebar_item(session)
+          end
+          if common.serialize(items, {sort = true}) ~= common.serialize(listed or {}, {sort = true}) or not listed then
+            core.log_quiet("Machine Terminal Sessions listed: %d", #items)
+            listed = items
+            core.redraw = true
+          end
+        end
+      end
+      coroutine.yield(LIST_INTERVAL)
+    end
+    if watched == client then watched, listed = nil, nil end
+  end)
+  return listed
+end
+
+-- True when the Machine listed the session in its last list.
+function machine_terminal.listed(id)
+  for _, item in ipairs(listed or {}) do
+    if item.id == id then return true end
+  end
+  return false
 end
 
 return machine_terminal

@@ -693,7 +693,7 @@ Each dirty Machine Buffer has a recovery record in `core.storage` (`machine_reco
 An edit writes it after 0.5 seconds. A save writes it before the request leaves. A clean Buffer deletes it, except while a save is unresolved: the Machine can have its bytes. For the same reason, the Buffer registry keeps a Buffer with an unresolved save after its last View closes. Records are written on the UI thread, as Untitled recovery is.
 When a Machine file loads and has a record, the Buffer takes the record's text as one edit. The Machine's version decides: the same bytes mean clean, the base or the sent version mean dirty, other bytes mean a conflict.
 A Buffer that the user closes without a save deletes its record, and no due write or later reply writes it again. A rename moves the record to the new name.
-On Windows, the server has a Terminal service (`core.serve_terminal`). `terminal.list {project}` gives the running Terminal Sessions of a Project. A session with a `.closed` marker is not listed.
+On Windows, the server has a Terminal service (`core.serve_terminal`). `terminal.list {project}` gives the running Terminal Sessions of a Project, newest first, with the record fields that the Sidebar shows. A session with a `.closed` marker is not listed.
 `terminal.attach {id, cols, rows, cell_width, cell_height}` connects the server to the session's host as one more Client (`terminal_link.connect`). The reply gives the `link`, the `session_id`, the `shell_pid` and the host's size.
 `terminal.start {project, cwd, shell, scrollback_lines, cols, rows, cell_width, cell_height}` starts a new host in a Project folder and attaches the device as its Controller (`terminal_link.launch`). Only Full control devices can start a shell. Its reply is the reply of `terminal.attach`.
 A new shell ends when its link ends before the device reads it, for example after a lost reply. Nothing else knows its ID.
@@ -710,8 +710,11 @@ The attach ROLE comes before the snapshot. The Client applies it with the snapsh
 In a Project on a Machine (`fs.machine`), each Terminal View runs its shell on the Machine. The View keeps no session record on this PC and uses no prepared shell.
 Workspace restore attaches the saved session ID. When the Machine no longer has it, a new shell starts in the saved folder, as a local restore does. Reopen Closed Pane does the same, because the Machine keeps no closed sessions.
 A shell that ended while this PC was away closes its View, as after an exit. A failed start shows its error in the View.
-These Terminals cannot move to another Project. The Sidebar does not list them yet. Programs in them reach the Machine's Anvil, so the View publishes no control endpoint.
-Run `runtime/machine_terminal.lua` and `ui/machine_terminal.lua` after changes. The runtime test uses a real host and a real server that shares the test's user folder. The UI test gives the server its own user folder.
+These Terminals cannot move to another Project. Programs in them reach the Machine's Anvil, so the View publishes no control endpoint.
+The shell's scan reads only this PC's records. So the Project process lists its Machine's sessions every 2 seconds (`machine_terminal.sessions`), and its Pane report sends them as `terminals`.
+The Sidebar model adds them to the Project's Terminal Sessions, so they show agent status, age groups and attention as local sessions do. A Dormant Project on a Machine lists none.
+A Sidebar click opens a listed session through the Machine. It does not start a new shell, as a local click does not.
+Run `runtime/machine_terminal.lua`, `ui/machine_terminal.lua` and `ui/project_sidebar.lua` after changes. The runtime test uses a real host and a real server that shares the test's user folder. The UI test gives the server its own user folder.
 Run `runtime/machine_serve.lua`, `runtime/machine_client.lua`, `runtime/machine_buffer.lua`, `anvil:machine-frame` and `anvil:launch-mode` after changes. Tests that need a fixed port must try ports until one opens: Windows reserves whole port ranges, and `get_port()` returns the requested port. Pass one file to each `--test-args`: the runner reads only the first path.
 
 ## Companion (Android)
