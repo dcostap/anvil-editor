@@ -781,34 +781,6 @@ local function markdown_list_marker_delete_end(buffer, line, line_text, col)
   end
 end
 
-local function markdown_join_lines_text(buffer, line1, line2)
-  local result = ""
-  for line = line1, line2 do
-    local raw = buffer.lines[line] or ""
-    local current = raw:gsub("\n$", "")
-    if line == line1 then
-      result = current
-    else
-      local previous_raw = buffer.lines[line - 1] or ""
-      local next_content_col = markdown_list_join_content_col(
-        buffer, line - 1, previous_raw, raw
-      )
-      if next_content_col then
-        local separator = result:sub(-1):match("[ \t]") and "" or " "
-        result = result .. separator .. current:sub(next_content_col)
-      else
-        local leading = current:match("^[\t ]*") or ""
-        if previous_raw:gsub("\n$", ""):match("^%s*$") then
-          result = result .. current:sub(#leading + 1)
-        else
-          result = result .. " " .. current:sub(#leading + 1)
-        end
-      end
-    end
-  end
-  return result
-end
-
 local function token_at(buffer, line, col)
   local column = 0
   for _, token_type, token_text in buffer.highlighter:each_token(line) do
@@ -1410,6 +1382,45 @@ end
 local function joined_lines_spacing(before, after)
   if before:find("[%(%[]$") or after:find("^[%)%]},;%.]") then return "" end
   return " "
+end
+
+-- Joins `line1` through `line2` into one line. Each joined line loses its
+-- indentation, a Markdown list marker, or a line comment marker that
+-- continues a comment on the line before it.
+local function join_lines_text(buffer, line1, line2)
+  local marker = buffer.syntax and buffer.syntax.comment
+  if type(marker) ~= "string" or marker == "" then marker = nil end
+  local result = ""
+  for line = line1, line2 do
+    local raw = buffer.lines[line] or ""
+    local current = raw:gsub("\n$", "")
+    if line == line1 then
+      result = current
+    else
+      local previous_raw = buffer.lines[line - 1] or ""
+      local next_content_col = markdown_list_join_content_col(
+        buffer, line - 1, previous_raw, raw
+      )
+      if next_content_col then
+        local separator = result:sub(-1):match("[ \t]") and "" or " "
+        result = result .. separator .. current:sub(next_content_col)
+      else
+        local content = current:sub(#(current:match("^[\t ]*") or "") + 1)
+        local previous = previous_raw:gsub("\n$", "")
+        if marker and content:sub(1, #marker) == marker and previous:find("%S")
+        and token_at(buffer, line - 1, #previous) == "comment" then
+          content = content:sub(#marker + 1):gsub("^[\t ]*", "")
+        end
+        if previous:match("^%s*$") then
+          result = result .. content
+        elseif content ~= "" then
+          result = result:gsub("[\t ]+$", "")
+          result = result .. joined_lines_spacing(result, content) .. content
+        end
+      end
+    end
+  end
+  return result
 end
 
 -- Backspace in a line's indentation first moves the line to its block's
@@ -2281,7 +2292,7 @@ local commands = {
 
     local edits = {}
     for _, action in ipairs(merged) do
-      action.text = markdown_join_lines_text(dv.buffer, action.line1, action.line2)
+      action.text = join_lines_text(dv.buffer, action.line1, action.line2)
       edits[#edits + 1] = {
         line1 = action.line1,
         col1 = 1,

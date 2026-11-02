@@ -699,6 +699,26 @@ test.describe("smart indentation", function()
     test.equal(text(buffer), "- first second\nafter\n")
   end)
 
+  test.it("Join Lines makes one comment of joined line comments", function(context)
+    local buffer, view = new_editor(context, "x = 1 -- a  \n  --  b", "sample.lua")
+    core.set_active_view(view)
+    buffer:set_selection(1, 1)
+
+    test.ok(command.perform("editor:join_lines"))
+
+    test.equal(text(buffer), "x = 1 -- a b\n")
+  end)
+
+  test.it("Join Lines puts no space inside brackets", function(context)
+    local buffer, view = new_editor(context, "f(\n  a,\n  b\n)", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(1, 1, 4, 2)
+
+    test.ok(command.perform("editor:join_lines"))
+
+    test.equal(text(buffer), "f(a, b)\n")
+  end)
+
   test.it("continues Markdown list items ending in a colon", function(context)
     local buffer, view = new_editor(context, "- item:", "sample.md")
     core.set_active_view(view)
