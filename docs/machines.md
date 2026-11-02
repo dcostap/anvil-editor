@@ -17,6 +17,7 @@ Not everything ships at once. The rule for each step is: it must not make a late
 - **Credentials on a random PC.** Pi on such a PC needs inference without your real logins. That problem is separate from Anvil. See [Later: Pi on a random PC](#later-pi-on-a-random-pc).
 - **An Anvil port to Android.** The phone app is a native Android app. See [Why a native app](#why-a-native-app).
 - **Other people.** The first versions have one owner. Access for a second person is a later design.
+- **LSP.** Anvil's LSP code will be removed, so this plan does not include it.
 
 ## Terms
 
@@ -48,7 +49,7 @@ The API is a set of services. Each service matches a part of Anvil, not a screen
 | Terminal | The Terminal Session list, attach as Controller or Viewer, snapshot then output, input, resize |
 | Agent | Agent Status, Pi conversations, and send, wait and interrupt for a Pi in a Terminal Session |
 | Index | Symbols, and Markdown links and backlinks |
-| Process | Starts a configured tool, such as an LSP server or a formatter, and carries its standard input and output as a byte stream |
+| Process | Starts a configured tool, such as a formatter, and carries its standard input and output as a byte stream |
 
 Git stays structured. Do not use the Process service as a generic command runner for Git.
 
@@ -253,13 +254,12 @@ This follows the model of VS Code Remote. The UI stays local. The Project's file
 - Buffers, undo, selections and unsaved text
 - Themes, keymaps, config and plugins
 - Tree-sitter parses of open Buffers, and Live Preview
-- LSP clients
 
 ### What runs on the Machine
 
 - Buffer reads and writes
 - The file list, the folder watcher and the native indexes: `project_file_manifest.c`, `git_status_index.c`, `markdown_vault_index.c` and the tree-sitter symbol index
-- `rg`, Git, LSP servers and formatters
+- `rg`, Git and formatters
 - Terminal hosts, with their records and saved screens
 
 ### One Machine for each Project process
@@ -295,7 +295,7 @@ Every call site of the raw file functions in `data/` was read. Most touch local 
 | Symbol index | `treesitter/symbol_index.lua` with the native `treesitter_project_*` jobs | 9 |
 | Git | `plugins/git`, `plugins/git_view.lua`, `plugins/file_git_status.lua` with the native `filetree_git_status_index` job, `plugins/gitdiff_highlight`, `workers/changes_baseline.lua` | 9 |
 | Terminal | `plugins/terminal.lua` (working folder), `core/control.lua` (`cwd` of a launch) | 7 |
-| LSP and formatters | `lsp/config.lua` (executable lookup on the Client's `PATH`), `lsp/manager.lua`, `lsp/documents.lua`, `plugins/document_format.lua` | 10 |
+| Formatters | `plugins/document_format.lua` | 10 |
 
 The Buffer load and save flow is clean: the Buffer tests on a Machine run with the guard on. In a Project process on a Machine, the Markdown vault index does not track Buffers until the Index service exists.
 
@@ -313,22 +313,16 @@ The picker's screen code does not change. Only its data sources change.
 | Text Search query | The query out, the matches back as a stream | One round trip, plus `rg` time |
 | Selecting a row to preview | A bounded part of the file, then cached. Nearby rows can be fetched in advance. | One round trip |
 | Opening a file | The file's bytes, one time | One round trip |
-| Typing in an open file | None, unless an LSP server is active. Then the LSP stream carries the changes. | None |
+| Typing in an open file | None | None |
 | Saving | The whole file, as a conditional write | In the background |
 
 `stat_paths` already takes many paths in one call. On a Machine it becomes one request.
 
 Previews read at most a fixed number of bytes and can be cancelled. The server applies Anvil's binary rule (`common.is_binary`) before it sends text.
 
-### LSP and formatters
+### Formatters
 
-- The LSP client, its settings and its document state stay local.
-- The Machine finds, checks and starts the LSP server, with its own `PATH`, environment and working directory. Today, `data/core/lsp/config.lua` finds the executable on the Client's `PATH`, and `data/core/lsp/manager.lua` puts that path into the launch command. A path from the Client means nothing on the Machine.
-- The Process service carries the server's standard input and output. Today's transport in `data/core/lsp/process.lua` starts a local process. A Machine backend replaces that transport.
-- Test a server that exists only on the Machine.
-- LSP paths are Machine paths, because each Project process uses one Machine.
-- After a disconnect, the LSP server stops. At reconnect, the client starts it again and sends the open documents again.
-- A formatter gets the text of one Buffer revision. Its result applies only if the Buffer still has that revision.
+A formatter gets the text of one Buffer revision. Its result applies only if the Buffer still has that revision.
 
 ### Indexes and unsaved Buffers
 
@@ -348,14 +342,14 @@ These features act on the local PC by nature. For a Project on another Machine:
 ### Disconnects
 
 - A disconnect does not discard the live Buffer. Its recovery record keeps it through a crash (see [Recovery](#recovery)).
-- Saves, searches, LSP and Terminals stop until the link returns. Reconnects follow the [Reconnect](#reconnect) steps.
+- Saves, searches and Terminals stop until the link returns. Reconnects follow the [Reconnect](#reconnect) steps.
 - The Pane Status Bar shows the Machine as offline.
 - Closing a Project that has unconfirmed saves asks first. Its edits did not reach the Machine.
 - Terminal Sessions keep running on the Machine, and attach again with a snapshot.
 
 ### Bootstrap
 
-A Machine needs `anvil serve` and its tools. Anvil bundles `rg` on Windows (`data/core/project_files.lua`). Git is not bundled: the Git plugin uses `git` from `PATH` or a configured path (`data/plugins/git/backend.lua`). LSP servers and formatters are also external. The Machine service lists which tools are available, and a Client hides the features that need a missing tool.
+A Machine needs `anvil serve` and its tools. Anvil bundles `rg` on Windows (`data/core/project_files.lua`). Git is not bundled: the Git plugin uses `git` from `PATH` or a configured path (`data/plugins/git/backend.lua`). Formatters are also external. The Machine service lists which tools are available, and a Client hides the features that need a missing tool.
 
 The user installs Pi and its packages on each of their PCs.
 
@@ -552,7 +546,7 @@ These decisions come before code. This doc answers identity, ownership and the a
 7. **Terminal service** with Controller and Viewers. In progress: a Terminal host accepts several Clients with one Controller, and the Machine server carries a session's records to a remote Client. A remote session attaches again with a snapshot after a disconnect, and a View device cannot type. A Project on a Machine starts its Terminals on the Machine, and the Sidebar lists them while the Project is loaded. A Pane Close ends the shell only when no other device shows it. The desktop Viewer bar, with the Controller's device and Take Control, does not exist yet. See "Machine server" in `AGENTS.md`.
 8. **Agent service** and the split of `core.control`.
 9. **Git and Index services**, when the first Client feature needs them.
-10. **Process service** for LSP and formatters.
+10. **Process service** for formatters.
 
 ### Companion
 
