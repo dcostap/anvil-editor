@@ -59,6 +59,7 @@ anvil_sources = [
     'process_exit.c',
     'resize_diagnostics.c',
     'renderer.c',
+    'mapped_file.c',
     'image_scale.c',
     'display_packet.c',
     'renwindow.c',

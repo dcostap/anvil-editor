@@ -21,6 +21,7 @@
 #include "d3d11_backend.h"
 #include "font_raster_internal.h"
 #include "image_scale.h"
+#include "mapped_file.h"
 #include "renwindow.h"
 
 // uncomment the line below for more debugging information through printf
@@ -1420,23 +1421,17 @@ static void font_clear_glyph_cache(RenFont* font) {
   font->glyphs.bytesize = 0;
 }
 
-// based on https://github.com/libsdl-org/SDL_ttf/blob/2a094959055fba09f7deed6e1ffeb986188982ae/SDL_ttf.c#L1735
-static unsigned long font_file_read(FT_Stream stream, unsigned long offset, unsigned char *buffer, unsigned long count) {
-  uint64_t amount;
-  SDL_IOStream *file = (SDL_IOStream *) stream->descriptor.pointer;
-  SDL_SeekIO(file, (int) offset, SDL_IO_SEEK_SET);
-  if (count == 0)
-    return 0;
-  amount = SDL_ReadIO(file, buffer, sizeof(char) * count);
-  if (amount <= 0)
-    return 0;
-  return (unsigned long) amount;
-}
+// A memory stream over the mapped font file. FreeType and HarfBuzz then read tables in place.
+// A file stream made each font instance copy its tables, such as Segoe UI Emoji's 7 MB COLR table.
+typedef struct {
+  FT_StreamRec stream;
+  AnvilMappedFile file;
+} FontFileStream;
 
 static void font_file_close(FT_Stream stream) {
-  if (stream && stream->descriptor.pointer)
-    SDL_CloseIO((SDL_IOStream *) stream->descriptor.pointer);
-  SDL_free(stream);
+  FontFileStream *font_stream = (FontFileStream *) stream;
+  anvil_mapped_file_close(&font_stream->file);
+  SDL_free(font_stream);
 }
 
 static int font_set_face_metrics(RenFont *font, FT_Face face) {
@@ -1530,11 +1525,16 @@ static int font_set_face_metrics(RenFont *font, FT_Face face) {
 
 RenFont* ren_font_load(const char* path, float size, ERenFontAntialiasing antialiasing, ERenFontHinting hinting, unsigned char style, bool ligatures) {
   FT_Error err = FT_Err_Ok;
-  SDL_IOStream *file = NULL; RenFont *font = NULL;
-  FT_Face face = NULL; FT_Stream stream = NULL;
+  RenFont *font = NULL;
+  FT_Face face = NULL;
 
-  file = SDL_IOFromFile(path, "rb");
-  if (!file) return NULL; // error set by SDL_IOFromFile
+  AnvilMappedFile file;
+  if (!anvil_mapped_file_open(path, &file)) return NULL;
+  if (file.size > ULONG_MAX) {
+    anvil_mapped_file_close(&file);
+    SDL_SetError("Font file is too large: %s", path);
+    return NULL;
+  }
 
   int len = strlen(path);
   font = check_alloc(SDL_calloc(1, sizeof(RenFont) + len + 1));
@@ -1551,22 +1551,19 @@ RenFont* ren_font_load(const char* path, float size, ERenFontAntialiasing antial
   font->scale = 1.0;
 #endif
 
-  stream = check_alloc(SDL_calloc(1, sizeof(FT_StreamRec)));
-  if (!stream) goto stream_failure;
-  stream->read = &font_file_read;
-  stream->close = &font_file_close;
-  stream->descriptor.pointer = file;
-  stream->pos = 0;
-  stream->size = (unsigned long) SDL_GetIOSize(file);
+  FontFileStream *font_stream = check_alloc(SDL_calloc(1, sizeof(FontFileStream)));
+  font_stream->file = file;
+  font_stream->stream.base = (unsigned char *) file.data;
+  font_stream->stream.size = (unsigned long) file.size;
+  font_stream->stream.close = &font_file_close;
 
-  if ((err = FT_Open_Face(library, &(FT_Open_Args) { .flags = FT_OPEN_STREAM, .stream = stream }, 0, &face)) != 0)
+  // FreeType closes the stream when the face ends, also when FT_Open_Face fails.
+  if ((err = FT_Open_Face(library, &(FT_Open_Args) { .flags = FT_OPEN_STREAM, .stream = &font_stream->stream }, 0, &face)) != 0)
     goto failure;
   if ((err = font_set_face_metrics(font, face)) != 0)
     goto failure;
   return font;
 
-stream_failure:
-  if (file) SDL_CloseIO(file);
 failure:
   if (err != FT_Err_Ok) SDL_SetError("%s", get_ft_error(err));
   if (face) FT_Done_Face(face);
