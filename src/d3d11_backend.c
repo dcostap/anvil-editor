@@ -22,6 +22,9 @@
 #define SAFE_RELEASE(p) do { if (p) { (p)->lpVtbl->Release(p); (p) = NULL; } } while (0)
 #endif
 
+/* 1 MiB. Most frames use a part of it. The buffer grows when one batch needs more. */
+#define D3D11_QUAD_BUFFER_INITIAL_INSTANCES 16384
+
 typedef struct D3D11QuadInstance {
   float x0, y0, x1, y1;
   float u0, v0, u1, v1;
@@ -193,6 +196,7 @@ typedef struct D3D11State {
   int quad_instance_count;
   int quad_instance_capacity;
   int quad_instance_buffer_capacity;
+  int quad_instance_buffer_used; /* instances written since the last discard */
   ID3D11ShaderResourceView *quad_srvs[ANVIL_D3D11_QUAD_TEXTURE_SLOTS];
   D3D11CachedTexture *quad_cached_textures[ANVIL_D3D11_QUAD_TEXTURE_SLOTS];
   int quad_srv_count;
@@ -827,7 +831,8 @@ static bool d3d11_ensure_quad_pipeline(D3D11SetupStats *setup_stats) {
   );
   if (FAILED(hr)) goto fail;
 
-  g_d3d11.quad_instance_buffer_capacity = 65536;
+  g_d3d11.quad_instance_buffer_capacity = D3D11_QUAD_BUFFER_INITIAL_INSTANCES;
+  g_d3d11.quad_instance_buffer_used = 0;
   D3D11_BUFFER_DESC vdesc;
   memset(&vdesc, 0, sizeof(vdesc));
   vdesc.ByteWidth = (UINT)(sizeof(D3D11QuadInstance) * g_d3d11.quad_instance_buffer_capacity);
@@ -1249,7 +1254,8 @@ static bool d3d11_ensure_quad_instance_buffer_capacity(int vertex_count) {
   if (vertex_count <= g_d3d11.quad_instance_buffer_capacity) return true;
 
   SAFE_RELEASE(g_d3d11.quad_vbuf);
-  int new_capacity = g_d3d11.quad_instance_buffer_capacity ? g_d3d11.quad_instance_buffer_capacity * 2 : 65536;
+  int new_capacity = g_d3d11.quad_instance_buffer_capacity ? g_d3d11.quad_instance_buffer_capacity * 2
+                                                           : D3D11_QUAD_BUFFER_INITIAL_INSTANCES;
   while (new_capacity < vertex_count) new_capacity *= 2;
 
   D3D11_BUFFER_DESC vdesc;
@@ -1261,6 +1267,7 @@ static bool d3d11_ensure_quad_instance_buffer_capacity(int vertex_count) {
   HRESULT hr = g_d3d11.device->lpVtbl->CreateBuffer(g_d3d11.device, &vdesc, NULL, &g_d3d11.quad_vbuf);
   if (FAILED(hr)) return false;
   g_d3d11.quad_instance_buffer_capacity = new_capacity;
+  g_d3d11.quad_instance_buffer_used = 0;
   return true;
 }
 
@@ -1759,14 +1766,24 @@ static bool d3d11_flush_quads(void) {
       return false;
   }
 
+  /* Append each batch after the previous one and discard only when the buffer is full. Each discard makes the
+     driver hand out a new copy of the buffer while the GPU still reads the old one, and the driver keeps those
+     copies in RAM. */
+  D3D11_MAP map_type = D3D11_MAP_WRITE_NO_OVERWRITE;
+  if (g_d3d11.quad_instance_buffer_used + g_d3d11.quad_instance_count > g_d3d11.quad_instance_buffer_capacity) {
+    map_type = D3D11_MAP_WRITE_DISCARD;
+    g_d3d11.quad_instance_buffer_used = 0;
+  }
+  UINT first_instance = (UINT)g_d3d11.quad_instance_buffer_used;
   D3D11_MAPPED_SUBRESOURCE mapped;
   HRESULT hr = g_d3d11.context->lpVtbl->Map(g_d3d11.context,
                                             (ID3D11Resource *)g_d3d11.quad_vbuf,
-                                            0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+                                            0, map_type, 0, &mapped);
   if (FAILED(hr)) return false;
   g_d3d11.stats.frame.maps++;
-  memcpy(mapped.pData, g_d3d11.quad_instances,
+  memcpy((D3D11QuadInstance *)mapped.pData + first_instance, g_d3d11.quad_instances,
          sizeof(D3D11QuadInstance) * (size_t)g_d3d11.quad_instance_count);
+  g_d3d11.quad_instance_buffer_used += g_d3d11.quad_instance_count;
   g_d3d11.context->lpVtbl->Unmap(g_d3d11.context, (ID3D11Resource *)g_d3d11.quad_vbuf, 0);
 
   D3D11Window *w = d3d11_find_window(g_d3d11.active_window);
@@ -1798,7 +1815,7 @@ static bool d3d11_flush_quads(void) {
     );
   }
   g_d3d11.context->lpVtbl->DrawInstanced(
-    g_d3d11.context, 4, (UINT)g_d3d11.quad_instance_count, 0, 0
+    g_d3d11.context, 4, (UINT)g_d3d11.quad_instance_count, 0, first_instance
   );
   g_d3d11.stats.frame.draw_calls++;
   g_d3d11.stats.frame.quad_draws++;
