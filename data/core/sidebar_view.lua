@@ -1646,7 +1646,7 @@ function SidebarView:dim_target(row)
   if not row.selected and (row.snooze or row.agent and not row.agent.command
     and tab.working(row.tab.terminal or {}, row.agent)) then return 0.5 end
   local owner = row.project and row.project.window_id
-  if self.window_id and owner and owner ~= 0 and owner ~= self.window_id then return 0.7 end
+  if self.window_id and owner and owner ~= 0 and owner ~= self.window_id then return 0.5 end
   return 1
 end
 
