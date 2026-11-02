@@ -384,6 +384,7 @@ keymap.add_direct {
   ["ctrl+x"] = "core:cut",
   ["ctrl+c"] = "core:copy",
   ["ctrl+v"] = { "markdown:table_paste", "markdown:paste_table", "core:paste" },
+  ["ctrl+alt+shift+v"] = "core:paste_as_plain_text",
   ["insert"] = "core:toggle_overwrite",
   ["ctrl+insert"] = "core:copy",
   ["shift+insert"] = { "markdown:table_paste", "markdown:paste_table", "core:paste" },

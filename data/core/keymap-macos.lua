@@ -40,6 +40,7 @@ local function keymap_macos(keymap)
     ["cmd+x"] = "core:cut",
     ["cmd+c"] = "core:copy",
     ["cmd+v"] = "core:paste",
+    ["cmd+option+shift+v"] = "core:paste_as_plain_text",
     ["ctrl+insert"] = "core:copy",
     ["shift+insert"] = "core:paste",
     ["escape"] = { "core:close_prompt", "core:select_none", "core:select_dialog_no" },

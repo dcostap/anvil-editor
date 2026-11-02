@@ -1171,9 +1171,15 @@ end
 -- outside Anvil.
 -- Returns the text, an earlier column on `line` where the paste starts, and
 -- the offset in the text where each piece ends.
+local plain_paste = false
+
 local function smart_paste_pieces(buffer, line, col, pieces)
   local texts = {}
   for i, piece in ipairs(pieces) do texts[i] = tostring(piece.text or "") end
+  if plain_paste then
+    local text, ends = join_pieces(texts, "\n")
+    return text, nil, ends
+  end
   local text = table.concat(texts, "\n")
   local quote = string_quote_at(buffer, line, col)
   if quote then
@@ -1293,7 +1299,8 @@ local function paste_whole_lines_by_selection(buffer, text_for_idx)
   for idx, line1, col1, line2, col2 in buffer:get_selections(true) do
     local text = tostring(text_for_idx(idx) or ""):gsub("\r", "")
     -- Whole lines go where new lines belong before the caret's line.
-    local target = text:find("%S") and insertion_indent(buffer, line1, text:match("^%s*([^\n]*)"))
+    local target = not plain_paste and text:find("%S")
+      and insertion_indent(buffer, line1, text:match("^%s*([^\n]*)"))
     if target then text = table.concat(shift_lines_to(buffer, split_lines(text), target), "\n") end
     text = text .. "\n"
     actions[#actions + 1] = {
@@ -1746,6 +1753,20 @@ local commands = {
     	return
     end
     return empty_line_indent.write_then(dv, function() return paste_clipboard(dv, clipboard) end)
+  end,
+
+  -- Pastes like core:paste, but keeps the text unchanged: no indentation,
+  -- comment or string escape changes.
+  ["core:paste_as_plain_text"] = function(dv)
+    if not can_edit(dv, "paste") then return end
+    local clipboard = system.get_clipboard()
+    if not clipboard or clipboard == "" then return end
+    plain_paste = true
+    local ok, result = pcall(empty_line_indent.write_then, dv, function() return paste_clipboard(dv, clipboard) end)
+    plain_paste = false
+    if not ok then error(result, 0) end
+    core.log_quiet("Pasted plain text in %s", dv.buffer:get_name())
+    return result
   end,
 
   ["core:paste_primary_selection"] = function(dv, x, y)
