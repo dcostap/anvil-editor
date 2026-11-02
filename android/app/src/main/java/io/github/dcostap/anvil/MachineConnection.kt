@@ -15,13 +15,19 @@ import kotlin.concurrent.thread
 
 // An error reply of the Machine, or a connection fault. `offline`: the request was not sent. `disconnected`: its
 // reply did not arrive, so the Machine can have done it. The other codes come from the server, such as
-// `unauthorized`, `pairing_ended` or `forbidden`.
-class MachineError(val code: String, message: String) : Exception(message)
+// `unauthorized`, `pairing_ended`, `forbidden` or `conflict`. `details` is the server's error object, and `bytes`
+// are the bytes of its reply, such as the current text of a file after a `conflict`.
+class MachineError(
+    val code: String, message: String, val details: JSONObject = JSONObject(), val bytes: ByteArray = ByteArray(0),
+) : Exception(message)
+
+// A reply's `result` and the bytes after its JSON.
+class MachineReply(val result: JSONObject, val bytes: ByteArray)
 
 // One connection to a Machine's server (`anvil serve`). `open` sends `hello`, then requests wait for their replies.
 class MachineConnection private constructor(private val socket: Socket) : AutoCloseable {
     private val output = socket.getOutputStream()
-    private val pending = ConcurrentHashMap<Int, CompletableDeferred<JSONObject>>()
+    private val pending = ConcurrentHashMap<Int, CompletableDeferred<MachineFrames.Frame>>()
     private val ids = AtomicInteger(0)
 
     // Completes when the connection ends.
@@ -33,15 +39,20 @@ class MachineConnection private constructor(private val socket: Socket) : AutoCl
 
     // Sends one request and returns its `result`. A result that is not an object, such as `true`, gives an
     // empty object.
-    suspend fun request(method: String, params: JSONObject = JSONObject()): JSONObject {
+    suspend fun request(method: String, params: JSONObject = JSONObject()): JSONObject = call(method, params).result
+
+    // Sends one request with `bytes` after its JSON, and returns the reply with its bytes.
+    suspend fun call(method: String, params: JSONObject = JSONObject(), bytes: ByteArray = ByteArray(0)): MachineReply {
         val id = ids.incrementAndGet()
-        val reply = CompletableDeferred<JSONObject>()
+        val reply = CompletableDeferred<MachineFrames.Frame>()
         pending[id] = reply
         val json = JSONObject().put("method", method).put("params", params).toString().toByteArray()
         try {
             withContext(Dispatchers.IO) {
                 synchronized(output) {
-                    output.write(MachineFrames.header(MachineFrames.REQUEST, id, json.size, 0) + json)
+                    output.write(MachineFrames.header(MachineFrames.REQUEST, id, json.size, bytes.size))
+                    output.write(json)
+                    output.write(bytes)
                     output.flush()
                 }
             }
@@ -52,11 +63,13 @@ class MachineConnection private constructor(private val socket: Socket) : AutoCl
         }
         // A reply can arrive before the reader saw the close. A close fails the requests that still wait.
         if (closed.isCompleted) pending.remove(id)?.completeExceptionally(disconnected())
-        val body = reply.await()
+        val frame = reply.await()
+        val body = JSONObject(String(frame.json))
         body.optJSONObject("error")?.let {
-            throw MachineError(it.optString("code", "error"), it.optString("message", "The Machine refused the request"))
+            throw MachineError(it.optString("code", "error"), it.optString("message", "The Machine refused the request"),
+                it, frame.bytes)
         }
-        return body.optJSONObject("result") ?: JSONObject()
+        return MachineReply(body.optJSONObject("result") ?: JSONObject(), frame.bytes)
     }
 
     private fun read() {
@@ -71,7 +84,7 @@ class MachineConnection private constructor(private val socket: Socket) : AutoCl
                     while (true) {
                         val frame = decoder.next() ?: break
                         if (frame.type != MachineFrames.REPLY) throw IOException("The Machine sent a request")
-                        pending.remove(frame.id)?.complete(JSONObject(String(frame.json)))
+                        pending.remove(frame.id)?.complete(frame)
                     }
                 }
             }

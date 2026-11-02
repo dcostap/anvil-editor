@@ -556,7 +556,7 @@ The first test runs in parallel with the desktop work.
 2. **Machines and Projects** with Agent Status, read only. Done: see "Companion (Android)" in `AGENTS.md`. The Companion pairs with a code and lists the Projects of each Machine, with their Terminal Sessions and Agent Status. The server needed no change.
 3. **Terminal view**, first as a Viewer, then as a Controller.
 4. **Files and code** with highlighting, and File Search.
-5. **Markdown editing**, on the phone and on Machines, with recovery. Editing on Machines needs step 3 of [Shared editing](shared-editing.md#order-of-work).
+5. **Markdown editing**, on the phone and on Machines, with recovery. Notes on Machines are done: see "Companion (Android)" in `AGENTS.md`. A change on both sides asks the user to keep one version. The dirty merge, step 3 of [Shared editing](shared-editing.md#order-of-work), replaces that question later. Notes on the phone, wikilink taps and the editing rules wait. The server needed no change.
 6. **Text Search and Git** views.
 7. **Pi chat:** start Pi, send messages, read its session file.
 

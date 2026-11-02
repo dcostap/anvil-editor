@@ -1,5 +1,6 @@
 package io.github.dcostap.anvil
 
+import android.content.Context
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -16,6 +17,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 sealed interface LinkState {
@@ -26,10 +28,20 @@ sealed interface LinkState {
 
 // The connection to one paired Machine. While started, it connects again after each disconnect, with a growing
 // delay up to 5 seconds, as the desktop Client does.
-class MachineLink(val record: MachineRecord, private val scope: CoroutineScope) {
+class MachineLink(
+    val record: MachineRecord, private val scope: CoroutineScope, private val online: suspend (MachineLink) -> Unit,
+) {
     var state by mutableStateOf<LinkState>(LinkState.Connecting)
         private set
     private var features: Set<String> = emptySet()
+
+    // "full" when this phone can write files, from the last `hello`.
+    var level by mutableStateOf("view")
+        private set
+
+    // The separator of the Machine's paths.
+    var separator = "\\"
+        private set
     private var connection: MachineConnection? = null
     private var job: Job? = null
 
@@ -53,9 +65,12 @@ class MachineLink(val record: MachineRecord, private val scope: CoroutineScope) 
                 val (opened, hello) = MachineConnection.open(record.host, record.port, credentials)
                 val list = hello.optJSONArray("features")
                 features = (0 until (list?.length() ?: 0)).map { list!!.getString(it) }.toSet()
+                level = hello.optString("level", "view")
+                separator = if (hello.optString("os") == "Windows") "\\" else "/"
                 connection = opened
                 state = LinkState.Online
                 wait = 250L
+                scope.launch { online(this@MachineLink) }
                 opened.closed.await()
                 state = LinkState.Connecting
             } catch (e: MachineError) {
@@ -67,9 +82,11 @@ class MachineLink(val record: MachineRecord, private val scope: CoroutineScope) 
         }
     }
 
-    suspend fun request(method: String, params: JSONObject = JSONObject()): JSONObject {
+    suspend fun request(method: String, params: JSONObject = JSONObject()): JSONObject = call(method, params).result
+
+    suspend fun call(method: String, params: JSONObject = JSONObject(), bytes: ByteArray = ByteArray(0)): MachineReply {
         val open = connection ?: throw MachineError("offline", "The Machine is not connected")
-        return open.request(method, params)
+        return open.call(method, params, bytes)
     }
 
     // The Machine's Projects, each with its running Terminal Sessions, newest first.
@@ -118,20 +135,31 @@ data class Terminal(
     }
 }
 
-// All paired Machines. Their connections run between `start` and `stop`, while the app shows.
-class Swarm(private val store: MachineStore) {
+// All paired Machines and their open notes. The connections run between `start` and `stop`, while the app shows.
+class Swarm(context: Context) {
+    private val store = MachineStore(context)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var started = false
-    val links = mutableStateListOf<MachineLink>().apply { addAll(store.load().map { MachineLink(it, scope) }) }
+    private var stopping: Job? = null
+    val notes = Notes(RecoveryStore(context), scope)
+    val links = mutableStateListOf<MachineLink>().apply { addAll(store.load().map { link(it) }) }
+
+    // A Machine that comes online gets the recovered text of its notes.
+    private fun link(record: MachineRecord) = MachineLink(record, scope) { notes.resume(it) }
 
     fun start() {
         started = true
+        stopping?.cancel()
         links.forEach { it.start() }
     }
 
+    // Unsaved notes get up to 5 seconds to save before the connections close.
     fun stop() {
         started = false
-        links.forEach { it.stop() }
+        stopping = scope.launch {
+            withTimeoutOrNull(5000) { notes.flush() }
+            if (!started) links.forEach { it.stop() }
+        }
     }
 
     fun close() = scope.cancel()
@@ -150,7 +178,7 @@ class Swarm(private val store: MachineStore) {
             it.stop()
             links.remove(it)
         }
-        val link = MachineLink(record, scope)
+        val link = link(record)
         links.add(link)
         if (started) link.start()
         return link

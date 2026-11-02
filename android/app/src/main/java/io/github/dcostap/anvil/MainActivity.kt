@@ -31,6 +31,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -49,7 +50,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        swarm = Swarm(MachineStore(this))
+        swarm = Swarm(this)
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
                 Companion(swarm)
@@ -78,16 +79,25 @@ private sealed interface Screen {
     data object Machines : Screen
     data object Pair : Screen
     data class Machine(val link: MachineLink) : Screen
+    data class Folder(val link: MachineLink, val path: String, val name: String) : Screen
+    data class Note(val note: io.github.dcostap.anvil.Note) : Screen
 }
 
 @Composable
 private fun Companion(swarm: Swarm) {
-    var screen by remember { mutableStateOf<Screen>(Screen.Machines) }
-    BackHandler(screen != Screen.Machines) { screen = Screen.Machines }
-    when (val shown = screen) {
-        Screen.Machines -> MachinesScreen(swarm, open = { screen = Screen.Machine(it) }, pair = { screen = Screen.Pair })
-        Screen.Pair -> PairScreen(swarm, paired = { screen = Screen.Machine(it) }, back = { screen = Screen.Machines })
-        is Screen.Machine -> MachineScreen(shown.link, back = { screen = Screen.Machines })
+    // The screens that Back returns to. The last one shows.
+    val stack = remember { mutableStateListOf<Screen>(Screen.Machines) }
+    val back: () -> Unit = { stack.removeAt(stack.lastIndex) }
+    BackHandler(stack.size > 1, back)
+    when (val shown = stack.last()) {
+        Screen.Machines -> MachinesScreen(swarm, open = { stack.add(Screen.Machine(it)) }, pair = { stack.add(Screen.Pair) })
+        Screen.Pair -> PairScreen(swarm, paired = { stack[stack.lastIndex] = Screen.Machine(it) }, back = back)
+        is Screen.Machine -> MachineScreen(shown.link, back = back,
+            open = { stack.add(Screen.Folder(shown.link, it.path, it.name)) })
+        is Screen.Folder -> FolderScreen(shown.link, shown.path, shown.name, back = back,
+            openFolder = { path, name -> stack.add(Screen.Folder(shown.link, path, name)) },
+            openNote = { stack.add(Screen.Note(swarm.notes.open(shown.link, it))) })
+        is Screen.Note -> NoteScreen(shown.note, back = back)
     }
 }
 
@@ -172,7 +182,7 @@ private fun PairScreen(swarm: Swarm, paired: (MachineLink) -> Unit, back: () -> 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MachineScreen(link: MachineLink, back: () -> Unit) {
+private fun MachineScreen(link: MachineLink, back: () -> Unit, open: (Project) -> Unit) {
     var projects by remember { mutableStateOf<List<Project>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var now by remember { mutableStateOf(System.currentTimeMillis() / 1000) }
@@ -201,7 +211,8 @@ private fun MachineScreen(link: MachineLink, back: () -> Unit) {
             for (project in projects.orEmpty()) {
                 item(key = "project:" + project.path) {
                     HorizontalDivider()
-                    ListItem(headlineContent = { Text(project.name, style = MaterialTheme.typography.titleMedium) })
+                    ListItem(headlineContent = { Text(project.name, style = MaterialTheme.typography.titleMedium) },
+                        modifier = Modifier.clickable { open(project) })
                 }
                 items(project.terminals, key = { "terminal:" + it.id }) { terminal ->
                     TerminalRow(terminal, now)

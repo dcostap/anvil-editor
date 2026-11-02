@@ -718,16 +718,22 @@ Run `runtime/machine_serve.lua`, `runtime/machine_client.lua`, `runtime/machine_
 
 ## Companion (Android)
 
-`android/` is the Companion's Gradle project (`io.github.dcostap.anvil`). It is a Client of the Machine server, with View access. See [Machines](docs/machines.md).
+`android/` is the Companion's Gradle project (`io.github.dcostap.anvil`). It is a Client of the Machine server. See [Machines](docs/machines.md).
 The app opens to the paired Machines with their connection state. "Pair a Machine" takes the host, the port (default 7690) and a code from `anvil machine code`. It sends `hello` with the code and `Build.MODEL` as the device name.
 `machines.json` in the app's private storage keeps each Machine's ID, host, port and device ID. The device token is encrypted with an AES/GCM key in Android Keystore. Pairing the same Machine again replaces its record.
 A Machine screen lists its Projects and their Terminal Sessions, with the Agent Status as the desktop Sidebar says it, such as "Waiting for you". It sends `projects.list` and `terminal.list` again every 2 seconds while it shows.
 Connections run only while the app shows. A lost connection retries with a growing delay, up to 5 seconds.
+A Project row opens its folders and Markdown notes (`files.list_dir`). Dot entries do not show. A note opens in a text field with Live Preview.
+`markdown_styles.c` parses the note with the desktop's `markdown_parser.c` and `markdown_extensions.c` and returns styled ranges in UTF-16 units. Kotlin applies them as styles only, so the keyboard sees the real text. Syntax markers hide unless the focused field's selection is in their element.
+The Companion keeps the note's CRLF and BOM, and refuses text that is not UTF-8. A note saves 1 second after the last edit, with `files.write` and the version that it read as `base`.
+A conflict asks the user: Keep mine or Use theirs. A save whose answer was lost compares the file's version with the SHA-256 of the sent text after the reconnect.
+Each unsaved note has a recovery record in `files/recovery`. A recovered note saves when its Machine connects. A clean open note checks `files.stat` every 2 seconds and reads the file again when it changed.
+Without Full access, notes are read only. Wikilinks do not open notes yet.
 The frames use the desktop's codec, `src/machine_frame.c`, through the JNI binding `machine_frames.c`. CMake compiles it from `src/` and copies no files. Kotlin owns the socket, the JSON and the screens.
 Tools: the Android SDK in `%LOCALAPPDATA%\Android\Sdk`, NDK 30.0.16248370, CMake 4.1.2, platform 37 and JDK 17 or later in `JAVA_HOME`. Set `sdk.dir` in the ignored `android/local.properties`. The Gradle wrapper checks the distribution's SHA-256.
 Build with `./gradlew assembleDebug` in `android/`. Test on the emulator, not on the user's phone. Start the AVD `anvil-test-36` with `emulator -avd anvil-test-36 -no-window`.
-Install the app and its test APK with `./gradlew installDebug installDebugAndroidTest`. Then run `tests/lua/companion/machines.lua` through `anvil:lua-runtime --test-args`. It starts a real server and a Terminal with a waiting agent, and runs `MachinesTest` on the emulator through `adb`. The emulator reaches the PC's loopback address as `10.0.2.2`.
-The default suites do not run it. It skips when no emulator has both APKs. Run it after changes to the app or to `hello`, `projects.list` or `terminal.list`.
+Install the app and its test APK with `./gradlew installDebug installDebugAndroidTest`. Then run `tests/lua/companion/machines.lua` through `anvil:lua-runtime --test-args`. It starts a real server and a Terminal with a waiting agent, and runs `MachinesTest` and `NotesTest` on the emulator through `adb`. `MarkdownStylesTest` needs no server: run it with `am instrument`. The emulator reaches the PC's loopback address as `10.0.2.2`.
+The default suites do not run it. It skips when no emulator has both APKs. Run it after changes to the app or to `hello`, `projects.list`, `terminal.list` or the `files` methods.
 The connection logs with the tag `AnvilMachine`. Read them with `adb logcat -s AnvilMachine`.
 
 ## Agent control

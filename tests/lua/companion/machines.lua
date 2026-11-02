@@ -75,6 +75,38 @@ test.describe("Companion Machines", function()
     if context.project then test.ok(test.remove_tree(context.project)) end
   end)
 
+  -- Starts the server for the test's Project, makes a pairing code with `level` and runs the instrumented test
+  -- class on the emulator. Returns the runner's output.
+  local function instrument(context, level, class, tests)
+    local found
+    context.server, found = machine_server.start(USERDIR, {context.project})
+    context.owner = MachineClient.new(machine_server.discovery_path(USERDIR))
+    wait_until(function() return context.owner.state == "ready" end, "The owner did not connect")
+    local err, pairing = call(context.owner, "pairing.start", {level = level})
+    test.equal(err, nil)
+    -- The emulator reaches this PC's loopback address through 10.0.2.2.
+    local code, output = run {context.adb, "-s", context.serial, "shell", "am", "instrument", "-w",
+      "-e", "host", "10.0.2.2", "-e", "port", tostring(found.port), "-e", "code", pairing.code,
+      "-e", "project", common.basename(context.project), "-e", "class", PACKAGE .. "." .. class,
+      PACKAGE .. ".test/androidx.test.runner.AndroidJUnitRunner"}
+    test.equal(code, 0, output)
+    test.ok(output:find("OK (" .. tests .. " test", 1, true), output)
+  end
+
+  local function write(path, text)
+    common.mkdirp(common.dirname(path))
+    local file = assert(io.open(path, "wb"))
+    file:write(text)
+    file:close()
+  end
+
+  local function read(path)
+    local file = assert(io.open(path, "rb"))
+    local text = file:read("*a")
+    file:close()
+    return text
+  end
+
   test.it("pairs and shows a waiting agent in its Project", function(context)
     context.session = assert(require("terminal_native").new {cols = 80, rows = 10, cell_width = 8, cell_height = 16,
       cwd = context.project, project_path = context.project, shell = BLOCKED_SHELL})
@@ -82,18 +114,17 @@ test.describe("Companion Machines", function()
       local _, status = context.session:update()
       return status.agent_state == "blocked" and status.busy == true
     end, "The session did not report its agent")
-    local found
-    context.server, found = machine_server.start(USERDIR, {context.project})
-    context.owner = MachineClient.new(machine_server.discovery_path(USERDIR))
-    wait_until(function() return context.owner.state == "ready" end, "The owner did not connect")
-    local err, pairing = call(context.owner, "pairing.start", {level = "view"})
-    test.equal(err, nil)
-    -- The emulator reaches this PC's loopback address through 10.0.2.2.
-    local code, output = run {context.adb, "-s", context.serial, "shell", "am", "instrument", "-w",
-      "-e", "host", "10.0.2.2", "-e", "port", tostring(found.port), "-e", "code", pairing.code,
-      "-e", "project", common.basename(context.project), "-e", "class", PACKAGE .. ".MachinesTest",
-      PACKAGE .. ".test/androidx.test.runner.AndroidJUnitRunner"}
-    test.equal(code, 0, output)
-    test.ok(output:find("OK (1 test)", 1, true), output)
+    instrument(context, "view", "MachinesTest", 1)
+  end)
+
+  test.it("edits the notes of a Project and saves them on the Machine", function(context)
+    local note = context.project .. PATHSEP .. "Notas" .. PATHSEP .. "Dia.md"
+    write(note, "# Día\r\n\r\nUn **niño** y [[Año]].\r\n")
+    write(context.project .. PATHSEP .. "conflict.md", "suyo\n")
+    write(context.project .. PATHSEP .. "recovered.md", "antes\n")
+    instrument(context, "full", "NotesTest", 3)
+    -- The phone edits text with `\n`, and the file keeps its `\r\n`.
+    test.equal(read(note), "# Día\r\n\r\nUn **niño** y [[Año]]. Más\r\n")
   end)
 end)
+
