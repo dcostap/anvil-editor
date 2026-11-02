@@ -613,16 +613,23 @@ function KeyboardMap:key_color(spec, key, layer)
   return ui.mix(base, style.accent, 0.22)
 end
 
+-- The outline of a key, or the ring of the selected key. All outlines draw before the keys, so the parts of the
+-- ISO Enter key join without a line between them.
+function KeyboardMap:draw_key_outline(spec)
+  local x, y, w, h = self:key_rect(spec)
+  local r = math.floor(4 * SCALE + 0.5)
+  local selected = self.selected == spec.id
+  local line = math.max(1, math.floor((selected and 2 or 1) * SCALE + 0.5))
+  renderer.draw_rounded_rect(x - line, y - line, w + 2 * line, h + 2 * line, r + line,
+    selected and style.accent or ui.mix(style.background, style.text, 0.2))
+end
+
 function KeyboardMap:draw_key(spec, layer)
   local key = self.keys[spec]
   local x, y, w, h = self:key_rect(spec)
   local r = math.floor(4 * SCALE + 0.5)
   local color = self:key_color(spec, key, layer)
   local hovered = self.hovered and self.hovered.id == spec.id
-  if self.selected == spec.id then
-    local ring = math.max(1, math.floor(2 * SCALE + 0.5))
-    renderer.draw_rounded_rect(x - ring, y - ring, w + 2 * ring, h + 2 * ring, r + ring, style.accent)
-  end
   renderer.draw_rounded_rect(x, y, w, h, r, color)
   if hovered then renderer.draw_rounded_rect(x, y, w, h, r, ui.fade(style.text, 0.08)) end
   if spec.part == 2 then
@@ -722,6 +729,7 @@ function KeyboardMap:draw()
   ui.draw_check_box(chip.x, chip.y + math.floor((chip.h - box) / 2), box, self.alt_navigation and 1 or 0)
   renderer.draw_text(font, "Alt Navigation", chip.x + box + m.gap,
     chip.y + math.floor((chip.h - font:get_height()) / 2), style.text)
+  for _, spec in ipairs(LAYOUT) do self:draw_key_outline(spec) end
   for _, spec in ipairs(LAYOUT) do self:draw_key(spec, layer) end
 
   self.row_count = 0
