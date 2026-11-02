@@ -128,13 +128,6 @@ local function clone_caret_until_edge_intellij(dv, direction)
   end
 end
 
-command.add(nil, {
-  ["core:disabled_intellij_conflict"] = function()
-    -- Intentionally no-op: reserved because the same shortcut means something
-    -- unrelated in the user's IntelliJ keymap.
-  end,
-})
-
 command.add(function()
   local TextView = require "core.textview"
   return core.active_view and core.active_view:extends(TextView), core.active_view
@@ -1409,6 +1402,7 @@ keymap.add({
   ["alt+shift+p"] = "editor:expand_selection_block",
   ["alt+p"] = "editor:add_selection_next_occurrence",
   ["alt+shift+w"] = "editor:select_all_occurrences",
+  ["ctrl+alt+p"] = "editor:select_all_occurrences",
   ["alt+e"] = "editor:comment_with_line_comment_at_start",
   ["alt+shift+o"] = "editor:extend_selection_smart",
   ["alt+shift+u"] = "editor:shrink_selection_smart",
@@ -1442,21 +1436,4 @@ end, {
 keymap.add({
   ["escape"] = "editor:restore_selection_origin_or_select_none",
 })
-
-core.intellij_actions_disable_conflict_shortcuts = function()
-  keymap.add_direct({
-    ["ctrl+g"] = "core:disabled_intellij_conflict",
-    ["ctrl+shift+k"] = "core:disabled_intellij_conflict",
-    ["ctrl+alt+p"] = "editor:select_all_occurrences",
-    ["ctrl+alt+r"] = "core:disabled_intellij_conflict",
-    ["shift+alt+i"] = "core:disabled_intellij_conflict",
-    ["shift+alt+k"] = "core:disabled_intellij_conflict",
-  })
-end
-
-core.intellij_actions_disable_conflict_shortcuts()
-core.add_thread(function()
-  coroutine.yield(0.1)
-  core.intellij_actions_disable_conflict_shortcuts()
-end)
 

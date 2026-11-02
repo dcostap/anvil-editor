@@ -253,9 +253,6 @@ require_core_plugin "centered_editor"
 require_core_plugin "custom_welcome"
 require_core_plugin "theme_editor"
 require_core_plugin "keyboard_input_checker"
-if core.intellij_actions_disable_conflict_shortcuts then
-  core.intellij_actions_disable_conflict_shortcuts()
-end
 -- With no Panes, Alt+Left reopens the last closed Pane instead of navigating
 -- through Navigation History. Fuzzy Searcher installs a higher-priority
 -- picker-local binding immediately below this one.

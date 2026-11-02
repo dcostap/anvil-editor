@@ -374,7 +374,6 @@ keymap.add_direct {
   ["shift+f3"] = "editor:previous_find",
   ["ctrl+i"] = "editor:toggle_sensitivity",
   ["ctrl+shift+i"] = "editor:toggle_regex",
-  ["ctrl+g"] = "editor:go_to_line",
   ["ctrl+s"] = "editor:save",
   ["ctrl+shift+s"] = "editor:save_as",
 
