@@ -866,6 +866,7 @@ Parts copied from several carets and pasted at one caret go on separate lines. E
 Whole lines, and complete lines pasted at column 1, go where a new line belongs there: the brace block's indentation (`block_indent`), or else the Shown Indentation of a new empty line. Lines copied together keep their shape.
 After pasted complete lines, the rest of the caret's line keeps its indentation.
 Markdown keeps the indentation of pasted whole lines, because lists and quotes own it.
+Text from outside this process with one line for each caret pastes one line at each caret, in document order. A last newline does not count as a line.
 Run `ui/smart_indent.lua` after changes.
 
 ## Autocomplete searches

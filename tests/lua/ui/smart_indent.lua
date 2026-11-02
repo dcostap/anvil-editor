@@ -363,6 +363,21 @@ test.describe("smart indentation", function()
     test.equal(text(buffer), "f {\n  x()\n  y()\n}\n")
   end)
 
+  test.it("external text with one line for each caret pastes one line at each caret", function(context)
+    local buffer, view = new_editor(context, "a\nb\nc", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(3, 2, 3, 2)
+    buffer:add_selection(1, 2, 1, 2)
+    buffer:add_selection(2, 2, 2, 2)
+    system.set_clipboard("1\n2\n3\n")
+    core.cursor_clipboard = { full = "different" }
+    core.cursor_clipboard_whole_line = {}
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), "a1\nb2\nc3\n")
+  end)
+
   test.it("leaves the comment at its end, including trailing whitespace", function(context)
     for _, case in ipairs({
       { "-- hello", "sample.lua", 9 },

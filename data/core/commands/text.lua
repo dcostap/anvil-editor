@@ -1559,6 +1559,21 @@ local function coalesce_duplicate_replacements(edits)
   return result, original_to_coalesced
 end
 
+-- Maps each selection index to one of `lines`, in the carets' document order.
+local function lines_by_caret_position(buffer, lines)
+  local carets = {}
+  for idx, line1, col1 in buffer:get_selections(true) do
+    carets[#carets + 1] = { idx = idx, line = line1, col = col1 }
+  end
+  table.sort(carets, function(a, b)
+    if a.line ~= b.line then return a.line < b.line end
+    return a.col < b.col
+  end)
+  local by_idx = {}
+  for i, caret in ipairs(carets) do by_idx[caret.idx] = lines[i] end
+  return by_idx
+end
+
 local function paste_clipboard(dv, clipboard)
   local transaction
   -- If the clipboard has changed since our last look, use that instead
@@ -1566,8 +1581,14 @@ local function paste_clipboard(dv, clipboard)
     core.cursor_clipboard = {}
     core.cursor_clipboard_whole_line = {}
     local text = clipboard:gsub("\r", "")
-    transaction = dv.buffer:text_input_by_selection(function(_, line1, col1)
-      return smart_paste_text(dv.buffer, line1, col1, text)
+    local lines = split_lines((text:gsub("\n$", "")))
+    local line_for_idx = #lines > 1 and #lines == #dv.buffer.selections / 4
+      and lines_by_caret_position(dv.buffer, lines)
+    if line_for_idx then
+      core.log_quiet("Pasted one clipboard line at each of %d carets", #lines)
+    end
+    transaction = dv.buffer:text_input_by_selection(function(idx, line1, col1)
+      return smart_paste_text(dv.buffer, line1, col1, line_for_idx and line_for_idx[idx] or text)
     end, nil, { type = "paste" })
   else
     -- Use internal clipboard(s)
