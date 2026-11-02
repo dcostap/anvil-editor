@@ -385,7 +385,7 @@ test.describe("Command Palette View launchers", function()
     local pane = panes.create { factory = function() return source end }
     local options
     terminal.open = function(value) options = value; return View() end
-    test.ok(command.perform_with_context("terminal:open_at_path", {
+    test.ok(command.perform_with_context("terminal:open_at_choose_path", {
       source_pane = pane, source_view = source, placement = "current",
     }))
 

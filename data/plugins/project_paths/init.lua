@@ -186,7 +186,7 @@ command.add(nil, {
   end, {
     keywords = { "external", "vendored", "folders", "directories", "roots" },
   }),
-  ["project_paths:add"] = command.palette(function(path)
+  ["project_paths:add"] = function(path)
     if not path then
       local open_dialog = require("core.ui.dialog").current()
       if open_dialog then open_dialog:close() end
@@ -199,9 +199,7 @@ command.add(nil, {
     end
     M.open({ select = entry.path, rename = entry.role ~= "root" })
     return true
-  end, {
-    keywords = { "external", "vendored", "folder", "directory", "attach" },
-  }),
+  end,
 })
 
 return M
