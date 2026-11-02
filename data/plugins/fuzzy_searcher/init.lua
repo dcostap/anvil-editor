@@ -5554,7 +5554,8 @@ end
 
 function FSView:start_file_search(query, line, reset_selection)
   kill_file_search()
-  self.own_results = nil
+  -- A refresh of the same query keeps the shown rows, so rows from other Projects show during the refresh.
+  if reset_selection then self.own_results = nil end
   fuzzy_searcher.other_projects.request(self, "files", query, line)
   local gen = file_search_generation
   local direct = self.direct_path_result

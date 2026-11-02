@@ -122,6 +122,24 @@ test.describe("Project File Search in other Projects", function()
     return picker, other_file, searches[1].request
   end
 
+  test.it("shows another Project's rows that arrive while this Project's search refreshes", function(context)
+    fuzzy_searcher.open("alpha")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function()
+      return file_index(picker.results, context.local_file) and not picker.direct_path_pending
+        and not picker:search_running()
+    end), tostring(picker.status))
+    -- A refresh of the same query, such as after a file index change, searches this Project again.
+    picker.force_refresh, picker.dirty = true, true
+    picker:refresh(picker.input:get_text())
+    local other_file = context.other .. PATHSEP .. "alpha-other.txt"
+    test.ok(pane_requests.perform(serialize {
+      action = "project_results", source = context.other, id = sent(context, "project_search")[1].request.id,
+      rows = { { label = "alpha-other.txt", abs_path = other_file } },
+    }))
+    test.not_nil(file_index(picker.results, other_file), "the other Project's row waited for the refresh")
+  end)
+
   test.it("lists another Project's files below this Project's files, under that Project", function(context)
     local picker, other_file = open_with_other_rows(context)
     local own_index = file_index(picker.results, context.local_file)
