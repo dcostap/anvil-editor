@@ -435,7 +435,7 @@ function RootPanel:pane_views()
   local group = panes().visible_group()
   if not group then return {} end
   local result = {}
-  for _, pane in ipairs(layout.shown_leaves(group.root)) do
+  for _, pane in ipairs(layout.leaves(group.root)) do
     if pane.current_view then result[#result + 1] = pane.current_view end
   end
   return result
@@ -446,7 +446,7 @@ function RootPanel:pane_status_bars()
   local group = panes().visible_group()
   if not group or not core.status_bar then return {} end
   local result = {}
-  for _, pane in ipairs(layout.shown_leaves(group.root)) do
+  for _, pane in ipairs(layout.leaves(group.root)) do
     result[#result + 1] = core.status_bar:bar_for_pane(pane)
   end
   return result
@@ -599,14 +599,6 @@ function RootPanel:close_all_textviews(keep_active)
   end
 end
 
--- The Minimum Column Width is in terminal cells, so Zoom changes how many Pane Columns fit.
-local function pane_column_min_width()
-  local font = style.terminal_font or style.code_font
-  return config.pane_column_min_width * font:get_width("M")
-end
-
-local column_strip = {}
-
 function RootPanel:update_layout()
   local x, y, w, h = self.position.x, self.position.y, self.size.x, self.size.y
   local title, nag, prompt = core.title_bar, core.nag_view, core.global_prompt_bar
@@ -632,14 +624,9 @@ function RootPanel:update_layout()
   self.content_rect = { x = x, y = content_y, w = w, h = content_h }
   local group = panes().visible_group()
   if group then
-    local active = panes().active()
-    column_strip.min_width = pane_column_min_width()
-    column_strip.first = group.first_column
-    column_strip.focus = active and active.group == group and active or nil
-    group.first_column = layout.update_rects(group.root, self.content_rect, column_strip)
-    column_strip.focus = nil
+    layout.update_rects(group.root, self.content_rect)
     -- Each Pane's Status Bar takes the bottom of the Pane; the View gets the rest.
-    for _, pane in ipairs(layout.shown_leaves(group.root)) do
+    for _, pane in ipairs(layout.leaves(group.root)) do
       local bar_h = math.min(status_h, pane.size.y)
       local view_h = pane.size.y - bar_h
       if core.status_bar then
@@ -1131,21 +1118,18 @@ function RootPanel:open_dropped_file(filename, x, y, target)
   end
 end
 
-local function draw_split_dividers(node, view)
+local function draw_split_dividers(node)
   if not node or node.kind ~= "split" or not node.rect then return end
   local color = style.divider or style.background3 or style.background2
   if node.axis == "x" then
-    -- Dividers at the edges of the view border Pane Columns that do not show.
     local x = node.rect.x + node.rect.w * node.ratio
-    if x > view.x + 0.5 and x < view.x + view.w - 0.5 then
-      renderer.draw_rect(x - 1, node.rect.y, 2, node.rect.h, color)
-    end
+    renderer.draw_rect(x - 1, node.rect.y, 2, node.rect.h, color)
   else
     local y = node.rect.y + node.rect.h * node.ratio
     renderer.draw_rect(node.rect.x, y - 1, node.rect.w, 2, color)
   end
-  draw_split_dividers(node.a, view)
-  draw_split_dividers(node.b, view)
+  draw_split_dividers(node.a)
+  draw_split_dividers(node.b)
 end
 
 -- Replace existing content in one region with the window-aligned wallpaper.
@@ -1237,7 +1221,7 @@ function RootPanel:draw()
     core.pop_clip_rect()
   end
   for _, bar in ipairs(self:pane_status_bars()) do call_view(bar, "draw") end
-  if group then draw_split_dividers(group.root, self.content_rect) end
+  if group then draw_split_dividers(group.root) end
   for _, view in ipairs(self:shell_views()) do call_view(view, "draw") end
   end_caret_layer(self)
   local overlay_started, overlay_scope = perf_begin("rootpanel_overlays_draw")

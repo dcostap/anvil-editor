@@ -130,10 +130,7 @@ test.describe("Pane Status Bars", function()
       push_clip_rect = core.push_clip_rect,
       pop_clip_rect = core.pop_clip_rect,
       get_time = system.get_time,
-      column_min_width = config.pane_column_min_width,
     }
-    -- The tests put Panes side by side in a small window.
-    config.pane_column_min_width = 1
     core.status_bar = StatusBar()
     root = RootPanel()
     root.position.x, root.position.y = 0, 0
@@ -164,7 +161,6 @@ test.describe("Pane Status Bars", function()
     core.push_clip_rect = saved.push_clip_rect
     core.pop_clip_rect = saved.pop_clip_rect
     system.get_time = saved.get_time
-    config.pane_column_min_width = saved.column_min_width
     core.root_panel = saved.root_panel
     core.status_bar = saved.status_bar
     core.active_view = saved.active_view

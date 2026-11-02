@@ -222,6 +222,7 @@ end
 function TitleBar:get_pane_entries()
   local result = {}
   local active = panes().active()
+  local visible = panes().visible_group()
   local ordered = panes().navigable()
   local numbers = numbered_panes.local_numbers()
   for i, pane in ipairs(ordered) do
@@ -231,7 +232,7 @@ function TitleBar:get_pane_entries()
       number = numbers[pane.id],
       label = pane_label(numbers[pane.id], pane),
       active = pane == active,
-      visible = panes().is_visible(pane),
+      visible = pane.group == visible,
       x = geometry.x,
       y = geometry.y,
       w = geometry.w,
