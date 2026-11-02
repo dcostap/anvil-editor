@@ -10,7 +10,7 @@ local View = require "core.view"
 local view_icons = require "core.view_icons"
 local TextField = require "core.ui.text_field"
 
--- The Keyboard Map: the physical keyboard, with the command that each key runs on the shown modifier layer.
+-- The Keyboard Map: keyboard keys, with the command that each key runs on the shown modifier layer.
 -- It reads the live keymap, so it shows the bindings of all plugins and of the User Module.
 -- Key names come from the keyboard layout, as for a key press: on a Spanish layout the Ñ key is ";".
 -- With Alt Navigation, an Alt chord such as Alt+J shows the command of the key that it types, Ctrl+Left.
@@ -23,7 +23,8 @@ function KeyboardMap:get_name() return "Keyboard Map" end
 function KeyboardMap:supports_text_input() return true end
 
 ------------------------------------------------------------------------------------------------------------------
--- The physical keyboard: a compact ISO board, in key units. `sc` is the set 1 scan code of a key that types
+-- A compact ISO board with a navigation block, also for keyboards without those keys, in key units.
+-- `sc` is the set 1 scan code of a key that types
 -- text, and `id` is its scancode name, which Anvil uses as the key name when the layout types no ASCII text.
 -- A key with `name` has a fixed key name. A key with `mod` turns its modifier layer on or off.
 
@@ -72,8 +73,7 @@ do
     specs[#specs].gap = 0.25
     return specs
   end
-  add_row(ROW_Y[1], 0, concat({ named("escape", "Esc", 1, { gap = 0.25 }) }, fkeys(1, 4), fkeys(5, 8), fkeys(9, 12),
-    { named("delete", "Del") }))
+  add_row(ROW_Y[1], 0, concat({ named("escape", "Esc", 1, { gap = 0.25 }) }, fkeys(1, 4), fkeys(5, 8), fkeys(9, 12)))
   add_row(ROW_Y[2], 0, concat({ { id = "`", sc = 0x29 } }, text_keys("1234567890-=", 0x02),
     { named("backspace", "Backspace", 2) }))
   add_row(ROW_Y[3], 0, concat({ named("tab", "Tab", 1.5) }, text_keys("qwertyuiop[]", 0x10),
@@ -89,9 +89,11 @@ do
     named("up", "↑", 1, { h = 0.5 }), named("down", "↓", 1, { x = 13, y = ROW_Y[6] + 0.5, h = 0.5 }),
     named("right", "→"),
   })
+  add_row(ROW_Y[2], 15.5, { named("insert", "Ins"), named("home", "Home"), named("pageup", "PgUp") })
+  add_row(ROW_Y[3], 15.5, { named("delete", "Del"), named("end", "End"), named("pagedown", "PgDn") })
 end
 KeyboardMap.layout = LAYOUT
-local BOARD_W, BOARD_H = 15, ROW_Y[6] + 1
+local BOARD_W, BOARD_H = 18.5, ROW_Y[6] + 1
 
 ------------------------------------------------------------------------------------------------------------------
 -- The model

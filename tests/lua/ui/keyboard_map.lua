@@ -107,6 +107,15 @@ test.describe("Keyboard Map", function()
     test.equal(view:current_layer(), 2)
   end)
 
+  test.it("shows a selectable navigation block", function()
+    local view = open()
+    for _, id in ipairs({ "insert", "delete", "home", "end", "pageup", "pagedown" }) do
+      click_key(view, id)
+      test.equal(view.selected, id)
+      test.equal(view:details_spec().name, id)
+    end
+  end)
+
   test.it("filters bindings by command and shows a match on its key and layer", function()
     local view = open()
     type_text("on ctrl f99")

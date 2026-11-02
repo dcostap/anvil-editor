@@ -386,7 +386,7 @@ A dialog that captures received keyboard input and shows key events, modifiers, 
 The operating system can reserve combinations that do not reach the dialog.
 
 **Keyboard Map**:
-A View that draws the physical keyboard with the commands that the live keymap binds to each key on the shown Ctrl, Alt and Shift layer.
+A View that draws keyboard keys with the commands that the live keymap binds to each key on the shown Ctrl, Alt and Shift layer. It includes navigation keys even when the physical keyboard has none.
 Key labels come from the current keyboard layout. With Alt Navigation on, an Alt chord shows the stroke that it types, and the chord's own bindings show as not reached.
 
 **Mouse-Complete Interaction**:
