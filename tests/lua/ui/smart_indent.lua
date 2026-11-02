@@ -210,6 +210,20 @@ test.describe("smart indentation", function()
     test.same(view:get_selection_state().selections, { 3, 6, 3, 6 })
   end)
 
+  test.it("Paste as Plain Text inserts the clipboard text unchanged", function(context)
+    local buffer, view = new_editor(context, "f {\n  s := \"\"\n  \n}", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(2, 9, 2, 9)
+    buffer:add_selection(3, 3, 3, 3)
+    system.set_clipboard("a\n\n  b")
+    core.cursor_clipboard = { full = "different" }
+    core.cursor_clipboard_whole_line = {}
+
+    test.ok(command.perform("core:paste_as_plain_text"))
+
+    test.equal(text(buffer), "f {\n  s := \"a\n\n  b\"\n  a\n\n  b\n}\n")
+  end)
+
   test.it("pasting a block copied from after its indentation keeps the block's shape", function(context)
     local buffer, view = new_editor(context, "f {\n  e {\n    v,\n  }\n\n  \n}", "sample.odin")
     core.set_active_view(view)
