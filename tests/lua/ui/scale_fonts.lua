@@ -251,4 +251,14 @@ test.describe("font scaling", function()
 
     test.near(style.fuzzy_searcher_result_row_padding, row_padding, 0.001)
   end)
+
+  test.it("resizes fonts derived from interface fonts after Zoom", function(context)
+    local ui = require "core.ui"
+    context.interface_scale, context.code_scale = scale.get(), scale.get_code()
+    test.near(ui.bold_font():get_size(), ui.font():get_size(), 0.001)
+
+    scale.increase()
+
+    test.near(ui.bold_font():get_size(), ui.font():get_size(), 0.001)
+  end)
 end)

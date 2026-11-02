@@ -31,8 +31,9 @@ function UpdateDialog:layout_content(x, y, w, max_h)
   local m = ui.metrics()
   local font = ui.font()
   -- Wrap only when the status, font or width changes, not during each draw.
-  if self.wrap_message ~= self.message or self.wrap_w ~= w or self.wrap_font ~= font then
-    self.wrap_message, self.wrap_w, self.wrap_font = self.message, w, font
+  local size = font:get_size()
+  if self.wrap_message ~= self.message or self.wrap_w ~= w or self.wrap_font ~= font or self.wrap_size ~= size then
+    self.wrap_message, self.wrap_w, self.wrap_font, self.wrap_size = self.message, w, font, size
     self.lines = {}
     local line = ""
     for word in self.message:gmatch("%S+") do

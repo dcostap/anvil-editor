@@ -213,17 +213,10 @@ local function fit_text(font, text, width)
   return low > 0 and text:usub(1, low) .. ellipsis or ""
 end
 
-local fonts = setmetatable({}, { __mode = "k" })
-
 -- The prose font, a little smaller, as footnote cards use it.
 local function outline_font()
   local base = style.markdown_body_font
-  local font = fonts[base]
-  if not font then
-    font = base:copy(base:get_size() * FONT_SCALE)
-    fonts[base] = font
-  end
-  return font
+  return style.get_scaled_font(base, base:get_size() * FONT_SCALE)
 end
 
 local function state_for(view)

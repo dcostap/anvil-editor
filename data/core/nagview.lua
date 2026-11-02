@@ -89,11 +89,9 @@ local function metrics()
 end
 
 -- The card uses the Sidebar's and Title Bar's proportional font. Styled message parts can set their own font.
-local bold_fonts = setmetatable({}, {__mode = "k"})
 local function title_font()
   local font = style.view_text_font
-  bold_fonts[font] = bold_fonts[font] or font:copy(font:get_size(), {bold = true})
-  return bold_fonts[font]
+  return style.get_scaled_font(font, font:get_size(), "bold")
 end
 
 local function fade(color, alpha)

@@ -12,18 +12,21 @@ local details = {}
 local derived = setmetatable({}, { __mode = "k" })
 
 -- Fonts derived from the pane's font: a bold title, a bold name and small secondary text.
+-- Zoom changes the base fonts' sizes in place, so the set is made again when a size changes.
 local function fonts(view)
-  local base = view:get_font()
+  local base, code = view:get_font(), style.code_font
+  local size, code_size = base:get_size(), code:get_size()
   local set = derived[base]
-  if not set or set.code_base ~= style.code_font then
-    local size = base:get_size()
+  if not set or set.code_base ~= code or set.size ~= size or set.code_size ~= code_size then
     set = {
       base = base,
-      title = base:copy(math.floor(size * 1.35 + 0.5), { bold = true }),
-      bold = base:copy(size, { bold = true }),
-      small = base:copy(math.max(1, math.floor(size * 0.88 + 0.5))),
-      code_base = style.code_font,
-      code = style.code_font:copy(math.max(1, math.floor(style.code_font:get_size() * 0.9 + 0.5))),
+      size = size,
+      title = style.get_scaled_font(base, math.floor(size * 1.35 + 0.5), "bold"),
+      bold = style.get_scaled_font(base, size, "bold"),
+      small = style.get_scaled_font(base, math.max(1, math.floor(size * 0.88 + 0.5))),
+      code_base = code,
+      code_size = code_size,
+      code = style.get_scaled_font(code, math.max(1, math.floor(code_size * 0.9 + 0.5))),
     }
     derived[base] = set
   end
@@ -68,11 +71,13 @@ end
 -- A role's layout depends on the pane width and font. Keep it on the line's metadata until either changes.
 local function cached_layout(meta, key_font, width, build)
   local cached = meta.layout
-  if cached and cached.width == width and cached.font == key_font and cached.theme == core.color_theme_generation then
+  local size = key_font:get_size()
+  if cached and cached.width == width and cached.font == key_font and cached.size == size
+    and cached.theme == core.color_theme_generation then
     return cached
   end
   cached = build()
-  cached.width, cached.font, cached.theme = width, key_font, core.color_theme_generation
+  cached.width, cached.font, cached.size, cached.theme = width, key_font, size, core.color_theme_generation
   meta.layout = cached
   return cached
 end

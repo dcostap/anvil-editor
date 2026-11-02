@@ -85,21 +85,35 @@ style.prose_strong_emphasis_font = renderer.font.load(DATADIR .. "/fonts/Inter-S
 style.prose_heading_font = renderer.font.load(DATADIR .. "/fonts/Merriweather_24pt-SemiBold.ttf", 14 * SCALE)
 style.prose_heading_emphasis_font = renderer.font.load(DATADIR .. "/fonts/Merriweather_24pt-SemiBoldItalic.ttf", 14 * SCALE)
 
+-- Copies by variant, source font and size. Zoom changes a font's size in place, so a copy cached
+-- by its source font alone keeps the old size.
 local scaled_font_cache = {}
+local VARIANT_OPTIONS = { bold = { bold = true }, italic = { italic = true } }
 
----Return a cached copy of a font at a specific size.
+---Return a cached copy of a font at a specific size. Derive `size` from `font:get_size()`, so the copy follows Zoom.
 ---@param font renderer.font
 ---@param size number
+---@param variant? "bold"|"italic"
 ---@return renderer.font
-function style.get_scaled_font(font, size)
-  local key = tostring(font) .. ":" .. tostring(size)
-  local cached = scaled_font_cache[key]
+function style.get_scaled_font(font, size, variant)
+  variant = variant or "regular"
+  local by_font = scaled_font_cache[variant]
+  if not by_font then
+    by_font = setmetatable({}, { __mode = "k" })
+    scaled_font_cache[variant] = by_font
+  end
+  local by_size = by_font[font]
+  if not by_size then
+    by_size = {}
+    by_font[font] = by_size
+  end
+  local cached = by_size[size]
   if cached then return cached end
   local ok, scaled = pcall(function()
-    return font:copy(size)
+    return font:copy(size, VARIANT_OPTIONS[variant])
   end)
   scaled = ok and scaled or font
-  scaled_font_cache[key] = scaled
+  by_size[size] = scaled
   return scaled
 end
 

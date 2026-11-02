@@ -19,12 +19,9 @@ function ui.font()
   return style.view_text_font
 end
 
-local bold_fonts = setmetatable({}, { __mode = "k" })
-
 function ui.bold_font()
   local font = style.view_text_font
-  bold_fonts[font] = bold_fonts[font] or font:copy(font:get_size(), { bold = true })
-  return bold_fonts[font]
+  return style.get_scaled_font(font, font:get_size(), "bold")
 end
 
 function ui.icon_font()

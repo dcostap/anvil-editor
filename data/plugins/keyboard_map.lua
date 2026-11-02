@@ -406,11 +406,9 @@ end
 ------------------------------------------------------------------------------------------------------------------
 -- Geometry
 
-local small_fonts = setmetatable({}, { __mode = "k" })
 local function small_font()
   local font = ui.font()
-  small_fonts[font] = small_fonts[font] or font:copy(math.max(1, math.floor(font:get_size() * 0.8 + 0.5)))
-  return small_fonts[font]
+  return style.get_scaled_font(font, math.max(1, math.floor(font:get_size() * 0.8 + 0.5)))
 end
 
 function KeyboardMap:layout_geometry()
@@ -577,8 +575,9 @@ end
 
 -- The command label of a key, cut into lines that fit its width.
 local function key_lines(key, font, width, max_lines)
-  if key.lines_width == width and key.lines_max == max_lines then return key.lines end
-  key.lines_width, key.lines_max, key.lines = width, max_lines, {}
+  local size = font:get_size()
+  if key.lines_width == width and key.lines_max == max_lines and key.lines_size == size then return key.lines end
+  key.lines_width, key.lines_max, key.lines_size, key.lines = width, max_lines, size, {}
   if not key.main then return key.lines end
   local _, words = KeyboardMap.command_parts(key.main)
   local line = ""

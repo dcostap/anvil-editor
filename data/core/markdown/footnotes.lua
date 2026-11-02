@@ -84,27 +84,15 @@ local FORMATTING_NODES = {
   strikethrough = true, highlight = true, code = true,
 }
 local LINK_NODES = { link = true, image = true, wiki_link = true, embed = true }
-local styled_fonts = setmetatable({}, { __mode = "k" })
-
 -- An inline style's font at the note font's size.
 local function styled_font(base, span_type)
   local source = style[SPAN_FONTS[span_type]]
-  local fonts = styled_fonts[base]
-  if not fonts then
-    fonts = setmetatable({}, { __mode = "k" })
-    styled_fonts[base] = fonts
+  local size = base:get_size()
+  -- Code keeps the size it has beside prose in the document.
+  if span_type == "code" then
+    size = size * source:get_size() / style.markdown_body_font:get_size()
   end
-  local font = fonts[source]
-  if not font then
-    local size = base:get_size()
-    -- Code keeps the size it has beside prose in the document.
-    if span_type == "code" then
-      size = size * source:get_size() / style.markdown_body_font:get_size()
-    end
-    font = source:copy(size)
-    fonts[source] = font
-  end
-  return font
+  return style.get_scaled_font(source, size)
 end
 
 local function reveal_col(view)
@@ -269,16 +257,9 @@ function NoteInput:draw_content_left_edge() end
 function NoteInput:draw_soft_wrap_continuation_indicators() end
 
 -- Notes read a step smaller than the prose they annotate.
-local note_fonts = setmetatable({}, { __mode = "k" })
-
 function NoteInput:get_font()
   local base = style.markdown_body_font
-  local font = note_fonts[base]
-  if not font then
-    font = base:copy(base:get_size() * NOTE_FONT_SCALE)
-    note_fonts[base] = font
-  end
-  return font
+  return style.get_scaled_font(base, base:get_size() * NOTE_FONT_SCALE)
 end
 
 -- Cards show and edit a note in the same wrapped shape.

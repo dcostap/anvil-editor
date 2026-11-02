@@ -400,14 +400,15 @@ function GitView:pane_view(name)
       view.get_h_content_size = function(v)
         local font = v:get_font()
         local cache = v.git_tree_width
-        if not (cache and cache.revision == v.buffer.text_revision and cache.font == font) then
+        if not (cache and cache.revision == v.buffer.text_revision and cache.font == font
+          and cache.size == font:get_size()) then
           local width = 0
           for line = (v.path_tree_line_offset or 0) + 1, #v.buffer.lines do
             if not (v.git_detail_line_meta and v.git_detail_line_meta[line]) then
               width = math.max(width, v:get_col_x_offset(line, #v.buffer.lines[line]))
             end
           end
-          cache = { revision = v.buffer.text_revision, font = font, width = width }
+          cache = { revision = v.buffer.text_revision, font = font, size = font:get_size(), width = width }
           v.git_tree_width = cache
         end
         local _, _, scrollbar_w = v.v_scrollbar:get_track_rect()

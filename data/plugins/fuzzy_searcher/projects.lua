@@ -74,10 +74,8 @@ function projects.details(project, now)
   return hint, look.note(project, projects.own_window(), now)
 end
 
-local bold_fonts = setmetatable({}, {__mode = "k"})
 function projects.bold(font)
-  if not bold_fonts[font] then bold_fonts[font] = font:copy(font:get_size(), {bold = true}) end
-  return bold_fonts[font]
+  return style.get_scaled_font(font, font:get_size(), "bold")
 end
 
 -- A chip: the Project's badge and bold name in `font`, at most `max_width` wide. The query's chip uses the normal
