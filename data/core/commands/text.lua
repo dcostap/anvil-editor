@@ -1053,6 +1053,27 @@ local function group_block_indent(buffer, line1, line2)
   end
 end
 
+-- Changes the indentation width of lines `line1`..`line2` by `delta` in one
+-- edit. Returns true when a line changed.
+local function shift_line_range(buffer, line1, line2, delta)
+  if delta == 0 then return false end
+  local edits = {}
+  for line = line1, line2 do
+    local text = buffer.lines[line]
+    local lead = leading_whitespace(text)
+    local new_lead = leading_whitespace(shift_lines_by(buffer, { text }, delta)[1])
+    if new_lead ~= lead then
+      edits[#edits + 1] = { line1 = line, col1 = 1, line2 = line, col2 = #lead + 1, text = new_lead, idx = 0 }
+    end
+  end
+  if #edits == 0 then return false end
+  local selections, last_selection = buffer:selections_after_edits(edits, nil, buffer.last_selection)
+  buffer:apply_edits(edits, {
+    type = "insert", selections = selections, last_selection = last_selection, merge_cursors = false,
+  })
+  return true
+end
+
 -- After Move Lines, shifts each group of lines by the change of its block
 -- indentation, so lines that enter or leave a block take its indentation and
 -- hanging indentation keeps its offset. `groups` lists `{ line1, line2,
@@ -1064,26 +1085,32 @@ local function reindent_moved_lines(buffer, groups)
     local after = group.before and group_block_indent(buffer, group.line1, group.line2)
     local delta = after
       and indent_visual_width(after, indent_size) - indent_visual_width(group.before, indent_size)
-    if delta and delta ~= 0 then
-      local edits = {}
-      for line = group.line1, group.line2 do
-        local text = buffer.lines[line]
-        local lead = leading_whitespace(text)
-        local new_lead = leading_whitespace(shift_lines_by(buffer, { text }, delta)[1])
-        if new_lead ~= lead then
-          edits[#edits + 1] = { line1 = line, col1 = 1, line2 = line, col2 = #lead + 1, text = new_lead, idx = 0 }
-        end
-      end
-      if #edits > 0 then
-        local selections, last_selection = buffer:selections_after_edits(edits, nil, buffer.last_selection)
-        buffer:apply_edits(edits, {
-          type = "insert", selections = selections, last_selection = last_selection, merge_cursors = false,
-        })
-        core.log_quiet("Move Lines shifted lines %d-%d by %d columns in %s",
-          group.line1, group.line2, delta, buffer:get_name())
+    if delta and shift_line_range(buffer, group.line1, group.line2, delta) then
+      core.log_quiet("Move Lines shifted lines %d-%d by %d columns in %s",
+        group.line1, group.line2, delta, buffer:get_name())
+    end
+  end
+end
+
+-- Moves the lines of each selection to where a paste of them would go: the
+-- first line with text takes the indentation of its place, and the other
+-- lines keep their shape.
+local function auto_indent_lines(buffer, ranges)
+  local _, indent_size = buffer:get_indent_info()
+  local shifted = 0
+  for _, range in ipairs(ranges) do
+    for line = range.line1, range.line2 do
+      local text = buffer.lines[line]
+      if text:find("%S") then
+        local target = insertion_indent(buffer, line, text)
+        local delta = target
+          and indent_visual_width(target, indent_size) - indent_visual_width(leading_whitespace(text), indent_size)
+        if delta and shift_line_range(buffer, range.line1, range.line2, delta) then shifted = shifted + 1 end
+        break
       end
     end
   end
+  core.log_quiet("Auto-Indent Lines shifted %d of %d range(s) in %s", shifted, #ranges, buffer:get_name())
 end
 
 local function split_lines(text)
@@ -2622,6 +2649,27 @@ local commands = {
       removed_before = removed_before + block.line2 - block.line1 + 1
     end
     dv.buffer:apply_edits(edits, { type = "remove", selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = true })
+  end),
+
+  ["editor:auto_indent_lines"] = command.palette(function(dv)
+    if not can_edit(dv, "indent") then return end
+    local ranges = {}
+    for _, line1, _, line2 in buffer_multiline_selections(true) do
+      ranges[#ranges + 1] = { line1 = line1, line2 = line2 }
+    end
+    table.sort(ranges, function(a, b) return a.line1 < b.line1 end)
+    local merged = {}
+    for _, range in ipairs(ranges) do
+      local previous = merged[#merged]
+      if previous and range.line1 <= previous.line2 then
+        previous.line2 = math.max(previous.line2, range.line2)
+      else
+        merged[#merged + 1] = range
+      end
+    end
+    local undo_idx = dv.buffer.undo_stack.idx
+    auto_indent_lines(dv.buffer, merged)
+    dv.buffer:join_undo_since(undo_idx)
   end),
 
   ["editor:move_lines_up"] = command.palette(function(dv)

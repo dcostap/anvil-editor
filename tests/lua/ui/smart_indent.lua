@@ -749,6 +749,17 @@ test.describe("smart indentation", function()
     test.equal(text(buffer), "if a {\n  x()\n}\n")
   end)
 
+  test.it("Auto-Indent Lines moves selected lines to their block and keeps their shape", function(context)
+    local buffer, view = new_editor(context, "f {\n      if x {\n          y()\n      }\nz()\n}", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(2, 1, 4, 8)
+    buffer:add_selection(5, 1, 5, 1)
+
+    test.ok(command.perform("editor:auto_indent_lines"))
+
+    test.equal(text(buffer), "f {\n  if x {\n      y()\n  }\n  z()\n}\n")
+  end)
+
   test.it("continues Markdown list items ending in a colon", function(context)
     local buffer, view = new_editor(context, "- item:", "sample.md")
     core.set_active_view(view)
