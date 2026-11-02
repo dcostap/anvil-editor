@@ -20,7 +20,7 @@ class ScenarioSafetyTests(unittest.TestCase):
     def test_over_budget_run_keeps_timers_without_starting_allocation_runs(self):
         args = SimpleNamespace(project=Path("project"), fixture_cache=Path("cache"),
                                runs=1, renderer="software", attribute=False,
-                               allocation=False, heap=False, diagnose=False)
+                               allocation=False, heap=False, diagnose=False, slow_io=0.0)
         run = {"metrics": {"work_ms_p95": 100, "work_ms_max": 200, "frames": 10},
                "run_dir": "run", "actions": {}}
         with patch.object(scenarios, "scenario_root", return_value=args.project), \

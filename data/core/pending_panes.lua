@@ -7,15 +7,33 @@ local storage = require "core.storage"
 local pending = {COUNT = recent.COUNT, key = recent.key, request = recent.request}
 
 -- Sidebar surfaces supply their shared live tables. Projects read the same persisted seen times and Snoozes.
+-- The Sidebar process writes them. Only the first read is on the UI thread. A worker rereads them,
+-- because a slow disk must not stop the UI.
 local cache = {}
+local function store(entry, value)
+  entry.value = type(value) == "table" and value or {}
+end
+
+local function reread(key, entry)
+  local function done() entry.job = nil end
+  entry.job = require("core.worker_pool").system():submit {
+    kind = "storage_load", priority = "background",
+    payload = {userdir = USERDIR, module = "sidebar", key = key},
+    on_result = function(message) store(entry, message.payload.value) end,
+    on_complete = done, on_error = done, on_cancelled = done,
+  }
+end
+
 local function saved(key)
   local now, entry = system.get_time(), cache[key]
-  if not entry or now - entry.read_at >= 0.25 then
-    entry = entry or {value = {}}
-    entry.read_at = now
+  if not entry then
+    entry = {value = {}, read_at = now}
     local ok, value = pcall(storage.load, "sidebar", key)
-    if ok then entry.value = type(value) == "table" and value or {} end
+    if ok then store(entry, value) end
     cache[key] = entry
+  elseif now - entry.read_at >= 0.25 and not entry.job then
+    entry.read_at = now
+    reread(key, entry)
   end
   return entry.value
 end

@@ -32,9 +32,6 @@ test.describe("Middle-click autoscroll", function()
     } do saved[key] = core[key] end
     saved.get_time = system.get_time
     saved.diff_layout = config.plugins.diffview.layout
-    saved.column_min_width = config.pane_column_min_width
-    -- The tests put Panes side by side in a small window.
-    config.pane_column_min_width = 1
     now = saved.get_time()
     system.get_time = function() return now end
     core.title_bar, core.nag_view, core.global_prompt_bar, core.status_bar = nil, nil, nil, nil
@@ -46,7 +43,6 @@ test.describe("Middle-click autoscroll", function()
   test.after_each(function()
     if saved.diff_view and not saved.diff_view.disposed then saved.diff_view:on_close() end
     config.plugins.diffview.layout = saved.diff_layout
-    config.pane_column_min_width = saved.column_min_width
     panes.reset_for_tests()
     system.get_time = saved.get_time
     for _, key in ipairs {

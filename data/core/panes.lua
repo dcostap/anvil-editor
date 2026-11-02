@@ -248,10 +248,8 @@ function M.contains(pane)
   return type(pane) == "table" and pane.id and M.panes_by_id[pane.id] == pane
 end
 
----Whether the Pane shows: it is in the visible Pane Group and in a shown Pane Column.
 function M.is_visible(pane)
   return M.contains(pane) and pane.group == M.visible_group_value
-    and layout.is_shown(pane.group.root, pane)
 end
 
 function M.owner_for_view(view)
@@ -441,7 +439,7 @@ function M.rotate_group_clockwise(target)
     rotated[index] = source_for_slot[slot_pane]
   end
   layout.reorder(group.root, rotated)
-  layout.refresh(group.root)
+  if group.root.rect then layout.update_rects(group.root, group.root.rect) end
   M.visible_group_value = group
   after_mutation("rotated Pane Group clockwise " .. group.id)
   return true
@@ -549,8 +547,10 @@ function M.swap(source_target, destination_target)
     source.group = destination_group
     destination.group = source_group
   end
-  layout.refresh(source_group.root)
-  if destination_group ~= source_group then layout.refresh(destination_group.root) end
+  if source_group.root.rect then layout.update_rects(source_group.root, source_group.root.rect) end
+  if destination_group ~= source_group and destination_group.root.rect then
+    layout.update_rects(destination_group.root, destination_group.root.rect)
+  end
 
   M.active_pane = source
   M.visible_group_value = source.group

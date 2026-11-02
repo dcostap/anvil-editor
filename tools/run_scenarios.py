@@ -29,6 +29,7 @@ import time
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fake_everything  # noqa: E402
 import perf_diagnostics  # noqa: E402
 import perf_fixtures  # noqa: E402
 from perf_fixtures import CompletionSpec, FolderSpec, MarkdownSpec, NoteSpec, ProjectSetSpec, RepoSpec, VaultSpec  # noqa: E402
@@ -88,6 +89,9 @@ class Scenario:
     churn_interval: float = 0.0
     # Number of clean tracked files passed to the scene as `settings.targets`.
     targets: int = 0
+    # Raw file calls that the UI thread may make in the measured frames. A busy disk or a
+    # virus scan can make each one take seconds. None only reports them.
+    blocking_call_budget: int | None = None
     timeout_seconds: int = 240
     window: tuple[int, int] = (1400, 900)
 
@@ -285,22 +289,38 @@ SCENARIOS: dict[str, Scenario] = {
         action_budgets={"first-query": 3000.0}),
     # The picker covers another View, and its preview follows the selection. The View
     # behind it stays visible, so each picker frame also draws that View.
+    # A selection reads its preview on workers, so a busy disk cannot stop the UI.
     "fuzzy-symbols-navigate-filetree-large": Scenario(
         "fuzzy_picker", REPO_MEDIUM, actions=48, suites=("smoke",), window=WINDOW_LARGE,
-        settings={"mode": "symbols", "query": "render", "behind": "filetree", "action": "navigate"}),
+        settings={"mode": "symbols", "query": "render", "behind": "filetree", "action": "navigate"},
+        blocking_call_budget=0),
     "fuzzy-symbols-navigate-editor": Scenario(
         "fuzzy_picker", REPO_MEDIUM, actions=48, suites=("smoke",), targets=1,
-        settings={"mode": "symbols", "query": "render", "behind": "editor", "action": "navigate"}),
+        settings={"mode": "symbols", "query": "render", "behind": "editor", "action": "navigate"},
+        blocking_call_budget=0),
     "fuzzy-symbols-type-filetree-large": Scenario(
         "fuzzy_picker", REPO_MEDIUM, actions=36, suites=("smoke",), window=WINDOW_LARGE,
         settings={"mode": "symbols", "query": "render_4", "behind": "filetree", "action": "type"},
         action_budget_ms=150.0),
     "fuzzy-files-navigate-filetree-large": Scenario(
         "fuzzy_picker", REPO_MEDIUM, actions=48, suites=("smoke",), window=WINDOW_LARGE,
-        settings={"mode": "files", "query": "render", "behind": "filetree", "action": "navigate"}),
+        settings={"mode": "files", "query": "render", "behind": "filetree", "action": "navigate"},
+        blocking_call_budget=0),
     "fuzzy-text-navigate-editor-large": Scenario(
         "fuzzy_picker", REPO_MEDIUM, actions=48, suites=("smoke",), targets=1, window=WINDOW_LARGE,
-        settings={"mode": "text", "query": "render", "behind": "editor", "action": "navigate"}),
+        settings={"mode": "text", "query": "render", "behind": "editor", "action": "navigate"},
+        blocking_call_budget=0),
+    # Path Search draws `kind:path` rows from Everything, which searches the whole PC.
+    "fuzzy-paths-navigate-filetree-large": Scenario(
+        "fuzzy_picker", REPO_MEDIUM, actions=48, suites=("smoke",), window=WINDOW_LARGE,
+        settings={"mode": "paths", "query": "render", "behind": "filetree", "action": "navigate",
+                  "everything": True},
+        blocking_call_budget=0),
+    "fuzzy-paths-type-filetree-large": Scenario(
+        "fuzzy_picker", REPO_MEDIUM, actions=36, suites=("smoke",), window=WINDOW_LARGE,
+        settings={"mode": "paths", "query": "render_0", "behind": "filetree", "action": "type",
+                  "everything": True},
+        action_budget_ms=150.0),
     # Each character starts a ripgrep search over the Project.
     "fuzzy-text-type-editor": Scenario(
         "fuzzy_picker", REPO_MEDIUM, actions=36, suites=("smoke",), targets=1,
@@ -371,7 +391,7 @@ def launch_options(scenario: Scenario, project: Path, run_dir: Path) -> dict[str
 
 
 def run_one(name: str, scenario: Scenario, *, exe: Path, work: Path, root: Path, run_dir: Path,
-            renderer: str, mode: str, details: bool,
+            renderer: str, mode: str, details: bool, slow_io_ms: float = 0.0,
             extra_environment: dict[str, str] | None = None) -> dict[str, Any]:
     user = run_dir.with_name(run_dir.name + "-user")
     shutil.rmtree(user, ignore_errors=True)
@@ -381,6 +401,11 @@ def run_one(name: str, scenario: Scenario, *, exe: Path, work: Path, root: Path,
     environment = dict(options.pop("extra_environment", {}))
     environment["GIT_CEILING_DIRECTORIES"] = os.pathsep.join(
         gate.native_path(path) for path in (work.parent, root.parent))
+    calls_file = run_dir / "blocking-calls.csv"
+    if not scenario.self_driven:
+        environment["ANVIL_PERF_BENCHMARK_BLOCKING_CALLS"] = gate.native_path(calls_file)
+        if slow_io_ms:
+            environment["ANVIL_PERF_BENCHMARK_SLOW_IO_MS"] = str(slow_io_ms)
     if details:
         environment["ANVIL_DOCVIEW_STATS"] = "1"
         environment["ANVIL_PERF_BENCHMARK_DETAILS"] = gate.native_path(run_dir / "details.csv")
@@ -392,14 +417,23 @@ def run_one(name: str, scenario: Scenario, *, exe: Path, work: Path, root: Path,
                     targets=scenario_targets(scenario))
     churn = (perf_fixtures.Churn(scenario.fixture, root, scenario.churn_interval)
              if scenario.churn_interval else contextlib.nullcontext())
-    with churn:
-        return gate.run_case(
+    # Path Search asks Everything. A fake one answers from the fixture.
+    everything = (fake_everything.FakeEverything(root) if scenario.settings.get("everything")
+                  else contextlib.nullcontext())
+    with churn, everything as server:
+        if server:
+            environment.update(server.environment())
+        run = gate.run_case(
             exe=exe, work=work, user=user, fixture=projects[0], tab_dir=work,
             scenario=name, settings=settings, mode=mode, run_dir=run_dir, renderer=renderer,
             frames=100000, warmup_frames=30, screenshot=False,
             total_timeout_seconds=scenario.timeout_seconds, startup_timeout_seconds=90,
             heartbeat_timeout_seconds=60, action_timeout_seconds=60,
             extra_environment=environment, **options)
+    calls = perf_diagnostics.read_blocking_calls(calls_file)
+    if calls is not None:
+        run["blocking_calls"] = calls
+    return run
 
 
 def read_details(path: Path, limit: int = 15) -> list[dict[str, Any]]:
@@ -464,16 +498,51 @@ def score(scenario: Scenario, runs: list[dict[str, Any]]) -> dict[str, Any]:
         if values["latency_ms_p95"] > budget:
             findings.append({"metric": f"{action} latency p95", "value": values["latency_ms_p95"],
                              "budget": budget})
+        samples = [run["actions"][action]["blocking_calls_max"] for run in runs
+                   if "blocking_calls_max" in run.get("actions", {}).get(action, {})]
+        if samples:
+            values["blocking_calls_max"] = median(samples)
+    blocking = blocking_calls(scenario, runs)
+    if blocking and scenario.blocking_call_budget is not None \
+            and blocking["total"] > scenario.blocking_call_budget:
+        findings.append({"metric": "UI-thread blocking calls", "value": blocking["total"],
+                         "budget": scenario.blocking_call_budget, "unit": "calls"})
     for finding in findings:
-        finding["ratio"] = finding["value"] / finding["budget"]
+        finding["ratio"] = finding["value"] / finding["budget"] if finding["budget"] else float("inf")
         finding.setdefault("unit", "ms")
-    return {"frame": frame, "actions": actions, "findings": findings,
+    return {"frame": frame, "actions": actions, "findings": findings, "blocking_calls": blocking,
             "state": runs[-1].get("state", {})}
 
 
+def blocking_calls(scenario: Scenario, runs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Score the median run's count. Report the call sites of every run, so a rare call shows."""
+    recorded = [run["blocking_calls"] for run in runs if run.get("blocking_calls") is not None]
+    if not recorded:
+        return None
+    sites: dict[tuple[str, str], dict[str, Any]] = {}
+    for calls in recorded:
+        for caller in calls["callers"]:
+            site = sites.setdefault((caller["name"], caller["stack"]),
+                                    dict(caller, calls=0, runs=0))
+            site["calls"] += caller["calls"]
+            site["runs"] += 1
+    callers = sorted(sites.values(), key=lambda site: (-site["calls"], site["stack"], site["name"]))
+    return {"total": statistics.median(calls["total"] for calls in recorded),
+            "budget": scenario.blocking_call_budget, "callers": callers}
+
+
+def finding_text(finding: dict[str, Any]) -> str:
+    unit = finding["unit"]
+    ratio = f" ({finding['ratio']:.1f}x)" if finding["budget"] else ""
+    return (f"{finding['metric']} {finding['value']:.2f} {unit} "
+            f"> {finding['budget']:.2f} {unit}{ratio}")
+
+
 def markdown(report: dict[str, Any]) -> str:
+    slow_io = (f" Each UI-thread file call waited {report['slow_io_ms']:g} ms first."
+               if report.get("slow_io_ms") else "")
     lines = [f"# Scenario report {report['run_id']}", "",
-             f"Renderer: {report['renderer']}. Runs per scenario: {report['runs']}.", ""]
+             f"Renderer: {report['renderer']}. Runs per scenario: {report['runs']}.{slow_io}", ""]
     for name, case in report["scenarios"].items():
         lines.append(f"## {name}: {case['verdict']}")
         lines.append("")
@@ -505,10 +574,20 @@ def markdown(report: dict[str, Any]) -> str:
             lines += ["Publication waits for the semantic publication and its redraw. "
                       "Visible stops at the first redraw of the edited line. "
                       "Neither includes display scanout or OS input delivery.", ""]
+        blocking = case.get("blocking_calls")
+        if blocking:
+            budget = "report only" if blocking["budget"] is None else f"budget {blocking['budget']}"
+            lines.append(f"UI-thread blocking calls in the measured frames: {blocking['total']:g} "
+                         f"in the median run ({budget}).")
+            if blocking["callers"]:
+                lines += ["", "| Call | calls in all runs | runs | caller < its callers |",
+                          "| --- | ---: | ---: | --- |"]
+                for caller in blocking["callers"][:15]:
+                    lines.append(f"| {caller['name']} | {caller['calls']} | {caller['runs']} "
+                                 f"| {caller['stack']} |")
+            lines.append("")
         for finding in case["findings"]:
-            unit = finding["unit"]
-            lines.append(f"- Over budget: {finding['metric']} {finding['value']:.2f} {unit} "
-                         f"> {finding['budget']:.2f} {unit} ({finding['ratio']:.1f}x)")
+            lines.append(f"- Over budget: {finding_text(finding)}")
         if case.get("attribution"):
             lines += ["", "Detail timers in the attribution run (nested timers overlap):", "",
                       "| Timer | ms/frame | max ms | calls/frame |", "| --- | ---: | ---: | ---: |"]
@@ -543,7 +622,7 @@ def run_scenario(name: str, scenario: Scenario, args, exe: Path, work: Path, log
             root = scenario_root(scenario, args.project, args.fixture_cache, log)
         run = run_one(name, scenario, exe=exe, work=work, root=root,
                       run_dir=work / name / f"run-{index + 1}", renderer=args.renderer,
-                      mode=mode, details=False)
+                      mode=mode, details=False, slow_io_ms=args.slow_io)
         if "metrics" in run:
             log(f"  run {index + 1}: work p95 {run['metrics']['work_ms_p95']:.2f} ms, "
                 f"{int(run['metrics']['frames'])} frames")
@@ -553,6 +632,8 @@ def run_scenario(name: str, scenario: Scenario, args, exe: Path, work: Path, log
                        f"p95 {values['visible_ms_p95']:.1f} ms") if "visible_ms_p50" in values else ""
             log(f"  run {index + 1}: {action} {completion} p50 {values['latency_ms_p50']:.1f} ms, "
                 f"p95 {values['latency_ms_p95']:.1f} ms{visible}")
+        if run.get("blocking_calls") is not None:
+            log(f"  run {index + 1}: {run['blocking_calls']['total']} UI-thread blocking calls")
         runs.append(run)
     case.update(score(scenario, runs))
     case["verdict"] = "over budget" if case["findings"] else "passed"
@@ -593,6 +674,8 @@ def main() -> int:
                         help="add a run that writes a Heap Census after the measured frames")
     parser.add_argument("--allocation", action="store_true",
                         help="disabled: the stopped-GC profiler exhausts system memory")
+    parser.add_argument("--slow-io", type=float, default=0.0, metavar="MS",
+                        help="make each UI-thread file call wait MS milliseconds, as on a busy disk")
     parser.add_argument("--project", type=Path,
                         help="run read-only scenarios on this directory instead of a fixture")
     parser.add_argument("--fixture-cache", type=Path, default=perf_fixtures.default_cache_root())
@@ -618,7 +701,7 @@ def main() -> int:
         print(message, flush=True)
         log_file.write(message + "\n")
 
-    report = {"run_id": run_id, "renderer": args.renderer, "runs": args.runs,
+    report = {"run_id": run_id, "renderer": args.renderer, "runs": args.runs, "slow_io_ms": args.slow_io,
               "repository": gate.repository_info(), "scenarios": {}}
     for name in names:
         log(f"{name}:")
@@ -629,8 +712,9 @@ def main() -> int:
                     "details": getattr(exc, "details", None)}
         log(f"  {case['verdict']}")
         for finding in case.get("findings", []):
-            unit = finding["unit"]
-            log(f"    {finding['metric']}: {finding['value']:.2f} {unit} > {finding['budget']:.2f} {unit}")
+            log(f"    {finding_text(finding)}")
+        for caller in (case.get("blocking_calls") or {}).get("callers", [])[:5]:
+            log(f"    {caller['calls']} x {caller['name']} at {caller['stack']}")
         for timer in case.get("attribution", [])[:6]:
             log(f"    {timer['key']}: {timer['ms_per_frame']:.2f} ms/frame")
         if case.get("heap"):

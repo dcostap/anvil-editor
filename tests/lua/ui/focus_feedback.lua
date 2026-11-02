@@ -1,5 +1,4 @@
 local test = require "core.test"
-local config = require "core.config"
 local style = require "core.style"
 
 -- Seam: focus transitions and the feedback renderer's public bounds and lifetime.
@@ -74,9 +73,7 @@ test.describe("Focus feedback surfaces", function()
     saved = {root=core.root_panel,view=core.active_view,window=core.active_window,
       nag=core.nag_view,last=core.last_active_view,next=core.next_active_view,
       time=system.get_time,focus=system.window_has_focus,request=system.pane_request,
-      draw=renderer.draw_rect,color=style.focus_feedback,columns=config.pane_column_min_width}
-    -- The tests put Panes side by side in a small window.
-    config.pane_column_min_width = 1
+      draw=renderer.draw_rect,color=style.focus_feedback}
     clock, focused, rectangles = 100, true, {}
     system.get_time = function() return clock end
     system.window_has_focus = function() return focused end
@@ -102,7 +99,6 @@ test.describe("Focus feedback surfaces", function()
     system.get_time, system.window_has_focus = saved.time, saved.focus
     system.pane_request = saved.request
     renderer.draw_rect, style.focus_feedback = saved.draw, saved.color
-    config.pane_column_min_width = saved.columns
   end)
   local function draw(fn)
     rectangles = {}

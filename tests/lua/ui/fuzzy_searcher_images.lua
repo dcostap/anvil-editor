@@ -1,10 +1,23 @@
 local core = require "core"
+local common = require "core.common"
 local panes = require "core.panes"
 local ImageView = require "core.imageview"
 local View = require "core.view"
 local config = require "core.config"
 local test = require "core.test"
+local blocking_calls = require "core.blocking_calls"
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
+
+-- The preview reads an image on a worker. Wait until the View shows it.
+local function wait_for_image(picker)
+  local deadline = system.get_time() + 10
+  repeat
+    local preview = picker:update_preview_view()
+    if preview and preview.image then return preview end
+    coroutine.yield(0.01)
+  until system.get_time() > deadline
+  return nil
+end
 
 local function little_endian(value, bytes)
   local encoded = {}
@@ -45,7 +58,9 @@ test.describe("Fuzzy Searcher images", function()
     config.transitions = context.transitions
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
     panes.reset_for_tests()
+    blocking_calls.stop()
     os.remove(context.path)
+    if context.other then os.remove(context.other) end
   end)
 
   for _, split in ipairs({ false, true }) do
@@ -75,10 +90,64 @@ test.describe("Fuzzy Searcher images", function()
     picker.results = { { kind = "file", file = context.path, text = context.path } }
     picker.selected = 1
 
-    local preview = test.not_nil(picker:update_preview_view())
+    local preview = test.not_nil(wait_for_image(picker), "the image preview did not load")
 
     test.ok(preview.width <= preview.size.x, "expected the image width to fit")
     test.ok(preview.height <= preview.size.y, "expected the image height to fit")
+  end)
+
+  test.it("reads a selected image on a worker and shows only the latest selection", function(context)
+    context.other = USERDIR .. PATHSEP .. "fuzzy-image-test-other.bmp"
+    write_blue_bmp(context.path, 30, 20)
+    write_blue_bmp(context.other, 40, 10)
+    fuzzy_searcher.open("")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    picker:layout()
+    picker.results = {
+      { kind = "file", file = context.path, text = context.path },
+      { kind = "file", file = context.other, text = context.other },
+    }
+    picker.selected = 1
+
+    blocking_calls.start()
+    local first = picker:update_preview_view()
+    picker.selected = 2
+    picker:update_preview_view()
+    local calls = {}
+    for _, caller in ipairs(blocking_calls.callers()) do
+      calls[#calls + 1] = caller.name .. " at " .. caller.stack
+    end
+    blocking_calls.stop()
+    -- A busy disk or a virus scan must not stop the UI while the user moves the selection.
+    test.same(calls, {}, "the preview read on the UI thread:\n" .. table.concat(calls, "\n"))
+    test.ok(first == nil or first.image == nil, "the image must not load before its read ends")
+
+    local preview = test.not_nil(wait_for_image(picker), "the image preview did not load")
+    test.equal(common.basename(preview.path), common.basename(context.other))
+    test.same({ preview.image:get_size() }, { 40, 10 })
+    if first then test.is_nil(first.image, "a cancelled read must not show its image") end
+  end)
+
+  test.it("names why a selected image cannot show", function(context)
+    local file = assert(io.open(context.path, "wb"))
+    file:write("not an image")
+    file:close()
+    fuzzy_searcher.open("")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    picker:layout()
+    picker.results = { { kind = "file", file = context.path, text = context.path } }
+    picker.selected = 1
+
+    local deadline = system.get_time() + 10
+    local preview
+    repeat
+      preview = picker:update_preview_view()
+      coroutine.yield(0.01)
+    until (preview and not preview.loading) or system.get_time() > deadline
+
+    test.not_nil(preview)
+    test.is_nil(preview.image)
+    test.not_nil(preview.errmsg, "expected the decode error")
   end)
 
   test.it("zooms and pans the image preview without changing the result or input focus", function(context)
@@ -89,7 +158,7 @@ test.describe("Fuzzy Searcher images", function()
     picker:layout()
     picker.results = { { kind = "file", file = context.path, text = context.path } }
     picker.selected = 1
-    local preview = test.not_nil(picker:update_preview_view())
+    local preview = test.not_nil(wait_for_image(picker), "the image preview did not load")
     local width = preview.width
     local focus = core.active_view
     local x, y = preview.position.x + preview.size.x / 2, preview.position.y + preview.size.y / 2
@@ -114,7 +183,7 @@ test.describe("Fuzzy Searcher images", function()
     picker:layout()
     picker.results = { { kind = "file", file = context.path, text = context.path } }
     picker.selected = 1
-    local preview = test.not_nil(picker:update_preview_view())
+    local preview = test.not_nil(wait_for_image(picker), "the image preview did not load")
     local x, y = preview.position.x + preview.size.x / 2, preview.position.y + preview.size.y / 2
     picker:on_mouse_moved(x, y, 0, 0)
     picker:on_mouse_wheel(3, 0)

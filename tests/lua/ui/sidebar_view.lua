@@ -568,7 +568,9 @@ test.describe("Sidebar Window folding", function()
     end
     local function tabs(view)
       local names = {}
-      for _, row in ipairs(view.rows) do if row.kind == "tab" then names[#names + 1] = row.tab.name end end
+      for _, row in ipairs(view.rows) do
+        if row.kind == "tab" and row.project.id == 11 then names[#names + 1] = row.tab.name end
+      end
       return table.concat(names, ",")
     end
     local actions, action = recorder()
@@ -576,15 +578,16 @@ test.describe("Sidebar Window folding", function()
     local saved = {["project:C:/A"]=false}
     local a = SidebarView(action, saved, nil, true)
     a:set_model(model(9), 7)
-    test.equal(tabs(a), "pwsh,b.lua", "Only the Terminal that needs the user shows")
+    test.equal(tabs(a), "pwsh", "Only the Terminal that needs the user shows")
 
     -- Neither the keyboard nor the arrow area expands it.
     a:on_focus(true)
     a.cursor = row_index(a, function(row) return row.kind == "project" and row.project.id == 11 end)
     a:on_key_pressed("right")
-    a:on_mouse_pressed("left", a.width - 16, row_y(a, "project"))
-    a:on_mouse_released("left", a.width - 16, row_y(a, "project"))
-    test.equal(tabs(a), "pwsh,b.lua")
+    local y = a:row_y(a.cursor) + 2
+    a:on_mouse_pressed("left", a.width - 16, y)
+    a:on_mouse_released("left", a.width - 16, y)
+    test.equal(tabs(a), "pwsh")
     for _, item in ipairs(actions) do test.not_equal(item[1], "collapsed", "A fold was saved") end
 
     -- A search still lists its Tabs.
@@ -594,7 +597,7 @@ test.describe("Sidebar Window folding", function()
 
     -- Back in this Window, the saved fold applies again.
     a:set_model(model(7), 7)
-    test.equal(tabs(a), "a.lua,pwsh,b.lua")
+    test.equal(tabs(a), "a.lua,pwsh")
     test.equal(saved["project:C:/A"], false)
   end)
 
@@ -693,6 +696,31 @@ test.describe("Sidebar age groups", function()
     view:on_focus(true)
     view:on_text_input("scr")
     test.same(paths(view, "main"), {"C:/User/scratch"})
+  end)
+
+  test.it("places other Windows' Projects above the age groups and returns moved Projects to the main list", function()
+    local actions, action = recorder()
+    local scratch = project(1, "C:/User/scratch", DAY, "ready")
+    scratch.scratch, scratch.window_id = true, 9
+    local remote = project(2, "C:/Remote", DAY, "ready")
+    remote.window_id = 9
+    local local_project = project(3, "C:/Local", DAY, "ready")
+    local_project.window_id = 7
+    local model = {scratch, remote, local_project, project(4, "C:/Week", DAY)}
+    local view = SidebarView(action, {["group:week"]=false})
+    view:set_size(400, 1000)
+    view:set_model(model, 7)
+    test.same(paths(view, "main"), {"C:/Local"})
+    test.same(paths(view, "bottom"), {"C:/User/scratch", "C:/Remote", "C:/Week"})
+    local remote_index = row_index(view, function(row) return row.project == remote end)
+    local group_index = row_index(view, function(row) return row.kind == "group" end)
+    test.ok(view:row_y(remote_index) + view.rows[remote_index].h <= view:row_y(group_index))
+    view:on_mouse_pressed("left", 20, view:row_y(remote_index) + 2, 400)
+    test.same(actions[#actions], {"select", 2})
+    remote.window_id = 7
+    view:set_model(model, 7)
+    test.same(paths(view, "main"), {"C:/Remote", "C:/Local"})
+    test.same(paths(view, "bottom"), {"C:/User/scratch", "C:/Week"})
   end)
 
   test.it("aligns the groups to the bottom, below a gap after the main list", function()

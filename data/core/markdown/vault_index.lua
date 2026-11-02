@@ -1294,7 +1294,8 @@ function Index:on_buffer_closed(buffer)
   if not self:untrack_buffer(buffer) then return false end
   if path then
     self:remove_path_entry(path)
-    if file_exists(path) then
+    -- Every named Buffer is tracked. Only check the disk for a file that the index keeps.
+    if (is_markdown(path) or self:is_attachment(path)) and file_exists(path) then
       self:update_path(path, { rebuilding = true, cooperative = true })
     end
   end
@@ -1480,6 +1481,8 @@ end
 
 function vault_index.track_buffer(buffer)
   if not (buffer and buffer.abs_filename) then return false end
+  -- A preview Buffer has no language services. Live Preview tracks it when it renders it.
+  if buffer.disable_language_services then return false end
   -- The index reads the Project's files. A Machine's Project needs the Machine's Index service.
   if fs.machine then return false end
   return vault_index.index_for_path(buffer.abs_filename):track_buffer(buffer)

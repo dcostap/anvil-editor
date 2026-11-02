@@ -130,34 +130,76 @@ function ImageView:set_image(image, label, path, open_animation)
   self:update()
 end
 
+-- Decode the bytes of a file read away from the UI thread, and show them.
+function ImageView:show_bytes(path, bytes, read_err)
+  self.loading = nil
+  local image, load_err
+  if read_err then
+    load_err = read_err
+  else
+    image, load_err = canvas.load_image_data(bytes)
+  end
+  local animation_type = image and image_animation.detect_type(bytes:sub(1, 6))
+  self:set_image(image, nil, path, animation_type and function()
+    return canvas.open_animation_data(bytes, animation_type)
+  end or nil)
+  self.errmsg = load_err
+  local scroll = self.restore_scroll
+  self.restore_scroll = nil
+  if image and scroll then self.image_x, self.image_y = -scroll.x, -scroll.y end
+  core.redraw = true
+  return image ~= nil
+end
+
 -- A Machine's image comes from the Machine. The View shows it when its bytes arrive.
 function ImageView:load_from_machine(path)
   self.path, self.loading = path, true
   fs.read(path, function(err, bytes)
     if self.path ~= path then return end
-    self.loading = nil
-    local image, load_err
-    if err then
-      load_err = err.message or err.code
-    else
-      image, load_err = canvas.load_image_data(bytes)
-    end
-    local animation_type = image and image_animation.detect_type(bytes:sub(1, 6))
-    self:set_image(image, nil, path, animation_type and function()
-      return canvas.open_animation_data(bytes, animation_type)
-    end or nil)
-    self.errmsg = load_err
-    local scroll = self.restore_scroll
-    self.restore_scroll = nil
-    if image and scroll then self.image_x, self.image_y = -scroll.x, -scroll.y end
-    core.log_quiet("Image View on a Machine: %s %s", path, image and "loaded" or tostring(load_err))
-    core.redraw = true
+    local loaded = self:show_bytes(path, bytes, err and (err.message or err.code))
+    core.log_quiet("Image View on a Machine: %s %s", path, loaded and "loaded" or tostring(self.errmsg))
   end)
   return true
 end
 
+---Read the image on a worker, so a slow disk or a virus scan does not stop the UI.
+---The View shows nothing until the bytes arrive.
+function ImageView:load_in_background(path)
+  if fs.on_machine(path) then return self:load_from_machine(path) end
+  self:cancel_load()
+  self.path, self.loading = path, true
+  local function finish(bytes, err)
+    if self.path ~= path or not self.load_job then return end
+    self.load_job = nil
+    local loaded = self:show_bytes(path, bytes, err)
+    core.log_quiet("Image View loaded in background: %s %s", path, loaded and "loaded" or tostring(self.errmsg))
+  end
+  self.load_pool = require("core.worker_pool").named("file_io", { worker_count = 1 })
+  self.load_job = self.load_pool:submit {
+    kind = "file_read", priority = "interactive", payload = { path = path },
+    on_result = function(message) finish(message.payload.bytes, message.payload.error) end,
+    on_error = function(message) finish(nil, tostring(message.error)) end,
+  }
+  if not self.load_job then
+    self.loading = nil
+    return self:load(path)
+  end
+  return true
+end
+
+---Stop a background read. The View keeps what it shows.
+function ImageView:cancel_load()
+  local job = self.load_job
+  self.load_job = nil
+  if job then
+    self.load_pool:cancel(job)
+    self.loading = nil
+  end
+end
+
 function ImageView:load(path)
   if fs.on_machine(path) then return self:load_from_machine(path) end
+  self:cancel_load()
   local image, err = canvas.load_image(path)
   self:set_image(image, nil, path, image and ImageView.file_animation_opener(path))
   self.errmsg = err

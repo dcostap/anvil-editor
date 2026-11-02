@@ -228,11 +228,6 @@ Each Project checks the saved times every 5 seconds (`core.snoozed_panes`). It d
 Due Panes wake into new Pane Groups at the end, at most three side by side, oldest Snooze first. A shown Pane wakes in place.
 Run `ui/snoozed_panes.lua`, `ui/sidebar_view.lua`, `ui/pending_panes.lua` and the `terminal-focus` shell probe after changes.
 
-A Pane Group's top row holds its Pane Columns. `core.pane_layout` gives the shown columns the whole width. It puts the other columns on the same row outside the view, so focus moves and Pane positions work unchanged.
-`config.pane_column_min_width` is in terminal cells, so Zoom changes how many columns fit. The group keeps its first shown column in memory only, and the focused Pane always shows.
-`panes.is_visible` is true only for Panes in shown columns. A divider between two columns moves width between those two only.
-Run `runtime/pane_layout.lua` and `ui/rootpanel_panes.lua` after changes.
-
 Tabs show shared Pane numbers, not Tab positions. `core.numbered_panes` selects `core.pending_panes`.
 Unread Results and agents waiting for an answer get numbers 1 to 5, oldest pending event first.
 The Sidebar passes its shared seen times. Projects read the persisted seen times with a short cache.
@@ -474,6 +469,7 @@ The shell moves the Project's last frame to a docked Sidebar's edge, so a Projec
 Sidebar width and the Project list remain shared. Each Window saves its own Project and group folds.
 Loaded Projects start expanded unless this Window has a saved manual fold.
 Another Window's Project stays collapsed and has no chevron. It ignores this Window's saved fold. A search still lists its Tabs.
+Other Windows' Projects use 50% opacity and sit above the age groups in the Sidebar's bottom area. Their visible children stay with them. The Scratch Project stays first in its area.
 Selecting a Project expands it and saves that state. It stays expanded after it loses the selection. The first selection in a restored Window keeps its saved fold.
 Window IDs persist across restart. The saved allocation sequence prevents reuse of a closed Window's folding state.
 Run `anvil:shell-state`, `ui/sidebar_view.lua`, and the `windows-sidebar-layout`, `windows-sidebar-folding`, and `toggle-sidebar` shell probes after changes.
@@ -898,6 +894,10 @@ Use the worker pool for scans or other work that can exceed one UI frame.
 Send a copy of the input, then check its revision before applying results on the UI thread.
 Do not read live Editor or UI objects from a worker.
 The pool returns results to the UI during its budgeted frame drain.
+
+A busy disk or a virus scan can make one file call take seconds. Do not open, read, write or stat files on the UI thread in code that runs while the user works.
+Use the `file_info`, `file_read`, `storage_load` and `storage_save` workers. The Session Log writes on its own thread.
+The fuzzy navigate scenarios allow 0 UI-thread file calls. See [UI-thread blocking calls](tools/SCENARIOS.md#ui-thread-blocking-calls).
 
 Starting a child process can block for hundreds of milliseconds on Windows.
 Do not call `process.start` on the UI thread for recurring work.

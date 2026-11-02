@@ -34,6 +34,7 @@
   #include <shellapi.h>
   #include <shlobj.h>
   #include <fileapi.h>
+  #include <psapi.h>
   #include "../utfconv.h"
   #define fileno _fileno
   #define ftruncate _chsize
@@ -1915,6 +1916,19 @@ static int f_get_time(lua_State *L) {
   return 1;
 }
 
+// Bytes of private memory that this process has committed, or nil where the platform does not tell.
+static int f_get_private_memory(lua_State *L) {
+#ifdef _WIN32
+  PROCESS_MEMORY_COUNTERS_EX counters = { .cb = sizeof(counters) };
+  if (K32GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS *) &counters, sizeof(counters))) {
+    lua_pushinteger(L, (lua_Integer) counters.PrivateUsage);
+    return 1;
+  }
+#endif
+  lua_pushnil(L);
+  return 1;
+}
+
 static int f_timing_capture(lua_State *L) {
   const char *base = luaL_checkstring(L, 1);
   char path[32768];
@@ -3113,6 +3127,7 @@ static const luaL_Reg lib[] = {
   { "set_primary_selection", f_set_primary_selection },
   { "get_process_id",        f_get_process_id        },
   { "get_time",              f_get_time              },
+  { "get_private_memory",    f_get_private_memory    },
   { "timing_capture",        f_timing_capture        },
   { "set_native_single_instance_enabled", f_set_native_single_instance_enabled },
   { "is_hosted_surface",     f_is_hosted_surface     },

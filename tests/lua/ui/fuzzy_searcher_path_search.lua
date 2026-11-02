@@ -120,7 +120,10 @@ test.describe("Fuzzy Searcher Path Search", function()
         if result.file and common.path_equals(helpers.fullpath(result), file) then return true end
       end
     end), "expected ./ to preserve Project file results")
-    test.ok(common.path_equals(picker.results[1].abs_path, context.project_root))
+    -- The typed path's row shows after a worker reads it.
+    test.ok(wait_until(function()
+      return picker.results[1] and common.path_equals(picker.results[1].abs_path, context.project_root)
+    end), "expected the Project folder first")
   end)
 
   test.it("keeps a Project directory prefix and search terms in Project File Search", function(context)
@@ -290,6 +293,9 @@ test.describe("Fuzzy Searcher Path Search", function()
 
     fuzzy_searcher.open(join_path(context.external_root, "alpha"))
     local picker = core.fuzzy_searcher_active_view
+    -- The typed path's row shows after a worker reads it.
+    test.ok(wait_until(function() return picker.results[1].kind == "create_path" end),
+      "expected the Create Path Result first")
     local folder_result = result_for_path(picker.results, folder)
     local file_result = result_for_path(picker.results, file)
 
@@ -299,7 +305,6 @@ test.describe("Fuzzy Searcher Path Search", function()
     test.not_nil(file_result)
     test.equal(file_result.is_folder, false)
     test.equal(file_result.file, file)
-    test.equal(picker.results[1].kind, "create_path")
     test.equal(picker.results[2].label, "Folders")
     for index, result in ipairs(picker.results) do
       if result == file_result then picker.selected = index break end
@@ -345,6 +350,8 @@ test.describe("Fuzzy Searcher Path Search", function()
 
     fuzzy_searcher.open("@" .. join_path(context.external_root, "alpha"))
     local picker = core.fuzzy_searcher_active_view
+    -- The rows move when the typed path's row arrives. A user picks from the final rows.
+    test.ok(wait_until(function() return not picker.direct_path_pending end), "the typed path was not read")
     local index
     for candidate_index, result in ipairs(picker.results) do
       if result.path and common.path_equals(result.path, folder) then
@@ -484,7 +491,8 @@ test.describe("Fuzzy Searcher Path Search", function()
         end
       end
     end), "expected the matching file result")
-    test.equal(picker.results[1].kind, "create_path")
+    test.ok(wait_until(function() return picker.results[1].kind == "create_path" end),
+      "expected the Create Path Result first")
     test.ok(common.path_equals(picker.results[1].abs_path,
       join_path(context.project_root, "missing.txt")))
   end)
@@ -502,6 +510,55 @@ test.describe("Fuzzy Searcher Path Search", function()
     end), "expected the exact file result")
     test.not_equal(picker.results[1].kind, "create_path")
     test.ok(common.path_equals(picker.results[1].abs_path, file))
+  end)
+
+  test.it("reads a typed path on a worker and offers creation only after the read", function(context)
+    local blocking_calls = require "core.blocking_calls"
+    local existing = join_path(context.project_root, "typed", "existing.txt")
+    mkdirp(common.dirname(existing))
+    write_file(existing)
+    helpers.set_everything_state("unavailable")
+
+    blocking_calls.start()
+    local direct = helpers.path_search.direct_result(existing)
+    local missing = helpers.path_search.direct_result(join_path(context.project_root, "typed", "missing.txt"))
+    local calls = {}
+    for _, caller in ipairs(blocking_calls.callers()) do
+      calls[#calls + 1] = caller.name .. " at " .. caller.stack
+    end
+    blocking_calls.stop()
+    -- A busy disk or a virus scan must not stop typing.
+    test.same(calls, {}, "the typed path was read on the UI thread:\n" .. table.concat(calls, "\n"))
+    test.is_nil(direct, "an unread path must not show as existing")
+    test.is_nil(missing, "an unread path must not offer creation")
+
+    test.ok(wait_until(function()
+      local result = helpers.path_search.direct_result(existing)
+      return result and result.exact_path
+    end), "expected the existing path after its read")
+    test.ok(wait_until(function()
+      local result = helpers.path_search.direct_result(join_path(context.project_root, "typed", "missing.txt"))
+      return result and result.kind == "create_path"
+    end), "expected the Create Path Result after the read")
+  end)
+
+  test.it("opens a typed path on Enter before its worker read ends", function(context)
+    local path = join_path(context.project_root, "typed-enter", "file.txt")
+    mkdirp(common.dirname(path))
+    write_file(path)
+    local opened
+    core.open_file = function(file)
+      opened = file
+      return { buffer = { set_selection = function() end } }
+    end
+    helpers.set_everything_state("unavailable")
+
+    fuzzy_searcher.open(path)
+    local picker = core.fuzzy_searcher_active_view
+    test.ok(picker.direct_path_pending, "the typed path must still be read on a worker")
+    picker:confirm()
+
+    test.ok(opened and common.path_equals(opened, path), "Enter must open the typed path, not " .. tostring(opened))
   end)
 
   test.it("keeps a bare Path Search query as a search term", function()
