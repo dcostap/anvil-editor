@@ -341,15 +341,50 @@ test.describe("Sidebar list actions", function()
       < find_text(drawn_texts(b, 600, 1000), "notes.lua").opacity)
   end)
 
-  test.it("selects a Project clicked anywhere on its row", function()
+  test.it("opens a Dormant Project clicked anywhere on its row", function()
     local actions, action = recorder()
     local view = SidebarView(action, {["group:week"]=false})
-    view:set_model({{row_id=7,path="C:/B",state="ready",terminals={}},
+    view:set_model({{row_id=7,path="C:/B",state="dormant",exists=true,activity=os.time(),terminals={}},
                     {row_id=9,path="C:/A",state="dormant",exists=true,activity=os.time(),terminals={}}})
     view:on_mouse_pressed("left", 20, row_y(view, "project", 2), 240)
     view:on_mouse_moved(230, row_y(view, "project", 1), 240)
     view:on_mouse_pressed("left", 230, row_y(view, "project", 1), 240)
     test.same(actions, {{"select", 9}, {"select", 7}})
+  end)
+
+  test.it("toggles another loaded Project from either side of its row without selecting it", function()
+    local actions, action = recorder()
+    local view = SidebarView(action)
+    local model = {
+      {row_id=1,id=11,path="C:/A",state="ready",window_id=5,
+        panes={active=1,{id="a",name="A.lua"}}},
+      {row_id=2,id=22,path="C:/B",state="ready",window_id=5,
+        panes={active=1,{id="b",name="B.lua"}}},
+      windows={{id=5,selected_project=11}},
+    }
+    view:set_model(model, 5)
+    for _, x in ipairs {20, 230} do
+      view:on_mouse_pressed("left", x, row_y(view, "project", 2))
+      test.equal(count(view, "tab"), 1, "The clicked Project stays expanded")
+      view:set_model(model, 5)
+      test.equal(count(view, "tab"), 1, "A model refresh expands the clicked Project")
+      view:on_mouse_pressed("left", x, row_y(view, "project", 2))
+      test.equal(count(view, "tab"), 2, "The clicked Project stays collapsed")
+    end
+    test.same(actions, {
+      {"collapsed", "project:C:/B", true}, {"collapsed", "project:C:/B", false},
+      {"collapsed", "project:C:/B", true}, {"collapsed", "project:C:/B", false},
+    })
+    view:on_mouse_pressed("left", 20, row_y(view, "tab", 2))
+    test.same(actions[#actions], {"request", "select", "C:/B", {action="focus", pane="b"}})
+  end)
+
+  test.it("does not select an empty loaded Project when clicked", function()
+    local actions, action = recorder()
+    local view = SidebarView(action)
+    view:set_model({{row_id=7,path="C:/A",state="ready",panes={},terminals={}}})
+    view:on_mouse_pressed("left", 60, row_y(view, "project"))
+    test.same(actions, {})
   end)
 
   test.it("toggles the Selected Project's children when its row is clicked", function()
@@ -376,15 +411,6 @@ test.describe("Sidebar list actions", function()
       windows={{id=5,selected_project=31},{id=8,selected_project=0}}}, 8)
     view:on_mouse_pressed("left", 60, row_y(view, "project"))
     test.same(actions, {{"select", 7}})
-  end)
-
-  test.it("requests a redraw when the pointer enters or leaves the Project arrow", function()
-    local view = SidebarView(function() end)
-    view:set_model({{row_id=7,path="C:/A",state="ready",terminals={},panes={{id="pane",name="A.lua"}}}})
-    local y = row_y(view, "project")
-    view:on_mouse_moved(60, y)
-    test.ok(view:on_mouse_moved(230, y), "Entering the arrow does not request hover feedback")
-    test.ok(view:on_mouse_moved(60, y), "Leaving the arrow does not clear hover feedback")
   end)
 
   test.it("asks to focus a clicked Terminal Session without giving it Project actions", function()
@@ -580,7 +606,7 @@ test.describe("Sidebar Window folding", function()
     a:set_model(model(9), 7)
     test.equal(tabs(a), "pwsh", "Only the Terminal that needs the user shows")
 
-    -- Neither the keyboard nor the arrow area expands it.
+    -- Neither the keyboard nor a click expands it.
     a:on_focus(true)
     a.cursor = row_index(a, function(row) return row.kind == "project" and row.project.id == 11 end)
     a:on_key_pressed("right")
@@ -1354,7 +1380,7 @@ test.describe("Sidebar Snoozes", function()
       local project = test.not_nil(find_row(view, "project", is_p))
       test.same(project.pending, {count = 2, kind = "blocked"})
       test.ok(find_text(drawn_texts(view), "2"), "The collapsed Project does not show its count")
-      -- The Project's chevron expands it.
+      -- Clicking the Project expands it.
       view:on_mouse_pressed("left", view.width - 16 * SCALE, row_y(view, "project", 1, is_p))
       test.not_ok(find_row(view, "project", is_p).collapsed)
       test.is_nil(find_text(drawn_texts(view), "2"), "The expanded Project still shows its count")

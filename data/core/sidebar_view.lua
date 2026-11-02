@@ -13,6 +13,8 @@ local icons = require("core.context_menu").icons
 -- The shell owns identity and lifecycle. This view sends only Project, Pane and Terminal Session actions.
 -- A right-click on a Project or a Terminal Tab, or the Context Menu key on the cursor's row, opens that row's
 -- Context Menu. The menu can extend over the Project, because the Sidebar's surface covers the whole Window.
+-- A click on a loaded Project in this Window toggles its children without selecting it.
+-- Dormant Projects and Projects in other Windows open on click.
 -- Left on a collapsed loaded Project asks to unload it. A second Left unloads it; any other input cancels.
 -- Layout: a search field below the window caption, then the main list: loaded Projects with their Tabs, one for
 -- each Pane, and the Terminal Sessions that no Pane shows. Other Windows' Projects sit above the unloaded Projects'
@@ -670,7 +672,7 @@ function SidebarView:rebuild_rows()
     local seen_active = (selected_projects[project.id] or not window_id and project.selected) and panes.active
     -- The Selected Project's active Tab takes the highlight.
     local active = is_selected and panes[panes.active or 0] and panes.active
-    -- Another Window's Project stays collapsed and has no fold key, so it shows no chevron and does not toggle.
+    -- Another Window's Project stays collapsed and has no fold key, so it does not toggle.
     local elsewhere = in_other_window(project, window_id)
     local key = not elsewhere and (#panes > 0 or #(project.terminals or {}) > 0) and ("project:" .. project.path) or nil
     -- A Project expands when it becomes selected, and stays expanded after it loses the selection.
@@ -1019,12 +1021,6 @@ function SidebarView:search_offset(x)
   return self:field():offset_at(style.font, x - self:search_box() + self.search_scroll)
 end
 
--- The Project arrow has its own hit area, even when the Project is not selected.
-function SidebarView:project_arrow_at(row, x)
-  return row and row.kind == "project" and row.key and self.query == ""
-    and x >= self.width - 32 * SCALE and x < self.width - self:metrics().pad
-end
-
 function SidebarView:on_mouse_pressed(button, x, y)
   if button ~= "left" and button ~= "right" and button ~= "middle" then return end
   self.focus_pending = nil
@@ -1071,8 +1067,8 @@ function SidebarView:on_mouse_pressed(button, x, y)
     return
   end
   if row.kind ~= "project" then return end
-  if button == "left" and row.key and self.query == "" and (row.current or self:project_arrow_at(row, x)) then
-    self:toggle(row.key, row.collapsed)
+  if button == "left" and row.project.state ~= "dormant" and not in_other_window(row.project, self.window_id) then
+    if row.key then self:toggle(row.key, row.collapsed) end
     return
   end
   if button == "middle" then
@@ -1110,9 +1106,8 @@ function SidebarView:update_hover()
   local scrollbar = self.hover_x and self:scrollbar_at(self.hover_x, self.hover_y)
   if scrollbar then hover = nil end
   scrollbar = scrollbar and scrollbar.field
-  local arrow = hover and self:project_arrow_at(hover, self.hover_x) and hover or nil
-  local changed = hover ~= self.hover or scrollbar ~= self.scrollbar_hover or arrow ~= self.arrow_hover
-  self.hover, self.scrollbar_hover, self.arrow_hover = hover, scrollbar, arrow
+  local changed = hover ~= self.hover or scrollbar ~= self.scrollbar_hover
+  self.hover, self.scrollbar_hover = hover, scrollbar
   local tooltip = self:get_tooltip()
   if tooltip ~= self.tooltip_text then
     self.tooltip_text, self.tooltip_started = tooltip, system.get_time()
@@ -1624,7 +1619,7 @@ function SidebarView:step(dt)
     if drop.alpha <= 0 then self.marks.drop = nil end
   end
   for _, row in ipairs(self.rows) do
-    if row.key then
+    if row.key and row.kind ~= "project" then
       local target = row.collapsed and 0 or 1
       self.chevrons[row.key] = ease(self.chevrons[row.key], target, MOVE_RATE * 0.8, 0.01)
     end
@@ -1833,17 +1828,6 @@ function SidebarView:draw_project(row, y, width, now)
   local size = m.badge
   local bx = left + 6 * SCALE
   look.draw_badge(project, bx, math.floor(cy - size / 2), size, font_variant("bold"), style.background2)
-  -- The chevron keeps its space, so the note does not move when it shows.
-  if row.key and self.query == "" then
-    local shows = row.collapsed or self.hover == row or self.focused and self:get_cursor() == row
-    local hovered = self.arrow_hover == row
-    if hovered then
-      renderer.draw_rounded_rect(width - 32 * SCALE, y + 1, 32 * SCALE - m.pad, row.h - 2,
-        m.radius, style.sidebar_hover)
-    end
-    if shows then chevron(right - 12 * SCALE, cy, self.chevrons[row.key], hovered and style.text or style.dim) end
-    right = right - 20 * SCALE
-  end
   if row.pending and (row.collapsed or dormant) then right = self:draw_pending(row.pending, right, cy) end
   local note = look.note(project, self.window_id, now)
   local hints

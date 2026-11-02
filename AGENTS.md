@@ -470,8 +470,10 @@ A slide shows one step at each display refresh. A docked Sidebar keeps its space
 A Sidebar that focus shows floats: it slides opaque over the Project, and the Project keeps its layout. The toggle docks it.
 The shell moves the Project's last frame to a docked Sidebar's edge, so a Project that has not drawn its new width shows no content under the Sidebar.
 Sidebar width and the Project list remain shared. Each Window saves its own Project and group folds.
+Clicking a loaded Project row in this Window expands or collapses it without selecting it. Clicking a Tab selects its Project.
+Dormant Projects and Projects in other Windows open when their rows are clicked.
 Loaded Projects start expanded unless this Window has a saved manual fold.
-Another Window's Project stays collapsed and has no chevron. It ignores this Window's saved fold. A search still lists its Tabs.
+Another Window's Project stays collapsed. It ignores this Window's saved fold. A search still lists its Tabs.
 Other Windows' Projects use 50% opacity and sit above the age groups in the Sidebar's bottom area. Their visible children stay with them. The Scratch Project stays first in its area.
 Selecting a Project expands it and saves that state. It stays expanded after it loses the selection. The first selection in a restored Window keeps its saved fold.
 Window IDs persist across restart. The saved allocation sequence prevents reuse of a closed Window's folding state.
