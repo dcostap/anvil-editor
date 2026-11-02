@@ -16,7 +16,7 @@ local TextField = require "core.ui.text_field"
 -- With Alt Navigation, an Alt chord such as Alt+J shows the command of the key that it types, Ctrl+Left.
 local KeyboardMap = View:extend()
 KeyboardMap.context = "workspace"
-KeyboardMap.view_icon = view_icons.register("keyboard_map", view_icons.ui("\u{F030C}"))
+KeyboardMap.view_icon = view_icons.register("keyboard_map", view_icons.ui("k"))
 
 function KeyboardMap:__tostring() return "KeyboardMap" end
 function KeyboardMap:get_name() return "Keyboard Map" end
@@ -603,7 +603,8 @@ local function layer_has(layer, spec)
 end
 
 function KeyboardMap:key_color(spec, key, layer)
-  local base = style.background2
+  -- Mixed from the text color, so keys stand out from the background in light and dark themes.
+  local base = ui.mix(style.background, style.text, 0.08)
   if spec.mod then return layer_has(layer, spec) and style.accent or base end
   local entry = key.entry
   if not entry or (#entry.commands == 0 and not entry.target) then return base end
@@ -651,8 +652,7 @@ function KeyboardMap:draw_key(spec, layer)
     if max_lines < 1 then return end
     local lines = key_lines(key, small, w - 2 * inset, max_lines)
     local ty = y + h - math.floor(inset * 0.6) - #lines * small:get_height()
-    local text_color = key.entry.target and style.good or style.text
-    if #self.words > 0 and not key.match then text_color = style.dim end
+    local text_color = (#self.words > 0 and not key.match) and style.dim or style.text
     for _, line in ipairs(lines) do
       renderer.draw_text(small, line, x + inset, ty, text_color)
       ty = ty + small:get_height()
