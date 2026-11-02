@@ -859,6 +859,15 @@ Caches use `buffer.text_revision`. `get_change_id()` is the undo position, which
 In Markdown, a blank line after a list item or a quote shows at the margin.
 Keep `newline_indent` in step with `core:newline`. Run `ui/empty_line_indent.lua` and `ui/smart_indent.lua` after changes.
 
+## Paste indentation
+
+The lines after the first line of a multi-line paste start at the caret's indentation. They keep their shape relative to the first line.
+Parts copied from several carets and pasted at one caret go on separate lines. Each part starts at the caret's indentation.
+Whole lines, and complete lines pasted at column 1, go where a new line belongs there: the brace block's indentation (`block_indent`), or else the Shown Indentation of a new empty line. Lines copied together keep their shape.
+After pasted complete lines, the rest of the caret's line keeps its indentation.
+Markdown keeps the indentation of pasted whole lines, because lists and quotes own it.
+Run `ui/smart_indent.lua` after changes.
+
 ## Autocomplete searches
 
 Autocomplete runs Project symbol searches through `workspace_symbols_async`. It submits only the last input context in each frame. A new Buffer edit, caret position, View, Project Paths generation, or close cancels the old requests. Parse refresh reuses the current requests. Results request a redraw even when normal frame pacing leaves the UI idle. Local symbols and matching visible suggestions remain available while Project searches run.

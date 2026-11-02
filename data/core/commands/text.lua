@@ -1016,36 +1016,131 @@ end
 
 -- Rewrites leading whitespace in the Buffer's indentation type. A tab counts
 -- as one indentation level.
+local function indentation_of_width(buffer, width)
+  local tab_type, indent_size = buffer:get_indent_info()
+  if tab_type == "hard" then
+    return string.rep("\t", math.floor(width / indent_size)) .. string.rep(" ", width % indent_size)
+  end
+  return string.rep(" ", width)
+end
+
 local function convert_indentation(buffer, text)
   local indent = leading_whitespace(text)
   if indent == "" then return text end
-  local tab_type, indent_size = buffer:get_indent_info()
-  local width = indent_visual_width(indent, indent_size)
-  local converted
-  if tab_type == "hard" then
-    converted = string.rep("\t", math.floor(width / indent_size)) .. string.rep(" ", width % indent_size)
-  else
-    converted = string.rep(" ", width)
-  end
-  return converted .. text:sub(#indent + 1)
+  local _, indent_size = buffer:get_indent_info()
+  return indentation_of_width(buffer, indent_visual_width(indent, indent_size)) .. text:sub(#indent + 1)
 end
 
+local function is_markdown_buffer(buffer)
+  local name = tostring(buffer.syntax and buffer.syntax.name or ""):lower()
+  return name:find("markdown", 1, true) ~= nil
+end
+
+-- The indentation of a new line before `line` that starts with `text`: the
+-- indentation that the block structure gives it, or else the indentation that
+-- a new empty line there shows. Nil in Markdown, where lists and quotes own
+-- the indentation.
+local function insertion_indent(buffer, line, text)
+  if is_markdown_buffer(buffer) then return nil end
+  local indent = intelligence.block_indent(buffer, line, { line_text = text })
+  if type(indent) == "string" then return indent end
+  return empty_line_indent.indent_before(buffer, line)
+end
+
+-- Moves `lines` so that their first line with text starts at `target`. The
+-- other lines keep their indentation relative to it.
+local function shift_lines_to(buffer, lines, target)
+  local _, indent_size = buffer:get_indent_info()
+  local delta
+  for i, line in ipairs(lines) do
+    if line:find("%S") then
+      local lead = leading_whitespace(line)
+      local width = indent_visual_width(lead, indent_size)
+      if not delta then
+        delta = indent_visual_width(target, indent_size) - width
+        lines[i] = target .. line:sub(#lead + 1)
+      elseif delta ~= 0 then
+        lines[i] = indentation_of_width(buffer, math.max(0, width + delta)) .. line:sub(#lead + 1)
+      end
+    end
+  end
+  return lines
+end
+
+local function split_lines(text)
+  local lines = {}
+  local start = 1
+  while true do
+    local nl = text:find("\n", start, true)
+    if not nl then
+      lines[#lines + 1] = text:sub(start)
+      return lines
+    end
+    lines[#lines + 1] = text:sub(start, nl - 1)
+    start = nl + 1
+  end
+end
+
+-- Splits one copied text into lines without the indentation that they share.
+-- `first_indent` is the indentation that preceded the text on its source
+-- line. Text without it keeps its lines when `reindent` is false.
+local function paste_piece_lines(buffer, text, first_indent, reindent)
+  local lines = split_lines(text)
+  if not first_indent and leading_whitespace(lines[1]) == "" and opens_block(lines[1])
+  and closes_block(lines[#lines]) then
+    -- A block copied from after its indentation ends with a closing line at
+    -- the block's own indentation.
+    first_indent = leading_whitespace(lines[#lines])
+  end
+  first_indent = first_indent or ""
+  lines[1] = first_indent .. lines[1]
+  local common_indent = ""
+  if reindent or first_indent ~= "" then
+    common_indent = common_leading_indent(lines)
+    if common_indent == "" and lines[1]:find("%S") then
+      common_indent = leading_whitespace(lines[1])
+    end
+  end
+  for i, line in ipairs(lines) do
+    lines[i] = convert_indentation(buffer, remove_indent_prefix(line, common_indent))
+  end
+  return lines
+end
+
+local function join_pieces(texts, separator)
+  local ends, length = {}, 0
+  for i, text in ipairs(texts) do
+    if i > 1 then length = length + #separator end
+    length = length + #text
+    ends[i] = length
+  end
+  return table.concat(texts, separator), ends
+end
+
+-- Pastes `pieces` as one text at `line`, `col`: each piece on its own line,
+-- each starting at the paste's indentation. A piece is `{ text, source }`.
 -- `source.first_indent` is the indentation that preceded the copied text on
 -- its source line. `source.from_string` marks text copied from inside a
 -- string literal, which is already escaped. `source` is nil for text copied
 -- outside Anvil.
--- The second result is an earlier column on `line` where the paste starts.
-local function smart_paste_text(buffer, line, col, text, source)
-  text = tostring(text or "")
-  source = source or {}
+-- Returns the text, an earlier column on `line` where the paste starts, and
+-- the offset in the text where each piece ends.
+local function smart_paste_pieces(buffer, line, col, pieces)
+  local texts = {}
+  for i, piece in ipairs(pieces) do texts[i] = tostring(piece.text or "") end
+  local text = table.concat(texts, "\n")
   local quote = string_quote_at(buffer, line, col)
   if quote then
-    if source.from_string then return text end
-    local escaped = escape_for_string(text, quote)
-    if escaped ~= text then
+    local escaped = {}
+    for i, piece in ipairs(pieces) do
+      local from_string = piece.source and piece.source.from_string
+      escaped[i] = from_string and texts[i] or escape_for_string(texts[i], quote)
+    end
+    local escaped_text, ends = join_pieces(escaped, escape_for_string("\n", quote))
+    if escaped_text ~= text then
       core.log_quiet("Escaped pasted text for a %s string in %s", quote, buffer:get_name())
     end
-    return escaped
+    return escaped_text, nil, ends
   end
   local line_text = buffer.lines[line] or ""
   -- A pasted list item replaces an empty Markdown list item at the caret.
@@ -1057,81 +1152,80 @@ local function smart_paste_text(buffer, line, col, text, source)
   end
   if not text:find("\n", 1, true) then
     if replace_col then text = text:gsub("^[\t ]+", "") end
-    return text, replace_col
+    return text, replace_col, { #text }
   end
   local before = line_text:sub(1, col - 1)
-  local target_indent = before:match("^[\t ]*$") and before or leading_whitespace(line_text)
+  local in_indentation = before:match("^[\t ]*$") ~= nil
+  local target_indent = in_indentation and before or leading_whitespace(line_text)
   local comment_lead = line_comment_lead(buffer, line, col)
-  if comment_lead then
-    text = text:gsub("\n+$", "")
-    target_indent = comment_lead
+  if comment_lead then target_indent = comment_lead end
+  -- Complete lines pasted at the start of a line go where new lines belong there.
+  local lines_indent = col == 1 and text:sub(-1) == "\n"
+    and insertion_indent(buffer, line, text:match("^%s*([^\n]*)"))
+  if lines_indent then
+    target_indent = lines_indent
+    core.log_quiet("Pasted complete lines at the indentation of line %d in %s", line, buffer:get_name())
   end
-  local first_indent = source.first_indent
+  -- After pasted complete lines, the rest of the line keeps its indentation.
+  local keep_rest_indent = in_indentation and line_text:sub(col):find("%S") ~= nil
 
-  local parts = {}
-  local start = 1
-  while true do
-    local nl = text:find("\n", start, true)
-    if not nl then
-      parts[#parts + 1] = text:sub(start)
-      break
+  local out, last_lines = {}, {}
+  for i, piece in ipairs(pieces) do
+    local piece_text = texts[i]
+    if comment_lead then piece_text = piece_text:gsub("\n+$", "") end
+    local first_indent = piece.source and piece.source.first_indent
+    for _, piece_line in ipairs(paste_piece_lines(buffer, piece_text, first_indent, target_indent ~= "")) do
+      out[#out + 1] = piece_line
     end
-    parts[#parts + 1] = text:sub(start, nl - 1)
-    start = nl + 1
+    last_lines[i] = #out
   end
-
-  if not first_indent and leading_whitespace(parts[1]) == "" and opens_block(parts[1])
-  and closes_block(parts[#parts]) then
-    -- A block copied from after its indentation ends with a closing line at
-    -- the block's own indentation.
-    first_indent = leading_whitespace(parts[#parts])
-  end
-  first_indent = first_indent or ""
-  -- Text pasted at column one with its own indentation keeps its shape.
-  local reindent = target_indent ~= "" or first_indent ~= ""
-
-  parts[1] = first_indent .. parts[1]
-  local common_indent = ""
-  if reindent then
-    common_indent = common_leading_indent(parts)
-    if common_indent == "" and parts[1]:find("%S") then
-      common_indent = leading_whitespace(parts[1])
+  for i, stripped in ipairs(out) do
+    if i > 1 or lines_indent then
+      if stripped == "" then
+        out[i] = (i == #out and keep_rest_indent) and before or (comment_lead or "")
+      elseif comment_lead then
+        out[i] = comment_lead .. " " .. stripped
+      else
+        out[i] = target_indent .. stripped
+      end
     end
   end
-
-  for i, part in ipairs(parts) do
-    local stripped = convert_indentation(buffer, remove_indent_prefix(part, common_indent))
-    if i == 1 then
-      parts[i] = stripped
-    elseif stripped == "" then
-      parts[i] = comment_lead or ""
-    elseif comment_lead then
-      parts[i] = comment_lead .. " " .. stripped
-    else
-      parts[i] = target_indent .. stripped
+  if replace_col then out[1] = out[1]:gsub("^[\t ]+", "") end
+  local ends, length, piece = {}, 0, 1
+  for i, out_line in ipairs(out) do
+    length = length + #out_line + (i > 1 and 1 or 0)
+    if last_lines[piece] == i then
+      ends[piece] = length
+      piece = piece + 1
     end
   end
-  if replace_col then parts[1] = parts[1]:gsub("^[\t ]+", "") end
-  return table.concat(parts, "\n"), replace_col
+  return table.concat(out, "\n"), replace_col, ends
 end
 
+local function smart_paste_text(buffer, line, col, text, source)
+  local pasted, replace_col = smart_paste_pieces(buffer, line, col, { { text = text, source = source } })
+  return pasted, replace_col
+end
+
+-- Pastes all parts of the internal clipboard at each caret, and puts a caret
+-- at the end of each part.
 local function paste_all_normal_clipboards(buffer)
-  local payloads = {}
+  local pieces = {}
+  local sources = core.cursor_clipboard.sources
   for cb_idx in ipairs(core.cursor_clipboard_whole_line) do
-    payloads[#payloads + 1] = tostring(core.cursor_clipboard[cb_idx] or ""):gsub("\r", "")
+    pieces[#pieces + 1] = {
+      text = tostring(core.cursor_clipboard[cb_idx] or ""):gsub("\r", ""),
+      source = sources and sources[cb_idx],
+    }
   end
-  if #payloads == 0 then return end
+  if #pieces == 0 then return end
 
   local edits, final_by_idx = {}, {}
   for idx, line1, col1, line2, col2 in buffer:get_selections(true) do
-    local text, final_offsets = "", {}
-    for payload_idx, payload in ipairs(payloads) do
-      if payload_idx > 1 then text = text .. "\n" end
-      text = text .. payload
-      final_offsets[#final_offsets + 1] = #text
-    end
+    local text, replace_col, ends = smart_paste_pieces(buffer, line1, col1, pieces)
+    if replace_col and replace_col < col1 then col1 = replace_col end
     edits[#edits + 1] = { line1 = line1, col1 = col1, line2 = line2, col2 = col2, text = text, idx = idx }
-    final_by_idx[idx] = final_offsets
+    final_by_idx[idx] = ends
   end
   if #edits == 0 then return end
   return buffer:apply_edits(edits, {
@@ -1151,7 +1245,11 @@ local function paste_whole_lines_by_selection(buffer, text_for_idx)
 
   local actions = {}
   for idx, line1, col1, line2, col2 in buffer:get_selections(true) do
-    local text = tostring(text_for_idx(idx) or ""):gsub("\r", "") .. "\n"
+    local text = tostring(text_for_idx(idx) or ""):gsub("\r", "")
+    -- Whole lines go where new lines belong before the caret's line.
+    local target = text:find("%S") and insertion_indent(buffer, line1, text:match("^%s*([^\n]*)"))
+    if target then text = table.concat(shift_lines_to(buffer, split_lines(text), target), "\n") end
+    text = text .. "\n"
     actions[#actions + 1] = {
       idx = idx,
       line1 = line1,

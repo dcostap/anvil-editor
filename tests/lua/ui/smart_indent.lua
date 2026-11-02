@@ -285,6 +285,84 @@ test.describe("smart indentation", function()
     test.equal(text(buffer), "x\n  ybb\ncc\n")
   end)
 
+  test.it("multi-cursor copies pasted at one caret each start at the caret's indentation", function(context)
+    local buffer, view = new_editor(context, "f {\n  a := 1\n  if x {\n    b := 2\n  }\n  \n}", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(2, 3, 2, 9)
+    buffer:add_selection(4, 5, 4, 11)
+    test.ok(command.perform("core:copy"))
+    buffer:set_selection(6, 3, 6, 3)
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), "f {\n  a := 1\n  if x {\n    b := 2\n  }\n  a := 1\n  b := 2\n}\n")
+    test.same(view:get_selection_state().selections, { 6, 9, 6, 9, 7, 9, 7, 9 })
+  end)
+
+  test.it("a pasted whole line takes the indentation of its new brace block", function(context)
+    local buffer, view = new_editor(context, "f {\n  g {\n    x()\n  }\n  y()\n}", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(3, 5, 3, 5)
+    test.ok(command.perform("core:copy"))
+    buffer:set_selection(5, 3, 5, 3)
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), "f {\n  g {\n    x()\n  }\n  x()\n  y()\n}\n")
+  end)
+
+  test.it("a pasted whole line takes the indentation that a new line there shows", function(context)
+    local buffer, view = new_editor(context, "if a then\n  if b then\n    x()\n  end\nend", "sample.lua")
+    core.set_active_view(view)
+    buffer:set_selection(3, 5, 3, 5)
+    test.ok(command.perform("core:copy"))
+    buffer:set_selection(5, 1, 5, 1)
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), "if a then\n  if b then\n    x()\n  end\n  x()\nend\n")
+  end)
+
+  test.it("pasted whole lines from several carets keep their shape", function(context)
+    local buffer, view = new_editor(context, "if x {\n  y()\n}\nf {\n  g {\n  }\n}", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(1, 1, 1, 1)
+    buffer:add_selection(2, 1, 2, 1)
+    buffer:add_selection(3, 1, 3, 1)
+    test.ok(command.perform("core:copy"))
+    buffer:set_selection(6, 3, 6, 3)
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), "if x {\n  y()\n}\nf {\n  g {\n    if x {\n      y()\n    }\n  }\n}\n")
+  end)
+
+  test.it("complete lines pasted at column one take the indentation of their new block", function(context)
+    local buffer, view = new_editor(context, "f {\n  g {\n    y()\n  }\n}", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(3, 1, 3, 1)
+    system.set_clipboard("x()\n  z()\n")
+    core.cursor_clipboard = { full = "different" }
+    core.cursor_clipboard_whole_line = {}
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), "f {\n  g {\n    x()\n      z()\n    y()\n  }\n}\n")
+  end)
+
+  test.it("complete lines pasted in a line's indentation keep the indentation of its text", function(context)
+    local buffer, view = new_editor(context, "f {\n  y()\n}", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(2, 3, 2, 3)
+    system.set_clipboard("x()\n")
+    core.cursor_clipboard = { full = "different" }
+    core.cursor_clipboard_whole_line = {}
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), "f {\n  x()\n  y()\n}\n")
+  end)
+
   test.it("leaves the comment at its end, including trailing whitespace", function(context)
     for _, case in ipairs({
       { "-- hello", "sample.lua", 9 },

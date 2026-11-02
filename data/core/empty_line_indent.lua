@@ -80,6 +80,25 @@ local function newline_indent(buffer, line)
   return type(indent) == "string" and indent or lead
 end
 
+-- The indentation of a new line before `line`, and the line above it with
+-- content that gives it.
+local function indent_before(buffer, line)
+  for previous = line - 1, math.max(1, line - SCAN_LIMIT), -1 do
+    if has_content(buffer.lines[previous]) then
+      return newline_indent(buffer, previous), previous
+    end
+  end
+  return ""
+end
+
+---Returns the indentation that a new empty line before `line` shows.
+---@param buffer core.buffer
+---@param line integer
+---@return string
+function empty_line_indent.indent_before(buffer, line)
+  return (indent_before(buffer, line))
+end
+
 local function entry(buffer, line)
   local text = buffer.lines[line]
   if not text or has_content(text) then return nil end
@@ -91,14 +110,8 @@ local function entry(buffer, line)
   end
   local found = lines[line]
   if found then return found end
-  local reference
-  for previous = line - 1, math.max(1, line - SCAN_LIMIT), -1 do
-    if has_content(buffer.lines[previous]) then
-      reference = previous
-      break
-    end
-  end
-  found = { indent = reference and newline_indent(buffer, reference) or "", reference = reference }
+  local indent, reference = indent_before(buffer, line)
+  found = { indent = indent, reference = reference }
   lines[line] = found
   return found
 end
