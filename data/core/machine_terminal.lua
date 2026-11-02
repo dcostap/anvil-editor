@@ -16,11 +16,12 @@ end
 
 -- Carries the records of one attach until the link, the session or the Machine connection ends.
 local function carry(remote, link, link_id)
-  local client, ended = remote.client, false
+  -- `ended`: the Machine's link ended. `closed`: the session closed its pipe.
+  local client, ended, closed = remote.client, false, false
   core.add_thread(function()
-    while not ended do
+    while not ended and not closed do
       local err, result, bytes = call(client, "terminal.read", {link = link_id})
-      if ended then return end
+      if ended or closed then return end
       if err or result.done then
         core.log_quiet("Remote Terminal Session %s link ended: %s", remote.id, err and err.code or "done")
         ended = true
@@ -30,15 +31,21 @@ local function carry(remote, link, link_id)
       while not ended do
         local ok, why = link:write(bytes)
         if ok then break end
-        if why ~= "full" then ended = true; return end
+        -- The session closed. Its last records still wait in the link for the loop below.
+        if why ~= "full" then closed = true; return end
         coroutine.yield(0.01)
       end
     end
   end)
   while not ended do
     local bytes = link:read()
-    -- The session closed its pipe. Its last record, such as CLOSE, was in the previous bytes.
-    if bytes == nil then break end
+    -- The session closed its pipe after its last record, such as CLOSE. The Machine's link then ends, also when
+    -- no read waits on it.
+    if bytes == nil then
+      closed = true
+      call(client, "terminal.detach", {link = link_id})
+      break
+    end
     if bytes == "" then
       coroutine.yield(0.004)
     else

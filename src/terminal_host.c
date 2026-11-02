@@ -393,6 +393,7 @@ static void fill_role(TerminalHost *host, HostClient *client, AnvilTerminalRole 
   role->generation = host->generation;
   role->controller = client->controller;
   role->size = host->size;
+  for (int i = 0; i < MAX_CLIENTS; i++) role->clients += host->clients[i].attached;
   if (host->controller >= 0)
     memcpy(role->controller_name, host->clients[host->controller].name, sizeof(role->controller_name));
 }
@@ -694,12 +695,13 @@ static void write_input(HostClient *client, const uint8_t *bytes, uint32_t lengt
   }
 }
 
-/* Caller holds lock. Tells each Client its role, the Controller and the size, at this exact place in the output.
-   A Client resizes its own screen there, as the host's model did. ConPTY then repaints the new grid. */
-static void send_roles(TerminalHost *host) {
+/* Caller holds lock. Tells each Client its role, the Controller, the size and the number of Clients, at this exact
+   place in the output. A Client resizes its own screen there, as the host's model did. ConPTY then repaints the new
+   grid. `except` gets its role later, or NULL. */
+static void send_roles(TerminalHost *host, HostClient *except) {
   for (int i = 0; i < MAX_CLIENTS; i++) {
     HostClient *other = &host->clients[i];
-    if (!other->attached) continue;
+    if (!other->attached || other == except) continue;
     AnvilTerminalRole role; fill_role(host, other, &role);
     queue_record(other, ANVIL_TERMINAL_ROLE, &role, sizeof(role));
   }
@@ -723,7 +725,7 @@ static void take_control(HostClient *client, const uint8_t *bytes, uint32_t leng
     host->controller = client_index(client);
     client->controller = true;
     if (!apply_size(host, take.size)) host_log(host, "take: keep the size; the requested size is not valid");
-    send_roles(host);
+    send_roles(host, NULL);
     host_log(host, "control granted: generation=%lu slot=%d", (unsigned long)host->generation, client_index(client));
   }
   LeaveCriticalSection(&host->lock);
@@ -751,7 +753,7 @@ static DWORD WINAPI host_client(void *userdata) {
       EnterCriticalSection(&host->lock);
       AnvilTerminalSize before = host->size;
       bool ok = !client->controller || apply_size(host, size);
-      if (ok && (before.cols != host->size.cols || before.rows != host->size.rows)) send_roles(host);
+      if (ok && (before.cols != host->size.cols || before.rows != host->size.rows)) send_roles(host, NULL);
       LeaveCriticalSection(&host->lock);
       if (!ok) break;
     } else if (header.type == ANVIL_TERMINAL_TAKE && header.size == sizeof(AnvilTerminalTake)) {
@@ -772,11 +774,24 @@ static DWORD WINAPI host_client(void *userdata) {
       host->next_project[header.size] = 0;
       LeaveCriticalSection(&host->lock);
       InterlockedExchange(&host->project_requested, 1);
-    } else if (header.type == ANVIL_TERMINAL_CLOSE && !header.size) {
-      host->explicit_close = true;
-      host_log(host, "close requested"); stop_host(host); return 0;
-    } else if (header.type == ANVIL_TERMINAL_END && !header.size) {
-      host_log(host, "end requested; keep the record for revival"); stop_host(host); return 0;
+    } else if ((header.type == ANVIL_TERMINAL_CLOSE || header.type == ANVIL_TERMINAL_END) && !header.size) {
+      /* A Pane Close on one device must not take the shell from another device that shows it. */
+      EnterCriticalSection(&host->lock);
+      int others = 0;
+      for (int i = 0; i < MAX_CLIENTS; i++) others += host->clients[i].attached && &host->clients[i] != client;
+      LeaveCriticalSection(&host->lock);
+      if (others) {
+        host_log(host, "%s requested; %d other Clients remain, so detach this Client",
+          header.type == ANVIL_TERMINAL_CLOSE ? "close" : "end", others);
+        break;
+      }
+      if (header.type == ANVIL_TERMINAL_CLOSE) {
+        host->explicit_close = true;
+        host_log(host, "close requested");
+      } else {
+        host_log(host, "end requested; keep the record for revival");
+      }
+      stop_host(host); return 0;
     } else if (header.type == ANVIL_TERMINAL_CLEAR && !header.size) {
       static const uint8_t clear[] = "\033[2J\033[3J\033[H";
       EnterCriticalSection(&host->lock);
@@ -814,6 +829,8 @@ static void reap_client(HostClient *client) {
     InterlockedExchange(&host->editor_request, 0); host->editor_client = -1;
   }
   bool attached = any_attached(host);
+  /* The others learn that this Client left. */
+  if (attached && !host->stop) send_roles(host, NULL);
   client->used = false;
   WakeAllConditionVariable(&host->space);
   LeaveCriticalSection(&host->lock);
@@ -849,7 +866,13 @@ static bool attach_client(HostClient *client) {
     AnvilTerminalWelcome welcome = { GetCurrentProcessId(), GetProcessId(host->pty.process), 1, host->size };
     if (anvil_ipc_pipe_write(&client->pipe, ANVIL_TERMINAL_WELCOME, &welcome, sizeof(welcome), NULL, 0) &&
         anvil_ipc_pipe_read(&client->pipe, &header, NULL, 0) && !header.size) {
-      if (header.type == ANVIL_TERMINAL_CLOSE) {
+      EnterCriticalSection(&host->lock);
+      bool shown = any_attached(host);
+      LeaveCriticalSection(&host->lock);
+      if ((header.type == ANVIL_TERMINAL_CLOSE || header.type == ANVIL_TERMINAL_END) && shown) {
+        /* Another device shows the session. The closing View was not attached, so nothing changes. */
+        host_log(host, "close or end through control connection ignored: a Client is attached");
+      } else if (header.type == ANVIL_TERMINAL_CLOSE) {
         host->explicit_close = true;
         host_log(host, "close requested through control connection"); stop_host(host);
       } else if (header.type == ANVIL_TERMINAL_END) {
@@ -897,11 +920,9 @@ static bool attach_client(HostClient *client) {
       host->generation++;
       host->controller = client_index(client);
       client->controller = true;
-      /* The others learn the new generation and size before any output at that size. */
-      client->attached = false;
-      send_roles(host);
-      client->attached = true;
     }
+    /* The others learn the new generation, size and number of Clients before any output at that size. */
+    send_roles(host, client);
     AnvilTerminalWelcome welcome = { GetCurrentProcessId(), GetProcessId(host->pty.process), 1, host->size };
     ok = queue_record(client, ANVIL_TERMINAL_WELCOME, &welcome, sizeof(welcome));
     AnvilTerminalRole role; fill_role(host, client, &role);

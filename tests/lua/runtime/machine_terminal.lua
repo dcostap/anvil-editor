@@ -73,8 +73,13 @@ test.describe("Remote Terminal Session", function()
     for _, name in ipairs {"owner", "device"} do
       if context[name] then context[name]:close() end
     end
-    if context.local_session then context.local_session:close() end
     machine_server.stop(context.server)
+    if context.local_session then
+      -- A close while the server's link still shows the session only detaches it. Close the shell last.
+      wait_until(function() return (select(2, context.local_session:update()).clients or 0) <= 1 end,
+        "The server's link stays attached")
+      context.local_session:close()
+    end
     if context.project then test.ok(test.remove_tree(context.project)) end
   end)
 
@@ -97,6 +102,30 @@ test.describe("Remote Terminal Session", function()
       "The local View did not become a Viewer")
     wait_until(function() return not select(2, context.remote:update()).viewer end,
       "The remote session did not take control")
+  end)
+
+  test.it("keeps the shell when a device closes it while another device shows it", function(context)
+    context.remote = remote_session()
+    machine_terminal.connect(context.owner, context.remote, context.id)
+    wait_text(context.remote, "ANVIL_ECHO_READY")
+    local function clients(session) return select(2, session:update()).clients end
+    wait_until(function() return clients(context.local_session) == 2 and clients(context.remote) == 2 end,
+      "The sessions do not count two Clients")
+    local record = load(require("terminal_native").read_session_record(context.id), "=record", "t", {})()
+
+    -- The close only detaches this device. The other device keeps the shell.
+    context.remote:close()
+    context.remote = nil
+    wait_until(function() return clients(context.local_session) == 1 end, "The local session still counts the closed device")
+    context.local_session:write("after-close\r")
+    wait_text(context.local_session, "ECHO:after-close")
+
+    -- The last close ends the shell.
+    context.local_session:close()
+    context.local_session = nil
+    local alive = require("terminal_link").host_alive
+    wait_until(function() return not alive(record.host_pid, record.host_creation_time) end,
+      "The last close did not end the shell")
   end)
 
   test.it("attaches again with a new snapshot after the Machine restarts", function(context)

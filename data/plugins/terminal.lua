@@ -2403,8 +2403,10 @@ function TerminalView:can_close(approve)
   local status = self:close_status()
   local idle_pi = status.agent_app == "pi"
     and (status.agent_state == "idle" or status.agent_state == "done")
+  -- Another device shows the session, so the close only detaches this View. The shell keeps running.
+  local shared = (status.clients or 0) > 1
   local busy = status.kind == "reconnecting"
-    or (status.kind == "running" and status.busy ~= false and not idle_pi)
+    or (status.kind == "running" and status.busy ~= false and not idle_pi and not shared)
   if not busy then
     core.log_quiet("Terminal session %d closed without confirmation: busy=%s app=%s agent=%s",
       self.log_id, tostring(status.busy), tostring(status.agent_app), tostring(status.agent_state))
@@ -2503,7 +2505,9 @@ function TerminalView:on_close(reopen)
   local retained = false
   -- A detached session belongs to its host or another Workspace. Only a live session ends for Reopen.
   -- The Machine keeps no closed sessions. Reopen starts a new shell there in the same folder.
-  if reopen and self.session and self.session_id and not self.machine then
+  -- A session that another device shows keeps running. Reopen attaches it again without a closed record.
+  local shared = self.session and (select(2, self.session:update()).clients or 0) > 1
+  if reopen and self.session and self.session_id and not self.machine and not shared then
     local file, err = io.open(closed_session_path(self.session_id), "wb")
     if file then retained, err = file:close() end
     if retained then

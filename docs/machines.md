@@ -400,6 +400,10 @@ A Client on the host's own PC takes control when it attaches, if the Controller 
 
 The host orders an attach snapshot and the output after it with its model lock. Role records use the same lock.
 
+### Closing
+
+A Pane Close on one device does not take the shell from another device. While another Client is attached, a close or an end only detaches the closing Client, and Pane Close asks no question. The last close ends the shell, as on one PC. Role records count the attached Clients, so each Client knows if others show the session.
+
 ### Changes to the Terminal host
 
 - The host accepts up to 8 Clients: one Controller and the Viewers. Each Client has its own pipe and an 8 MiB queue. The Controller's queue has a 10-second stall timeout.
@@ -545,7 +549,7 @@ These decisions come before code. This doc answers identity, ownership and the a
 4. **The full call-site audit**, then the Machine guard. Users see no change. Done: see [The file seam](#the-file-seam-corefs). Each Project content site moves to `core.fs` with its service, not before, because most must also become asynchronous.
 5. **Files and Search services**, the Machine's Project list and Project configuration, the local metadata copy, and the picker data sources. Read-only Projects on another Machine ship here. Done: see "Machine server" in `AGENTS.md`. Anvil starts its own Machine server, or uses the one that runs for its user folder. `machine:open_project` opens a Project of a paired Machine as a separate Sidebar Project with a Machine key. File Search, Text Search, previews, the File Tree, images and Buffer saves work. The Project module (`.anvil_project.lua`), Git, the symbol index and the vault index wait for step 9. Size filters and the preview size limit do not work yet, because the metadata copy has only the path type.
 6. **Writes** with recovery and today's conflict prompt. Done: see "Machine server" in `AGENTS.md`. `core.file_ops` makes, moves, copies and deletes files and folders on the Machine, also to its Recycle Bin. The File Tree, File Search's create row, Rename, Delete, New Directory and Markdown attachments use it. A Buffer that the user discards deletes its recovery record. A wikilink to a missing note does not create the note on a Machine, because it needs the vault index (step 9).
-7. **Terminal service** with Controller and Viewers. In progress: a Terminal host accepts several Clients with one Controller, and the Machine server carries a session's records to a remote Client. A remote session attaches again with a snapshot after a disconnect, and a View device cannot type. A Project on a Machine starts its Terminals on the Machine, and the Sidebar lists them while the Project is loaded. See "Machine server" in `AGENTS.md`.
+7. **Terminal service** with Controller and Viewers. In progress: a Terminal host accepts several Clients with one Controller, and the Machine server carries a session's records to a remote Client. A remote session attaches again with a snapshot after a disconnect, and a View device cannot type. A Project on a Machine starts its Terminals on the Machine, and the Sidebar lists them while the Project is loaded. A Pane Close ends the shell only when no other device shows it. The desktop Viewer bar, with the Controller's device and Take Control, does not exist yet. See "Machine server" in `AGENTS.md`.
 8. **Agent service** and the split of `core.control`.
 9. **Git and Index services**, when the first Client feature needs them.
 10. **Process service** for LSP and formatters.

@@ -141,6 +141,7 @@ typedef struct {
   bool viewer, take_pending;
   uint32_t control_generation;
   char controller_name[ANVIL_TERMINAL_NAME_LENGTH];
+  uint32_t clients;
   GhosttyColorScheme color_scheme;
   bool color_scheme_known;
   TerminalContrast contrast;
@@ -341,7 +342,8 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
     }
     if (header.type == ANVIL_TERMINAL_ROLE && header.size == sizeof(AnvilTerminalRole)) {
       AnvilTerminalRole role; memcpy(&role, buffer, sizeof(role));
-      if (role.controller > 1 || !memchr(role.controller_name, 0, sizeof(role.controller_name))) {
+      if (role.controller > 1 || !role.clients || role.clients > 64 ||
+          !memchr(role.controller_name, 0, sizeof(role.controller_name))) {
         session->read_error = ERROR_INVALID_DATA; InterlockedExchange(&session->read_failed, 1); break;
       }
       EnterCriticalSection(&session->read_lock);
@@ -1586,6 +1588,8 @@ static void push_status(lua_State *L, TerminalSession *session) {
   set_boolean_field(L, "revived", session->revived);
   set_integer_field(L, "revision", (lua_Integer)session->state_revision);
   set_integer_field(L, "attach_count", session->attach_count);
+  /* Attached Clients of the host, this one included, or 0 before the first ROLE. */
+  set_integer_field(L, "clients", session->state == TERMINAL_STATE_RUNNING ? session->clients : 0);
   set_boolean_field(L, "render_pending", session->render_pending ||
     session->state == TERMINAL_STATE_RECONNECTING ||
     (session->state == TERMINAL_STATE_RUNNING && !session->replay_finished));
@@ -1764,8 +1768,10 @@ static bool resize_model(TerminalSession *session, AnvilTerminalSize size) {
 static void apply_role(TerminalSession *session, const AnvilTerminalRole *role) {
   bool was_viewer = session->viewer;
   session->viewer = !role->controller;
-  session->take_pending = false;
+  /* A refused TAKE always meets a newer generation. A ROLE that only counts Clients keeps the request. */
+  if (role->generation != session->control_generation) session->take_pending = false;
   session->control_generation = role->generation;
+  session->clients = role->clients;
   bool name_changed = strcmp(session->controller_name, role->controller_name) != 0;
   memcpy(session->controller_name, role->controller_name, sizeof(session->controller_name));
   if (was_viewer != session->viewer || (session->viewer && name_changed)) session->state_revision++;

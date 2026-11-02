@@ -38,7 +38,8 @@ typedef struct { char id[ANVIL_TERMINAL_ID_LENGTH + 1]; AnvilTerminalSize size;
 #define ANVIL_TERMINAL_VIEW_ONLY 1u
 typedef struct { char name[ANVIL_TERMINAL_NAME_LENGTH]; uint32_t flags; } AnvilTerminalClientInfo;
 typedef struct { uint32_t generation; AnvilTerminalSize size; } AnvilTerminalTake;
-typedef struct { uint32_t generation, controller; AnvilTerminalSize size;
+/* `clients` counts the attached Clients, this one included. */
+typedef struct { uint32_t generation, controller, clients; AnvilTerminalSize size;
   char controller_name[ANVIL_TERMINAL_NAME_LENGTH]; } AnvilTerminalRole;
 typedef struct { uint32_t host_pid, shell_pid, state; AnvilTerminalSize size; } AnvilTerminalWelcome;
 typedef struct { uint32_t busy; char agent_app[32], agent_model[257]; char agent_state[16]; } AnvilTerminalStatus;

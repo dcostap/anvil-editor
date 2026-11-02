@@ -99,11 +99,14 @@ A Terminal host accepts up to 8 Clients. One Client is the Controller: it sets t
 Viewers show the Controller's screen at its size. They send no query answers, focus reports or mouse reports, and get no clipboard writes.
 Typed input in a Viewer takes control. The client sends `TAKE` with the control generation that it saw last, then the input on the same pipe. The host refuses an old generation and drops a Viewer's input.
 After a grant or a resize, the host sends a `ROLE` record to each Client at that place in the output. Each Client resizes its own screen there. A handoff sends no snapshot.
+A `ROLE` also counts the attached Clients. The host sends one to the others when a Client attaches or leaves. The session status reports the count as `clients`.
+A CLOSE or END from one Client only detaches that Client while another Client is attached. The last Client's close ends the shell. A control connection's CLOSE or END does nothing while a Client is attached.
+So Pane Close asks no question for a session that another device shows, and keeps no Reopen record for it. When the Controller leaves, no other Client gets control until it asks.
 A Client on the host's own PC takes control when it attaches, if the Controller is also on this PC. A Pane move attaches before the old View's detach arrives, so the target still controls. A remote Controller keeps control.
 A Viewer whose 8 MiB queue is full is dropped. It attaches again with a snapshot, so it never stalls the Controller.
 Hosts that write `shared = true` in their record accept more than one Client. Older hosts refuse a second Client and send no `ROLE`, so their one Client controls.
 The session status reports `viewer` and the Controller's device name. `session:take_control()` takes control without input.
-Run `ui/terminal_sessions.lua` and `ui/pane_transfer.lua` after changes.
+Run `ui/terminal_sessions.lua`, `ui/pane_transfer.lua`, `runtime/machine_terminal.lua` and `ui/machine_terminal.lua` after changes.
 
 Pane Close skips confirmation when Pi reports `idle` or `done`, even while its shell command remains busy.
 Window Close asks once for its live Terminal Sessions, including idle shells and idle Pi.
@@ -705,7 +708,7 @@ On a Client, `terminal_native.new {remote = true}` makes a session without a hos
 With a nil `id`, it starts a shell through `terminal.start`. A first attach that gets `not_found` also starts a shell, with the same `start` options.
 `attach_remote` gives the session one end of an in-process pipe pair (`terminal_link.c`). The session's reader and writer use it as a host pipe. Lua carries the other end's records through `terminal.read` and `terminal.write`.
 After a disconnect, `core.machine_terminal` closes the pipe pair. The session then waits in the reconnecting state, with no time limit, and attaches again with a new snapshot when the Machine returns.
-A closed session sends its last record, such as CLOSE or DETACH, through the link after its pipe closes. A later `not_found` attach means the session ended on the Machine.
+A closed session sends its last record, such as CLOSE or DETACH, through the link after its pipe closes. The Client then sends `terminal.detach`. A later `not_found` attach means the session ended on the Machine.
 The attach ROLE comes before the snapshot. The Client applies it with the snapshot, so a key that the user types when the screen shows goes out with its role.
 In a Project on a Machine (`fs.machine`), each Terminal View runs its shell on the Machine. The View keeps no session record on this PC and uses no prepared shell.
 Workspace restore attaches the saved session ID. When the Machine no longer has it, a new shell starts in the saved folder, as a local restore does. Reopen Closed Pane does the same, because the Machine keeps no closed sessions.

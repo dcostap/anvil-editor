@@ -109,6 +109,28 @@ test.describe("Terminal on a Machine", function()
     -- The test's teardown checks that closing the View ends the shell.
   end)
 
+  test.it("closes a busy session without a question while another device shows it, and keeps its shell", function(context)
+    -- The shell's child process keeps the session busy.
+    config.plugins.terminal.shell = [[cmd.exe /d /c ping -n 600 127.0.0.1]]
+    local first = open(context, {})
+    -- ping prints its target when it runs.
+    wait_text(first, "127.0.0.1")
+    wait_until(first, function() return first:close_status().busy == true end,
+      "The session does not report busy")
+    local second = open(context, { session_id = first.session_id })
+    local function clients(view) return view.session and view:close_status().clients end
+    wait_until(second, function() return clients(first) == 2 and clients(second) == 2 end,
+      "The Views do not count two devices")
+
+    local approved = false
+    first:can_close(function() approved = true end)
+    test.ok(approved, "The close asked a question")
+    first:on_close()
+    table.remove(context.views, 1)
+    wait_until(second, function() return clients(second) == 1 end, "The other device lost the shell")
+    test.equal(second.state, "running")
+  end)
+
   test.it("lists the Machine's sessions that no Pane shows, and opens them", function(context)
     local view = open(context, {})
     wait_text(view, "ANVIL_ECHO_READY:project")
