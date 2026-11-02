@@ -15,9 +15,9 @@ local icons = require("core.context_menu").icons
 -- Context Menu. The menu can extend over the Project, because the Sidebar's surface covers the whole Window.
 -- Left on a collapsed loaded Project asks to unload it. A second Left unloads it; any other input cancels.
 -- Layout: a search field below the window caption, then the main list: loaded Projects with their Tabs, one for
--- each Pane, and the Terminal Sessions that no Pane shows. Unloaded Projects sit in collapsible age groups aligned
--- to the bottom, which take at most part of the height and scroll on their own. Their rows count their running
--- Terminal Sessions.
+-- each Pane, and the Terminal Sessions that no Pane shows. Other Windows' Projects sit above the unloaded Projects'
+-- collapsible age groups at the bottom. This area takes at most part of the height and scrolls on its own.
+-- Unloaded Project rows count their running Terminal Sessions.
 -- Each area that overflows shows a scrollbar; its thumb drags and its track pages.
 -- Inside a Project, older Terminal Sessions fold into collapsible groups the same way.
 -- Rows keep the shell's order. Age only chooses a row's group, so rows never swap places under the pointer.
@@ -572,6 +572,11 @@ local function age_bucket(activity, now)
   return age < MONTH and "month" or "older"
 end
 
+local function in_other_window(project, window_id)
+  local owner = project and project.window_id
+  return window_id and owner and owner ~= 0 and owner ~= window_id
+end
+
 function SidebarView:is_collapsed(key, default)
   local saved = self.collapsed[key]
   if saved == nil then return default end
@@ -666,8 +671,7 @@ function SidebarView:rebuild_rows()
     -- The Selected Project's active Tab takes the highlight.
     local active = is_selected and panes[panes.active or 0] and panes.active
     -- Another Window's Project stays collapsed and has no fold key, so it shows no chevron and does not toggle.
-    local owner = project.window_id
-    local elsewhere = window_id and owner and owner ~= 0 and owner ~= window_id
+    local elsewhere = in_other_window(project, window_id)
     local key = not elsewhere and (#panes > 0 or #(project.terminals or {}) > 0) and ("project:" .. project.path) or nil
     -- A Project expands when it becomes selected, and stays expanded after it loses the selection.
     if key then
@@ -764,14 +768,23 @@ function SidebarView:rebuild_rows()
     end
   end
   area = "main"
-  -- The Scratch Project stays first, even when it is Dormant.
+  local other_windows = {}
+  -- The Scratch Project stays first in its area, even when it is Dormant.
   for _, project in ipairs(projects) do
-    if project.scratch then add_loaded(project) end
+    if project.scratch then
+      if in_other_window(project, window_id) then
+        other_windows[#other_windows + 1] = project
+      else
+        add_loaded(project)
+      end
+    end
   end
   local grouped = {}
   for _, project in ipairs(projects) do
     if project.scratch then
       -- It is listed first.
+    elseif in_other_window(project, window_id) then
+      other_windows[#other_windows + 1] = project
     elseif project.state == "dormant" then
       local bucket = age_bucket(look.activity(project), now)
       grouped[bucket] = grouped[bucket] or {}
@@ -780,11 +793,12 @@ function SidebarView:rebuild_rows()
       add_loaded(project)
     end
   end
-  if #rows == 0 then
+  if #rows == 0 and #other_windows == 0 then
     local label = #projects > 0 and "No loaded Projects" or "No Projects yet"
     add({kind = "empty", label = label, id_key = "empty"}, m.project)
   end
   area = "bottom"
+  for _, project in ipairs(other_windows) do add_loaded(project) end
   for _, group in ipairs(GROUPS) do
     local members = grouped[group.bucket]
     if members then
@@ -1645,8 +1659,7 @@ function SidebarView:dim_target(row)
   if drag and drag.key == key or pending and pending.key == key then return 0.35 end
   if not row.selected and (row.snooze or row.agent and not row.agent.command
     and tab.working(row.tab.terminal or {}, row.agent)) then return 0.5 end
-  local owner = row.project and row.project.window_id
-  if self.window_id and owner and owner ~= 0 and owner ~= self.window_id then return 0.5 end
+  if in_other_window(row.project, self.window_id) then return 0.5 end
   return 1
 end
 
