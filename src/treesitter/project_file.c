@@ -115,6 +115,21 @@ static bool checked_grow(void **data, uint32_t *capacity, uint32_t needed, size_
   return true;
 }
 
+/* Gives back the unused part of an array that grew by doubling. A failed shrink keeps the larger array. */
+static void shrink_to_fit(void **data, uint32_t *capacity, uint32_t count, size_t item_size) {
+  if (!*data || count >= *capacity) return;
+  if (!count) {
+    free(*data);
+    *data = NULL;
+    *capacity = 0;
+    return;
+  }
+  void *shrunk = realloc(*data, (size_t)count * item_size);
+  if (!shrunk) return;
+  *data = shrunk;
+  *capacity = count;
+}
+
 static bool buffer_append(Buffer *buffer, const char *text, uint32_t length) {
   if (!length) return true;
   if (buffer->length > UINT32_MAX - length) return false;
@@ -600,7 +615,19 @@ static int usage_compare(const void *left, const void *right) {
   return a->capture.offset < b->capture.offset ? -1 : a->capture.offset > b->capture.offset;
 }
 
-static bool build_usage_record(AnvilTSProjectFileResult *result, const AnvilTSSnapshot *snapshot, const AnvilTSProjectCapture *capture, Usage *usage) {
+/* Usages on one line share one copy of the line. A copy for each usage took most of an index's memory. */
+static bool usage_line_text(AnvilTSProjectFileResult *result, const AnvilTSSnapshot *snapshot, uint32_t row, Slice *lines, Slice *slice) {
+  if (lines[row].offset == ANVIL_PROJECT_NO_OFFSET) {
+    uint32_t line_start = snapshot->line_starts[row];
+    uint32_t line_len = snapshot->line_lengths[row];
+    if (line_len && snapshot->bytes[line_start + line_len - 1] == '\n') line_len--;
+    if (!arena_append(result, snapshot->bytes + line_start, line_len, 512, &lines[row])) return false;
+  }
+  *slice = lines[row];
+  return true;
+}
+
+static bool build_usage_record(AnvilTSProjectFileResult *result, const AnvilTSSnapshot *snapshot, const AnvilTSProjectCapture *capture, Slice *lines, Usage *usage) {
   const char *name;
   uint32_t name_len;
   if (!capture_text(snapshot, capture, &name, &name_len) || !name_len) return false;
@@ -612,13 +639,10 @@ static bool build_usage_record(AnvilTSProjectFileResult *result, const AnvilTSSn
   capture_definition_kind(capture, &kind, &kind_len);
   uint32_t row = capture->start_point.row;
   if (row >= snapshot->line_count) return false;
-  uint32_t line_start = snapshot->line_starts[row];
-  uint32_t line_len = snapshot->line_lengths[row];
-  if (line_len && snapshot->bytes[line_start + line_len - 1] == '\n') line_len--;
   return arena_append(result, name, name_len, 0, &usage->name) &&
     arena_intern_label(result, capture->name, capture->name_len, &usage->capture) &&
     arena_intern_label(result, kind, kind_len, &usage->kind) &&
-    arena_append(result, snapshot->bytes + line_start, line_len, 512, &usage->line_text);
+    usage_line_text(result, snapshot, row, lines, &usage->line_text);
 }
 
 static bool usage_same(const AnvilTSProjectFileResult *result, const Usage *usage, const char *name, uint32_t name_len, uint32_t start, uint32_t end) {
@@ -633,7 +657,14 @@ static bool build_usages(AnvilTSProjectFileResult *result, const AnvilTSSnapshot
   uint32_t slot_count = 16;
   while (slot_count < target_slots && slot_count <= UINT32_MAX / 2) slot_count *= 2;
   UsageSlot *slots = (UsageSlot *)calloc(slot_count, sizeof(*slots));
-  if (!slots) { set_error(error, "out of memory deduplicating native Project usages"); return false; }
+  Slice *lines = (Slice *)malloc((snapshot->line_count ? snapshot->line_count : 1) * sizeof(*lines));
+  if (!slots || !lines) {
+    free(slots);
+    free(lines);
+    set_error(error, "out of memory deduplicating native Project usages");
+    return false;
+  }
+  for (uint32_t i = 0; i < snapshot->line_count; i++) lines[i] = absent_slice();
   for (uint32_t i = 0; i < capture_count; i++) {
     const AnvilTSProjectCapture *capture = &captures[i];
     if (!usage_capture(capture)) continue;
@@ -648,7 +679,7 @@ static bool build_usages(AnvilTSProjectFileResult *result, const AnvilTSSnapshot
         bool declaration = starts_with(capture->name, capture->name_len, "definition.");
         if (declaration && !existing->is_declaration) {
           Usage replacement;
-          if (!build_usage_record(result, snapshot, capture, &replacement)) goto oom;
+          if (!build_usage_record(result, snapshot, capture, lines, &replacement)) goto oom;
           *existing = replacement;
         }
         goto next_capture;
@@ -656,16 +687,18 @@ static bool build_usages(AnvilTSProjectFileResult *result, const AnvilTSSnapshot
       slot = (slot + 1) & (slot_count - 1);
     }
     if (!checked_grow((void **)&result->usages, &result->usage_capacity, result->usage_count + 1, sizeof(*result->usages))) goto oom;
-    if (!build_usage_record(result, snapshot, capture, &result->usages[result->usage_count])) goto oom;
+    if (!build_usage_record(result, snapshot, capture, lines, &result->usages[result->usage_count])) goto oom;
     slots[slot].hash = hash;
     slots[slot].usage_plus_one = ++result->usage_count;
 next_capture:;
   }
   qsort(result->usages, result->usage_count, sizeof(*result->usages), usage_compare);
   free(slots);
+  free(lines);
   return true;
 oom:
   free(slots);
+  free(lines);
   set_error(error, "out of memory constructing native Project usages");
   return false;
 }
@@ -698,6 +731,12 @@ AnvilTSProjectFileResult *anvil_ts_project_file_build(
     anvil_ts_project_file_free(result);
     return NULL;
   }
+  /* An index keeps thousands of these records while its Project is open. */
+  shrink_to_fit((void **)&result->arena, &result->arena_capacity, result->arena_length, 1);
+  shrink_to_fit((void **)&result->symbols, &result->symbol_capacity, result->symbol_count, sizeof(*result->symbols));
+  shrink_to_fit((void **)&result->usages, &result->usage_capacity, result->usage_count, sizeof(*result->usages));
+  shrink_to_fit((void **)&result->interned_labels, &result->interned_label_capacity,
+    result->interned_label_count, sizeof(*result->interned_labels));
   return result;
 }
 

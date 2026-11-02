@@ -106,7 +106,7 @@ local function flat_range(range)
   return { range.start.line, range.start.col, range["end"].line, range["end"].col }
 end
 
-local function extract(case)
+local function index_text(case)
   local language = test.not_nil(registry.get(case.filename, ""))
   local pool = native_pool.new({ name = "project-contract-" .. case.language, worker_count = 1 })
   local handle, submit_err = pool:submit({
@@ -139,6 +139,11 @@ local function extract(case)
     coroutine.yield(0.001)
   end
   test.not_nil(result, terminal_error)
+  return result, pool
+end
+
+local function extract(case)
+  local result, pool = index_text(case)
   local summary = result:summary()
   test.equal(summary.capabilities.compact_project_records, true)
   local function collect_pages(method)
@@ -196,4 +201,44 @@ test.describe("Tree-sitter Project index behavior contract", function()
       test.equal(usage_count, #case.usages)
     end)
   end
+end)
+
+local MB = 1024 * 1024
+
+local function long_line_source(line_count, names_per_line)
+  local terms = {}
+  for i = 1, names_per_line do terms[i] = string.format("shared_value_%02d", i) end
+  local sum = table.concat(terms, " + ")
+  local lines = {}
+  for i = 1, line_count do lines[i] = string.format("int line_%04d(void) { return %s; }\n", i, sum) end
+  return table.concat(lines)
+end
+
+test.describe("Tree-sitter Project index memory", function()
+  test.test("keeps each source line once for all usages on it", function()
+    test.skip_if(not system.get_private_memory(), "needs a private memory report")
+    -- 1500 lines with 31 usages each. A copy of the line for each usage took about 31 MB; one copy for each line takes about 9 MB.
+    local case = { language = "c", filename = "long_lines.c", source = long_line_source(1500, 30) }
+    -- The first run grows the heap for the parse. The second run reuses that memory, so its growth is the result.
+    local warm, warm_pool = index_text(case)
+    warm:close()
+    warm_pool:shutdown({ cancel_running = true })
+    collectgarbage()
+    local before = system.get_private_memory()
+    -- An index keeps only the file's records, so the worker's result closes after the builder takes them.
+    local result, pool = index_text(case)
+    local builder = native_pool.new_project_builder({ usage_cap = 100000 })
+    test.ok(result:adopt_project(builder:id(), { fingerprint = "long-lines", usage_complete = true }))
+    result:close()
+    pool:shutdown({ cancel_running = true })
+    collectgarbage()
+    local growth = system.get_private_memory() - before
+    local snapshot = builder:freeze()
+    local usages = snapshot:usages({ offset = 1, limit = 1 })
+    test.equal(usages.total, 1500 * 31)
+    test.equal(usages[1].line_text:sub(1, 30), "int line_0001(void) { return s")
+    snapshot:close()
+    builder:close()
+    test.ok(growth < 16 * MB, string.format("%d usages took %.1f MB", usages.total, growth / MB))
+  end)
 end)
