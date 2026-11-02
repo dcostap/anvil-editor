@@ -3909,7 +3909,6 @@ keymap.add {
   ["ctrl+s"] = "filetree:apply_changes",
   ["f5"] = "filetree:reload",
   ["alt+shift+r"] = "filetree:open_selected_right",
-  ["alt+home"] = "filetree:project_root",
 }
 
 return M
