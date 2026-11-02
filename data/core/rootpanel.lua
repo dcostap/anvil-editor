@@ -1166,6 +1166,13 @@ function RootPanel:draw()
   for _, bar in ipairs(self:pane_status_bars()) do call_view(bar, "draw") end
   if group then draw_split_dividers(group.root) end
   for _, view in ipairs(self:shell_views()) do call_view(view, "draw") end
+  -- Focus feedback belongs to its View's layer, so popups and overlays cover it.
+  local focused = self.focus_feedback_view
+  if focused then
+    core.push_clip_rect(focused.position.x, focused.position.y, focused.size.x, focused.size.y)
+    self.focus_feedback:draw(focused.position.x, focused.position.y, focused.size.x, focused.size.y)
+    core.pop_clip_rect()
+  end
   end_caret_layer(self)
   local overlay_started, overlay_scope = perf_begin("rootpanel_overlays_draw")
   self:draw_active_app_overlay()
@@ -1215,12 +1222,6 @@ function RootPanel:draw()
   end
   perf_end("rootpanel_deferred_draw", deferred_started, deferred_scope)
   end_caret_layer(self)
-  local focused = self.focus_feedback_view
-  if focused then
-    core.push_clip_rect(focused.position.x, focused.position.y, focused.size.x, focused.size.y)
-    self.focus_feedback:draw(focused.position.x, focused.position.y, focused.size.x, focused.size.y)
-    core.pop_clip_rect()
-  end
   local image_overlay = package.loaded["core.image_overlay"]
   if image_overlay then image_overlay.draw() end
   local context_menu = package.loaded["core.context_menu"]

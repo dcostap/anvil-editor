@@ -231,6 +231,38 @@ test.describe("Focus feedback surfaces", function()
     test.ok(#rectangles > 0)
   end)
 
+  test.it("draws Pane feedback below popups and the app overlay", function()
+    local pane = panes.create {factory=function() return View() end}
+    local root = core.root_panel
+    root:update()
+    -- The draw index of the first rectangle in each color.
+    local order, count = {}, 0
+    local names = {["13,57,91"] = "feedback", ["1,2,3"] = "overlay", ["4,5,6"] = "popup"}
+    local draw_rect = renderer.draw_rect
+    renderer.draw_rect = function(x, y, w, h, color)
+      count = count + 1
+      local name = names[color[1] .. "," .. color[2] .. "," .. color[3]]
+      if name and not order[name] then order[name] = count end
+      return draw_rect(x, y, w, h, color)
+    end
+    local config = require "core.config"
+    local transitions = config.transitions
+    config.transitions = false
+    root:show_app_overlay("popup-test", {1, 2, 3, 100})
+    root:update()
+    config.transitions = transitions
+    root:defer_draw(function()
+      local view = pane.current_view
+      renderer.draw_rect(view.position.x, view.position.y, 40, 20, {4, 5, 6, 255})
+    end)
+    draw(function() root:draw() end)
+    renderer.draw_rect = draw_rect
+    root:hide_app_overlay("popup-test")
+    test.ok(order.feedback, "Focus did not produce visible feedback")
+    test.ok(order.feedback < order.overlay, "Focus feedback must draw below the app overlay")
+    test.ok(order.feedback < order.popup, "Focus feedback must draw below popups")
+  end)
+
   test.it("does not highlight the content area when a confirmation takes focus", function()
     local pane = panes.create {factory=function() return View() end}
     local root = core.root_panel
