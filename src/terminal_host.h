@@ -21,6 +21,11 @@ bool anvil_terminal_host_identity(HANDLE process, DWORD pid, const char *creatio
 bool anvil_terminal_host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
                                  DWORD *shell_pid, const char *id, AnvilTerminalSize *size,
                                  DWORD *error);
+/* Connects as a Client on another device, such as a Machine server's link for a remote Client. `info` names
+   the device, and can make the connection view-only. Hosts without `shared = true` refuse it. */
+bool anvil_terminal_host_connect_as(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid, DWORD *shell_pid,
+                                    const char *id, AnvilTerminalSize *size, const AnvilTerminalClientInfo *info,
+                                    DWORD *error);
 /* A fresh authenticated control connection needs no snapshot or model resize. */
 bool anvil_terminal_host_control(HANDLE process, DWORD host_pid, const char *id,
                                  uint16_t type, DWORD *error);

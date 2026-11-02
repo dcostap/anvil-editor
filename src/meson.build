@@ -183,6 +183,7 @@ if host_machine.system() == 'windows'
         shell_compose_shader,
         'zig_abi_compat.c',
         'api/terminal_native.c',
+        'api/terminal_link.c',
         'ipc_pipe.c',
         'conpty.c',
         'terminal_model.c',

@@ -1502,7 +1502,7 @@ static size_t quote_arg(wchar_t *out, const wchar_t *arg) {
 
 static bool host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
                          DWORD *shell_pid, const char *id, AnvilTerminalSize *size,
-                         bool replay, DWORD timeout_ms, DWORD *error) {
+                         const AnvilTerminalClientInfo *info, bool replay, DWORD timeout_ms, DWORD *error) {
   if (!anvil_terminal_id_valid(id)) { *error = ERROR_INVALID_DATA; return false; }
   char name[128]; snprintf(name, sizeof(name), "\\\\.\\pipe\\anvil-terminal-%s", id);
   uint64_t deadline = GetTickCount64() + timeout_ms;
@@ -1528,7 +1528,8 @@ static bool host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
   pipe->timeout_ms = timeout_ms;
   AnvilTerminalHello hello = { .size = *size, .client_pid = GetCurrentProcessId(), .replay = replay };
   memcpy(hello.id, id, sizeof(hello.id));
-  if (!anvil_ipc_pipe_write(pipe, ANVIL_TERMINAL_HELLO, &hello, sizeof(hello), NULL, 0)) {
+  if (!anvil_ipc_pipe_write(pipe, ANVIL_TERMINAL_HELLO, &hello, sizeof(hello), info,
+        info ? (uint32_t)sizeof(*info) : 0)) {
     *error = GetLastError(); return false;
   }
   AnvilIPCHeader header; AnvilTerminalWelcome welcome;
@@ -1550,13 +1551,19 @@ static bool host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
 
 bool anvil_terminal_host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
                                  DWORD *shell_pid, const char *id, AnvilTerminalSize *size, DWORD *error) {
-  return host_connect(pipe, process, host_pid, shell_pid, id, size, true, CONNECT_TIMEOUT_MS, error);
+  return host_connect(pipe, process, host_pid, shell_pid, id, size, NULL, true, CONNECT_TIMEOUT_MS, error);
+}
+
+bool anvil_terminal_host_connect_as(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid, DWORD *shell_pid,
+                                    const char *id, AnvilTerminalSize *size, const AnvilTerminalClientInfo *info,
+                                    DWORD *error) {
+  return host_connect(pipe, process, host_pid, shell_pid, id, size, info, true, CONNECT_TIMEOUT_MS, error);
 }
 
 bool anvil_terminal_host_control(HANDLE process, DWORD host_pid, const char *id,
                                  uint16_t type, DWORD *error) {
   AnvilIPCPipe pipe = {0}; DWORD shell_pid; AnvilTerminalSize size = {0};
-  bool ok = host_connect(&pipe, process, host_pid, &shell_pid, id, &size, false, CONNECT_TIMEOUT_MS, error);
+  bool ok = host_connect(&pipe, process, host_pid, &shell_pid, id, &size, NULL, false, CONNECT_TIMEOUT_MS, error);
   if (ok) {
     pipe.timeout_ms = 5000;
     ok = anvil_ipc_pipe_write(&pipe, type, NULL, 0, NULL, 0);
@@ -1613,7 +1620,7 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
   CloseHandle(info.hThread); *process = info.hProcess; *host_pid = info.dwProcessId;
   *replay_bytes = 0;
   if (revive_from) { size->cols = 0; size->rows = 0; }
-  return host_connect(pipe, *process, *host_pid, shell_pid, id, size, true, LAUNCH_TIMEOUT_MS, error);
+  return host_connect(pipe, *process, *host_pid, shell_pid, id, size, NULL, true, LAUNCH_TIMEOUT_MS, error);
 }
 
 void anvil_terminal_host_discard(const char *userdir, const char *id) {

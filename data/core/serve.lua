@@ -12,6 +12,14 @@ local core = {threads = {}, background_threads = 0}
 package.loaded.core = core
 local PROTOCOL = 1
 local FEATURES = {"projects.list", "files.list", "files.changes", "files.stat", "files.list_dir", "files.mkdir", "files.move", "files.copy", "files.delete", "search.start", "search.read", "search.cancel", "files.read", "files.write", "files.save_result", "pairing.start", "devices.list", "devices.revoke"}
+-- Terminal hosts use ConPTY, so only a Windows Machine has Terminal Sessions.
+local SERVICES = {"core.serve_files", "core.serve_search"}
+if PLATFORM == "Windows" then
+  SERVICES[#SERVICES + 1] = "core.serve_terminal"
+  for _, name in ipairs({"terminal.list", "terminal.attach", "terminal.read", "terminal.write", "terminal.detach"}) do
+    FEATURES[#FEATURES + 1] = name
+  end
+end
 local MAX_CLIENTS, MAX_REQUEST_JSON, MAX_FILE, HELLO_TIMEOUT = 32, 64 * 1024, 16 * 1024 * 1024, 10
 local MAX_SAVES, PAIRING_TIME, PAIRING_ATTEMPTS, MAX_NAME = 1024, 300, 5, 100
 -- A View device only reads. These methods need Full control.
@@ -444,6 +452,7 @@ local function handle(client, id, body, bytes)
       return fail(client, id, "unauthorized", "The credentials are not valid")
     end
     client.authorized, client.level, client.device = true, level, device and device.id
+    client.name = device and device.name
     client.decoder:limits(MAX_REQUEST_JSON, MAX_FILE)
     return reply(client, id, {result = {protocol = PROTOCOL, machine = server.machine, epoch = server.epoch,
       os = PLATFORM, features = FEATURES, level = level, device = token and {id = device.id, token = token}}})
@@ -544,7 +553,7 @@ local function start(listed)
   local service_context = {reply = reply, fail = fail, check_path = check_path, disk_path = disk_path,
     machine_path = machine_path, project_root = project_root, holds_project = holds_project, log = log,
     private = server.private, on_close = function(fn) server.on_close[#server.on_close + 1] = fn end}
-  for _, module in ipairs({"core.serve_files", "core.serve_search"}) do
+  for _, module in ipairs(SERVICES) do
     for name, method in pairs(require(module).new(service_context)) do services[name] = method end
   end
   write_file(server.discovery, json.encode {version = 1, port = port, token = token,

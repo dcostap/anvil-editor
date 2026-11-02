@@ -22,6 +22,7 @@
 #include "../terminal_contrast.h"
 #include "../terminal_model.h"
 #include "../terminal_host.h"
+#include "../terminal_link.h"
 
 #define TERMINAL_READ_BUDGET (128u * 1024u)
 #define TERMINAL_READ_QUEUE_CAPACITY (4u * 1024u * 1024u)
@@ -66,6 +67,10 @@ typedef struct {
   uint64_t reconnect_started, reconnect_at;
   DWORD reconnect_delay;
   bool initial_restore, preserve_grid, terminate_on_failure;
+  /* A session on another Machine. Lua connects it through a Terminal link (`session:attach_remote`), and
+     reconnects it after a fault. It has no host process on this PC. */
+  bool remote;
+  AnvilTerminalLink *link;
   uint8_t *replay;
   size_t replay_length, replay_capacity;
   volatile LONG replay_complete;
@@ -1086,6 +1091,13 @@ static void close_session(TerminalSession *session) {
   session->prepared_environment = NULL;
   uint16_t final_type = session->prepared ? ANVIL_TERMINAL_CLOSE : session->ended ? ANVIL_TERMINAL_END
     : session->detached ? ANVIL_TERMINAL_DETACH : ANVIL_TERMINAL_CLOSE;
+  /* Lua sends a remote session's last record to its Machine after the pipe closes. */
+  if (session->link) {
+    anvil_terminal_link_finish(session->link, final_type);
+    release_terminal_transport(session);
+    anvil_terminal_link_release(session->link);
+    session->link = NULL;
+  }
   HANDLE process = retain_handle(session->process);
   bool job_owns_command = cancel_reconnect(session, final_type);
   if (session->vt_trace_file) {
@@ -1447,8 +1459,15 @@ static int f_terminal_new(lua_State *L) {
   const char *revive_from = lua_isstring(L, -1) ? lua_tostring(L, -1) : NULL;
   lua_getfield(L, 1, "revive_session_id");
   const char *revive_id = lua_isstring(L, -1) ? lua_tostring(L, -1) : NULL;
+  lua_getfield(L, 1, "remote");
+  session->remote = lua_toboolean(L, -1);
+  lua_pop(L, 1);
   bool started = false;
-  if (revive_from) {
+  if (session->remote) {
+    /* Lua attaches it through its Machine. */
+    started = true;
+    session->transport_released = true;
+  } else if (revive_from) {
     lua_getglobal(L, "DATADIR");
     const char *datadir = luaL_checkstring(L, -1);
     started = start_launch(session, revive_id, revive_from, userdir ? userdir : ".", project, shell, cwd, datadir);
@@ -1619,8 +1638,44 @@ static void fail_transport(TerminalSession *session, DWORD error) {
   clear_replay(session);
 }
 
+/* Starts the reader and writer on a connection whose host sent WELCOME. The snapshot follows. */
+static bool start_attached(TerminalSession *session, HANDLE handle) {
+  session->read_queue_head = session->read_queue_count = 0;
+  session->write_queue_head = session->write_queue_count = 0;
+  /* The new connection's ROLE says who controls. An older host sends none, and this Client controls. */
+  session->role_ready = session->take_pending = false;
+  if (session->viewer) { session->viewer = false; session->state_revision++; }
+  session->read_error = session->write_error = 0;
+  InterlockedExchange(&session->read_failed, 0); InterlockedExchange(&session->write_failed, 0);
+  InterlockedExchange(&session->reader_done, 0); InterlockedExchange(&session->closing, 0);
+  InterlockedExchange64((LONG64 *)&session->replay_bytes, 0);
+  session->transport_released = false;
+  if (!anvil_ipc_pipe_init(&session->pipe, handle, ANVIL_TERMINAL_PROTOCOL_VERSION,
+                          ANVIL_TERMINAL_MAX_PAYLOAD) || !start_terminal_io(session)) return false;
+  session->attached_at = GetTickCount64(); session->attach_count++;
+  session->initial_restore = session->preserve_grid = false;
+  set_terminal_state(session, TERMINAL_STATE_RUNNING);
+  return true;
+}
+
 static bool service_transport(TerminalSession *session) {
   bool fault = session->read_failed || (session->write_failed && session->reader_done && !session->host_exited);
+  if (session->remote) {
+    /* Lua attaches the session again, with a new snapshot. A protocol fault ends it. */
+    if (session->state == TERMINAL_STATE_RUNNING && fault) {
+      if (session->read_error == ERROR_INVALID_DATA || session->read_error == ERROR_NOT_ENOUGH_MEMORY) {
+        fail_transport(session, session->read_error);
+        return false;
+      }
+      release_terminal_transport(session);
+      if (session->link) { anvil_terminal_link_release(session->link); session->link = NULL; }
+      clear_replay(session);
+      session->replay_finished = false;
+      InterlockedExchange(&session->replay_complete, 0);
+      set_terminal_state(session, TERMINAL_STATE_RECONNECTING);
+    }
+    return session->state != TERMINAL_STATE_RECONNECTING && !session->transport_released;
+  }
   if (session->state == TERMINAL_STATE_RUNNING && fault) {
     if (session->prepared) {
       send_final_command(session, retain_handle(session->process), ANVIL_TERMINAL_CLOSE);
@@ -1686,23 +1741,7 @@ static bool service_transport(TerminalSession *session) {
       }
       return false;
     }
-    session->read_queue_head = session->read_queue_count = 0;
-    session->write_queue_head = session->write_queue_count = 0;
-    /* The new connection's ROLE says who controls. An older host sends none, and this Client controls. */
-    session->role_ready = session->take_pending = false;
-    if (session->viewer) { session->viewer = false; session->state_revision++; }
-    session->read_error = session->write_error = 0;
-    InterlockedExchange(&session->read_failed, 0); InterlockedExchange(&session->write_failed, 0);
-    InterlockedExchange(&session->reader_done, 0); InterlockedExchange(&session->closing, 0);
-    InterlockedExchange64((LONG64 *)&session->replay_bytes, 0);
-    session->transport_released = false;
-    if (!anvil_ipc_pipe_init(&session->pipe, handle, ANVIL_TERMINAL_PROTOCOL_VERSION,
-                            ANVIL_TERMINAL_MAX_PAYLOAD) || !start_terminal_io(session)) {
-      fail_transport(session, ERROR_NOT_ENOUGH_MEMORY); return false;
-    }
-    session->attached_at = GetTickCount64(); session->attach_count++;
-    session->initial_restore = session->preserve_grid = false;
-    set_terminal_state(session, TERMINAL_STATE_RUNNING);
+    if (!start_attached(session, handle)) { fail_transport(session, ERROR_NOT_ENOUGH_MEMORY); return false; }
     if (session->activated_prepared && !enqueue_record(session, ANVIL_TERMINAL_ACTIVATE, NULL, 0)) {
       fail_transport(session, ERROR_BROKEN_PIPE); return false;
     }
@@ -1775,6 +1814,14 @@ static bool service_replay(TerminalSession *session, bool *changed) {
     }
     session->render_generation++;
     *changed = true;
+    /* The attach ROLE comes before the snapshot. It applies with the snapshot, so a key typed when the screen
+       shows goes out with its role. */
+    EnterCriticalSection(&session->read_lock);
+    bool role = session->role_ready;
+    AnvilTerminalRole next = session->role_next;
+    if (role) { session->role_ready = false; WakeConditionVariable(&session->read_ready); }
+    LeaveCriticalSection(&session->read_lock);
+    if (role) apply_role(session, &next);
     return false;
   }
   uint64_t deadline = GetTickCount64() + 2;
@@ -2122,6 +2169,55 @@ static int f_terminal_resize(lua_State *L) {
   session->render_generation++;
   lua_pushboolean(L, true);
   return 1;
+}
+
+/* `session:attach_remote {shell_pid, cols, rows, cell_width, cell_height}` connects a remote session after its
+   Machine attached it to the host. It returns the Terminal link whose records Lua carries to the Machine, or
+   nil and an error. The snapshot and the output then arrive through the link. */
+static int f_terminal_attach_remote(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  luaL_checktype(L, 2, LUA_TTABLE);
+  if (!session->remote || session->closed || session->state != TERMINAL_STATE_RECONNECTING) {
+    lua_pushnil(L); lua_pushliteral(L, "The session is not waiting for its Machine"); return 2;
+  }
+  lua_Integer values[5];
+  const char *names[] = { "shell_pid", "cols", "rows", "cell_width", "cell_height" };
+  for (int i = 0; i < 5; i++) {
+    lua_getfield(L, 2, names[i]);
+    values[i] = luaL_checkinteger(L, -1);
+    lua_pop(L, 1);
+    if (values[i] < 1 || values[i] > (i == 0 ? UINT32_MAX : i < 3 ? 32767 : 65535))
+      return luaL_error(L, "%s is out of range", names[i]);
+  }
+  HANDLE handle = NULL; DWORD error = 0;
+  AnvilTerminalLink *link = anvil_terminal_link_pair(&handle, &error);
+  if (!link) {
+    lua_pushnil(L);
+    push_windows_error(L, "Could not connect the Terminal Session", error);
+    return 2;
+  }
+  if (session->link) anvil_terminal_link_release(session->link);
+  session->link = link;
+  session->shell_pid = (DWORD)values[0];
+  session->cols = (uint16_t)values[1]; session->rows = (uint16_t)values[2];
+  session->cell_width = (uint32_t)values[3]; session->cell_height = (uint32_t)values[4];
+  if (!start_attached(session, handle)) {
+    fail_transport(session, ERROR_NOT_ENOUGH_MEMORY);
+    lua_pushnil(L); lua_pushliteral(L, "Could not connect the Terminal Session"); return 2;
+  }
+  anvil_terminal_link_push(L, link);
+  return 1;
+}
+
+/* Returns the View's own size: cols, rows, cell width and cell height. A Viewer shows another size. Returns
+   nothing for a closed session. */
+static int f_terminal_wanted_size(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  if (session->closed) return 0;
+  AnvilTerminalSize size = wanted_size(session);
+  lua_pushinteger(L, size.cols); lua_pushinteger(L, size.rows);
+  lua_pushinteger(L, size.cell_width); lua_pushinteger(L, size.cell_height);
+  return 4;
 }
 
 /* Takes control without input. Returns false for a Controller or a closed session. */
@@ -4108,6 +4204,8 @@ static const luaL_Reg terminal_methods[] = {
   { "paste", f_terminal_paste },
   { "resize", f_terminal_resize },
   { "take_control", f_terminal_take_control },
+  { "attach_remote", f_terminal_attach_remote },
+  { "wanted_size", f_terminal_wanted_size },
   { "clear", f_terminal_clear },
   { "request_editor", f_terminal_request_editor },
   { "set_project", f_terminal_set_project },

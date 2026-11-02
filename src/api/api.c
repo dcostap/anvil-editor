@@ -21,7 +21,8 @@ int luaopen_worker_pool_native(lua_State *L);
 
 #ifdef _WIN32
   int luaopen_terminal_native(lua_State *L);
-  #define LUA_TERMINAL { "terminal_native", luaopen_terminal_native },
+  int luaopen_terminal_link(lua_State *L);
+  #define LUA_TERMINAL { "terminal_native", luaopen_terminal_native }, { "terminal_link", luaopen_terminal_link },
 #else
   #define LUA_TERMINAL
 #endif
