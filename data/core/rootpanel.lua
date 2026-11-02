@@ -6,7 +6,6 @@ local View = require "core.view"
 local layout = require "core.pane_layout"
 local CaretRenderer = require "core.caret_renderer"
 local FocusFeedback = require "core.focus_feedback"
-local wallpaper_contrast = require "core.wallpaper_contrast"
 local wallpapers = require "core.wallpapers"
 
 local RootPanel = View:extend()
@@ -1139,69 +1138,13 @@ function RootPanel:backdrop_rect()
 end
 
 function RootPanel:draw_wallpaper_region(x, y, width, height)
-  if width <= 0 or height <= 0 then return end
-  if not self.wallpaper then
-    renderer.draw_rect(x, y, width, height, style.background)
-    return
-  end
   local bx, by, bw, bh = self:backdrop_rect()
-  local clipped = x ~= bx or y ~= by or width ~= bw or height ~= bh
-  if clipped then core.push_clip_rect(x, y, width, height) end
-  local iw, ih = self.wallpaper:get_size()
-  local scale = math.max(bw / iw, bh / ih)
-  local w, h = iw * scale, ih * scale
-  renderer.draw_canvas_scaled(self.wallpaper, bx + (bw - w) / 2, by + (bh - h) / 2, w, h)
-  if clipped then core.pop_clip_rect() end
-  renderer.draw_rect(x, y, width, height,
-    style.wallpaper_surface(style.background, self.wallpaper_backdrop_opacity))
+  wallpapers.draw_region(self, bx, by, bw, bh, x, y, width, height)
 end
 
 function RootPanel:draw_wallpaper(has_pane_view)
-  local selected = wallpapers.current()
-  if selected == "none" then
-    self.wallpaper = nil
-    self.wallpaper_name = nil
-    self.wallpaper_contrast_image = nil
-    self.wallpaper_visibility = nil
-    self.wallpaper_backdrop_opacity = nil
-    local x, y, w, h = self:backdrop_rect()
-    renderer.draw_rect(x, y, w, h, style.background)
-    return
-  end
-  if self.wallpaper_name ~= selected then
-    local path = wallpapers.path(selected)
-    local image, err = canvas.load_image(path)
-    self.wallpaper = image or false
-    self.wallpaper_name = selected
-    if image then
-      core.log_quiet("Window wallpaper loaded: %s", path)
-    else
-      core.log_quiet("Window wallpaper unavailable: %s (%s)", path, tostring(err))
-    end
-  end
-  if not self.wallpaper then
-    self:draw_wallpaper_region(self:backdrop_rect())
-    return
-  end
-  if self.wallpaper_contrast_image ~= self.wallpaper then
-    self.wallpaper_contrast_image = self.wallpaper
-    self.wallpaper_sample_low, self.wallpaper_sample_high, self.wallpaper_sample_mid =
-      wallpaper_contrast.sample(self.wallpaper)
-    self.wallpaper_contrast_generation = nil
-  end
-  if not self.wallpaper_visibility or self.wallpaper_contrast_generation ~= core.color_theme_generation then
-    self.wallpaper_visibility = wallpaper_contrast.visibility(
-      self.wallpaper_sample_low, self.wallpaper_sample_high, self.wallpaper_sample_mid,
-      style.background,
-      style.wallpaper_reference_background, style.wallpaper_reference_visibility)
-    self.wallpaper_contrast_generation = core.color_theme_generation
-    core.log_quiet("Window wallpaper theme visibility: %.1f%% generation=%s",
-      self.wallpaper_visibility * 100, tostring(core.color_theme_generation))
-  end
-  -- With a View, both fills attenuate the image. Without one, the root does it alone.
-  self.wallpaper_backdrop_opacity = 1 - self.wallpaper_visibility
-    / (has_pane_view and (1 - style.wallpaper_surface_opacity) or 1)
-  self:draw_wallpaper_region(self:backdrop_rect())
+  local bx, by, bw, bh = self:backdrop_rect()
+  wallpapers.draw(self, bx, by, bw, bh, has_pane_view)
 end
 
 function RootPanel:draw()

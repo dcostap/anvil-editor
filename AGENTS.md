@@ -278,7 +278,10 @@ Run `ui/fuzzy_searcher_other_projects.lua`, `ui/fuzzy_searcher_terminals.lua` an
 Each group has a divider and a small, dim header. Check the `fuzzy-picker-other-projects` and `fuzzy-picker-other-text` render scenarios after visual changes.
 
 File Search shows all its rows at once. Paged lists load the next page one screen before their end. A refresh keeps the selected row.
-A picker that opens with the same non-empty query as at its last close selects the same row again, at the same place on the screen. An empty File Search starts at its first row.
+Each non-empty query keeps a Saved Screen: its rows down to the bottom of the screen and its selected row. The picker saves it at close and when the prompt history moves away from the query. It keeps the newest 50 in memory. An empty File Search starts at its first row.
+A picker that opens a query with a Saved Screen, or that the prompt history moves to, shows that screen in its first frame. It does not wait for the search.
+While the Saved Screen shows, searches keep their rows back (`holds_saved_screen`). Their last rows replace it, and `restore_position` selects the saved row at its place on the screen. Text Search keeps the found rows of the Saved Screen first, in their order, as rows that the user saw.
+A move during the Saved Screen changes the row that the restore selects. Pages do not load until the search ends.
 Run `ui/fuzzy_searcher_scrolling.lua` after changes.
 
 Text Search also searches the Terminal Sessions of this Project. Other Projects search their own Terminals.
@@ -474,11 +477,15 @@ Selecting a Project expands it and saves that state. It stays expanded after it 
 Window IDs persist across restart. The saved allocation sequence prevents reuse of a closed Window's folding state.
 Run `anvil:shell-state`, `ui/sidebar_view.lua`, and the `windows-sidebar-layout`, `windows-sidebar-folding`, and `toggle-sidebar` shell probes after changes.
 
-An unload of a Window's last Project leaves the Window without a Project. Its Project area stays empty, with no card or button.
+An unload of a Window's last Project leaves the Window without a Project. Its Project area shows only the wallpaper, with no card or button.
+No Project process draws that Window, so the shell sets `backdrop` in the Sidebar's configuration and shows the Sidebar's whole frame.
+The Sidebar draws the wallpaper with `core.wallpapers`, as a Project without Panes does, then its strip over it. It reads the wallpaper choice from the user settings when a Window loses its Project.
+Until that frame arrives, the shell shows the plain background. The Sidebar opens there without a slide.
+The "Starting" text and the failed card stay on the plain background.
 A Window without a Project, or with a failed Selected Project, has no process to take keys. Its Window's Sidebar then takes the keyboard and keeps it.
 Escape and the Sidebar focus command do not release it. A hidden Sidebar slides open.
 The keyboard goes back to the Project when the user selects a Project that can take keys, or restarts the failed Project.
-Run the `dormant-last`, `shell-empty`, `recovery` and `navigate-sidebar` shell probes after changes.
+Run the `dormant-last`, `shell-empty`, `recovery` and `navigate-sidebar` shell probes after changes. `shell-empty` checks the wallpaper's pixels.
 
 The shell draws its own text, such as the failed card and the Title Bar name, in Fira Sans, the Sidebar's typeface.
 The executable carries the font as a resource (`resources/windows/ui_font.rc`), so the shell needs no data folder.

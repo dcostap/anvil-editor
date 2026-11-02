@@ -2164,6 +2164,11 @@ static int f_get_window_content_x(lua_State *L) {
   lua_pushinteger(L, anvil_hosted_surface_content_x());
   return 1;
 }
+/* True when the Sidebar draws its Window's wallpaper, because the Window has no Project. */
+static int f_draws_window_backdrop(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_backdrop());
+  return 1;
+}
 static int f_set_surface_overlay(lua_State *L) {
   RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   uint32_t overlay = 0;
@@ -3166,6 +3171,7 @@ static const luaL_Reg lib[] = {
   { "get_window_process_id", f_get_window_process_id },
   { "get_window_controls",   f_get_window_controls },
   { "get_window_content_x",  f_get_window_content_x },
+  { "draws_window_backdrop", f_draws_window_backdrop },
   { "set_surface_overlay",   f_set_surface_overlay },
   { "is_surface_transparent", f_is_surface_transparent },
   { "get_startup_path_arguments", f_get_startup_path_arguments },

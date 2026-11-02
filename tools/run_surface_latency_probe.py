@@ -274,9 +274,12 @@ def main() -> int:
                     if action != "launch-handoff" and (action == "dialog-blocked-close" or action.startswith(("windows-", "fault-", "startup-", "identity-", "launch-", "restore-", "adopt-", "resize-")) or action in ("layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "maximize-button", "zoom-global", "select-hold", "terminal-focus", "toggle-sidebar", "alt-navigation", "project-menu", "project-menu-background", "conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close", "loaded-switch")):
                         init += 'local config = require "core.config"\nconfig.plugins.ipc.single_instance = false\n'
                     (case_dir / "user/init.lua").write_text(init, encoding="utf-8")
-                    if action in ("theme-global", "theme-empty", "reveal"):
+                    if action in ("theme-global", "reveal"):
                         (case_dir / "user/user_settings.lua").write_text(
                             'return {["config"]={["theme"]="light"}}', encoding="utf-8")
+                    if action == "theme-empty":
+                        (case_dir / "user/user_settings.lua").write_text(
+                            'return {["config"]={["theme"]="light",["wallpaper"]="none"}}', encoding="utf-8")
                     if action in ("launch-userdir", "adopt-userdir"):
                         (case_dir / "user2").mkdir()
                         (case_dir / "user2/init.lua").write_text(init, encoding="utf-8")

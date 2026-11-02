@@ -6,6 +6,7 @@
 -- The shell's Window controls draw in the selected Project's Color Theme: its text colour, and its pressed colour.
 -- A posted mouse move hovers only until the real cursor's leave event, so a held press shows the fill instead.
 -- theme-empty: a shell Window with no Project draws its Project area and Window controls in the saved Color Theme.
+-- The saved wallpaper is none, so the area shows the theme's exact background.
 -- reveal: a starting shell first shows its Window with the loaded Project, Sidebar and Color Theme, so its first
 -- visible frame already looks like the settled frame.
 local action = os.getenv("ANVIL_PROJECT_PROBE")

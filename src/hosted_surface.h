@@ -68,6 +68,7 @@ void anvil_hosted_surface_set_overlay(SDL_Window *window, uint32_t overlay, cons
                                       int count);
 /* The left edge of the Project UI inside the full-window surface; zero when not hosted. */
 int anvil_hosted_surface_content_x(void);
+bool anvil_hosted_surface_backdrop(void);
 bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surface,
                                            const SDL_Rect *rects, int count);
 

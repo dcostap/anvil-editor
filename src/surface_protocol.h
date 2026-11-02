@@ -225,6 +225,9 @@ typedef struct {
    * its backdrop to the left of it, where the shell blends the Sidebar. The Sidebar lays out its strip left of
    * content_x and draws only popups right of it. */
   int32_t content_x;
+  /* The Sidebar draws the Window's wallpaper across its whole surface, because no Project frame covers the
+   * Window. */
+  int32_t backdrop;
 } AnvilSurfaceConfigure;
 
 typedef struct {

@@ -13,6 +13,16 @@ local zoom = require "core.zoom"
 local keymap = require "core.keymap"
 local command = require "core.command"
 local common = require "core.common"
+-- A Window without a Project shows the Sidebar's whole surface, so the Sidebar draws its wallpaper. All surfaces
+-- share the loaded image.
+local wallpapers, backdrop = nil, {}
+-- Projects save the wallpaper in the user settings. The Sidebar reads it again when a Window loses its Project.
+local function load_wallpaper()
+  local ok, settings = pcall(dofile, USERDIR .. "/user_settings.lua")
+  local saved = ok and type(settings) == "table" and type(settings.config) == "table" and settings.config.wallpaper
+  require("core.config").wallpaper = wallpapers.exists(saved) and saved or nil
+  core.log_quiet("Sidebar wallpaper: %s", wallpapers.current())
+end
 -- The Sidebar draws at each Window's display scale times the interface Zoom that Projects save.
 local interface_zoom = 1
 local function set_zoom(interface)
@@ -346,6 +356,8 @@ local function apply_color_theme(preview)
   end
   for _, surface in pairs(surfaces) do surface.redraw = true end
   core.redraw = true
+  -- The wallpaper's tint follows the Color Theme.
+  core.color_theme_generation = (core.color_theme_generation or 0) + 1
   -- The shell draws an empty Project area and its Window controls in these colours.
   local delivered = system.set_shell_colors(color_theme.shell_colors(require "core.style"))
   core.log_quiet("Sidebar Color Theme: %s shell_colors=%s", name, tostring(delivered))
@@ -472,6 +484,8 @@ function core.init()
   SidebarView = require "core.sidebar_view"
   context_menu = require "core.context_menu"
   style = require "core.style"
+  wallpapers = require "core.wallpapers"
+  load_wallpaper()
   -- Terminal titles carry spinners and symbols the text font lacks. The editor's fallbacks draw them.
   local font_fallbacks = require "core.font_fallbacks"
   font = font_fallbacks.group(style.font, font_fallbacks.load(style.font:get_size(), "Sidebar"))
@@ -631,9 +645,20 @@ function core.run_step()
       end
       -- A working Terminal's spinner turns between the host's title reports.
       if visible and surface.spin_at and now >= surface.spin_at then core.redraw = true end
+      local draws_backdrop = system.draws_window_backdrop()
+      if draws_backdrop ~= surface.backdrop then
+        surface.backdrop = draws_backdrop
+        if draws_backdrop then load_wallpaper() end
+        core.redraw = true
+      end
       if visible and core.redraw then
         local width, height = renwindow.get_size(core.window)
         renderer.begin_frame(core.window)
+        if draws_backdrop then
+          core.clip_rect_stack = {{0, 0, width, height}}
+          renderer.set_clip_rect(0, 0, width, height)
+          wallpapers.draw(backdrop, 0, 0, width, height, false)
+        end
         surface.view:draw(strip_size(core.window), height)
         local menu_moves = draw_menu(surface, width, height)
         renderer.end_frame()

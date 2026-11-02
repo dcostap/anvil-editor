@@ -239,6 +239,8 @@ typedef struct {
   int content_x;
   /* The last frame has premultiplied alpha; the shell blends it instead of copying it. */
   bool transparent;
+  /* The last Sidebar frame also drew the Window's backdrop, because no Project frame covers the Window. */
+  bool backdrop;
   /* The last frame's areas that the shell shows above the other layer, in surface pixels: a Project's modal UI
    * above the Sidebar, or a Sidebar popup above the Project. */
   RECT raised[ANVIL_SURFACE_RAISED_MAX];
@@ -1647,6 +1649,8 @@ static void send_configure(ShellProject *project) {
   bool docked = !window->sidebar_floating && (window->sidebar_sliding || sidebar_shown(window));
   int project_x = docked ? window->sidebar_full_w : 0;
   config.content_x = SDL_min(project->sidebar ? window->sidebar_full_w : project_x, SDL_max(0, config.pixel_w - 1));
+  /* A Window without a Project has no process to draw its wallpaper, so its Sidebar draws it. */
+  config.backdrop = project->sidebar && window->selected == window->empty;
   config.refresh_hz = current_refresh_rate(window);
   typedef UINT(WINAPI * DpiForWindow)(HWND);
   typedef int(WINAPI * MetricForDpi)(int, UINT);
@@ -2493,12 +2497,20 @@ static void paint_failed_window(ShellWindow *window, HDC dc) {
 
 /* The Project area shows the native starting text, empty area or failed card while no Project frame covers it. A held
  * frame of the previous Project covers it until the selected Project presents. */
+/* In a Window without a Project, the Sidebar's whole frame is the Window: its wallpaper, strip and popups. */
+static bool sidebar_backdrop_shown(ShellWindow *window) {
+  ShellPresentation *sidebar = &window->sidebar_presentation;
+  return window->selected == window->empty && sidebar->have_surface && sidebar->backdrop && shell.sidebar_process &&
+         shell.sidebar_process->state != SHELL_FAILED;
+}
+
 static bool project_area_covered(ShellWindow *window) {
   ShellProject *project = window->selected;
   ShellPresentation *content = &window->project_presentation;
   if (project->state == SHELL_FAILED) return !content->have_surface || content->held;
   if (content->held) return false;
-  return project->state == SHELL_STARTING || project->state == SHELL_DORMANT;
+  if (project == window->empty) return !sidebar_backdrop_shown(window);
+  return project->state == SHELL_STARTING;
 }
 
 static void end_selection_hold(ShellWindow *window) {
@@ -2933,7 +2945,13 @@ static void composite_and_present(ShellWindow *window) {
   /* Layers: the Project backdrop and UI, the Sidebar, the Project's overlay dim over the Sidebar, then the
    * native strip and window controls. A transparent Sidebar shows the Project's wallpaper under it. */
   ShellPresentation *sidebar = &window->sidebar_presentation;
-  if (sidebar->have_surface && shell.sidebar_process && shell.sidebar_process->state != SHELL_FAILED) {
+  bool sidebar_backdrop = sidebar_backdrop_shown(window);
+  if (sidebar_backdrop) {
+    D3D11_BOX box = {0, 0, 0, (UINT)SDL_min(window->buffer_w, sidebar->surface_w),
+                     (UINT)SDL_min(window->buffer_h, sidebar->surface_h), 1};
+    window->context->lpVtbl->CopySubresourceRegion(window->context, (ID3D11Resource *)window->backbuffer, 0, 0, 0,
+                                                   0, (ID3D11Resource *)sidebar->surface, 0, &box);
+  } else if (sidebar->have_surface && shell.sidebar_process && shell.sidebar_process->state != SHELL_FAILED) {
     /* A sliding Sidebar moves left. Its surface keeps the open width, and the Window shows its right part. */
     int slide = window->sidebar_full_w - window->sidebar_w;
     RECT rect = {0, 0, SDL_min(window->sidebar_w, sidebar->surface_w - slide),
@@ -2978,7 +2996,7 @@ static void composite_and_present(ShellWindow *window) {
     copy_ui(window, sidebar_restart_rect(window));
   else
     blend_ui(window, (RECT){0, 0, window->sidebar_w, window->controls.bottom});
-  if (lifecycle_titlebar(window))
+  if (lifecycle_titlebar(window) && !sidebar_backdrop)
     copy_ui(window, (RECT){window->sidebar_w, 0, window->controls.left, window->controls.bottom});
   int hot = window->pressed_control >= 0 ? window->pressed_control : window->hovered_control;
   if (hot >= 0 && hot < 3) {
@@ -3124,6 +3142,11 @@ static bool load_pending_frame(ShellProject *project, ShellPresentation *surface
   if (surface == &window->sidebar_presentation && transparent != surface->transparent)
     SDL_Log("Shell Sidebar layer: Window=%u transparent=%d", window->id, transparent);
   surface->transparent = transparent;
+  if (surface == &window->sidebar_presentation && surface->backdrop != (bool)project->last_config.backdrop) {
+    surface->backdrop = project->last_config.backdrop;
+    window->ui_dirty = true;
+    SDL_Log("Shell Sidebar backdrop: Window=%u shown=%d", window->id, surface->backdrop);
+  }
   bool popup = sidebar_popup_shown(window);
   for (int i = 0; i < ANVIL_SURFACE_RAISED_MAX; i++) {
     const AnvilSurfaceArea *area = &frame->raised[i];
@@ -4228,8 +4251,9 @@ static bool sidebar_shown(ShellWindow *window) {
   return !window->sidebar_hidden || window->sidebar_focused;
 }
 
+/* A Window without a Project shows its Sidebar's whole frame, so its Sidebar opens without a slide. */
 static bool can_slide(ShellWindow *window) {
-  return window->shown && !window->revealing && !window->live_resize && !window->render_failed && window->rtv &&
+  return window->selected != window->empty && window->shown && !window->revealing && !window->live_resize && !window->render_failed && window->rtv &&
          window->present_ready_event && !IsIconic(window->hwnd);
 }
 

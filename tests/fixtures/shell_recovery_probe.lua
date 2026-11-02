@@ -1,6 +1,6 @@
 -- mod-version:3
 -- Seam: an owned native Window on a private desktop. Failed Projects keep a draggable Title Bar.
--- Native buttons show pointer feedback and cancel a dragged-out press. Empty Windows show an empty area;
+-- Native buttons show pointer feedback and cancel a dragged-out press. Empty Windows show only the wallpaper;
 -- Sidebar recovery restores its process without taking drag space from the rest of the Title Bar.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if action ~= "recovery" and action ~= "shell-empty" and action ~= "shell-sidebar" then return end
@@ -118,9 +118,25 @@ if path:match("/driver$") then
     assert(user32.GetClientRect(window, rect) ~= 0)
     local x, y = (layout.content_x + rect.right) / 2, (layout.title_h + rect.bottom) / 2
     assert(hit(layout.content_x + 60 * scale, layout.title_h / 2) == 2, "The empty Title Bar blocks dragging")
-    local function pixels(bytes, dy) return button_pixels(bytes, x, y + dy) end
-    local bytes = capture(window)
-    assert(pixels(bytes, 0) == pixels(bytes, 100 * scale), "The empty Project area is not empty")
+    -- No Project draws this Window, so its Sidebar draws the wallpaper there. The plain background has one colour.
+    wait(function() return trace():find("Shell Sidebar backdrop: Window=2 shown=1", 1, true) end, 10,
+     "The Sidebar did not draw the empty Window's backdrop")
+    local background
+    for id, color in trace():gmatch("Shell Window background: id=(%d+) color=(%x+)") do
+     if id == "2" then background = tonumber(color, 16) end
+    end
+    -- The theme tints the wallpaper, so its pixels stay near the background colour, and some differ from it.
+    local plain = {math.floor(background / 65536) % 256, math.floor(background / 256) % 256, background % 256}
+    local area = button_pixels(capture(window), x, y)
+    local largest, total = 0, 0
+    for i = 1, #area, 4 do
+     for channel = 1, 3 do
+      local offset = math.abs(area:byte(i + channel - 1) - plain[channel])
+      largest, total = math.max(largest, offset), total + offset
+     end
+    end
+    assert(largest > 0, "The empty Window shows no wallpaper")
+    assert(total / (#area / 4 * 3) <= 16, "The empty Window's wallpaper has no theme tint")
     local mark = #trace()
     input(0, point(x, y)); input(1, point(x, y)); input(2, point(x, y))
     coroutine.yield(.3)

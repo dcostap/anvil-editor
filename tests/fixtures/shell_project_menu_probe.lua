@@ -138,6 +138,13 @@ if path:match("/driver$") then
    menu("Unload", LOADED)
    wait(function() return trace():find("Shell Project is Dormant: id=", 1, true) end, 15,
     "Unload did not unload the Project")
+   -- The Sidebar gets the shell's model after the unload. A click before it arrives finds no group.
+   wait(function()
+    for _, item in ipairs(model().items) do
+     if item.id == original.id and item.state == "dormant" then return true end
+    end
+   end, 10, "The Sidebar model does not show the Project as Dormant")
+   coroutine.yield(.5)
    -- The Dormant Project is in a group in the Sidebar's bottom area. Groups start collapsed. The only group is at the
    -- bottom, above the Sidebar's padding, and a click opens it.
    local client = ffi.new("MenuProbeRect")

@@ -1,6 +1,7 @@
 local config = require "core.config"
 local core = require "core"
 local style = require "core.style"
+local wallpaper_contrast = require "core.wallpaper_contrast"
 
 local wallpapers = {}
 
@@ -48,6 +49,73 @@ function wallpapers.options()
     choices[#choices + 1] = { name = name, text = name }
   end
   return choices
+end
+
+-- Replaces the content of one region with the wallpaper, aligned to the backdrop rect (bx, by, bw, bh).
+-- `state` keeps the loaded image and its theme visibility between frames.
+function wallpapers.draw_region(state, bx, by, bw, bh, x, y, width, height)
+  if width <= 0 or height <= 0 then return end
+  if not state.wallpaper then
+    renderer.draw_rect(x, y, width, height, style.background)
+    return
+  end
+  local clipped = x ~= bx or y ~= by or width ~= bw or height ~= bh
+  if clipped then core.push_clip_rect(x, y, width, height) end
+  local iw, ih = state.wallpaper:get_size()
+  local scale = math.max(bw / iw, bh / ih)
+  local w, h = iw * scale, ih * scale
+  renderer.draw_canvas_scaled(state.wallpaper, bx + (bw - w) / 2, by + (bh - h) / 2, w, h)
+  if clipped then core.pop_clip_rect() end
+  renderer.draw_rect(x, y, width, height,
+    style.wallpaper_surface(style.background, state.wallpaper_backdrop_opacity))
+end
+
+-- Draws the selected wallpaper over the whole backdrop rect. With a Pane View, the View's fill also attenuates
+-- the image.
+function wallpapers.draw(state, bx, by, bw, bh, has_pane_view)
+  local selected = wallpapers.current()
+  if selected == "none" then
+    state.wallpaper = nil
+    state.wallpaper_name = nil
+    state.wallpaper_contrast_image = nil
+    state.wallpaper_visibility = nil
+    state.wallpaper_backdrop_opacity = nil
+    renderer.draw_rect(bx, by, bw, bh, style.background)
+    return
+  end
+  if state.wallpaper_name ~= selected then
+    local path = wallpapers.path(selected)
+    local image, err = canvas.load_image(path)
+    state.wallpaper = image or false
+    state.wallpaper_name = selected
+    if image then
+      core.log_quiet("Window wallpaper loaded: %s", path)
+    else
+      core.log_quiet("Window wallpaper unavailable: %s (%s)", path, tostring(err))
+    end
+  end
+  if not state.wallpaper then
+    wallpapers.draw_region(state, bx, by, bw, bh, bx, by, bw, bh)
+    return
+  end
+  if state.wallpaper_contrast_image ~= state.wallpaper then
+    state.wallpaper_contrast_image = state.wallpaper
+    state.wallpaper_sample_low, state.wallpaper_sample_high, state.wallpaper_sample_mid =
+      wallpaper_contrast.sample(state.wallpaper)
+    state.wallpaper_contrast_generation = nil
+  end
+  if not state.wallpaper_visibility or state.wallpaper_contrast_generation ~= core.color_theme_generation then
+    state.wallpaper_visibility = wallpaper_contrast.visibility(
+      state.wallpaper_sample_low, state.wallpaper_sample_high, state.wallpaper_sample_mid,
+      style.background,
+      style.wallpaper_reference_background, style.wallpaper_reference_visibility)
+    state.wallpaper_contrast_generation = core.color_theme_generation
+    core.log_quiet("Window wallpaper theme visibility: %.1f%% generation=%s",
+      state.wallpaper_visibility * 100, tostring(core.color_theme_generation))
+  end
+  state.wallpaper_backdrop_opacity = 1 - state.wallpaper_visibility
+    / (has_pane_view and (1 - style.wallpaper_surface_opacity) or 1)
+  wallpapers.draw_region(state, bx, by, bw, bh, bx, by, bw, bh)
 end
 
 function wallpapers.select(name)

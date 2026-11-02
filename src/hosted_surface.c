@@ -516,6 +516,7 @@ static const char *configure_problem(const AnvilSurfaceConfigure *config) {
       config->controls_y > config->pixel_h || config->controls_h > config->pixel_h - config->controls_y)
     return "window controls";
   if (config->content_x < 0 || config->content_x >= config->pixel_w) return "content_x";
+  if (config->backdrop != 0 && config->backdrop != 1) return "backdrop";
   return NULL;
 }
 
@@ -1458,6 +1459,7 @@ void anvil_hosted_surface_set_overlay(SDL_Window *window, uint32_t overlay, cons
   if (count) memcpy(view->raised, raised, (size_t)count * sizeof(*raised));
 }
 int anvil_hosted_surface_content_x(void) { return hosted.active ? view->config.content_x : 0; }
+bool anvil_hosted_surface_backdrop(void) { return hosted.active && view->config.backdrop; }
 
 void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, int width, int height) {
   if (!anvil_hosted_surface_should_render()) return;
@@ -1765,6 +1767,7 @@ void anvil_hosted_surface_set_overlay(SDL_Window *window, uint32_t overlay, cons
   (void)window; (void)overlay; (void)raised; (void)count;
 }
 int anvil_hosted_surface_content_x(void) { return 0; }
+bool anvil_hosted_surface_backdrop(void) { return false; }
 bool anvil_hosted_surface_open_project_window(const char *path) { (void)path; return false; }
 bool anvil_hosted_surface_open_project_picker(void) { return false; }
 bool anvil_hosted_surface_preview_color_theme(const char *preview) { (void)preview; return false; }
