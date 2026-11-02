@@ -7,6 +7,8 @@
 #include "markdown_parser.h"
 #include "markdown_extensions.h"
 #include "language_detector.h"
+#include "image_decode.h"
+#include "custom_events.h"
 #include "treesitter/languages.h"
 #include "treesitter/query_cache.h"
 #include "treesitter/project_index.h"
@@ -41,6 +43,8 @@ struct AnvilWorkerJob {
   char *value;
   int count;
   uint32_t sleep_ms;
+  uint32_t image_width;
+  uint32_t image_height;
 
   char *path;
   char *relpath;
@@ -149,6 +153,9 @@ struct AnvilWorkerResult {
   AnvilGitStatusSnapshot *git_status_snapshot;
   AnvilProjectFileManifestSnapshot *project_file_manifest;
   AnvilMarkdownVaultSnapshot *markdown_vault_snapshot;
+  SDL_Surface *image;
+  int image_covers_width;
+  int image_covers_height;
   struct AnvilWorkerResult *next;
 };
 
@@ -1311,6 +1318,41 @@ static void run_language_detect(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
   enqueue_result(pool, result);
   SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_COMPLETE);
   enqueue_simple_result(pool, job, "final");
+}
+
+/* Decodes a JPEG for drawing at the job's size. The `imagedecoded` event wakes an idle event loop to drain it. */
+static void run_image_decode(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
+  char *error = NULL;
+  int covers_width = 0, covers_height = 0;
+  /* A newer request cancels a queued one, such as while the user browses wallpapers. */
+  SDL_Surface *image = job->path && !job_cancelled(job) ? anvil_image_decode_jpeg(job->path, (int)job->image_width,
+    (int)job->image_height, &covers_width, &covers_height, &error) : NULL;
+  CustomEvent wake = {0};
+  if (job_cancelled(job)) {
+    SDL_DestroySurface(image);
+    SDL_free(error);
+    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_CANCELLED);
+    enqueue_simple_result(pool, job, "cancelled");
+    return;
+  }
+  AnvilWorkerResult *result = image ? result_new(job, "result") : NULL;
+  if (!result) {
+    SDL_DestroySurface(image);
+    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+    AnvilWorkerResult *failed = result_new(job, "error");
+    if (failed) failed->error = error ? error : pool_strdup("cannot decode the image");
+    else SDL_free(error);
+    enqueue_result(pool, failed);
+    push_custom_event("imagedecoded", &wake);
+    return;
+  }
+  result->image = image;
+  result->image_covers_width = covers_width;
+  result->image_covers_height = covers_height;
+  enqueue_result(pool, result);
+  SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_COMPLETE);
+  enqueue_simple_result(pool, job, "final");
+  push_custom_event("imagedecoded", &wake);
 }
 
 #ifdef _WIN32
@@ -4212,6 +4254,8 @@ static void run_job(AnvilWorkerContext *context, AnvilWorkerJob *job) {
     run_test_fail(pool, job);
   } else if (strcmp(kind, "language_detect") == 0) {
     run_language_detect(pool, job);
+  } else if (strcmp(kind, "image_decode") == 0) {
+    run_image_decode(pool, job);
 #ifdef _WIN32
   } else if (strcmp(kind, "terminal_snapshot_text") == 0) {
     run_terminal_snapshot_text(pool, job);
@@ -4565,6 +4609,8 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
   job->value = pool_strdup(spec->value);
   job->count = spec->count;
   job->sleep_ms = spec->sleep_ms;
+  job->image_width = spec->image_width;
+  job->image_height = spec->image_height;
   job->path = pool_strdup(spec->path);
   job->relpath = pool_strdup(spec->relpath);
   job->language = pool_strdup(spec->language);
@@ -4822,7 +4868,17 @@ void anvil_worker_result_free(AnvilWorkerResult *result) {
   anvil_git_status_snapshot_release(result->git_status_snapshot);
   anvil_project_file_manifest_release(result->project_file_manifest);
   anvil_markdown_vault_snapshot_release(result->markdown_vault_snapshot);
+  SDL_DestroySurface(result->image);
   SDL_free(result);
+}
+
+SDL_Surface *anvil_worker_result_steal_image(AnvilWorkerResult *result, int *covers_width, int *covers_height) {
+  if (!result || !result->image) return NULL;
+  SDL_Surface *out = result->image;
+  result->image = NULL;
+  *covers_width = result->image_covers_width;
+  *covers_height = result->image_covers_height;
+  return out;
 }
 
 AnvilWorkerTreeSitterIndexResult *anvil_worker_result_steal_treesitter_index_result(AnvilWorkerResult *result) {

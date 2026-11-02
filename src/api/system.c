@@ -2494,6 +2494,11 @@ static int colorthemechanged_callback(lua_State *L, SDL_Event *event) {
   lua_pushstring(L, "colorthemechanged");
   return 1;
 }
+static int imagedecoded_callback(lua_State *L, SDL_Event *event) {
+  (void)event;
+  lua_pushstring(L, "imagedecoded");
+  return 1;
+}
 static int altnavigation_callback(lua_State *L, SDL_Event *event) {
   lua_pushstring(L, "altnavigation");
   lua_pushboolean(L, event->user.code != 0);
@@ -3223,6 +3228,8 @@ int luaopen_system(lua_State *L) {
     return luaL_error(L, "Unable to register the Color Theme event: %s", SDL_GetError());
   if (!register_custom_event("colorthemepreview", colorthemepreview_callback))
     return luaL_error(L, "Unable to register the Color Theme preview event: %s", SDL_GetError());
+  if (!register_custom_event("imagedecoded", imagedecoded_callback))
+    return luaL_error(L, "Unable to register the image decode event: %s", SDL_GetError());
   if (!register_custom_event("zoomchanged", zoomchanged_callback))
     return luaL_error(L, "Unable to register the Zoom event: %s", SDL_GetError());
   if (!register_custom_event("zoomwheel", zoomwheel_callback))

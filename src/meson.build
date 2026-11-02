@@ -21,6 +21,7 @@ anvil_sources = [
     'fuzzy.c',
     'git_status_index.c',
     'worker_pool.c',
+    'image_decode.c',
     'shutdown_diagnostics.c',
     'markdown_parser.c',
     'markdown_extensions.c',
@@ -330,6 +331,15 @@ image_scale_test = executable('image_scale_test',
 )
 test('image-scale', image_scale_test, env: anvil_test_env, suite: 'anvil')
 
+image_decode_test = executable('image_decode_test',
+    ['../tests/native/image_decode_test.c', 'image_decode.c'],
+    include_directories: anvil_includes,
+    dependencies: [sdl_dep, jpeg_dep],
+    c_args: anvil_cargs,
+)
+test('image-decode', image_decode_test, args: [files('../data/core/assets/wallpaper.jpg')],
+    env: anvil_test_env, suite: 'anvil')
+
 display_scale_test = executable('display_scale_test',
     ['../tests/native/display_scale_test.c'],
     include_directories: anvil_includes,
@@ -454,6 +464,7 @@ worker_pool_test = executable('worker_pool_test',
     worker_pool_terminal_sources + [
         '../tests/native/worker_pool_test.c',
         'worker_pool.c',
+        'image_decode.c',
         'shutdown_diagnostics.c',
         'fuzzy.c',
         'git_status_index.c',
@@ -471,7 +482,7 @@ worker_pool_test = executable('worker_pool_test',
         'custom_events.c',
     ],
     include_directories: anvil_includes,
-    dependencies: [tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, tree_sitter_rust_dep, tree_sitter_javascript_dep, tree_sitter_typescript_dep, tree_sitter_tsx_dep, tree_sitter_markdown_dep, tree_sitter_markdown_inline_dep, sdl_dep, lua_dep, pcre2_dep] + worker_pool_terminal_deps,
+    dependencies: [tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, tree_sitter_rust_dep, tree_sitter_javascript_dep, tree_sitter_typescript_dep, tree_sitter_tsx_dep, tree_sitter_markdown_dep, tree_sitter_markdown_inline_dep, sdl_dep, lua_dep, pcre2_dep, jpeg_dep] + worker_pool_terminal_deps,
     c_args: anvil_cargs,
 )
 test('worker_pool', worker_pool_test, env: anvil_test_env)

@@ -263,6 +263,13 @@ if not get_option('source-only')
         harfbuzz_anvil_dep = harfbuzz_dep
     endif
 
+    # Wallpapers decode with libjpeg-turbo. Its SIMD code needs NASM. Windows builds require it, because the
+    # decoder is several times slower without it.
+    jpeg_dep = dependency('libjpeg', fallback: ['libjpeg-turbo', 'jpeg_dep'],
+        default_options: default_fallback_options + ['default_library=static', 'turbojpeg=disabled',
+            'tests=disabled', 'simd=' + (host_machine.system() == 'windows' ? 'enabled' : 'auto')]
+    )
+
     uchardet_dep = dependency('uchardet', fallback: ['uchardet', 'uchardet_dep'],
         default_options: default_fallback_options + ['default_library=static', 'test=false']
     )
@@ -363,7 +370,7 @@ if not get_option('source-only')
     )
     tree_sitter_markdown_dep = tree_sitter_markdown_subproject.get_variable('tree_sitter_markdown_dep')
     tree_sitter_markdown_inline_dep = tree_sitter_markdown_subproject.get_variable('tree_sitter_markdown_inline_dep')
-    anvil_deps = [lua_dep, sdl_dep, sdl_image, freetype_dep, harfbuzz_anvil_dep, pcre2_dep, uchardet_dep, tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, tree_sitter_rust_dep, tree_sitter_javascript_dep, tree_sitter_typescript_dep, tree_sitter_tsx_dep, tree_sitter_markdown_dep, tree_sitter_markdown_inline_dep, libm, libdl, librt]
+    anvil_deps = [lua_dep, sdl_dep, sdl_image, jpeg_dep, freetype_dep, harfbuzz_anvil_dep, pcre2_dep, uchardet_dep, tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, tree_sitter_rust_dep, tree_sitter_javascript_dep, tree_sitter_typescript_dep, tree_sitter_tsx_dep, tree_sitter_markdown_dep, tree_sitter_markdown_inline_dep, libm, libdl, librt]
 
     if host_machine.system() == 'windows'
         ghostty_vt_dep = subproject('ghostty').get_variable('ghostty_vt_dep')

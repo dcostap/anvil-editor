@@ -68,6 +68,9 @@ typedef struct AnvilWorkerJobSpec {
   int count;
   uint32_t sleep_ms;
   int priority;
+  /* image_decode: the size that the image covers when it is drawn. */
+  uint32_t image_width;
+  uint32_t image_height;
 
   const char *path;
   const char *relpath;
@@ -195,6 +198,7 @@ AnvilTSProjectSnapshot *anvil_worker_result_steal_project_snapshot(AnvilWorkerRe
 AnvilGitStatusSnapshot *anvil_worker_result_steal_git_status_snapshot(AnvilWorkerResult *result);
 AnvilProjectFileManifestSnapshot *anvil_worker_result_steal_project_file_manifest(AnvilWorkerResult *result);
 AnvilMarkdownVaultSnapshot *anvil_worker_result_steal_markdown_vault_snapshot(AnvilWorkerResult *result);
+SDL_Surface *anvil_worker_result_steal_image(AnvilWorkerResult *result, int *covers_width, int *covers_height);
 
 void anvil_worker_treesitter_index_result_retain(AnvilWorkerTreeSitterIndexResult *result);
 void anvil_worker_treesitter_index_result_free(AnvilWorkerTreeSitterIndexResult *result);

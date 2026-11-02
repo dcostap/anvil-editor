@@ -20,7 +20,7 @@ if not exist "%BASH%" (
   )
 )
 
-set "ANVIL_PACKAGES=git curl unzip patch mingw-w64-x86_64-gcc mingw-w64-x86_64-ninja mingw-w64-x86_64-cmake mingw-w64-x86_64-pkgconf mingw-w64-x86_64-python mingw-w64-x86_64-meson"
+set "ANVIL_PACKAGES=git curl unzip patch mingw-w64-x86_64-gcc mingw-w64-x86_64-ninja mingw-w64-x86_64-cmake mingw-w64-x86_64-pkgconf mingw-w64-x86_64-python mingw-w64-x86_64-meson mingw-w64-x86_64-nasm"
 "%BASH%" -lc "missing=; for p in $ANVIL_PACKAGES; do pacman -Q $p >/dev/null 2>&1 || missing=\"$missing $p\"; done; command -v meson >/dev/null && missing=${missing/ mingw-w64-x86_64-meson/}; [ -z \"$missing\" ] && exit 0; echo \"Installing MSYS2 packages:$missing\"; pacman -Sy --needed --noconfirm $missing"
 if errorlevel 1 (
   echo Could not install the MSYS2 build packages.

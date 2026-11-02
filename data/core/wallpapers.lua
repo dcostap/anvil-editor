@@ -5,6 +5,11 @@ local wallpaper_contrast = require "core.wallpaper_contrast"
 
 local wallpapers = {}
 
+-- One native worker decodes wallpapers, so a decode never waits behind other background work, and no Lua
+-- worker threads start for it. Each request maps its job to the state that waits for it.
+local decoder
+local requests = {}
+
 local files = {
   image1 = "wallpaper.jpg",
   image2 = "wallpaper2.jpg",
@@ -15,9 +20,9 @@ local files = {
   image7 = "wallpaper7.jpg",
   image8 = "wallpaper8.jpg",
   image9 = "wallpaper9.jpg",
-  image10 = "wallpaper10.png",
-  image11 = "wallpaper11.png",
-  image12 = "wallpaper12.png",
+  image10 = "wallpaper10.jpg",
+  image11 = "wallpaper11.jpg",
+  image12 = "wallpaper12.jpg",
   image13 = "wallpaper13.jpg",
   image14 = "wallpaper14.jpg",
   image15 = "wallpaper15.jpg",
@@ -51,6 +56,68 @@ function wallpapers.options()
   return choices
 end
 
+-- Cancels the decode that `state` waits for, so a newer request does not wait behind it.
+local function cancel(state)
+  local pending = requests[state.wallpaper_request]
+  if pending then
+    decoder:cancel(pending.job)
+    requests[state.wallpaper_request] = nil
+  end
+  state.wallpaper_request = nil
+end
+
+-- Decodes wallpaper `name` on the worker, at the size that covers a `width` x `height` backdrop. Until the
+-- result arrives, `state` keeps its current image.
+local function request(state, name, width, height)
+  cancel(state)
+  local path, ok, job, err = wallpapers.path(name), true, nil, nil
+  if not decoder then
+    ok, err = pcall(function() decoder = require("worker_pool_native").new({name = "wallpaper", worker_count = 1}) end)
+  end
+  if ok then
+    ok, job, err = pcall(decoder.submit, decoder, {kind = "image_decode", priority = "interactive", path = path,
+      width = math.ceil(width), height = math.ceil(height)})
+    if not ok then job, err = nil, job end
+  end
+  if not job then
+    state.wallpaper = false
+    core.log_quiet("Window wallpaper unavailable: %s (%s)", path, tostring(err))
+    return
+  end
+  local id = decoder:status(job).id
+  state.wallpaper_request = id
+  requests[id] = {state = state, job = job, path = path, size = width .. "x" .. height,
+    started = system.get_time()}
+end
+
+-- Applies finished decodes. The `imagedecoded` event calls it. Returns true when a wallpaper changed.
+function wallpapers.receive()
+  if not decoder then return false end
+  local changed = false
+  for _, message in ipairs(decoder:drain({max_messages = 16})) do
+    local entry = requests[message.job_id]
+    if entry and (message.type == "result" or message.type == "error") then
+      requests[message.job_id] = nil
+      local state = entry.state
+      if state.wallpaper_request == message.job_id then
+        state.wallpaper_request = nil
+        if message.image then
+          state.wallpaper = message.image
+          state.wallpaper_covers = {message.covers_width, message.covers_height}
+          local w, h = message.image:get_size()
+          core.log_quiet("Window wallpaper loaded: %s at %dx%d for %s in %.1f ms", entry.path, w, h, entry.size,
+            (system.get_time() - entry.started) * 1000)
+        else
+          state.wallpaper = state.wallpaper or false
+          core.log_quiet("Window wallpaper unavailable: %s (%s)", entry.path, tostring(message.error))
+        end
+        changed = true
+      end
+    end
+  end
+  return changed
+end
+
 -- Replaces the content of one region with the wallpaper, aligned to the backdrop rect (bx, by, bw, bh).
 -- `state` keeps the loaded image and its theme visibility between frames.
 function wallpapers.draw_region(state, bx, by, bw, bh, x, y, width, height)
@@ -77,6 +144,7 @@ function wallpapers.draw(state, bx, by, bw, bh, has_pane_view)
   if selected == "none" then
     state.wallpaper = nil
     state.wallpaper_name = nil
+    cancel(state)
     state.wallpaper_contrast_image = nil
     state.wallpaper_visibility = nil
     state.wallpaper_backdrop_opacity = nil
@@ -84,15 +152,13 @@ function wallpapers.draw(state, bx, by, bw, bh, has_pane_view)
     return
   end
   if state.wallpaper_name ~= selected then
-    local path = wallpapers.path(selected)
-    local image, err = canvas.load_image(path)
-    state.wallpaper = image or false
     state.wallpaper_name = selected
-    if image then
-      core.log_quiet("Window wallpaper loaded: %s", path)
-    else
-      core.log_quiet("Window wallpaper unavailable: %s (%s)", path, tostring(err))
-    end
+    state.wallpaper = nil
+    request(state, selected, bw, bh)
+  elseif state.wallpaper and not state.wallpaper_request then
+    -- A larger backdrop needs a larger decode. The smaller image shows until it arrives.
+    local covers = state.wallpaper_covers
+    if covers and covers[1] > 0 and (bw > covers[1] or bh > covers[2]) then request(state, selected, bw, bh) end
   end
   if not state.wallpaper then
     wallpapers.draw_region(state, bx, by, bw, bh, bx, by, bw, bh)

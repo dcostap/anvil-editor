@@ -608,7 +608,12 @@ function core.run_step()
     for candidate, surface in pairs(surfaces) do
       if surface.native_id == native_id then id = candidate end
     end
-    if event[1] == "colorthemechanged" then
+    if event[1] == "imagedecoded" then
+      if wallpapers.receive() then
+        for _, surface in pairs(surfaces) do surface.redraw = true end
+        core.redraw = true
+      end
+    elseif event[1] == "colorthemechanged" then
       theme_change = {}
     elseif event[1] == "colorthemepreview" then
       theme_change = {preview = event[2] ~= "" and event[2] or nil}

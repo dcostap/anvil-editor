@@ -289,6 +289,8 @@ static int pool_submit(lua_State *L) {
   else luaL_argcheck(L, strcmp(priority, "normal") == 0, 2, "native worker priority must be interactive, normal, or background");
   spec.value = opt_string_field(L, 2, "value", NULL);
   spec.count = opt_int_field(L, 2, "count", 0);
+  spec.image_width = (uint32_t)SDL_max(0, opt_int_field(L, 2, "width", 0));
+  spec.image_height = (uint32_t)SDL_max(0, opt_int_field(L, 2, "height", 0));
   int sleep_ms = opt_int_field(L, 2, "sleep_ms", 0);
   if (sleep_ms < 0) sleep_ms = 0;
   spec.sleep_ms = (uint32_t)sleep_ms;
@@ -2335,6 +2337,17 @@ static void push_result(lua_State *L, AnvilWorkerResult *result) {
     push_markdown_vault_handle(L, vault_snapshot); lua_setfield(L, -2, "vault_snapshot");
     lua_getfield(L, -1, "payload"); if (!lua_istable(L, -1)) { lua_pop(L, 1); lua_createtable(L, 0, 1); }
     lua_getfield(L, -2, "vault_snapshot"); lua_setfield(L, -2, "vault_snapshot"); lua_setfield(L, -2, "payload");
+  }
+  int covers_width = 0, covers_height = 0;
+  SDL_Surface *image = anvil_worker_result_steal_image(result, &covers_width, &covers_height);
+  if (image) {
+    /* The canvas takes the surface without a copy. */
+    if (api_canvas_push_image(L, image) == 2) lua_pop(L, 1);
+    lua_setfield(L, -2, "image");
+    lua_pushinteger(L, covers_width);
+    lua_setfield(L, -2, "covers_width");
+    lua_pushinteger(L, covers_height);
+    lua_setfield(L, -2, "covers_height");
   }
   const char *error = anvil_worker_result_error(result);
   if (error) {

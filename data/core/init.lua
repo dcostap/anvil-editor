@@ -2441,6 +2441,10 @@ function core.on_event(type, ...)
   if type == "shellgone" then core.on_shell_gone(); return true end
   if type == "prepareupdate" then core.prepare_update(); return true end
   if type == "shelladopted" then core.on_shell_adopted(); return true end
+  if type == "imagedecoded" then
+    if require("core.wallpapers").receive() then core.redraw = true end
+    return true
+  end
   if core.shell_lost and (type == "quit" or type == "windowclosed") then return true end
   core.current_event_context = event_summary(type, ...)
   local button = ...

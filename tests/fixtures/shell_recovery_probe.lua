@@ -126,17 +126,23 @@ if path:match("/driver$") then
      if id == "2" then background = tonumber(color, 16) end
     end
     -- The theme tints the wallpaper, so its pixels stay near the background colour, and some differ from it.
+    -- The wallpaper decodes in the background, so the first backdrop frames can show the plain background.
     local plain = {math.floor(background / 65536) % 256, math.floor(background / 256) % 256, background % 256}
-    local area = button_pixels(capture(window), x, y)
-    local largest, total = 0, 0
-    for i = 1, #area, 4 do
-     for channel = 1, 3 do
-      local offset = math.abs(area:byte(i + channel - 1) - plain[channel])
-      largest, total = math.max(largest, offset), total + offset
+    local largest, mean
+    wait(function()
+     local area = button_pixels(capture(window), x, y)
+     local total = 0
+     largest = 0
+     for i = 1, #area, 4 do
+      for channel = 1, 3 do
+       local offset = math.abs(area:byte(i + channel - 1) - plain[channel])
+       largest, total = math.max(largest, offset), total + offset
+      end
      end
-    end
-    assert(largest > 0, "The empty Window shows no wallpaper")
-    assert(total / (#area / 4 * 3) <= 16, "The empty Window's wallpaper has no theme tint")
+     mean = total / (#area / 4 * 3)
+     return largest > 0
+    end, 10, "The empty Window shows no wallpaper")
+    assert(mean <= 16, "The empty Window's wallpaper has no theme tint")
     local mark = #trace()
     input(0, point(x, y)); input(1, point(x, y)); input(2, point(x, y))
     coroutine.yield(.3)

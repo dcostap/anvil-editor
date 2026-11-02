@@ -282,6 +282,7 @@ Each non-empty query keeps a Saved Screen: its rows down to the bottom of the sc
 A picker that opens a query with a Saved Screen, or that the prompt history moves to, shows that screen in its first frame. It does not wait for the search.
 While the Saved Screen shows, searches keep their rows back (`holds_saved_screen`). Their last rows replace it, and `restore_position` selects the saved row at its place on the screen. Text Search keeps the found rows of the Saved Screen first, in their order, as rows that the user saw.
 A move during the Saved Screen changes the row that the restore selects. Pages do not load until the search ends.
+A typed path that does not exist gets a Create Path Result at the top. It is not the default selection: the next row is, if one exists (`skip_create_path_row`). The user selects it with a move, and a refresh keeps that choice. Run `ui/fuzzy_searcher_path_search.lua` after changes.
 Run `ui/fuzzy_searcher_scrolling.lua` after changes.
 
 Text Search also searches the Terminal Sessions of this Project. Other Projects search their own Terminals.
@@ -842,6 +843,14 @@ An image cell never reveals its source in Live Preview. A click, Up or Down sele
 Image cells have no resize controls yet. Edit the source in Source mode.
 A Wikilink reads `\|` as its alias separator, because a table needs it: `![[image.png\|200]]`.
 Run `ui/markdown_interactive_tables.lua` after changes. Check the `markdown-table-images` render scenario after visual changes.
+
+## Wallpapers
+
+A native worker decodes the wallpaper (`image_decode` job, `src/image_decode.c`). The UI thread never decodes it. A Window shows its plain background until the image arrives. The `imagedecoded` event wakes the event loop.
+The decoder uses libjpeg-turbo with its SIMD code, which needs NASM. It decodes at 1/2, 1/4 or 1/8 scale when the result still covers 80% of the drawn size. A larger Window decodes again, and the smaller image shows until then.
+Wallpapers are baseline JPEGs. A progressive JPEG decodes about three times slower, and PNG does not decode. Convert a new image with `jpegtran -copy none -optimize`, which does not change its pixels.
+Meson's NASM check finds MSVC's `cl.exe` when Visual Studio is on `PATH`, then fails on Git's `link.exe`. The BAT files use a clean MSYS2 `PATH`. An agent shell must remove Visual Studio from `PATH` before it builds.
+Run `ui/wallpaper.lua`, `anvil:image-decode` and the `shell-empty` shell probe after changes.
 
 ## Shared storage
 

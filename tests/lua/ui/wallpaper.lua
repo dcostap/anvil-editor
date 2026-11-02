@@ -6,6 +6,13 @@ local TextView = require "core.textview"
 local style = require "core.style"
 local test = require "core.test"
 
+-- Waits for a wallpaper decode, which arrives through the event loop.
+local function arrived(condition)
+  local deadline = system.get_time() + 20
+  while not condition() and system.get_time() < deadline do coroutine.yield(0.01) end
+  return condition()
+end
+
 local function near(actual, expected)
   test.ok(math.abs(actual - expected) < 0.01,
     string.format("expected %.2f, got %.2f", expected, actual))
@@ -166,6 +173,59 @@ test.describe("Window wallpaper", function()
       test.equal(style.text[4] or 255, 255)
     end)
     renderer.draw_rect = old_rect
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("decodes the image in the background at the size that its backdrop needs", function()
+    local config = require "core.config"
+    local wallpapers = require "core.wallpapers"
+    local old_wallpaper = config.wallpaper
+    config.wallpaper = "image1"
+    local old_rect, old_scaled, old_clip =
+      renderer.draw_rect, renderer.draw_canvas_scaled, renderer.set_clip_rect
+    renderer.draw_rect, renderer.draw_canvas_scaled, renderer.set_clip_rect =
+      function() end, function() end, function() end
+    local state = {}
+    local ok, err = pcall(function()
+      local full_w, full_h = canvas.load_image(wallpapers.path("image1")):get_size()
+      wallpapers.draw(state, 0, 0, full_w / 4, full_h / 4, false)
+      test.equal(state.wallpaper, nil, "the first frame must not wait for the decode")
+      test.ok(arrived(function() return state.wallpaper end), "the decoded wallpaper must arrive")
+      local small_w = state.wallpaper:get_size()
+      test.ok(small_w < full_w and small_w >= full_w / 4 * 0.8,
+        "a small backdrop must get a smaller image that still covers it, got width " .. small_w)
+      local small = state.wallpaper
+      wallpapers.draw(state, 0, 0, full_w, full_h, false)
+      test.equal(state.wallpaper, small, "the smaller image must show until the larger one arrives")
+      test.ok(arrived(function() return state.wallpaper ~= small end), "the larger wallpaper must arrive")
+      test.equal(state.wallpaper:get_size(), full_w, "a full-size backdrop must get the full image")
+    end)
+    renderer.draw_rect, renderer.draw_canvas_scaled, renderer.set_clip_rect = old_rect, old_scaled, old_clip
+    config.wallpaper = old_wallpaper
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("loads each wallpaper choice", function()
+    local config = require "core.config"
+    local wallpapers = require "core.wallpapers"
+    local old_wallpaper = config.wallpaper
+    local old_rect, old_scaled, old_clip =
+      renderer.draw_rect, renderer.draw_canvas_scaled, renderer.set_clip_rect
+    renderer.draw_rect, renderer.draw_canvas_scaled, renderer.set_clip_rect =
+      function() end, function() end, function() end
+    local ok, err = pcall(function()
+      for _, choice in ipairs(wallpapers.options()) do
+        if choice.name ~= "none" then
+          config.wallpaper = choice.name
+          local state = {}
+          wallpapers.draw(state, 0, 0, 800, 600, false)
+          test.ok(arrived(function() return state.wallpaper ~= nil end), choice.name .. " did not load")
+          test.ok(state.wallpaper, choice.name .. " did not decode")
+        end
+      end
+    end)
+    renderer.draw_rect, renderer.draw_canvas_scaled, renderer.set_clip_rect = old_rect, old_scaled, old_clip
+    config.wallpaper = old_wallpaper
     if not ok then error(err, 0) end
   end)
 

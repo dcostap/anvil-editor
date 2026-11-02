@@ -32,18 +32,15 @@ test.describe("wallpaper selection", function()
     local ok, err = pcall(function()
       root:draw_wallpaper(true)
       test.equal("image2", root.wallpaper_name)
-      test.ok(root.wallpaper)
       bar:set_text("image12")
       bar:update_suggestions()
       root:draw_wallpaper(true)
       test.equal("image12", root.wallpaper_name)
-      test.ok(root.wallpaper)
       for index = 13, 18 do
         local name = "image" .. index
         test.ok(settings.apply_wallpaper(name), name .. " must be selectable")
         root:draw_wallpaper(true)
         test.equal(name, root.wallpaper_name)
-        test.ok(root.wallpaper)
       end
     end)
     renderer.draw_rect, renderer.draw_canvas_scaled = old_rect, old_scaled
