@@ -1019,24 +1019,71 @@ local function insertion_indent(buffer, line, text)
   return empty_line_indent.indent_before(buffer, line)
 end
 
+-- Changes the indentation width of each line with text in `lines` by `delta`.
+local function shift_lines_by(buffer, lines, delta)
+  if delta == 0 then return lines end
+  local _, indent_size = buffer:get_indent_info()
+  for i, line in ipairs(lines) do
+    if line:find("%S") then
+      local lead = leading_whitespace(line)
+      local width = indent_visual_width(lead, indent_size) + delta
+      lines[i] = indentation_of_width(buffer, math.max(0, width)) .. line:sub(#lead + 1)
+    end
+  end
+  return lines
+end
+
 -- Moves `lines` so that their first line with text starts at `target`. The
 -- other lines keep their indentation relative to it.
 local function shift_lines_to(buffer, lines, target)
   local _, indent_size = buffer:get_indent_info()
-  local delta
-  for i, line in ipairs(lines) do
+  for _, line in ipairs(lines) do
     if line:find("%S") then
-      local lead = leading_whitespace(line)
-      local width = indent_visual_width(lead, indent_size)
-      if not delta then
-        delta = indent_visual_width(target, indent_size) - width
-        lines[i] = target .. line:sub(#lead + 1)
-      elseif delta ~= 0 then
-        lines[i] = indentation_of_width(buffer, math.max(0, width + delta)) .. line:sub(#lead + 1)
-      end
+      local width = indent_visual_width(leading_whitespace(line), indent_size)
+      return shift_lines_by(buffer, lines, indent_visual_width(target, indent_size) - width)
     end
   end
   return lines
+end
+
+-- The block indentation of the first line with text in `line1`..`line2`.
+local function group_block_indent(buffer, line1, line2)
+  for line = line1, line2 do
+    if (buffer.lines[line] or ""):find("%S") then return block_indent(buffer, line) end
+  end
+end
+
+-- After Move Lines, shifts each group of lines by the change of its block
+-- indentation, so lines that enter or leave a block take its indentation and
+-- hanging indentation keeps its offset. `groups` lists `{ line1, line2,
+-- before }` in document order. `before` is the group's block indentation
+-- before the move.
+local function reindent_moved_lines(buffer, groups)
+  local _, indent_size = buffer:get_indent_info()
+  for _, group in ipairs(groups) do
+    local after = group.before and group_block_indent(buffer, group.line1, group.line2)
+    local delta = after
+      and indent_visual_width(after, indent_size) - indent_visual_width(group.before, indent_size)
+    if delta and delta ~= 0 then
+      local edits = {}
+      for line = group.line1, group.line2 do
+        local text = buffer.lines[line]
+        local lead = leading_whitespace(text)
+        local new_lead = leading_whitespace(shift_lines_by(buffer, { text }, delta)[1])
+        if new_lead ~= lead then
+          edits[#edits + 1] = { line1 = line, col1 = 1, line2 = line, col2 = #lead + 1, text = new_lead, idx = 0 }
+        end
+      end
+      if #edits > 0 then
+        local selections, last_selection = buffer:selections_after_edits(edits, nil, buffer.last_selection)
+        buffer:apply_edits(edits, {
+          type = "insert", selections = selections, last_selection = last_selection, merge_cursors = false,
+        })
+        core.log_quiet("Move Lines shifted lines %d-%d by %d columns in %s",
+          group.line1, group.line2, delta, buffer:get_name())
+      end
+    end
+  end
 end
 
 local function split_lines(text)
@@ -2597,11 +2644,19 @@ local commands = {
       end
     end
 
-    local edits, line_mapping = {}, {}
+    local edits, line_mapping, groups = {}, {}, {}
     local selections = { table.unpack(dv.buffer.selections) }
     for _, block in ipairs(blocks) do
       local delta = block.line1 > 1 and -1 or 0
       if delta ~= 0 then
+        groups[#groups + 1] = {
+          line1 = block.line1 - 1, line2 = block.line2 - 1,
+          before = group_block_indent(dv.buffer, block.line1, block.line2),
+        }
+        groups[#groups + 1] = {
+          line1 = block.line2, line2 = block.line2,
+          before = group_block_indent(dv.buffer, block.line1 - 1, block.line1 - 1),
+        }
         line_mapping[block.line1 - 1] = block.line2
         for line = block.line1, block.line2 do line_mapping[line] = line - 1 end
         local parts = {}
@@ -2629,7 +2684,10 @@ local commands = {
       end
     end
     if #edits > 0 then
+      local undo_idx = dv.buffer.undo_stack.idx
       dv.buffer:apply_edits(edits, { type = "batch", line_mapping = line_mapping, selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = false })
+      reindent_moved_lines(dv.buffer, groups)
+      dv.buffer:join_undo_since(undo_idx)
     else
       dv.buffer:set_selection_list(selections, dv.buffer.last_selection)
     end
@@ -2655,10 +2713,20 @@ local commands = {
       end
     end
 
-    local edits, line_mapping = {}, {}
+    local edits, line_mapping, groups = {}, {}, {}
     local selections = { table.unpack(dv.buffer.selections) }
     for _, block in ipairs(blocks) do
       local delta = 1
+      if block.line2 < #dv.buffer.lines then
+        groups[#groups + 1] = {
+          line1 = block.line1, line2 = block.line1,
+          before = group_block_indent(dv.buffer, block.line2 + 1, block.line2 + 1),
+        }
+      end
+      groups[#groups + 1] = {
+        line1 = block.line1 + 1, line2 = block.line2 + 1,
+        before = group_block_indent(dv.buffer, block.line1, block.line2),
+      }
       for line = block.line1, block.line2 do line_mapping[line] = line + 1 end
       if block.line2 < #dv.buffer.lines then line_mapping[block.line2 + 1] = block.line1 end
       if block.line2 == #dv.buffer.lines then
@@ -2692,7 +2760,10 @@ local commands = {
       end
     end
     if #edits > 0 then
+      local undo_idx = dv.buffer.undo_stack.idx
       dv.buffer:apply_edits(edits, { type = "batch", line_mapping = line_mapping, selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = false })
+      reindent_moved_lines(dv.buffer, groups)
+      dv.buffer:join_undo_since(undo_idx)
     else
       dv.buffer:set_selection_list(selections, dv.buffer.last_selection)
     end

@@ -719,6 +719,36 @@ test.describe("smart indentation", function()
     test.equal(text(buffer), "f(a, b)\n")
   end)
 
+  test.it("Move Lines gives moved lines the indentation of the block that they enter", function(context)
+    local original = "f {\n  x()\n  g {\n    y()\n  }\n}"
+    local buffer, view = new_editor(context, original, "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(2, 4)
+
+    test.ok(command.perform("editor:move_lines_down"))
+    test.equal(text(buffer), "f {\n  g {\n    x()\n    y()\n  }\n}\n")
+    test.same(view:get_selection_state().selections, { 3, 6, 3, 6 })
+    test.ok(command.perform("core:undo"))
+    test.equal(text(buffer), original .. "\n")
+
+    test.ok(command.perform("editor:move_lines_down"))
+    test.ok(command.perform("editor:move_lines_down"))
+    test.equal(text(buffer), "f {\n  g {\n    y()\n    x()\n  }\n}\n")
+
+    test.ok(command.perform("editor:move_lines_down"))
+    test.equal(text(buffer), "f {\n  g {\n    y()\n  }\n  x()\n}\n")
+  end)
+
+  test.it("Move Lines moves a closing brace with the line that it passes", function(context)
+    local buffer, view = new_editor(context, "if a {\n}\nx()", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(2, 1)
+
+    test.ok(command.perform("editor:move_lines_down"))
+
+    test.equal(text(buffer), "if a {\n  x()\n}\n")
+  end)
+
   test.it("continues Markdown list items ending in a colon", function(context)
     local buffer, view = new_editor(context, "- item:", "sample.md")
     core.set_active_view(view)
