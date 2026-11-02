@@ -6,6 +6,7 @@ local keymap = require "core.keymap"
 local style = require "core.style"
 local card = require "core.card"
 local RowHighlight = require "core.row_highlight"
+local LineInput = require "core.line_input"
 
 ---A Context Menu: a small card of commands that opens at the pointer.
 ---Each item runs a command, so a menu adds no behavior of its own. Items whose command
@@ -17,6 +18,8 @@ local RowHighlight = require "core.row_highlight"
 ---  `command` a command name, or a list of names; the first valid one runs
 ---  `args`    arguments for the command and its predicate
 ---  `items`   a submenu instead of a command
+---
+---Typed text filters the menu with a fuzzy query, also the items of submenus.
 ---
 ---The menu opens over a host panel: the Root Panel, or a Project Sidebar's surface. The host has `position` and
 ---`size`, takes the menu's input through `push_modal_input` and `pop_modal_input`, gets a press outside the menu
@@ -122,6 +125,34 @@ local function resolve(items)
   return rows
 end
 
+-- Rows that the keyboard and pointer can select: not separators and not the query field.
+local function selectable(row) return not (row.separator or row.field) end
+
+local PATH_SEPARATOR = " \u{203A} "
+
+-- The query field, then the command rows of all levels that match the query, best match first.
+-- A submenu's item shows its path.
+local function filtered_rows(rows, query)
+  local candidates = {}
+  local function collect(list, path)
+    for _, row in ipairs(list) do
+      if row.items then
+        collect(row.items, path and path .. PATH_SEPARATOR .. row.label or row.label)
+      elseif row.command then
+        candidates[#candidates + 1] = { row = row, path = path, text = path and path .. " " .. row.label or row.label }
+      end
+    end
+  end
+  collect(rows)
+  local result = { { field = true }, { separator = true } }
+  for _, match in ipairs(common.fuzzy_match(candidates, query)) do
+    local row = match.row
+    result[#result + 1] = { label = row.label, icon = row.icon, command = row.command, args = row.args,
+      shortcut = row.shortcut, path = match.path }
+  end
+  return result
+end
+
 local function bounds()
   local host = state.host
   return host.position.x, host.position.y, host.size.x, host.size.y
@@ -129,17 +160,18 @@ end
 
 -- Lays out one level of rows with its top left corner near (x, y).
 -- `flip_x` is the x to use when the level does not fit to the right of x.
-local function layout_level(rows, x, y, flip_x)
+local function layout_level(rows, x, y, flip_x, min_w)
   local m = metrics()
-  local w = m.min_w
+  local w = math.max(m.min_w, min_w or 0)
   -- A level with an icon gives every row an icon column, so the labels line up.
   local icon_w = 0
   for _, row in ipairs(rows) do
     if row.icon then icon_w = m.icon_w end
   end
   for _, row in ipairs(rows) do
-    if not row.separator then
+    if row.label then
       local label_w = icon_w + m.font:get_width(row.label)
+        + (row.path and m.font:get_width(row.path .. PATH_SEPARATOR) or 0)
       local extra = row.shortcut and m.gap + m.font:get_width(row.shortcut) or (row.items and m.gap) or 0
       w = math.max(w, label_w + extra + m.row_x * 2 + m.pad * 2)
     end
@@ -173,7 +205,7 @@ local function hit(x, y)
     local level = state.levels[depth]
     if contains(level, x, y) then
       for index, row in ipairs(level.rows) do
-        if not row.separator and contains(row, x, y) then return depth, index end
+        if selectable(row) and contains(row, x, y) then return depth, index end
       end
       return depth
     end
@@ -239,6 +271,8 @@ function context_menu.open(x, y, items, opts)
     progress = config.transitions and 0 or 1,
     origin = { x = x, y = y, button = opts.button },
     root_size = { host.size.x, host.size.y },
+    rows = rows,
+    input = LineInput(),
   }
   state.levels = { layout_level(rows, x + 1, y + 1, x - 1) }
   host:push_modal_input(context_menu, { label = "context-menu", handlers = modal_handlers })
@@ -253,7 +287,9 @@ end
 function context_menu.labels(depth)
   local level = state and state.levels[depth or 1]
   local labels = {}
-  for _, row in ipairs(level and level.rows or {}) do labels[#labels + 1] = row.separator and "-" or row.label end
+  for _, row in ipairs(level and level.rows or {}) do
+    if not row.field then labels[#labels + 1] = row.separator and "-" or row.label end
+  end
   return labels
 end
 
@@ -267,7 +303,7 @@ end
 
 local function activate(depth, index)
   local row = state.levels[depth].rows[index]
-  if not row or row.separator then return end
+  if not row or not selectable(row) then return end
   if row.items then
     select(depth, index)
     open_submenu(depth, index, true)
@@ -296,39 +332,88 @@ local function step(level, from, delta)
   local index = from or (delta > 0 and 0 or count + 1)
   for _ = 1, count do
     index = (index + delta - 1) % count + 1
-    if not level.rows[index].separator then return index end
+    if selectable(level.rows[index]) then return index end
   end
 end
 
-local function on_key_pressed(key)
+-- Lays out the menu's first level again: its own rows without a query, or else the rows that match the query.
+-- The filtered level starts at the place of the unfiltered level and is not narrower.
+local function relayout()
+  local origin, old = state.origin, state.levels[1]
+  close_below(1)
+  state.pending = nil
+  local level = layout_level(state.rows, origin.x + 1, origin.y + 1, origin.x - 1)
+  if state.input.text ~= "" then
+    level = layout_level(filtered_rows(state.rows, state.input.text), level.x, level.y, nil, level.w)
+  end
+  level.highlight = old.highlight
+  state.levels[1] = level
+end
+
+-- Filters the menu again after the query changed, and selects the best match.
+local function query_changed()
+  relayout()
+  local level = state.levels[1]
+  if state.input.text ~= "" then level.selected = step(level, nil, 1) end
+  core.log_quiet("Context Menu query: %d byte(s), %d row(s)", #state.input.text, #level.rows)
+end
+
+local line_commands = {}
+for _, name in ipairs(LineInput.COMMANDS) do line_commands[name] = true end
+
+-- Performs the user's line command for the key in the query field, such as Backspace. Without a query, only a
+-- paste starts one. Returns false when the key has no such command.
+local function edit_query(key, event)
+  local stroke = keymap.stroke_for_event(key, event)
+  for _, name in ipairs(keymap.map[stroke] or {}) do
+    local edit = type(name) == "string" and name:match(":(.+)$")
+    if edit and line_commands[edit] and (state.input.text ~= "" or edit == "paste") then
+      local before = state.input.text
+      state.input:perform(edit)
+      if state.input.text ~= before then query_changed() end
+      return true
+    end
+  end
+  return false
+end
+
+local function on_key_pressed(key, event)
   if not state then return false end
+  if keymap.is_modifier_key(key) then return "keymap" end
   local depth = #state.levels
   local level = state.levels[depth]
+  local querying = state.input.text ~= ""
+  local modkeys = keymap.modkeys
   if key == "escape" then
-    if depth > 1 then close_below(depth - 1) else context_menu.close() end
+    if querying then
+      state.input:set_text("")
+      query_changed()
+    elseif depth > 1 then close_below(depth - 1) else context_menu.close() end
   elseif key == "down" or key == "up" then
     level.selected = step(level, level.selected, key == "down" and 1 or -1)
     state.pending = nil
+  elseif key == "return" or key == "keypad enter" or (key == "space" and not querying) then
+    if level.selected then activate(depth, level.selected) end
+  elseif edit_query(key, event) then
+    -- The query field took the key.
   elseif key == "home" or key == "end" then
     level.selected = step(level, nil, key == "home" and 1 or -1)
   elseif key == "right" then
     if level.selected and level.rows[level.selected].items then open_submenu(depth, level.selected, true) end
   elseif key == "left" then
     if depth > 1 then close_below(depth - 1) end
-  elseif key == "return" or key == "keypad enter" or key == "space" then
-    if level.selected then activate(depth, level.selected) end
-  elseif #key == 1 then
-    -- Type ahead: a letter selects the next row that starts with it.
-    local start = level.selected or 0
-    for offset = 1, #level.rows do
-      local index = (start + offset - 1) % #level.rows + 1
-      local row = level.rows[index]
-      if not row.separator and row.label:sub(1, 1):lower() == key then
-        level.selected = index
-        break
-      end
-    end
+  elseif not (modkeys.ctrl or modkeys.alt or modkeys.super or modkeys.cmd) then
+    -- The key's text arrives in a later text event, and goes to the query.
+    return "text"
   end
+  core.redraw = true
+  return true
+end
+
+local function on_text_input(text)
+  if not state then return false end
+  state.input:insert(text)
+  query_changed()
   core.redraw = true
   return true
 end
@@ -391,6 +476,8 @@ end
 
 modal_handlers = {
   key_pressed = on_key_pressed,
+  text_input = on_text_input,
+  ime_text_editing = function() return true end,
   mouse_moved = on_mouse_moved,
   mouse_pressed = on_mouse_pressed,
   mouse_released = on_mouse_released,
@@ -405,9 +492,9 @@ function context_menu.update()
   if state.root_size[1] ~= size.x or state.root_size[2] ~= size.y then
     -- The menu stays at its point, inside the new bounds. Submenus close.
     state.root_size = { size.x, size.y }
-    local origin, old = state.origin, state.levels[1]
-    state.levels = { layout_level(old.rows, origin.x + 1, origin.y + 1, origin.x - 1) }
-    state.levels[1].selected, state.levels[1].highlight = old.selected, old.highlight
+    local selected = state.levels[1].selected
+    relayout()
+    state.levels[1].selected = selected
     core.redraw = true
   end
   if state.progress < 1 then
@@ -442,6 +529,30 @@ local function draw_chevron(x, y, h, color)
   end
 end
 
+-- The query field: a search icon, the query with its selection, and the caret.
+local function draw_field(row, m)
+  local input = state.input
+  local font = m.font
+  local tx = row.x + m.row_x
+  common.draw_text(m.icon_font, style.accent, context_menu.icons.search, "left", tx, row.y, m.icon_w, row.h)
+  tx = tx + m.icon_w
+  local available = row.x + row.w - m.row_x - tx
+  local caret_w = math.max(1, math.floor(1.5 * SCALE))
+  local function offset_x(pos) return font:get_width(input.text:sub(1, pos)) end
+  -- A long query scrolls so its caret stays in view.
+  local scroll = math.max(0, offset_x(input.caret) + caret_w - available)
+  local ty = row.y + math.floor((row.h - font:get_height()) / 2)
+  core.push_clip_rect(tx, row.y, available, row.h)
+  local first, last = input:selection()
+  if first ~= last then
+    local left = offset_x(first)
+    renderer.draw_rect(tx - scroll + left, ty, offset_x(last) - left, font:get_height(), style.selection)
+  end
+  renderer.draw_text(font, input.text, tx - scroll, ty, style.text)
+  renderer.draw_rect(tx - scroll + offset_x(input.caret), ty, caret_w, font:get_height(), style.accent)
+  core.pop_clip_rect()
+end
+
 local function draw_level(level)
   local m = metrics()
   card.draw(level.x, level.y, level.w, level.h, m.radius)
@@ -458,13 +569,19 @@ local function draw_level(level)
     if row.separator then
       local line_y = math.floor(row.y + row.h / 2)
       renderer.draw_rect(row.x + m.row_x, line_y, row.w - m.row_x * 2, card.border_width(), style.card_border)
+    elseif row.field then
+      draw_field(row, m)
     else
       local selected = level.selected == index
       local tx, tw = row.x + m.row_x, row.w - m.row_x * 2
       if row.icon then
         common.draw_text(m.icon_font, selected and style.text or style.card_text, row.icon, "left", tx, row.y, level.icon_w, row.h)
       end
-      common.draw_text(m.font, style.text, row.label, "left", tx + level.icon_w, row.y, tw - level.icon_w, row.h)
+      local lx = tx + level.icon_w
+      if row.path then
+        lx = common.draw_text(m.font, style.card_text, row.path .. PATH_SEPARATOR, "left", lx, row.y, 0, row.h)
+      end
+      common.draw_text(m.font, style.text, row.label, "left", lx, row.y, tx + tw - lx, row.h)
       if row.shortcut then
         common.draw_text(m.font, style.card_text, row.shortcut, "right", tx, row.y, tw, row.h)
       elseif row.items then

@@ -1194,6 +1194,16 @@ local function scenario_is_ready()
     context_menu.choose("Insert")
     return false
   end
+  if benchmark.scenario == "context-menu-query" then
+    -- The Markdown Context Menu filtered by a typed query, which also finds submenu items.
+    local context_menu = require "core.context_menu"
+    if context_menu.is_open() then return true end
+    config.transitions = false
+    local x, y = view.position.x + 420 * SCALE, view.position.y + 205 * SCALE
+    context_menu.open(x, y, view:context_menu(x, y))
+    for char in ("tab"):gmatch(".") do core.on_event("textinput", char) end
+    return false
+  end
   if benchmark.scenario:find("^git%-view") then
     -- The log and the selected commit's changed files load from Git in the background.
     local tab = view.model:log_tab()

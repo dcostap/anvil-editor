@@ -46,6 +46,14 @@ local function right_click(x, y)
   core.on_event("mousereleased", "right", x, y)
 end
 
+-- Types text as the keyboard does: a key press, then its text.
+local function type_text(text)
+  for char in text:gmatch(".") do
+    core.on_event("keypressed", char == " " and "space" or char, {})
+    core.on_event("textinput", char)
+  end
+end
+
 local function contains(list, wanted)
   for _, value in ipairs(list) do
     if value == wanted then return true end
@@ -85,9 +93,10 @@ test.describe("Context Menu", function()
     system.set_clipboard("X")
     right_click(point(view, 1, 7))
     test.ok(context_menu.is_open())
-    -- Type ahead selects Paste; Enter runs it.
-    core.on_event("keypressed", "p", {})
+    -- Typed text filters the menu and selects the best match; Enter runs it.
+    type_text("pas")
     test.equal(context_menu.selected_label(), "Paste")
+    test.ok(not contains(context_menu.labels(), "Select All"))
     core.on_event("keypressed", "return", {})
     test.ok(not context_menu.is_open())
     test.equal(view.buffer:get_text(1, 1, 1, math.huge), "alpha Xbeta")
@@ -150,6 +159,30 @@ test.describe("Context Menu", function()
     core.on_event("keypressed", "escape", {})
     test.ok(not context_menu.is_open())
     test.equal(view.buffer:get_text(1, 1, 1, math.huge), "alpha")
+  end)
+
+  test.it("finds a submenu item from the typed query", function()
+    local view = open_editor("Title", "note.md")
+    view.buffer:set_selection(1, 3)
+    test.ok(command.perform("core:show_context_menu"))
+    type_text("heading 2")
+    test.equal(context_menu.selected_label(), "Heading 2")
+    core.on_event("keypressed", "return", {})
+    test.ok(not context_menu.is_open())
+    test.equal(view.buffer:get_text(1, 1, 1, math.huge), "## Title")
+  end)
+
+  test.it("clears the query with Escape before it closes", function()
+    local view = open_editor("alpha")
+    right_click(point(view, 1, 2))
+    local labels = context_menu.labels()
+    type_text("zzzz")
+    test.ok(not contains(context_menu.labels(), "Copy"))
+    core.on_event("keypressed", "escape", {})
+    test.ok(context_menu.is_open())
+    test.same(context_menu.labels(), labels)
+    core.on_event("keypressed", "escape", {})
+    test.ok(not context_menu.is_open())
   end)
 
   test.it("opens from the keyboard at the caret", function()

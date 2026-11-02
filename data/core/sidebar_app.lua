@@ -204,7 +204,10 @@ end
 
 -- While a Context Menu is open, it takes the pointer and the keyboard. Returns true for an event that it takes.
 local function menu_event(handlers, name, ...)
-  if name == "keypressed" then handlers.key_pressed((...))
+  if name == "keypressed" then
+    -- The menu leaves modifier keys to the keymap, so it sees Ctrl and Shift.
+    if handlers.key_pressed(...) == "keymap" then keymap.on_key_pressed(...) end
+  elseif name == "textinput" then handlers.text_input(...)
   elseif name == "keyreleased" then keymap.on_key_released(...)
   elseif name == "mousepressed" then handlers.mouse_pressed(...)
   elseif name == "mousereleased" then handlers.mouse_released(...)
@@ -214,7 +217,7 @@ local function menu_event(handlers, name, ...)
     -- The Window lost focus. The Sidebar View also takes the event.
     context_menu.close()
     return false
-  elseif name ~= "textinput" and name ~= "mouseleft" then
+  elseif name ~= "mouseleft" then
     return false
   end
   core.redraw = true
