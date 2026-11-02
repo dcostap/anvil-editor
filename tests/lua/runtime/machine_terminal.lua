@@ -114,6 +114,21 @@ test.describe("Remote Terminal Session", function()
     wait_text(context.local_session, "ECHO:after-restart")
   end)
 
+  test.it("ends a new shell when its device detaches before it reads the shell", function(context)
+    local err, result = call(context.owner, "terminal.start", {project = context.project, cwd = context.project,
+      shell = ECHO_SHELL, scrollback_lines = 1000, cols = 60, rows = 10, cell_width = 8, cell_height = 16})
+    test.is_nil(err)
+    local text = require("terminal_native").read_session_record(result.session_id)
+    local record = text and load(text, "=record", "t", {})()
+    test.ok(record, "The new shell has no record")
+    test.ok(common.path_equals(record.project_path, context.project))
+    -- A lost reply looks the same to the Machine. Nothing else knows the new shell.
+    test.is_nil(call(context.owner, "terminal.detach", {link = result.link}))
+    local alive = require("terminal_link").host_alive
+    wait_until(function() return not alive(record.host_pid, record.host_creation_time) end,
+      "The Machine kept the unread shell")
+  end)
+
   test.it("does not let a View device type", function(context)
     local err, result = call(context.owner, "pairing.start", {level = "view"})
     test.is_nil(err)

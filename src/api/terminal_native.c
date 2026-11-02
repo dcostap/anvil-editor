@@ -966,7 +966,7 @@ static DWORD WINAPI reconnect_main(void *userdata) {
     ? anvil_terminal_host_launch(&job->pipe, &job->process, &job->host_pid, &job->shell_pid,
         &replay_bytes, job->id, job->userdir, job->project, job->shell, job->cwd, job->datadir,
         job->revive_from, job->environment, job->prepared, &job->size,
-        job->has_scrollback_lines ? &job->scrollback_lines : NULL, &job->error)
+        job->has_scrollback_lines ? &job->scrollback_lines : NULL, NULL, &job->error)
     : anvil_terminal_host_connect(&job->pipe, job->process, job->host_pid,
         &job->shell_pid, job->id, &job->size, &job->error);
   if (!connected && job->userdir && job->process) {
@@ -2171,7 +2171,7 @@ static int f_terminal_resize(lua_State *L) {
   return 1;
 }
 
-/* `session:attach_remote {shell_pid, cols, rows, cell_width, cell_height}` connects a remote session after its
+/* `session:attach_remote {session_id, shell_pid, cols, rows, cell_width, cell_height}` connects a remote session after its
    Machine attached it to the host. It returns the Terminal link whose records Lua carries to the Machine, or
    nil and an error. The snapshot and the output then arrive through the link. */
 static int f_terminal_attach_remote(lua_State *L) {
@@ -2189,6 +2189,11 @@ static int f_terminal_attach_remote(lua_State *L) {
     if (values[i] < 1 || values[i] > (i == 0 ? UINT32_MAX : i < 3 ? 32767 : 65535))
       return luaL_error(L, "%s is out of range", names[i]);
   }
+  lua_getfield(L, 2, "session_id");
+  const char *id = luaL_checkstring(L, -1);
+  if (!anvil_terminal_id_valid(id)) return luaL_error(L, "session_id is not valid");
+  memcpy(session->id, id, sizeof(session->id));
+  lua_pop(L, 1);
   HANDLE handle = NULL; DWORD error = 0;
   AnvilTerminalLink *link = anvil_terminal_link_pair(&handle, &error);
   if (!link) {

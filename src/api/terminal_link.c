@@ -43,6 +43,8 @@ struct AnvilTerminalLink {
   uint64_t allowed;
   uint16_t final_type;
   LinkBuffer out, in;
+  /* A link that starts a new host (`terminal_link.launch`). The host writes its record in `userdir`. */
+  struct { char *userdir, *project, *shell, *cwd, *datadir; wchar_t *environment; size_t scrollback_lines; } *launch;
 };
 
 typedef struct { AnvilTerminalLink *link; } LinkHandle;
@@ -84,6 +86,12 @@ void anvil_terminal_link_release(AnvilTerminalLink *link) {
   anvil_ipc_pipe_close(&link->pipe);
   if (link->process) CloseHandle(link->process);
   free(link->out.bytes); free(link->in.bytes);
+  if (link->launch) {
+    free(link->launch->userdir); free(link->launch->project); free(link->launch->shell);
+    free(link->launch->cwd); free(link->launch->datadir);
+    if (link->launch->environment) FreeEnvironmentStringsW(link->launch->environment);
+    free(link->launch);
+  }
   DeleteCriticalSection(&link->lock);
   free(link);
 }
@@ -155,10 +163,29 @@ static DWORD WINAPI link_reader(void *userdata) {
     AnvilIPCPipe pipe = {0};
     AnvilTerminalSize size = link->size;
     DWORD shell_pid = 0;
-    bool ok = anvil_terminal_host_connect_as(&pipe, link->process, link->host_pid, &shell_pid, link->id, &size,
-      &link->info, &error);
+    char id[ANVIL_TERMINAL_ID_LENGTH + 1] = {0};
+    bool ok;
+    if (link->launch) {
+      HANDLE process = NULL; DWORD host_pid = 0; uint64_t replay_bytes = 0;
+      ok = anvil_terminal_host_launch(&pipe, &process, &host_pid, &shell_pid, &replay_bytes, id,
+        link->launch->userdir, link->launch->project, link->launch->shell, link->launch->cwd, link->launch->datadir,
+        NULL, link->launch->environment, false, &size, &link->launch->scrollback_lines, &link->info, &error);
+      if (!ok && process) {
+        TerminateProcess(process, 1);
+        /* A new host can write its record before it answers. Nothing can revive its shell. */
+        if (WaitForSingleObject(process, 5000) == WAIT_OBJECT_0) anvil_terminal_host_discard(link->launch->userdir, id);
+      }
+      link->process = process; link->host_pid = host_pid;
+    } else {
+      memcpy(id, link->id, sizeof(id));
+      ok = anvil_terminal_host_connect_as(&pipe, link->process, link->host_pid, &shell_pid, id, &size, &link->info,
+        &error);
+    }
     EnterCriticalSection(&link->lock);
+    /* No Client takes a new shell that Lua closed during its start. */
+    if (ok && link->closing && link->launch) anvil_ipc_pipe_write(&pipe, ANVIL_TERMINAL_CLOSE, NULL, 0, NULL, 0);
     ok = ok && !link->closing;
+    memcpy(link->id, id, sizeof(id));
     if (ok) {
       link->pipe = pipe; link->pipe_ready = true;
       link->shell_pid = shell_pid; link->size = size;
@@ -272,39 +299,23 @@ static lua_Integer field_integer(lua_State *L, const char *name, lua_Integer low
 
 static void allow(AnvilTerminalLink *link, uint16_t type) { link->allowed |= (uint64_t)1 << type; }
 
-/* `terminal_link.connect {session_id, host_pid, host_creation_time, cols, rows, cell_width, cell_height, name,
-   full}` connects to a Terminal host as a Client on another device. Only `full` devices can type, take control
-   and close the session. Returns the link, or nil and an error. */
-static int f_link_connect(lua_State *L) {
+/* A new link for the options table at index 1: the Client's size, its device `name`, and `full` control. */
+static AnvilTerminalLink *options_link(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
-  lua_getfield(L, 1, "session_id");
-  const char *id = luaL_checkstring(L, -1);
-  lua_getfield(L, 1, "host_creation_time");
-  const char *created = luaL_checkstring(L, -1);
+  AnvilTerminalSize size = {
+    (uint16_t)field_integer(L, "cols", 1, 32767), (uint16_t)field_integer(L, "rows", 1, 32767),
+    (uint32_t)field_integer(L, "cell_width", 1, 65535), (uint32_t)field_integer(L, "cell_height", 1, 65535),
+  };
   lua_getfield(L, 1, "name");
   size_t name_length = 0;
   const char *name = luaL_optlstring(L, -1, "", &name_length);
   lua_getfield(L, 1, "full");
   bool full = lua_toboolean(L, -1);
-  lua_pop(L, 4);
-  DWORD pid = (DWORD)field_integer(L, "host_pid", 1, UINT32_MAX);
-  AnvilTerminalSize size = {
-    (uint16_t)field_integer(L, "cols", 1, 32767), (uint16_t)field_integer(L, "rows", 1, 32767),
-    (uint32_t)field_integer(L, "cell_width", 1, 65535), (uint32_t)field_integer(L, "cell_height", 1, 65535),
-  };
-  if (!anvil_terminal_id_valid(id)) luaL_argerror(L, 1, "invalid Terminal Session ID");
-  HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-  if (!anvil_terminal_host_identity(process, pid, created)) {
-    if (process) CloseHandle(process);
-    lua_pushnil(L);
-    lua_pushliteral(L, "The Terminal Session has ended");
-    return 2;
-  }
   AnvilTerminalLink *link = new_link();
-  if (!link) { CloseHandle(process); return luaL_error(L, "Could not allocate a Terminal link"); }
-  link->process = process; link->host_pid = pid; link->size = size;
-  memcpy(link->id, id, sizeof(link->id));
+  if (!link) luaL_error(L, "Could not allocate a Terminal link");
+  link->size = size;
   memcpy(link->info.name, name, name_length < sizeof(link->info.name) ? name_length : sizeof(link->info.name) - 1);
+  lua_pop(L, 2);
   link->info.flags = full ? 0 : ANVIL_TERMINAL_VIEW_ONLY;
   allow(link, ANVIL_TERMINAL_DETACH);
   if (full) {
@@ -312,6 +323,10 @@ static int f_link_connect(lua_State *L) {
     allow(link, ANVIL_TERMINAL_CLEAR); allow(link, ANVIL_TERMINAL_CLOSE); allow(link, ANVIL_TERMINAL_END);
   }
   link->state = LINK_CONNECTING;
+  return link;
+}
+
+static int push_started(lua_State *L, AnvilTerminalLink *link) {
   if (!start_reader(link)) {
     anvil_terminal_link_release(link);
     return luaL_error(L, "Could not start a Terminal link");
@@ -321,18 +336,84 @@ static int f_link_connect(lua_State *L) {
   return 1;
 }
 
-/* Returns "connecting", "open" or "closed", and a table with the shell's `shell_pid` and the session's size
-   once the host answered. A closed link's table has the Windows `error`. */
+/* `terminal_link.connect {session_id, host_pid, host_creation_time, cols, rows, cell_width, cell_height, name,
+   full}` connects to a Terminal host as a Client on another device. Only `full` devices can type, take control
+   and close the session. Returns the link, or nil and an error. */
+static int f_link_connect(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  lua_getfield(L, 1, "session_id");
+  const char *id = luaL_checkstring(L, -1);
+  lua_getfield(L, 1, "host_creation_time");
+  const char *created = luaL_checkstring(L, -1);
+  DWORD pid = (DWORD)field_integer(L, "host_pid", 1, UINT32_MAX);
+  if (!anvil_terminal_id_valid(id)) luaL_argerror(L, 1, "invalid Terminal Session ID");
+  AnvilTerminalLink *link = options_link(L);
+  HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (!anvil_terminal_host_identity(process, pid, created)) {
+    if (process) CloseHandle(process);
+    anvil_terminal_link_release(link);
+    lua_pushnil(L);
+    lua_pushliteral(L, "The Terminal Session has ended");
+    return 2;
+  }
+  link->process = process; link->host_pid = pid;
+  memcpy(link->id, id, sizeof(link->id));
+  return push_started(L, link);
+}
+
+static char *string_field(lua_State *L, const char *name) {
+  lua_getfield(L, 1, name);
+  char *copy = _strdup(lua_tostring(L, -1));
+  lua_pop(L, 1);
+  return copy;
+}
+
+/* `terminal_link.launch {project, cwd, shell, scrollback_lines, cols, rows, cell_width, cell_height, name}` starts
+   a new host for a Client with Full control, and connects that Client. The status then gives the `session_id`. */
+static int f_link_launch(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  lua_pushboolean(L, 1);
+  lua_setfield(L, 1, "full");
+  size_t scrollback_lines = (size_t)field_integer(L, "scrollback_lines", 0, 100000000);
+  const char *fields[] = { "project", "cwd", "shell" };
+  for (int i = 0; i < 3; i++) { lua_getfield(L, 1, fields[i]); luaL_checkstring(L, -1); lua_pop(L, 1); }
+  AnvilTerminalLink *link = options_link(L);
+  link->launch = calloc(1, sizeof(*link->launch));
+  if (link->launch) {
+    link->launch->project = string_field(L, "project");
+    link->launch->cwd = string_field(L, "cwd");
+    link->launch->shell = string_field(L, "shell");
+    lua_getglobal(L, "USERDIR");
+    link->launch->userdir = _strdup(luaL_checkstring(L, -1));
+    lua_getglobal(L, "DATADIR");
+    link->launch->datadir = _strdup(luaL_checkstring(L, -1));
+    lua_pop(L, 2);
+    link->launch->environment = GetEnvironmentStringsW();
+    link->launch->scrollback_lines = scrollback_lines;
+  }
+  if (!link->launch || !link->launch->project || !link->launch->cwd || !link->launch->shell ||
+      !link->launch->userdir || !link->launch->datadir || !link->launch->environment) {
+    anvil_terminal_link_release(link);
+    return luaL_error(L, "Could not allocate a Terminal link");
+  }
+  return push_started(L, link);
+}
+
+/* Returns "connecting", "open" or "closed", and a table with the `session_id`, the shell's `shell_pid` and the
+   session's size once the host answered. A closed link's table has the Windows `error`. */
 static int f_link_status(lua_State *L) {
   AnvilTerminalLink *link = check_link(L);
   EnterCriticalSection(&link->lock);
   LinkState state = link->state;
   DWORD shell_pid = link->shell_pid, error = link->error;
   AnvilTerminalSize size = link->size;
+  char id[ANVIL_TERMINAL_ID_LENGTH + 1];
+  memcpy(id, link->id, sizeof(id));
   LeaveCriticalSection(&link->lock);
   lua_pushstring(L, state == LINK_CONNECTING ? "connecting" : state == LINK_OPEN ? "open" : "closed");
   lua_createtable(L, 0, 6);
   if (shell_pid) {
+    lua_pushstring(L, id); lua_setfield(L, -2, "session_id");
     lua_pushinteger(L, shell_pid); lua_setfield(L, -2, "shell_pid");
     lua_pushinteger(L, size.cols); lua_setfield(L, -2, "cols");
     lua_pushinteger(L, size.rows); lua_setfield(L, -2, "rows");
@@ -391,13 +472,20 @@ static int f_link_write(lua_State *L) {
   return 2;
 }
 
-/* Sends the records that Lua wrote, then ends the connection. It does not wait. */
+/* `link:close(end_shell)` sends the records that Lua wrote, then ends the connection. It does not wait.
+   With `end_shell`, the host then ends its shell. */
 static int f_link_close(lua_State *L) {
   LinkHandle *handle = luaL_checkudata(L, 1, API_TYPE_TERMINAL_LINK);
   AnvilTerminalLink *link = handle->link;
+  bool end_shell = lua_toboolean(L, 2);
   if (!link) return 0;
   handle->link = NULL;
   EnterCriticalSection(&link->lock);
+  /* The writer sends CLOSE after the records before it. A new shell that is still starting gets it too. */
+  if (end_shell && link->state == LINK_OPEN && !link->pair) {
+    AnvilIPCHeader header = { 0, ANVIL_TERMINAL_CLOSE, ANVIL_TERMINAL_PROTOCOL_VERSION };
+    append(&link->in, &header, sizeof(header));
+  }
   link->closing = true;
   bool idle = link->state != LINK_OPEN;
   WakeAllConditionVariable(&link->changed);
@@ -430,6 +518,7 @@ static int f_link_host_alive(lua_State *L) {
 
 static const luaL_Reg link_functions[] = {
   { "connect", f_link_connect },
+  { "launch", f_link_launch },
   { "host_alive", f_link_host_alive },
   { NULL, NULL },
 };

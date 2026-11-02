@@ -1579,7 +1579,8 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
                                 const char *userdir, const char *project, const char *shell, const char *cwd,
                                 const char *datadir,
                                 const char *revive_from, const wchar_t *environment, bool prepared,
-                                AnvilTerminalSize *size, const size_t *scrollback_lines, DWORD *error) {
+                                AnvilTerminalSize *size, const size_t *scrollback_lines,
+                                const AnvilTerminalClientInfo *client, DWORD *error) {
   uint8_t random[16]; char name[128];
   bool random_ok = revive_from ? anvil_terminal_id_valid(id) : random_bytes(random, sizeof(random));
   if (!random_ok) { *error = ERROR_GEN_FAILURE; return false; }
@@ -1620,7 +1621,7 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
   CloseHandle(info.hThread); *process = info.hProcess; *host_pid = info.dwProcessId;
   *replay_bytes = 0;
   if (revive_from) { size->cols = 0; size->rows = 0; }
-  return host_connect(pipe, *process, *host_pid, shell_pid, id, size, NULL, true, LAUNCH_TIMEOUT_MS, error);
+  return host_connect(pipe, *process, *host_pid, shell_pid, id, size, client, true, LAUNCH_TIMEOUT_MS, error);
 }
 
 void anvil_terminal_host_discard(const char *userdir, const char *id) {

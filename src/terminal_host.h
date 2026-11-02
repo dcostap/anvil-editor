@@ -12,7 +12,7 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
                                 const char *datadir,
                                 const char *revive_from, const wchar_t *environment, bool prepared,
                                 AnvilTerminalSize *size, const size_t *scrollback_lines,
-                                DWORD *error);
+                                const AnvilTerminalClientInfo *client, DWORD *error);
 /* Deletes the record, screen and agent report of a session whose host has ended. */
 void anvil_terminal_host_discard(const char *userdir, const char *id);
 bool anvil_terminal_id_valid(const char *id);

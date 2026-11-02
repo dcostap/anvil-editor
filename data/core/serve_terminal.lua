@@ -44,7 +44,7 @@ local function size_param(params, name, high)
   return type(value) == "number" and value % 1 == 0 and value >= 1 and value <= high
 end
 
--- `server` gives: reply, fail, project_root, log and on_close.
+-- `server` gives: reply, fail, project_root, check_path, disk_path, log and on_close.
 function terminal.new(server)
   local links, sequence = {}, 0
 
@@ -57,12 +57,13 @@ function terminal.new(server)
     server.fail(client, id, "not_found", "This Machine has no such Terminal Session")
   end
 
-  -- A read that waits for a removed link gets `done`, so the Client attaches again.
+  -- A read that waits for a removed link gets `done`, so the Client attaches again. A new shell ends when its
+  -- Client never read it, for example after a lost reply. Nothing else knows its ID.
   local function remove(state)
     if links[state.id] ~= state then return end
     links[state.id] = nil
     state.client.links = state.client.links - 1
-    state.link:close()
+    state.link:close(state.started and not state.read)
     local waiter = state.waiter
     state.waiter = nil
     if waiter then server.reply(state.client, waiter, {result = {done = true}}) end
@@ -77,7 +78,7 @@ function terminal.new(server)
         local waiter = state.attach_waiter
         state.attach_waiter = nil
         if status == "closed" then
-          server.log("Machine server cannot attach Terminal Session %s: error %s", state.session, tostring(info.error))
+          server.log("Machine server Terminal link %s did not open: error %s", state.id, tostring(info.error))
           server.fail(state.client, waiter, "attach_failed", "The Terminal Session did not answer")
           return remove(state)
         end
@@ -119,32 +120,68 @@ function terminal.new(server)
     server.reply(client, id, {result = {sessions = sessions}})
   end
 
-  -- `terminal.attach {id, cols, rows, cell_width, cell_height}` attaches to a session with the Client's size.
-  -- The reply gives the `link` and the session's `shell_pid` and size. `terminal.read` then gives the snapshot
-  -- and the output. A View device attaches view-only. Other Clients of the host see the paired device's name.
-  local function attach(client, id, params)
-    if not (size_param(params, "cols", 32767) and size_param(params, "rows", 32767)
-        and size_param(params, "cell_width", 65535) and size_param(params, "cell_height", 65535)) then
-      return server.fail(client, id, "invalid_request", "The size is not valid")
+  local function valid_size(client, id, params)
+    if size_param(params, "cols", 32767) and size_param(params, "rows", 32767)
+        and size_param(params, "cell_width", 65535) and size_param(params, "cell_height", 65535) then
+      return true
     end
-    local record = find_record(client, id, params)
-    if not record then return end
+    server.fail(client, id, "invalid_request", "The size is not valid")
+  end
+
+  local function room(client, id)
     client.links = client.links or 0
-    if client.links >= MAX_LINKS then
-      return server.fail(client, id, "too_many", "This device has too many attached Terminal Sessions")
-    end
+    if client.links < MAX_LINKS then return true end
+    server.fail(client, id, "too_many", "This device has too many attached Terminal Sessions")
+  end
+
+  -- The reply to `id` waits until the host answers.
+  local function add_link(client, id, link, label, started)
+    sequence = sequence + 1
+    local state = {id = tostring(sequence), client = client, link = link, attach_waiter = id, started = started}
+    links[state.id], client.links = state, client.links + 1
+    server.log("Machine server %s: link=%s level=%s", label, state.id, tostring(client.level))
+    core.add_thread(function() pump(state) end)
+  end
+
+  -- `terminal.attach {id, cols, rows, cell_width, cell_height}` attaches to a session with the Client's size.
+  -- The reply gives the `link`, the session's `session_id`, its `shell_pid` and its size. `terminal.read` then
+  -- gives the snapshot and the output. A View device attaches view-only. Other Clients of the host see the paired
+  -- device's name.
+  local function attach(client, id, params)
+    if not valid_size(client, id, params) then return end
+    local record = find_record(client, id, params)
+    if not record or not room(client, id) then return end
     local link, err = terminal_link.connect {session_id = record.session_id, host_pid = record.host_pid,
       host_creation_time = record.host_creation_time, cols = params.cols, rows = params.rows,
       cell_width = params.cell_width, cell_height = params.cell_height, name = device_name(client.name),
       full = client.level == "full"}
     if not link then return server.fail(client, id, "not_found", err) end
-    sequence = sequence + 1
-    local state = {id = tostring(sequence), session = record.session_id, client = client, link = link,
-      attach_waiter = id}
-    links[state.id], client.links = state, client.links + 1
-    server.log("Machine server attaches Terminal Session %s: link=%s level=%s", state.session, state.id,
-      tostring(client.level))
-    core.add_thread(function() pump(state) end)
+    add_link(client, id, link, "attaches Terminal Session " .. record.session_id)
+  end
+
+  -- `terminal.start {project, cwd, shell, scrollback_lines, cols, rows, cell_width, cell_height}` starts a new shell
+  -- in a Project folder and attaches the Client as its Controller. The reply is the reply of `terminal.attach`.
+  -- An empty `shell` starts the default shell.
+  local function start(client, id, params)
+    if not valid_size(client, id, params) then return end
+    local root = server.project_root(params.project)
+    if not root then return server.fail(client, id, "outside_project", "This Machine has no such Project") end
+    local cwd, code, message = server.check_path(params.cwd)
+    if not cwd then return server.fail(client, id, code, message) end
+    if not (common.path_equals(cwd, root) or common.path_belongs_to(cwd, root)) then
+      return server.fail(client, id, "outside_project", "The folder is not in this Project")
+    end
+    local info = system.get_file_info(server.disk_path(cwd))
+    if not info or info.type ~= "dir" then return server.fail(client, id, "not_a_folder", "The folder does not exist") end
+    if type(params.shell) ~= "string" or type(params.scrollback_lines) ~= "number" then
+      return server.fail(client, id, "invalid_request", "The shell and the scrollback lines are not valid")
+    end
+    if not room(client, id) then return end
+    local ok, link = pcall(terminal_link.launch, {project = root, cwd = server.disk_path(cwd), shell = params.shell,
+      scrollback_lines = math.floor(params.scrollback_lines), cols = params.cols, rows = params.rows,
+      cell_width = params.cell_width, cell_height = params.cell_height, name = device_name(client.name)})
+    if not ok then return server.fail(client, id, "invalid_request", tostring(link)) end
+    add_link(client, id, link, "starts a Terminal Session in " .. root, true)
   end
 
   local function find(client, id, params)
@@ -156,7 +193,7 @@ function terminal.new(server)
   -- `terminal.read {link}` waits for records. Its reply carries them in the bytes. `done = true` ends the link.
   local function read(client, id, params)
     local state = find(client, id, params)
-    if state then state.waiter = id end
+    if state then state.waiter, state.read = id, true end
   end
 
   -- `terminal.write {link}` sends the records in the bytes to the host. A View device can only detach. A DETACH,
@@ -185,7 +222,7 @@ function terminal.new(server)
   end)
 
   return {["terminal.list"] = list, ["terminal.attach"] = attach, ["terminal.read"] = read,
-    ["terminal.write"] = write, ["terminal.detach"] = detach}
+    ["terminal.write"] = write, ["terminal.detach"] = detach, ["terminal.start"] = start}
 end
 
 return terminal

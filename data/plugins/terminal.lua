@@ -5,6 +5,7 @@ local common = require "core.common"
 local config = require "core.config"
 local core = require "core"
 local file_context = require "core.file_context"
+local fs = require "core.fs"
 local ime = require "core.ime"
 local image_formats = require "core.image_formats"
 local keymap = require "core.keymap"
@@ -194,6 +195,8 @@ local function validated_terminal_directory(path)
   local local_path = path:match("^[A-Za-z]:[\\/]") ~= nil
     or path:match("^\\\\[^\\]+\\[^\\]+") ~= nil
   if not local_path then return nil end
+  -- A Project on a Machine runs its shells there. This PC cannot check the Machine's folders.
+  if fs.machine then return path end
   local info = system.get_file_info(path)
   return info and info.type == "dir" and path or nil
 end
@@ -380,7 +383,7 @@ function TerminalView:new(options)
   native_options.scrollback_lines = terminal_config.scrollback_lines
   native_options.project_path = project_path("project")
   local record, record_error, inaccessible
-  if options.session_id then
+  if options.session_id and not fs.machine then
     record, record_error, inaccessible = session_record(options.session_id)
     if inaccessible then
       self.state, self.running, self.launch_error = "failed", false, record_error
@@ -407,10 +410,16 @@ function TerminalView:new(options)
     end
   end
   local session, pi_ready
-  if not options.session_id then session, pi_ready = take_prepared_session(native_options, options.pi) end
+  if not options.session_id and not fs.machine then
+    session, pi_ready = take_prepared_session(native_options, options.pi)
+  end
   if pi_ready then self.start_pi = nil end
   local start_error, transport_error
-  if not session then session, start_error, transport_error = native.new(native_options) end
+  if fs.machine then
+    session, start_error = self:new_remote_session(native_options, options.session_id)
+  elseif not session then
+    session, start_error, transport_error = native.new(native_options)
+  end
   if record and not session and transport_error ~= 231 and transport_error ~= 5 then
     core.log_quiet("Terminal Session %s attach rejected: %s", record.session_id, tostring(start_error))
     native_options.session_id, native_options.host_pid = nil, nil
@@ -440,7 +449,7 @@ function TerminalView:new(options)
     return
   end
   self.session = session
-  self.existing_host = native_options.session_id ~= nil
+  self.existing_host = native_options.session_id ~= nil or (fs.machine ~= nil and options.session_id ~= nil)
   -- A revived session keeps the activity time its host recorded.
   self.activity = record and tonumber(record.activity) or os.time()
   local attaching = session:stats().attach_count == 0
@@ -710,9 +719,48 @@ function TerminalView:create_session()
   native_options.cwd, native_options.shell = self.launch_options.cwd, self.launch_options.shell
   native_options.scrollback_lines = terminal_config.scrollback_lines
   native_options.project_path = project_path("project")
-  local session, start_error = native.new(native_options)
+  local session, start_error
+  if fs.machine then
+    session, start_error = self:new_remote_session(native_options)
+  else
+    session, start_error = native.new(native_options)
+  end
   if not session then return false, start_error or "Could not start the terminal." end
   return session
+end
+
+-- A Project on a Machine runs its shells there (`core.machine_terminal`). Its sessions have no record on this PC.
+-- A nil `id`, or an `id` that the Machine no longer has, starts a new shell in `options.cwd`.
+function TerminalView:new_remote_session(options, id)
+  local start = {project = options.project_path, cwd = options.cwd, shell = options.shell or "",
+    scrollback_lines = options.scrollback_lines}
+  -- The paths name the Machine's folders. Only the Machine uses them.
+  options.remote, options.project_path, options.cwd, options.shell = true, nil, nil, nil
+  local session, err = terminal_native().new(options)
+  if not session then return nil, err end
+  self.machine = true
+  self.remote = require("core.machine_terminal").connect(fs.machine, session, id, start)
+  core.log_quiet("Terminal session %d connects through its Machine: id=%s", self.log_id, tostring(id))
+  return session
+end
+
+-- The Machine has no such session, or it did not start the shell.
+function TerminalView:end_remote_session(status)
+  local err = self.remote.error
+  core.log_quiet("Terminal Session %s ended on its Machine: %s", tostring(self.session_id), err)
+  self.session:close()
+  self.session, self.remote, self.running = nil, nil, false
+  core.redraw = true
+  if (status.attach_count or 0) == 0 then
+    self.state, self.launch_error, self.snapshot = "failed", err, nil
+    return
+  end
+  -- The shell ended while this PC was away. Its View leaves its Pane, as after an exit.
+  self.state = "exited"
+  local pane = panes.pane_for_view(self)
+  if pane then
+    panes.close_view(pane, { view = self, force = true, keep_pane = true, focus = core.active_view == self })
+  end
 end
 
 function TerminalView:log_session_attach()
@@ -723,7 +771,8 @@ function TerminalView:log_session_attach()
   core.log_quiet("Terminal session %d attached: host=%d shell=%d replay=%d bytes",
     self.log_id, stats.host_pid, stats.shell_pid, stats.replay_bytes)
   self:claim_session()
-  require("core.control_runtime").observe(self)
+  -- Programs in a Machine's shell reach the Machine's Anvil, not this one.
+  if not self.machine then require("core.control_runtime").observe(self) end
 end
 
 -- A View that attaches to a session of another Project claims the session for its own Project. A Pane that
@@ -1004,6 +1053,10 @@ function TerminalView:service_session(include_rows)
     perf_detail("terminal_native_update_ms", (system.get_time() - update_started) * 1000)
   end
   local state_changed = self:apply_status(status)
+  if self.remote and self.remote.error and status.kind == "reconnecting" then
+    self:end_remote_session(status)
+    return true
+  end
   if self.start_pi and status.kind == "running" and not status.replaying then
     self.start_pi = nil
     -- Use the shell's Pi command, including its normal PATH and profile setup.
@@ -2382,6 +2435,7 @@ end
 
 -- Why the View cannot move to another Project, or nil when it can. Its host must accept a new Project.
 function TerminalView:move_refusal()
+  if self.machine then return "A Terminal Session on a Machine cannot move to another Project" end
   if self.state ~= "running" or not self.session or not self.session_id then
     return "Only a running Terminal Session can move to another Project"
   end
@@ -2447,7 +2501,8 @@ function TerminalView:on_close(reopen)
   require("core.control_runtime").release(self)
   local retained = false
   -- A detached session belongs to its host or another Workspace. Only a live session ends for Reopen.
-  if reopen and self.session and self.session_id then
+  -- The Machine keeps no closed sessions. Reopen starts a new shell there in the same folder.
+  if reopen and self.session and self.session_id and not self.machine then
     local file, err = io.open(closed_session_path(self.session_id), "wb")
     if file then retained, err = file:close() end
     if retained then
@@ -2472,7 +2527,7 @@ function TerminalView:on_close(reopen)
     )
   end
   TerminalView.super.on_close(self)
-  if self.session_id and not retained then M.cleanup_records(self.session_id) end
+  if self.session_id and not retained and not self.machine then M.cleanup_records(self.session_id) end
 end
 
 function M.open(options)
@@ -2567,7 +2622,7 @@ end
 
 -- The idle scheduler calls these only for the selected, visible Project.
 function M.prepare_session()
-  if not terminal_config.prepare_session or PLATFORM ~= "Windows" then
+  if not terminal_config.prepare_session or PLATFORM ~= "Windows" or fs.machine then
     discard_prepared(prepared_shell)
     return false
   end
@@ -2584,7 +2639,7 @@ local function running_pi(view)
 end
 
 function M.prepare_pi_session()
-  if not terminal_config.prepare_pi or PLATFORM ~= "Windows" then
+  if not terminal_config.prepare_pi or PLATFORM ~= "Windows" or fs.machine then
     discard_prepared(prepared_pi)
     pi_source = nil
     return false

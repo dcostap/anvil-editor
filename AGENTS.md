@@ -694,17 +694,24 @@ An edit writes it after 0.5 seconds. A save writes it before the request leaves.
 When a Machine file loads and has a record, the Buffer takes the record's text as one edit. The Machine's version decides: the same bytes mean clean, the base or the sent version mean dirty, other bytes mean a conflict.
 A Buffer that the user closes without a save deletes its record, and no due write or later reply writes it again. A rename moves the record to the new name.
 On Windows, the server has a Terminal service (`core.serve_terminal`). `terminal.list {project}` gives the running Terminal Sessions of a Project. A session with a `.closed` marker is not listed.
-`terminal.attach {id, cols, rows, cell_width, cell_height}` connects the server to the session's host as one more Client (`terminal_link.connect`). The reply gives the `link`, the `shell_pid` and the host's size.
+`terminal.attach {id, cols, rows, cell_width, cell_height}` connects the server to the session's host as one more Client (`terminal_link.connect`). The reply gives the `link`, the `session_id`, the `shell_pid` and the host's size.
+`terminal.start {project, cwd, shell, scrollback_lines, cols, rows, cell_width, cell_height}` starts a new host in a Project folder and attaches the device as its Controller (`terminal_link.launch`). Only Full control devices can start a shell. Its reply is the reply of `terminal.attach`.
+A new shell ends when its link ends before the device reads it, for example after a lost reply. Nothing else knows its ID.
 `terminal.read {link}` waits for the host's framed records and gives up to 1 MiB of whole records in the bytes. `terminal.write {link}` sends records to the host. `terminal.detach {link}` ends the link. The host keeps the session.
 The link checks each record that a Client writes, in C. A Full control device can send input, resize, take control, clear, detach, close and end. A View device attaches view-only and can only detach. Its other writes get `forbidden`.
 The host shows the paired device's name as the Controller's name. A full write buffer gives `busy`, and the Client sends again.
 The server closes a Client's links when the Client disconnects. Each Client has at most 32 links.
-On a Client, `terminal_native.new {remote = true}` makes a session without a host. `core.machine_terminal.connect(client, session, id)` attaches it through `terminal.attach`, then `session:attach_remote(result)` connects it.
+On a Client, `terminal_native.new {remote = true}` makes a session without a host. `core.machine_terminal.connect(client, session, id, start)` attaches it through `terminal.attach`, then `session:attach_remote(result)` connects it.
+With a nil `id`, it starts a shell through `terminal.start`. A first attach that gets `not_found` also starts a shell, with the same `start` options.
 `attach_remote` gives the session one end of an in-process pipe pair (`terminal_link.c`). The session's reader and writer use it as a host pipe. Lua carries the other end's records through `terminal.read` and `terminal.write`.
 After a disconnect, `core.machine_terminal` closes the pipe pair. The session then waits in the reconnecting state, with no time limit, and attaches again with a new snapshot when the Machine returns.
-A closed session sends its last record, such as CLOSE or DETACH, through the link after its pipe closes. A `not_found` attach means the session ended on the Machine.
+A closed session sends its last record, such as CLOSE or DETACH, through the link after its pipe closes. A later `not_found` attach means the session ended on the Machine.
 The attach ROLE comes before the snapshot. The Client applies it with the snapshot, so a key that the user types when the screen shows goes out with its role.
-Run `runtime/machine_terminal.lua` after changes. It uses a real host and a real server that shares the test's user folder.
+In a Project on a Machine (`fs.machine`), each Terminal View runs its shell on the Machine. The View keeps no session record on this PC and uses no prepared shell.
+Workspace restore attaches the saved session ID. When the Machine no longer has it, a new shell starts in the saved folder, as a local restore does. Reopen Closed Pane does the same, because the Machine keeps no closed sessions.
+A shell that ended while this PC was away closes its View, as after an exit. A failed start shows its error in the View.
+These Terminals cannot move to another Project. The Sidebar does not list them yet. Programs in them reach the Machine's Anvil, so the View publishes no control endpoint.
+Run `runtime/machine_terminal.lua` and `ui/machine_terminal.lua` after changes. The runtime test uses a real host and a real server that shares the test's user folder. The UI test gives the server its own user folder.
 Run `runtime/machine_serve.lua`, `runtime/machine_client.lua`, `runtime/machine_buffer.lua`, `anvil:machine-frame` and `anvil:launch-mode` after changes. Tests that need a fixed port must try ports until one opens: Windows reserves whole port ranges, and `get_port()` returns the requested port. Pass one file to each `--test-args`: the runner reads only the first path.
 
 ## Companion (Android)
