@@ -3,6 +3,7 @@ local command = require "core.command"
 local config = require "core.config"
 local Editor = require "core.editor"
 local keymap = require "core.keymap"
+local wrapping = require "core.linewrapping"
 local markdown = require "core.markdown"
 local footnotes = require "core.markdown.footnotes"
 local model = require "core.markdown.model"
@@ -47,6 +48,7 @@ local function open_note_view(context, text, width)
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = width or 1400, 600
   view:update()
+  test.ok(wrapping.complete_async_reconstruction(view), "The note's wrapped layout did not finish")
   return view, buffer, instance
 end
 
@@ -170,8 +172,10 @@ test.describe("Markdown footnotes", function()
   end)
 
   test.it("shows a note on highlighted text beside it without a number", function(context)
+    -- Exercise background parsing and layout, not only the short-note startup path.
     local view, buffer = open_note_view(context,
-      "A[^b] ==Terra==^[aside]hawks C[^a].\n\n[^a]: first\n\n[^b]: second\n\nend")
+      "A[^b] ==Terra==^[aside]hawks C[^a].\n\n[^a]: first\n\n[^b]: second\n\nend" .. string.rep("\n", 500))
+    view:scroll_to_line(1, false, true)
     test.equal(visible_text(view, 1), "A Terrahawks C.")
     test.same(badges(view, 1), { "1", "2" })
     test.equal(test.not_nil(fragment_with_text(view, 1, "Terra")).background,
