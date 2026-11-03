@@ -1867,7 +1867,7 @@ function SidebarView:draw_project(row, y, width, now)
   local size = m.badge
   local bx = left + 6 * SCALE
   -- A collapsed Project that can open shows a chevron left of its badge, in the Pane number column.
-  if row.key and row.collapsed then chevron(5.5 * SCALE, cy, 0, self.hover == row and style.text or style.dim) end
+  if row.key and row.collapsed then chevron(8 * SCALE, cy, 0, self.hover == row and style.text or style.dim) end
   look.draw_badge(project, bx, math.floor(cy - size / 2), size, font_variant("bold"), style.background2)
   if row.pending and (row.collapsed or dormant) then right = self:draw_pending(row.pending, right, cy) end
   local note = look.note(project, self.window_id, now)
