@@ -3820,13 +3820,12 @@ local function wrapped_select_to(dv, name, move_fn, ...)
   local selections = {}
   local affinity_positions = {}
   for index, line1, col1, line2, col2 in dv.buffer:get_selections(false) do
-    if row_end then
-      origins[index] = {
-        line = line1, col = col1,
-        line_end = linewrapping.has_wrapped_line_end_affinity(dv, line1, col1),
-      }
-    end
+    local origin_line_end = row_end and linewrapping.has_wrapped_line_end_affinity(dv, line1, col1)
     local line, col, line_end = move_fn(dv.buffer, line1, col1, ...)
+    -- Only a row-end target stays on its row; the line's end can be on a later row.
+    if row_end and line_end then
+      origins[index] = { line = line1, col = col1, line_end = origin_line_end }
+    end
     selections[#selections + 1] = line
     selections[#selections + 1] = col
     selections[#selections + 1] = line2
