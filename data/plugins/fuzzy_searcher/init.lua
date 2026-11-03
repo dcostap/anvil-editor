@@ -3079,46 +3079,9 @@ function fuzzy_searcher.line_result_location(result)
     line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
 end
 
-function FSView:grep_file_column_width(font, path_w)
-  local results = self.results
-  local count = #results
-  local cache = self._grep_file_column_width
-  local font_size = font:get_size()
-  local view_text_size = style.view_text_font:get_size()
-  if cache and cache.results == results and cache.count == count
-      and cache.first == results[1] and cache.last == results[count]
-      and cache.path_w == path_w and cache.font == font
-      and cache.font_size == font_size and cache.view_text_font == style.view_text_font
-      and cache.view_text_size == view_text_size then
-    return cache.width
-  end
-
-  local width = 0
-  for _, result in ipairs(results) do
-    if result.kind == "grep" or result.kind == "navigation_place" and result.buffer then
-      local prefix, suffix = fuzzy_searcher.line_result_location(result)
-      width = math.max(width, fuzzy_searcher.location_width(font, result, prefix, suffix))
-    end
-  end
-  width = math.min(path_w, width)
-  self._grep_file_column_width = {
-    results = results,
-    count = count,
-    first = results[1],
-    last = results[count],
-    path_w = path_w,
-    font = font,
-    font_size = font_size,
-    view_text_font = style.view_text_font,
-    view_text_size = view_text_size,
-    width = width,
-  }
-  return width
-end
-
 local function draw_grep_result_row(
   font, result, x, y, width, collapse_file, collapsed_line_x,
-  collapsed_context_x, file_column_width, edit_metadata_width
+  collapsed_context_x, edit_metadata_width
 )
   local path_w, gap, text_w = grep_row_columns(width)
   local history = result.kind == "navigation_place" or result.kind == "bookmark"
@@ -3139,10 +3102,8 @@ local function draw_grep_result_row(
       font, result, x, y, path_w, metadata_parts, nil, false
     )
   end
-  file_column_width = common.clamp(
-    tonumber(file_column_width) or filename_width, 0, content_width
-  )
-  local file_width = filename_width > file_column_width and content_width or file_column_width
+  -- Each row's symbol starts after its own location, so a wide row elsewhere in the list does not shrink it.
+  local file_width = math.min(filename_width, content_width)
   local line_x
   line_x, file_width = fuzzy_searcher.draw_grouped_file_location(
     font, result, prefix, line_suffix, x, y, file_width, x + path_w,
@@ -3162,7 +3123,7 @@ local function draw_grep_result_row(
     local icon_gap = icon_width > 0 and math.max(3 * (SCALE or 1), style.padding.x / 3) or 0
     local max_context = math.max(0, right - context_x)
     local min_context = icon_width + icon_gap + context_font:get_width("…")
-    if filename_width <= file_column_width and max_context >= min_context then
+    if filename_width <= content_width and max_context >= min_context then
       fuzzy_searcher.draw_grep_symbol_context(
         font, symbol, context_x, y, max_context, font:get_height()
       )
@@ -8918,14 +8879,7 @@ function FSView:draw_open_content()
       has_visible_split = true; break
     end
   end
-  local grep_file_column_width, grep_edit_metadata_width
-  if has_visible_split then
-    local path_w = grep_row_columns(row_text_w)
-    grep_edit_metadata_width = fuzzy_searcher.grep_edit_metadata_width(font)
-    grep_file_column_width = self:grep_file_column_width(
-      font, math.max(0, path_w - grep_edit_metadata_width)
-    )
-  end
+  local grep_edit_metadata_width = has_visible_split and fuzzy_searcher.grep_edit_metadata_width(font)
   fuzzy_searcher._perf_scope_end(phase_scope)
 
   local results_scope = fuzzy_searcher._perf_scope_begin("result_rows")
@@ -8967,8 +8921,7 @@ function FSView:draw_open_content()
       if kind ~= "symbol" then
         previous_rendered_line_x, previous_rendered_context_x = draw_grep_result_row(
           font, self.results[group_start], x + pad, seed_y, row_text_w,
-          false, nil, nil, grep_file_column_width,
-          kind == "navigation_place" and 0 or grep_edit_metadata_width)
+          false, nil, nil, kind == "navigation_place" and 0 or grep_edit_metadata_width)
       else
         previous_rendered_line_x = fuzzy_searcher.draw_symbol_result_row(
           font, self.results[group_start], x + pad, seed_y, row_text_w, lh, false
@@ -9035,7 +8988,7 @@ function FSView:draw_open_content()
       end
       if r.kind == "bookmark" then
         reset_rendered_file_group()
-        draw_grep_result_row(font, r, x + pad, row_y, row_text_w, false, nil, nil, nil, 0)
+        draw_grep_result_row(font, r, x + pad, row_y, row_text_w, false, nil, nil, 0)
       elseif r.kind == "grep" or r.kind == "navigation_place" and r.buffer then
         local file = fuzzy_searcher.group_key(r)
         local collapse_file = file ~= "" and previous_rendered_file_kind == r.kind
@@ -9043,7 +8996,7 @@ function FSView:draw_open_content()
         previous_rendered_line_x, previous_rendered_context_x = draw_grep_result_row(
           font, r, x + pad, row_y, row_text_w, collapse_file,
           previous_rendered_line_x, previous_rendered_context_x,
-          grep_file_column_width, r.kind == "navigation_place" and 0 or grep_edit_metadata_width)
+          r.kind == "navigation_place" and 0 or grep_edit_metadata_width)
         previous_rendered_file_kind = r.kind
         previous_rendered_file = file
       elseif r.kind == "navigation_place" then

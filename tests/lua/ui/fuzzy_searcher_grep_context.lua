@@ -104,29 +104,14 @@ test.describe("Fuzzy Searcher Text Search context", function()
     test.ok(found_inline_match, "the match must stay in its separate inline column")
   end)
 
-  test.it("left-aligns enclosing symbols with different label widths", function()
-    local symbols = {
-      [10] = {
-        name = "run",
-        kind = "method",
-        declaration = "void Worker::run()",
-        declaration_name_span = { 14, 16 },
-      },
-      [20] = {
-        name = "render_to_image_buffer",
-        kind = "method",
-        declaration = "int TMessagePanel::render_to_image_buffer()",
-        declaration_name_span = { 20, 41 },
-      },
-    }
-    local line_right, directory_count = nil, 0
+  test.it("keeps a row's symbol space when another row has a long path", function()
     local picker = fuzzy_searcher.open_static_results("Text Search", {
       {
         kind = "grep", file = "src/Panel.cpp",
         line = 10, col = 1, text = "matched content", exact = true,
       },
       {
-        kind = "grep", file = "src/Command.cpp",
+        kind = "grep", file = string.rep("very_long_folder_name/", 20) .. "Command.cpp",
         line = 20, col = 1, text = "matched content", exact = true,
       },
     })
@@ -135,21 +120,18 @@ test.describe("Fuzzy Searcher Text Search context", function()
     picker.open_transition_complete = true
     picker.update_selected_preview = function() end
     picker:update()
-    picker.results[1].enclosing_symbol = symbols[10]
-    picker.results[2].enclosing_symbol = symbols[20]
+    picker.results[1].enclosing_symbol = {
+      name = "run", kind = "method",
+      declaration = "void Worker::run()", declaration_name_span = { 14, 16 },
+    }
 
     local original_draw_rounded_rect = renderer.draw_rounded_rect
     local original_draw_text_known_bounds = renderer.draw_text_known_bounds
     local original_set_clip_rect = renderer.set_clip_rect
-    local symbol_x = {}
-    symbol_icons.draw = function(_, x)
-      symbol_x[#symbol_x + 1] = x
-    end
+    local drawn = {}
+    symbol_icons.draw = function() end
     renderer.draw_text = function(font, text, x)
-      if text:find(":10", 1, true) == 1 or text:find(":20", 1, true) == 1 then
-        line_right = math.max(line_right or 0, x + font:get_width(text))
-      end
-      if text == "src/" then directory_count = directory_count + 1 end
+      drawn[text] = true
       return x + font:get_width(text)
     end
     renderer.draw_rect = function() end
@@ -164,15 +146,8 @@ test.describe("Fuzzy Searcher Text Search context", function()
     renderer.set_clip_rect = original_set_clip_rect
     if not ok then error(err, 0) end
 
-    test.equal(#symbol_x, 2, "expected one enclosing symbol icon per row")
-    test.equal(symbol_x[1], symbol_x[2],
-      "enclosing symbol labels must start at one column")
-    test.not_nil(line_right, "expected the file line suffix")
-    local layout_slack = math.max(1, math.ceil(2 * (SCALE or 1)))
-    test.ok(symbol_x[1] - line_right
-        <= math.max(8 * (SCALE or 1), style.padding.x * 2) + layout_slack + 1,
-      "the symbol column must start after the filename without unused space")
-    test.equal(directory_count, 2, "Text Search must keep complete file paths when they fit")
+    test.ok(drawn["src/"], "Text Search must keep complete file paths when they fit")
+    test.ok(drawn["run"], "the short path's row must show its whole enclosing symbol")
   end)
 
   test.it("right-aligns enclosing symbol labels within their column", function()
