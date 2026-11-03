@@ -72,6 +72,7 @@ They also close when their client disconnects. An activated shell keeps the norm
 `config.plugins.terminal.prepare_session` controls preparation. It defaults to true and has a Terminal setting.
 Preparation uses extra memory and runs the shell profile early.
 Run `runtime/terminal_prepared.lua` and `ui/terminal_prepared.lua` after changes.
+New shells get their PATH from the Windows registry (system PATH, then user PATH), not from the Anvil process. A PATH change then reaches new Terminal Sessions without a restart. A prepared shell with an older PATH is not used. Running shells keep their PATH. Run `runtime/terminal_path_environment.lua` after changes.
 
 Copy View on a running Pi Terminal starts `pi` in a new Terminal with the same directory and shell. It starts a fresh conversation with Pi's normal defaults, not the source conversation or its command arguments.
 The visible Selected Project also prepares one Pi while at least one of its Panes runs Pi. The focused Pi supplies the directory and shell. Other Views keep the last Pi's choice while that Pi runs.
