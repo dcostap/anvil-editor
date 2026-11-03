@@ -89,27 +89,6 @@ local function sane_window_bounds(bounds)
      and x > -30000 and y > -30000
 end
 
-local function save_app_state()
-  local fp = io.open(USERDIR .. PATHSEP .. APP_STATE_FILENAME, "w")
-  if fp then
-    local window = core.window_mode ~= "fullscreen"
-      and table.pack(system.get_window_size(core.window)) or core.window_size
-    if not sane_window_bounds(window) then window = core.window_size end
-    if not sane_window_bounds(window) then window = {800, 600, 0, 0} end
-    local app_state = {
-      recents = core.recent_projects,
-      window = window,
-      window_mode = core.window_mode ~= "fullscreen"
-        and core.window_mode or core.prev_window_mode,
-      previous_find = core.previous_find,
-      previous_replace = core.previous_replace
-    }
-    fp:write("return " .. common.serialize(app_state, {pretty = true}))
-    fp:close()
-  end
-end
-
-
 local function normalize_project_path(path)
   if type(path) ~= "string" then return end
   if require("core.machine_project").is_key(path) then return path end
@@ -137,10 +116,11 @@ local function find_open_project(project)
 end
 
 
-local function update_recents_project(action, dir_path_abs)
-  local dirname = normalize_project_path(dir_path_abs)
-  if not dirname then return end
-  local recents = {table.unpack(core.recent_projects)}
+-- Each Project process loads the recent Projects once at startup. Other Projects save theirs while it runs, so a
+-- save applies only this process's own changes to the saved list. An old copy then cannot drop a newer Project.
+local recent_changes = {}
+
+local function change_recents(recents, action, dirname)
   for i = #recents, 1, -1 do
     if common.path_equals(dirname, recents[i]) then
       table.remove(recents, i)
@@ -149,7 +129,58 @@ local function update_recents_project(action, dir_path_abs)
   if action == "add" then
     table.insert(recents, 1, dirname)
   end
+end
+
+function core.update_recent_projects(action, dir_path_abs)
+  local dirname = normalize_project_path(dir_path_abs)
+  if not dirname then return end
+  local recents = {table.unpack(core.recent_projects)}
+  change_recents(recents, action, dirname)
+  recent_changes[#recent_changes + 1] = {action = action, path = dirname}
   core.set_recent_projects(recents)
+end
+
+
+function core.save_app_state()
+  local path = USERDIR .. PATHSEP .. APP_STATE_FILENAME
+  local saved = load_app_state().recents
+  local recents = {}
+  if type(saved) == "table" then
+    for _, project in ipairs(saved) do
+      if type(project) == "string" then recents[#recents + 1] = project end
+    end
+    for _, change in ipairs(recent_changes) do change_recents(recents, change.action, change.path) end
+  else
+    -- No readable saved list: this process's list is the only one.
+    recents = {table.unpack(core.recent_projects)}
+  end
+  local window = core.window_mode ~= "fullscreen"
+    and table.pack(system.get_window_size(core.window)) or core.window_size
+  if not sane_window_bounds(window) then window = core.window_size end
+  if not sane_window_bounds(window) then window = {800, 600, 0, 0} end
+  local app_state = {
+    recents = recents,
+    window = window,
+    window_mode = core.window_mode ~= "fullscreen"
+      and core.window_mode or core.prev_window_mode,
+    previous_find = core.previous_find,
+    previous_replace = core.previous_replace
+  }
+  -- Other processes read the file while this one saves, so a replace publishes it complete.
+  local tmp = path .. ".tmp-" .. system.get_process_id()
+  local fp = io.open(tmp, "wb")
+  if not fp then return false end
+  local written = fp:write("return " .. common.serialize(app_state, {pretty = true}))
+  local closed = fp:close()
+  local replaced, err = written and closed and system.replace_file(tmp, path)
+  if not replaced then
+    os.remove(tmp)
+    core.log_quiet("App State save failed: %s", tostring(err))
+    return false
+  end
+  core.log_quiet("App State saved: recent Projects=%d own changes=%d", #recents, #recent_changes)
+  recent_changes = {}
+  return true
 end
 
 
@@ -218,7 +249,7 @@ function core.open_project_in_same_window(project)
   local project = core.set_project(project)
   if not project then return false end
   core.root_panel:close_all_textviews()
-  update_recents_project("add", project.path)
+  core.update_recent_projects("add", project.path)
   command.perform("core:restart")
   return true
 end
@@ -637,14 +668,15 @@ function core.init()
     for _, project_dir in ipairs(core.recent_projects) do
       local normalized_project_dir = normalize_project_path(project_dir)
       local key = common.path_compare_key(normalized_project_dir)
-      if
-        normalized_project_dir
-        and not seen[key]
-        and (require("core.machine_project").is_key(normalized_project_dir)
-          or system.get_file_info(normalized_project_dir))
-      then
-        projects[#projects + 1] = normalized_project_dir
-        seen[key] = true
+      if normalized_project_dir and not seen[key] then
+        if require("core.machine_project").is_key(normalized_project_dir)
+          or system.get_file_info(normalized_project_dir)
+        then
+          projects[#projects + 1] = normalized_project_dir
+          seen[key] = true
+        else
+          recent_changes[#recent_changes + 1] = {action = "remove", path = normalized_project_dir}
+        end
       end
     end
     return projects
@@ -768,11 +800,11 @@ function core.init()
   )) end
   if project_set then
     if project_dir_explicit then
-      update_recents_project("add", require("core.machine_project").root_key(project_dir_abs))
+      core.update_recent_projects("add", require("core.machine_project").root_key(project_dir_abs))
     end
   else
     if not project_dir_explicit then
-      update_recents_project("remove", project_dir)
+      core.update_recent_projects("remove", project_dir)
     end
     project_dir_abs = system.absolute_path(".")
     startup_measure("set_fallback_project", function()
@@ -1065,7 +1097,7 @@ function core.exit(quit_fn, force)
     system.log_shutdown("temporary file cleanup end; Project removal begin")
     while #core.projects > 1 do core.remove_project(core.projects[#core.projects]) end
     system.log_shutdown("Project removal end; App State save begin")
-    save_app_state()
+    core.save_app_state()
     system.log_shutdown("App State save end; exit callback begin")
     quit_fn()
     system.log_shutdown("exit callback end")
@@ -2394,7 +2426,7 @@ function core.on_shell_lost()
   -- Save first, so a Project that no shell adopts keeps what a plain shell loss keeps.
   local ok, err = pcall(core.save_workspace)
   if not ok then core.log_quiet("Shell lost: Workspace save failed: %s", tostring(err)) end
-  save_app_state()
+  core.save_app_state()
   if system.await_shell_adoption() then
     core.log_quiet("Shell lost: Workspace saved; wait for the next shell to adopt this Project")
     return
