@@ -331,6 +331,8 @@ function SidebarView:open_menu(row, x, y, button)
   if not items then return false end
   self.focus_pending = nil
   self.unload_ask = nil
+  -- The menu takes pointer input, so end the row's hover until the pointer returns.
+  self:on_mouse_left()
   self.action("menu", items, x, y, button, row.project.row_id)
   return true
 end
