@@ -3796,8 +3796,11 @@ local function open_path_in_context(target, context, pane, source_view)
 end
 
 -- Opens a File Tree at a path that the user chose, with the same rules as the File Tree commands.
+-- `context.source_pane` names the Pane that gets the tree. Without it, the active Pane gets it.
 function M.open_path(path, context)
-  return open_path_in_context(path, context or {})
+  context = context or {}
+  local pane = context.source_pane and panes.find(context.source_pane)
+  return open_path_in_context(path, context, pane, pane and pane.current_view)
 end
 
 command.add(nil, {

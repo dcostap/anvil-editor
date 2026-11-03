@@ -1928,7 +1928,7 @@ function TerminalView:mouse_position(x, y)
   return col, row, native_x, math.max(0, local_y)
 end
 
-local function local_file_from_uri(uri)
+local function local_path_from_uri(uri)
   local authority, path = uri:match("^[Ff][Ii][Ll][Ee]://([^/]*)(/.*)$")
   if not path then return nil end
   path = path:gsub("%%(%x%x)", function(hex) return string.char(tonumber(hex, 16)) end)
@@ -1939,7 +1939,7 @@ local function local_file_from_uri(uri)
   end
   if path:find("[%z%c]") then return nil end
   local info = system.get_file_info(path)
-  return info and info.type == "file" and path or nil
+  return info and (info.type == "file" or info.type == "dir") and path or nil
 end
 
 local function supported_uri_scheme(uri)
@@ -1956,7 +1956,7 @@ function TerminalView:activate_uri(uri)
   if scheme == "http" or scheme == "https" or scheme == "mailto" then
     return common.open_in_system(uri)
   elseif scheme == "file" then
-    local path = local_file_from_uri(uri)
+    local path = local_path_from_uri(uri)
     if not path then return false end
     return self:activate_point_of_interest({ path = path })
   end
@@ -2023,14 +2023,14 @@ function TerminalView:point_of_interest_at(col, row, explicit_only)
   local scheme = supported_uri_scheme(uri)
   local point
   if scheme == "file" then
-    local path = local_file_from_uri(uri)
+    local path = local_path_from_uri(uri)
     if path then point = { kind = "terminal-location", path = path } end
   elseif scheme then
     point = { kind = "uri", uri = uri }
   elseif type(uri) == "string" and uri ~= "" and #uri <= 32768 and not uri:find("[%z%c]") then
     -- Markdown links can name a local file without a URI scheme. Resolve the hidden target,
     -- not its visible label, from the Terminal Session's directory.
-    local path = text_poi_locations.resolve_path(uri, self:get_cwd())
+    local path = text_poi_locations.resolve_path(uri, self:get_cwd(), { dirs = true })
     if path then point = { kind = "terminal-location", path = path } end
   end
   if point then return common.merge(point, self:hyperlink_extent(col, row, uri)) end
@@ -2071,6 +2071,19 @@ function TerminalView:point_of_interest_at(col, row, explicit_only)
         point.generation = data.generation
         return point
       end
+    end
+  end
+  -- An absolute path without a line number, such as Pi's inline code. A path with spaces needs a link.
+  for first, value in data.text:gmatch("%f[%a]()([A-Za-z]:[/\\][^%s:\"'<>|*?]*)") do
+    value = value:gsub("[%.,;%)]+$", "")
+    local hit, first_col, last_col = covers(first, first + #value)
+    if hit then
+      local info = system.get_file_info(value)
+      if not info or (info.type ~= "file" and info.type ~= "dir") then return nil end
+      return {
+        kind = "terminal-location", path = common.normalize_path(value),
+        col = first_col, end_col = last_col, row = row, generation = data.generation,
+      }
     end
   end
 end
@@ -2165,6 +2178,15 @@ function TerminalView:activate_point_of_interest(point, opts)
   end
   if point.uri then return self:activate_uri(point.uri) end
   if point.path then
+    local info = system.get_file_info(point.path)
+    if info and info.type == "dir" then
+      core.log_quiet("Terminal folder link: opening a File Tree at %s", point.path)
+      return require("plugins.filetree").open_path(point.path, {
+        source_pane = panes.pane_for_view(self),
+        placement = opts and opts.placement or "current",
+        reason = "terminal-folder-link",
+      }) ~= nil
+    end
     if image_formats.is_supported(point.path) then
       core.log_quiet("Terminal image link: opening Image Overlay for %s", point.path)
       return require("core.image_overlay").open(point.path)

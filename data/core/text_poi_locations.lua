@@ -30,12 +30,13 @@ local function path_from_file_uri(path)
   return ok and converted or nil
 end
 
-local function existing_file(path)
+local function existing_target(path, dirs)
   local info = path and system.get_file_info(path)
-  return info and info.type ~= "dir"
+  return info and (dirs or info.type ~= "dir")
 end
 
-function locations.resolve_path(path, root)
+-- `opts.dirs` also accepts a folder.
+function locations.resolve_path(path, root, opts)
   path = clean_path(path)
   if path == "" then return nil end
   local file_path = path_from_file_uri(path)
@@ -50,7 +51,7 @@ function locations.resolve_path(path, root)
       or common.normalize_path((root or system.getcwd()) .. PATHSEP .. path)
   end)
   if not ok then return nil end
-  return existing_file(candidate) and candidate or nil
+  return existing_target(candidate, opts and opts.dirs) and candidate or nil
 end
 
 local function resolved_candidate(candidate, path, kind)

@@ -1780,6 +1780,57 @@ test.describe("Terminal View", function()
     test.ok(common.path_equals(core.active_view.buffer.abs_filename, path))
   end)
 
+  test.it("opens a folder hyperlink in a File Tree with a normal click", function(context)
+    context.link_cwd = system.getcwd()
+    context.link_folder = USERDIR .. PATHSEP .. "terminal-folder-link"
+    local path = context.link_folder .. PATHSEP .. "linked folder"
+    test.ok(common.mkdirp(path))
+    local view = terminal.open { cwd = context.link_folder, focus = true }
+    local pane = panes.active()
+    view.snapshot.mouse_tracking = true
+    keymap.modkeys.ctrl = false
+    for _, uri in ipairs({
+      "file:///" .. path:gsub("\\", "/"):gsub(" ", "%%20"),
+      "linked folder",
+    }) do
+      view.session.hyperlink_uri = uri
+      view:clear_point_hover()
+      view:on_mouse_moved(7, 7, 0, 0)
+      test.equal(view.cursor, "hand")
+      test.ok(view.link_tooltip and common.path_equals(view.link_tooltip.text, path))
+      view:on_mouse_pressed("left", 7, 7)
+      view:on_mouse_released("left", 7, 7)
+      local tree = core.active_view
+      test.ok(tree ~= view and tree.root_dir, "a folder link must open a File Tree")
+      test.ok(common.path_equals(tree.root_dir, path))
+      test.equal(panes.pane_for_view(tree), pane)
+      panes.present(view, { pane = pane, focus = true })
+    end
+    for _, event in ipairs(view.session.mouse_events) do test.equal(event[1], "motion") end
+  end)
+
+  test.it("detects plain absolute file and folder paths when Ctrl is held", function(context)
+    context.link_folder = USERDIR .. PATHSEP .. "terminal-plain-path"
+    local file = context.link_folder .. PATHSEP .. "sheet-v2.txt"
+    test.ok(common.mkdirp(context.link_folder))
+    assert(io.open(file, "wb")):close()
+    local view = terminal.open()
+    keymap.modkeys.ctrl = true
+    for _, case in ipairs({
+      { text = "The file is " .. file .. ".", path = file },
+      { text = "(" .. context.link_folder:gsub("\\", "/") .. ")", path = context.link_folder },
+    }) do
+      local columns = {}
+      for index = 1, #case.text do columns[index] = index - 1 end
+      context.sessions[1].row_text_data = { text = case.text, columns = columns, generation = 1 }
+      test.equal(view:point_of_interest_at(#case.text - 1, 0), nil, "trailing punctuation is not part of the path")
+      local point = view:point_of_interest_at(#case.text - 2, 0)
+      test.ok(point and common.path_equals(point.path, case.path))
+      test.equal(point.end_col, #case.text - 2)
+    end
+    keymap.modkeys.ctrl = false
+  end)
+
   test.it("accepts URI schemes without case-sensitive matching", function(context)
     local previous_open = system.open_in_system
     local opened
