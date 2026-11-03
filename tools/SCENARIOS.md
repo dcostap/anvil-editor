@@ -52,6 +52,23 @@ A scenario can also set `churn_interval`. A background thread then edits
 modified files in the fixture during the run, as a build or a coding agent
 does. File watchers and Git status refreshes stay busy during measurement.
 
+## Heading Outline navigation
+
+`markdown-gallery-outline-sections` moves between adjacent and distant sections in the complete gallery. `markdown-gallery-outline-click` clicks visible headings in both directions. Both keep transitions enabled and require an outline longer than its visible area.
+
+`markdown-gallery-outline-response` repeats the section changes with normal frame pacing. It receives no harness redraw requests during measurement, so a missing animation redraw cannot pass.
+
+Each action waits for the caret, document scroll, outline scroll, and a drawn selection marker at the requested heading. A missing outline or an unfinished transition cannot pass as completed navigation. The scene observes the marker through renderer calls, not private animation fields. Its extra layout query adds measurement overhead.
+
+Run these cases before changing Heading Outline navigation or animation:
+
+```sh
+python tools/run_scenarios.py --scenario markdown-gallery-outline-sections --scenario markdown-gallery-outline-click --runs 1 --diagnose
+python tools/run_scenarios.py --scenario markdown-gallery-outline-response --runs 1
+```
+
+The standard frame-work budgets apply to the uncapped cases. The response case scores completed-action latency instead, because presentation waits can dominate its frame times. All three have a 400 ms completed-action budget, including intentional animation. These cases measure direct-mode frame work and completed draws, not native input delivery or physical display smoothness.
+
 ## Focused runtime workloads
 
 `text-poi-long-field` parses a 16,000-byte field followed by a file location. `text-poi-many-locations` parses 22,000 locations. `text-poi-limited-locations` uses the same input but requests only 32 results. Keep the limited case: limiting returned rows must also stop unnecessary scanning.

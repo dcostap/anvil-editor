@@ -126,6 +126,19 @@ local function current_title(layout)
   return entry and entry.title
 end
 
+-- The UI test has no native render target. Keep real layout and animation calls.
+local function draw_outline(view)
+  local text, rect, round = renderer.draw_text, renderer.draw_rect, renderer.draw_rounded_rect
+  local push, pop = core.push_clip_rect, core.pop_clip_rect
+  renderer.draw_text = function(font, value, x) return x + font:get_width(value) end
+  renderer.draw_rect, renderer.draw_rounded_rect = function() end, function() end
+  core.push_clip_rect, core.pop_clip_rect = function() end, function() end
+  local ok, err = pcall(heading_outline.draw, view)
+  renderer.draw_text, renderer.draw_rect, renderer.draw_rounded_rect = text, rect, round
+  core.push_clip_rect, core.pop_clip_rect = push, pop
+  if not ok then error(err, 0) end
+end
+
 test.describe("Markdown Heading Outline", function()
   test.before_each(function(context)
     panes.reset_for_tests()
@@ -134,6 +147,13 @@ test.describe("Markdown Heading Outline", function()
   end)
 
   test.after_each(function(context)
+    if context.probe then context.probe:close() end
+    if context.transitions ~= nil then config.transitions = context.transitions end
+    if context.clock then
+      system.get_time, core.fps = context.clock, context.fps
+      config.fps, core.in_live_resize_frame = context.config_fps, context.live_resize
+      config.disabled_transitions.markdown_heading_outline = context.outline_transition
+    end
     panes.reset_for_tests()
     local buffer = context.buffer
     if buffer then
@@ -293,5 +313,49 @@ test.describe("Markdown Heading Outline", function()
     markdown.live_render.set_source_mode(view, true, "test")
     view:update()
     test.equal(heading_outline.layout(view), nil)
+  end)
+
+  test.it("keeps the selection marker visible while a long outline scrolls in either direction", function(context)
+    local lines = {}
+    for i = 1, 80 do
+      lines[#lines + 1] = "## Section " .. i .. "\n\nSome prose.\n"
+    end
+    local view, buffer = open_view(context, nil, table.concat(lines, "\n"))
+    context.transitions = config.transitions
+    config.transitions = true
+    context.clock, context.fps = system.get_time, core.fps
+    context.config_fps, context.live_resize = config.fps, core.in_live_resize_frame
+    context.outline_transition = config.disabled_transitions.markdown_heading_outline
+    local now = system.get_time()
+    system.get_time = function() return now end
+    core.fps = 60
+    config.fps, core.in_live_resize_frame = 60, false
+    config.disabled_transitions.markdown_heading_outline = false
+    local scene = require "scenes.markdown_outline"
+    context.probe = scene.observe(view)
+    local probe = context.probe
+    for _, title in ipairs({ "Section 60", "Section 20" }) do
+      local layout = test.not_nil(heading_outline.layout(view))
+      local entry = test.not_nil(entry_titled(layout, title))
+      buffer:set_selection(entry.line, entry.col)
+      view:scroll_to_line(entry.line, false, true)
+      -- The caret and document scroll have arrived, but that is not a completed outline draw.
+      probe.layout = nil
+      test.ok(not probe:ready(entry.line), "a stale draw must not complete navigation")
+      draw_outline(view)
+      test.ok(not probe:ready(entry.line), "document scrolling must not complete the outline transition to " .. title)
+      -- Advance the clock without yielding to the dummy window's narrower layout.
+      for _ = 1, 300 do
+        now = now + 1 / 60
+        view:update()
+        draw_outline(view)
+        local drawn = test.not_nil(probe.layout)
+        test.ok(probe.marker_y >= drawn.y and probe.marker_y + probe.marker_h <= drawn.y + drawn.h,
+          "the selection marker left the visible outline during navigation to " .. title)
+        if probe:ready(entry.line) then break end
+      end
+      test.ok(probe:ready(entry.line), "the current section did not finish drawing: " .. title)
+      test.equal(current_title(probe.layout), title)
+    end
   end)
 end)

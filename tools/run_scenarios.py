@@ -265,6 +265,19 @@ SCENARIOS: dict[str, Scenario] = {
     "markdown-gallery-newline": Scenario(
         "markdown_gallery", MARKDOWN_GALLERY, actions=30, suites=("markdown",),
         settings=dict(GALLERY_SETTINGS, mode="newline", line=GALLERY_MIDDLE_LINE)),
+    # Include the outline's list scroll and marker animation through their final draw.
+    "markdown-gallery-outline-sections": Scenario(
+        "markdown_outline", MARKDOWN_GALLERY, actions=24, suites=("markdown",),
+        settings=dict(GALLERY_SETTINGS, mode="outline-sections", line=GALLERY_MIDDLE_LINE),
+        action_budget_ms=400.0),
+    "markdown-gallery-outline-click": Scenario(
+        "markdown_outline", MARKDOWN_GALLERY, actions=24, suites=("markdown",),
+        settings=dict(GALLERY_SETTINGS, mode="outline-click", line=GALLERY_MIDDLE_LINE),
+        action_budget_ms=400.0),
+    "markdown-gallery-outline-response": Scenario(
+        "markdown_outline", MARKDOWN_GALLERY, actions=24, suites=("markdown", "response"),
+        settings=dict(GALLERY_SETTINGS, mode="outline-sections", line=GALLERY_MIDDLE_LINE, cadence="normal"),
+        action_budget_ms=400.0),
     # Type into a task note with the vault's other notes open. Each keystroke
     # publishes the note to the vault index, which the other notes listen to.
     "markdown-vault-type": Scenario(
