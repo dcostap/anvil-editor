@@ -8,6 +8,15 @@ local function write(path, text)
   file:close()
 end
 
+local function check_for_root(root, original, fake)
+  return function(watcher, ...)
+    if watcher.watched[root] or watcher.scanned[root] ~= nil then
+      return fake(watcher, ...)
+    end
+    return original(watcher, ...)
+  end
+end
+
 test.describe("Project file worker I/O", function()
   test.after_each(function(context)
     if context.cleanup then context.cleanup() end
@@ -72,14 +81,14 @@ test.describe("Project file worker I/O", function()
       project_files.invalidate(root)
       common.rm(root, true)
     end
-    DirWatch.check = function(_, callback)
+    DirWatch.check = check_for_root(root, check, function(_, callback)
       if pending then
         pending = false
         second_batch_seen = true
         callback(root, path, true)
       end
       return false
-    end
+    end)
     project_files.subscribe(root, id, function(_, event)
       events[#events + 1] = event
       if #events == 1 then
@@ -94,6 +103,7 @@ test.describe("Project file worker I/O", function()
     while #events == 0 and system.get_time() < deadline do coroutine.yield(0) end
     test.equal(#events, 1)
     assert(os.remove(path))
+    second_batch_seen = false
     pending = true
     deadline = system.get_time() + 30
     while not second_batch_seen and system.get_time() < deadline do coroutine.yield(0.01) end
@@ -123,7 +133,7 @@ test.describe("Project file worker I/O", function()
       project_files.invalidate(root)
       common.rm(root, true)
     end
-    DirWatch.check = function(_, callback)
+    DirWatch.check = check_for_root(root, check, function(_, callback)
       if pending then
         pending = false
         for i = 1, 1024 do
@@ -131,7 +141,7 @@ test.describe("Project file worker I/O", function()
         end
       end
       return false
-    end
+    end)
     project_files.subscribe(root, id, function(paths)
       local count = 0
       for path in pairs(paths) do
@@ -165,13 +175,13 @@ test.describe("Project file worker I/O", function()
       project_files.invalidate(root)
       common.rm(root, true)
     end
-    DirWatch.check = function(_, callback)
+    DirWatch.check = check_for_root(root, check, function(_, callback)
       if pending then
         pending = false
         callback(root, root, false, "rescan")
       end
       return false
-    end
+    end)
     project_files.subscribe(root, id, function(paths)
       delivered_paths = paths
     end)
@@ -205,7 +215,7 @@ test.describe("Project file worker I/O", function()
       project_files.invalidate(root)
       common.rm(root, true)
     end
-    DirWatch.check = function(_, callback)
+    DirWatch.check = check_for_root(root, check, function(_, callback)
       if pending then
         pending = false
         for i = 1, 1024 do
@@ -216,7 +226,7 @@ test.describe("Project file worker I/O", function()
         callback(root, ignore_rule, true, "content")
       end
       return false
-    end
+    end)
     project_files.subscribe(root, id, function(paths)
       delivered_paths = paths
     end)

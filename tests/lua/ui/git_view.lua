@@ -1479,18 +1479,19 @@ test.describe("Git View command", function()
     test.equal(tab.selected_file, 2)
   end)
 
-  test.test("canceling Git open keeps a dirty Untitled Editor", function(context)
+  test.test("opening Git keeps a dirty Untitled Editor without a close question", function(context)
     local buffer = Buffer(nil, nil, true)
     buffer.intellij_untitled = true
     buffer.intellij_untitled_name = "Untitled-Git-Open"
     buffer:insert(1, 1, "keep me")
     local untitled_pane = panes.create { factory = function() return Editor(buffer) end }
     local editor = untitled_pane.current_view
-    open_fake_git_view(context.project)
-    test.ok(core.nag_view.visible)
-    test.ok(command.perform("core:select_dialog_no"))
+    local _, git_log = open_fake_git_view(context.project)
+    test.not_ok(core.nag_view.visible)
     test.equal(buffer_text(buffer), "keep me\n")
     test.equal(untitled_pane.current_view, editor)
+    test.not_equal(panes.pane_for_view(git_log), untitled_pane)
+    test.equal(core.active_view, git_log:get_focus_view())
   end)
 
   test.it("keeps only the changed-file tree in the commit source", function(context)

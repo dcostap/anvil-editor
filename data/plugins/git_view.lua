@@ -154,15 +154,10 @@ end
 local function activate_git_tab_view(session, view)
   if not session or not view then return end
   local pane = panes.pane_for_view(view) or pane_for_session(session)
-  if panes.pane_for_view(view) then
-    panes.present(view, { pane = pane, focus = true, reuse = true })
-  else
-    panes.place(function() return view end, {
-      pane = pane,
-      placement = "current",
-      focus = true,
-      reason = "git-view",
-    })
+  local placed, err = panes.present(view, { pane = pane, focus = true, reuse = true })
+  if not placed then
+    core.log_quiet("Git View: activation did not place the View: %s", tostring(err))
+    return
   end
   session.hidden = false
   local focus = view.get_focus_view and (view:get_focus_view() or view) or view
