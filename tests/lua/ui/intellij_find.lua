@@ -204,6 +204,7 @@ test.describe("TextView Prompt Bar find", function()
 
   test.it("keeps local find focus ownership valid when opening another View", function(context)
     local view = open_editor(context, "first\n")
+    view.buffer:set_filename("find-source.txt", USERDIR .. PATHSEP .. "find-source.txt")
     test.ok(command.perform("editor:find"))
     active_find_input_for(view)
 

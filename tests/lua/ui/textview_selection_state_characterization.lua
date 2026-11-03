@@ -807,7 +807,7 @@ test.describe("Text View Selection State edit characterization", function()
     test.same(selection(main), { 2, 1, 2, 1 })
   end)
 
-  test.it("smart newline ignores delimiters inside comments", function(context)
+  test.it("newline leaves a line comment without treating its brace as code", function(context)
     local buffer, main = new_shared_views(context, "// {")
     buffer:set_filename("smart_newline.c", "smart_newline.c")
     core.set_active_view(main)
@@ -815,8 +815,8 @@ test.describe("Text View Selection State edit characterization", function()
 
     test.ok(command.perform("core:newline"))
 
-    test.equal(text(buffer), "// {\n// \n")
-    test.same(selection(main), { 2, 4, 2, 4 })
+    test.equal(text(buffer), "// {\n\n")
+    test.same(selection(main), { 2, 1, 2, 1 })
   end)
 
   test.it("unmatched brace detection ignores closing braces inside strings and comments", function(context)

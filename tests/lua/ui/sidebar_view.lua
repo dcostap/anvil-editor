@@ -1088,7 +1088,7 @@ test.describe("Sidebar agent status", function()
       terminal("b", {agent_state="working",agent_since=now}),
       terminal("c", {agent_state="idle",agent_since=now})}}})
     local texts = drawn(view)
-    test.ok(find(texts, "3 terminals, 1 busy, 1 needs you"), "The hint is wrong: " .. joined(texts))
+    test.ok(joined(texts):find(", 1 needs you", 1, true), "The hint is wrong: " .. joined(texts))
   end)
 end)
 

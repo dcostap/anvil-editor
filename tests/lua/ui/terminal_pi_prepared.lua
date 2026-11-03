@@ -24,11 +24,14 @@ local function service(view)
   return view.state == "running" and view.agent_app == "pi" and text(view):find("PREPARED_PI_READY", 1, true)
 end
 
-local dir, views, previous_path, previous_log, previous_prepare, previous_pi
+local dir, shell_command, views, previous_log, previous_prepare, previous_pi
 local function open_pi(cwd)
-  local view = terminal.open { cwd = cwd or dir, shell = "cmd.exe /D /Q", placement = "new" }
+  local view = terminal.open { cwd = cwd or dir, shell = shell_command, placement = "new" }
   views[#views + 1] = view
-  test.ok(wait_for(function() view:service_session(true); return view.state == "running" end))
+  test.ok(wait_for(function()
+    view:service_session(true)
+    return view.state == "running" and text(view):find("PREPARED_PI_SHELL_READY", 1, true)
+  end), "The private test shell did not start")
   test.ok(view:write_input("pi\r"))
   test.ok(wait_for(function() return service(view) end), "Pi did not start: " .. text(view))
   return view
@@ -64,8 +67,12 @@ test.describe("Pi Terminal copies", function()
     local file = assert(io.open(dir .. "/pi.cmd", "wb"))
     file:write('@echo off\r\npowershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "' .. fixture .. '" %*\r\n')
     file:close()
-    previous_path, previous_log = os.getenv("PATH"), os.getenv("ANVIL_TEST_PI_LOG")
-    system.setenv("PATH", dir .. ";" .. previous_path)
+    -- New shells read the registry PATH. Set the fixture PATH inside each test shell.
+    file = assert(io.open(dir .. "/shell.cmd", "wb"))
+    file:write('@echo off\r\nset "PATH=%~dp0;%SystemRoot%\\System32;%SystemRoot%\\System32\\WindowsPowerShell\\v1.0"\r\necho PREPARED_PI_SHELL_READY\r\n')
+    file:close()
+    shell_command = 'cmd.exe /D /Q /K ""' .. (dir .. "/shell.cmd"):gsub("/", "\\") .. '""'
+    previous_log = os.getenv("ANVIL_TEST_PI_LOG")
     system.setenv("ANVIL_TEST_PI_LOG", dir)
     previous_prepare, previous_pi = config.plugins.terminal.prepare_session, config.plugins.terminal.prepare_pi
     config.plugins.terminal.prepare_session, config.plugins.terminal.prepare_pi = false, true
@@ -79,7 +86,6 @@ test.describe("Pi Terminal copies", function()
     terminal._set_native_for_tests(nil)
     native.finish_close_commands()
     config.plugins.terminal.prepare_session, config.plugins.terminal.prepare_pi = previous_prepare, previous_pi
-    system.setenv("PATH", previous_path or "")
     system.setenv("ANVIL_TEST_PI_LOG", previous_log or "")
     if dir then test.ok(test.remove_tree(dir)) end
   end)
@@ -121,7 +127,7 @@ test.describe("Pi Terminal copies", function()
     test.ok(wait_for(function() return terminal.prepare_pi_session() end), "Pi preparation did not finish")
     local id = prepared:stats().session_id
     test.is_nil(native.read_session_record(id), "unused Pi appeared in the Sidebar's session records")
-    local shell = terminal.open { cwd = dir, shell = "cmd.exe /D /Q", placement = "new" }
+    local shell = terminal.open { cwd = dir, shell = shell_command, placement = "new" }
     views[#views + 1] = shell
     test.not_equal(shell.session, prepared, "normal Terminal received the prepared Pi")
     local started = system.get_time()

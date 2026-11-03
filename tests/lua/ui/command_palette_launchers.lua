@@ -271,7 +271,7 @@ test.describe("Command Palette View launchers", function()
     end
   end)
 
-  test.it("opens a Standard Editor", function()
+  test.it("opens a Standard Editor in the requested Pane", function()
     local source = View()
     local pane = panes.create { factory = function() return source end }
     test.ok(command.perform_with_context("editor:open", {
@@ -280,7 +280,8 @@ test.describe("Command Palette View launchers", function()
       placement = "current",
     }))
     test.ok(panes.active().current_view:extends(Editor))
-    test.equal(pane.current_view, source)
+    test.equal(panes.active(), pane)
+    test.equal(panes.back(pane), source)
   end)
 
   test.it("reuses a matching File Tree from the source Pane history", function(context)

@@ -71,7 +71,10 @@ test.describe("Terminal Session restoration", function()
   local function open(context, state)
     local view = state and terminal.from_state(state)
       or terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
-    if state then panes.place(function() return view end, { placement = "current", focus = true }) end
+    if state then
+      test.equal(view.state, "reconnecting", "restore did not return a pending client")
+      panes.place(function() return view end, { placement = "current", focus = true })
+    end
     context.views[#context.views + 1] = view
     test.ok(wait_for(view, function() return view.state == "running" or view.state == "failed" end))
     test.equal(view.state, "running", view.launch_error)
