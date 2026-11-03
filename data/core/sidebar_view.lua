@@ -1786,8 +1786,10 @@ end
 
 -- Draws a label shortened before a right-aligned note, then the note. The note keeps the same inset from the
 -- row highlight's right edge as the row's content keeps from its left edge. The first hint that fits follows the
--- label in the dim colour.
-function SidebarView:label_with_note(label, color, note, x, y, row, right, hints, font, note_color)
+-- label in the dim colour. `mark_w` keeps that much space free after the label, for the caller to draw a mark in.
+-- Returns the label's right edge.
+function SidebarView:label_with_note(label, color, note, x, y, row, right, hints, font, note_color, mark_w)
+  mark_w = mark_w or 0
   font = font or style.font
   local ty = y + math.floor((row.h - font:get_height()) / 2)
   local note_ty = y + math.floor((row.h - style.font:get_height()) / 2)
@@ -1795,9 +1797,10 @@ function SidebarView:label_with_note(label, color, note, x, y, row, right, hints
   local note_w = note and style.font:get_width(note) + 8 * SCALE or 0
   if note_w > (right - x) / 2 then note, note_w = nil, 0 end
   local available = math.max(0, right - x - note_w)
-  label = tab.fit(font, label, available)
+  label = tab.fit(font, label, math.max(0, available - mark_w))
   text(label, x, ty, color, font)
-  local hint_x = x + font:get_width(label) + 8 * SCALE
+  local label_end = x + font:get_width(label)
+  local hint_x = label_end + mark_w + 8 * SCALE
   for _, hint in ipairs(hints or {}) do
     if hint_x + style.font:get_width(hint) <= x + available then
       text(hint, hint_x, note_ty, style.dim)
@@ -1805,6 +1808,7 @@ function SidebarView:label_with_note(label, color, note, x, y, row, right, hints
     end
   end
   if note then text(note, right - note_w + 8 * SCALE, note_ty, note_color or style.dim) end
+  return label_end
 end
 
 -- The count of a hidden Project's or group's Terminals that need the user: a pill in their attention colour, which
@@ -1866,8 +1870,6 @@ function SidebarView:draw_project(row, y, width, now)
   -- Keep the badge dim, including for the Window's Selected Project.
   local size = m.badge
   local bx = left + 6 * SCALE
-  -- A collapsed Project that can open shows a chevron left of its badge, in the Pane number column.
-  if row.key and row.collapsed then chevron(8 * SCALE, cy, 0, self.hover == row and style.text or style.dim) end
   look.draw_badge(project, bx, math.floor(cy - size / 2), size, font_variant("bold"), style.background2)
   if row.pending and (row.collapsed or dormant) then right = self:draw_pending(row.pending, right, cy) end
   local note = look.note(project, self.window_id, now)
@@ -1880,8 +1882,11 @@ function SidebarView:draw_project(row, y, width, now)
   local note_color
   if asking then note, note_color = "Unload?", fade(style.warn, asking) end
   local name_color = dormant and not project.exists and style.dim or style.text
-  self:label_with_note(look.name(project), name_color, note, bx + size + 8 * SCALE, y, row, right, hints,
-    dormant and style.font or font_variant("bold"), note_color)
+  -- A collapsed Project that can open shows a chevron after its name.
+  local folded = row.key and row.collapsed
+  local name_end = self:label_with_note(look.name(project), name_color, note, bx + size + 8 * SCALE, y, row, right,
+    hints, dormant and style.font or font_variant("bold"), note_color, folded and 11 * SCALE or nil)
+  if folded then chevron(name_end + 8.5 * SCALE, cy, 0, self.hover == row and style.text or style.dim) end
 end
 
 function SidebarView:draw_row(row, y, width, now)
