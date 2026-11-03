@@ -301,6 +301,8 @@ The standalone option is `-Dembedded_runtime=true`. It is off by default.
 `scripts\build-standalone-windows.sh` enables it, strips the executable, runs
 the standalone smoke test, and promotes the result only after the test passes.
 
+The Windows runtime excludes source artwork, platform app icons, icon compiler inputs, and the unused `fd.exe`. Keep these files in the source tree. Runtime UI icons, fonts, licenses, and `rg.exe` stay packaged. Run `anvil:embedded-runtime` after packaging changes.
+
 ### GitHub releases
 
 The only active GitHub workflow is `.github\workflows\release.yml`. It builds
@@ -355,7 +357,7 @@ To replace the app logo:
 4. Run `update-anvil-dev-build.bat` to rebuild, install, and restart the dev portable app.
 
 The generator needs Python and Pillow. It crops transparent outer padding and adds no inset.
-It updates the welcome logo, Windows ICO, macOS ICNS, and native window icon.
+It updates the Linux PNG, Windows ICO, macOS ICNS, and native window icon.
 Linux packages use the generated PNG.
 Do not edit generated icons separately. Commit the source PNG and all generated files together.
 Normal builds use these files and do not need the generator's tools.

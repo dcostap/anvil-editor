@@ -1,7 +1,7 @@
 local common = require "core.common"
 local core = require "core"
 local command = require "core.command"
-local EmptyView = require "core.emptyview"
+local View = require "core.view"
 local Project = require "core.project"
 local panes = require "core.panes"
 local process = require "core.process"
@@ -70,7 +70,7 @@ test.describe("language navigation", function()
     context.original_active_view = core.active_view
     context.original_cwd = system.getcwd()
     panes.reset_for_tests()
-    panes.create { factory = function() return EmptyView() end }
+    panes.create { factory = function() return View() end }
     context.temp_root = USERDIR
       .. PATHSEP .. "language-navigation-tests-"
       .. system.get_process_id() .. "-"

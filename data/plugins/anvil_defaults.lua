@@ -25,7 +25,6 @@ end
 local core_plugins = {
   bookmarks = true,
   centered_editor = true,
-  custom_welcome = true,
   document_format = true,
   file_types = true,
   filetree = true,
@@ -250,7 +249,6 @@ require_core_plugin "selection_surround"
 require_core_plugin "smart_indent_rules"
 require_core_plugin "tabular_data_preview"
 require_core_plugin "centered_editor"
-require_core_plugin "custom_welcome"
 require_core_plugin "theme_editor"
 require_core_plugin "keyboard_input_checker"
 -- With no Panes, Alt+Left reopens the last closed Pane instead of navigating

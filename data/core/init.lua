@@ -468,7 +468,7 @@ local style = require "core.style"
 --
 -- font names used by anvil:
 -- style.font          : user interface
--- style.big_font      : big text in welcome screen
+-- style.big_font      : large interface text
 -- style.icon_font     : icons
 -- style.icon_big_font : toolbar icons
 -- style.code_font     : code
@@ -910,8 +910,7 @@ function core.init()
   end
 
   if not plugins_success then
-    -- defer LogView to after everything is initialized,
-    -- so that EmptyView won't be added after LogView.
+    -- Open the Log View after startup finishes.
     core.add_thread(function()
       command.perform("log:open")
     end)

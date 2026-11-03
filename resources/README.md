@@ -32,7 +32,7 @@ The generator crops transparent outer padding and adds no inset.
 The Windows icon includes sizes from 16 to 256 pixels.
 The macOS icon includes sizes up to 1024 pixels.
 The native window icon uses 64-pixel RGBA data in `icons/icon.inl`.
-The welcome screen and Linux packages use `icons/logo.png`.
+Linux packages use `icons/logo.png`.
 
 - `include/anvil_plugin_api.h`: Native plugin API header. See the contents
 of `anvil_plugin_api.h` for more details. (TODO: to be dropped in favor of

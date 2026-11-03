@@ -17,6 +17,17 @@ ENTRY = struct.Struct("<HQQI")
 MAX_FILES = 10_000
 MAX_FILE_SIZE = 64 * 1024 * 1024
 
+# Keep build inputs, platform app icons, and unused helpers out of the runtime.
+WINDOWS_RUNTIME_EXCLUDES = (
+    "icons/icon.icns",
+    "icons/icon.ico",
+    "icons/icon.inl",
+    "icons/icon.rc",
+    "icons/logo-source.png",
+    "icons/logo.png",
+    "plugins/fuzzy_searcher/fd.exe",
+)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -65,6 +76,8 @@ def collect_files(args: argparse.Namespace) -> dict[str, Path]:
     add_file(files, "core/start.lua", args.start_file.resolve())
 
     add_tree(files, source_root / "resources" / "icons", "icons")
+    for name in WINDOWS_RUNTIME_EXCLUDES:
+        files.pop(name, None)
     add_tree(files, source_root / "subprojects" / "luajit" / "src" / "jit", "jit")
     add_file(files, "jit/vmdef.lua", args.vmdef_file.resolve())
     add_file(files, "conpty/conpty.dll", args.conpty_dll.resolve())

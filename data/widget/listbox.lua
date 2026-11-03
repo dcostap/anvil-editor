@@ -934,7 +934,6 @@ function ListBox:draw()
   if not self.parent.parent and not self.defer_draw then
     -- TODO: inspect why is this workaround needed
     -- Without it wrong offset occurs on child listviews of a single parent
-    -- like in the case of the recent projects in EmptyView.
     opy = 0
   end
 

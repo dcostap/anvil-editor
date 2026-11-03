@@ -518,6 +518,12 @@ endif
 if not get_option('source-only')
     subdir('src')
     render_perf_test_python = find_program('python3', 'python')
+    test('embedded-runtime', render_perf_test_python,
+        args : [anvil_source_root / 'tests/tools/test_embedded_runtime.py', '-v'],
+        env : anvil_test_env,
+        suite : 'anvil',
+        timeout : 60,
+    )
     test('render-perf-harness', render_perf_test_python,
         args : [anvil_source_root / 'tests/tools/test_render_perf_harness.py', '-v'],
         env : anvil_test_env,
