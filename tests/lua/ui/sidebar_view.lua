@@ -1755,6 +1755,39 @@ test.describe("Sidebar motion", function()
     end)
   end)
 
+  test.it("grows the age groups upward when one expands, so the groups below it stay in place", function()
+    with_clock(true, function(advance)
+      local now = os.time()
+      local function dormant(id, age)
+        return {row_id=id,id=id,path="C:/Old" .. id,state="dormant",exists=true,activity=now - age,terminals={}}
+      end
+      local view = SidebarView(function() end)
+      -- The y of both group labels in one frame.
+      local function labels()
+        local texts = drawn_texts(view)
+        local function y(label) return test.not_nil(find_text(texts, label), label .. " is not drawn").y end
+        return y("LAST MONTH"), y("OLDER")
+      end
+      view:set_model({project(1, "Alpha"), dormant(2, 10 * DAY), dormant(3, 12 * DAY), dormant(4, 60 * DAY)})
+      for _ = 1, 60 do advance(1 / 30); drawn_texts(view) end
+      local header_y, below_y = labels()
+      local index = row_index(view, function(row) return row.kind == "group" and row.bucket == "month" end)
+      view:on_mouse_pressed("left", 20, view:row_y(index) + 2, 400)
+      advance(1 / 60)
+      local moving, below = labels()
+      test.equal(below, below_y, "The group below the expanded group moved")
+      local target
+      for _ = 1, 60 do
+        advance(1 / 30)
+        target, below = labels()
+        test.equal(below, below_y, "The group below the expanded group moved")
+      end
+      test.ok(target < header_y, "The expanded group did not move up")
+      test.ok(moving < header_y and moving > target,
+        ("The expanded group did not slide: %s to %s, at %s"):format(header_y, target, moving))
+    end)
+  end)
+
   test.it("shimmers the status line of a working Terminal only", function()
     with_clock(true, function(advance)
       local function sidebar(agent_state, step)

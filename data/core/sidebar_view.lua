@@ -936,17 +936,19 @@ function SidebarView:rebuild_rows()
   if self.hover_y then self:update_hover() end
 end
 
--- The groups' height on screen, and the top of the area that shows them.
-function SidebarView:bottom_area()
-  if self.bottom_h == 0 then return self.view_h, 0 end
+-- The groups' height on screen, and the top of the area that shows them. `content` is the height of their rows,
+-- by default the layout's.
+function SidebarView:bottom_area(content)
+  content = content or self.bottom_h
+  if content <= 0 then return self.view_h, 0 end
   local m = self:metrics()
   local available = math.max(0, self.view_h - m.top)
-  local height = math.min(self.bottom_h + m.pad, math.floor(available * GROUPS_HEIGHT), GROUPS_ROWS * m.project + m.pad)
+  local height = math.min(content + m.pad, math.floor(available * GROUPS_HEIGHT), GROUPS_ROWS * m.project + m.pad)
   return self.view_h - height, height
 end
 
-function SidebarView:main_bottom()
-  local bottom_top, bottom_height = self:bottom_area()
+function SidebarView:main_bottom(content)
+  local bottom_top, bottom_height = self:bottom_area(content)
   return bottom_height > 0 and bottom_top - self:metrics().gap or self.view_h
 end
 
@@ -1537,6 +1539,8 @@ function SidebarView:step(dt)
   end
   shown.scroll = ease(shown.scroll, self.scroll, SCROLL_RATE)
   shown.bottom_scroll = ease(shown.bottom_scroll, self.bottom_scroll, SCROLL_RATE)
+  -- The groups' area grows and shrinks with its rows, so the rows below an expanding group stay in place.
+  shown.bottom_h = ease(shown.bottom_h, self.bottom_h, MOVE_RATE * ROW_SPEED)
   shown.search = ease(shown.search, self:search_open() and 1 or 0, SEARCH_RATE, 0.01)
   -- Rows. A new row unfolds from the row above it, which already showed. A row that leaves fades where it was.
   local old, visuals = self.visuals, {}
@@ -1697,7 +1701,7 @@ end
 -- The top of a row's area on screen, at the shown scroll.
 function SidebarView:shown_origin(area)
   local shown = self.shown or {}
-  if area == "bottom" then return self:area_origin(area, shown.bottom_scroll) end
+  if area == "bottom" then return self:bottom_area(shown.bottom_h) - (shown.bottom_scroll or self.bottom_scroll) end
   return self:shown_list_top() - (shown.scroll or self.scroll)
 end
 
@@ -2182,8 +2186,8 @@ function SidebarView:draw(width, height)
     system.is_surface_transparent() and style.wallpaper_surface(style.background2) or style.background2)
   renderer.draw_rect(width - math.max(1, SCALE), 0, math.max(1, SCALE), height, style.divider)
   self:draw_search(width, height)
-  local top, main_bottom = self:shown_list_top(), self:main_bottom()
-  local bottom_top = self:bottom_area()
+  local top, main_bottom = self:shown_list_top(), self:main_bottom(self.shown.bottom_h)
+  local bottom_top = self:bottom_area(self.shown.bottom_h)
   local active_color = self.focused and style.row_selection_inactive or style.row_selection
   for _, area in ipairs({{"main", top, main_bottom}, {"bottom", bottom_top, height}}) do
     local name, area_top, area_bottom = area[1], area[2], area[3]
