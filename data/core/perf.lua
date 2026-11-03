@@ -1488,7 +1488,8 @@ local function write_summary(path)
     file:write(string.format("Whole-record redraw FPS: %.1f\n", record.frame_count / elapsed))
   end
   if #record.redraw_intervals > 0 then
-    local intervals = { table.unpack(record.redraw_intervals) }
+    local intervals = {}
+    for i, ms in ipairs(record.redraw_intervals) do intervals[i] = ms end
     local active_like = 0
     local over_20 = 0
     local over_50 = 0
