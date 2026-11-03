@@ -1733,6 +1733,9 @@ local function fade(color, amount)
   return {color[1], color[2], color[3], (color[4] or 255) * amount}
 end
 
+-- The radius of a Terminal Tab's attention dot, before scaling.
+local ATTENTION_DOT = 3
+
 local function dot(x, cy, radius, color)
   renderer.draw_rounded_rect(x - radius, cy - radius, radius * 2, radius * 2, radius, color)
 end
@@ -1830,15 +1833,19 @@ function SidebarView:label_with_note(label, color, note, x, y, row, right, hints
 end
 
 -- The count of a hidden Project's or group's Terminals that need the user: a pill in their attention colour, which
--- ends at `right`. Returns the pill's left edge.
-function SidebarView:draw_pending(pending, right, cy)
+-- ends at `right`, or centres on `centre`. Returns the pill's left edge.
+function SidebarView:draw_pending(pending, right, cy, centre)
   local font = font_variant("small")
   local label = tostring(pending.count)
-  local h = font:get_height() + 2 * SCALE
-  local w = math.max(h, font:get_width(label) + 8 * SCALE)
+  local h = font:get_height()
+  local w = math.max(h, font:get_width(label) + 6 * SCALE)
+  if centre then right = math.floor(centre + w / 2 + 0.5) end
   local y = math.floor(cy - h / 2)
   renderer.draw_rounded_rect(right - w, y, w, h, h / 2, tab.attention_color(pending.kind))
-  text(label, right - w + math.floor((w - font:get_width(label)) / 2), y + SCALE, style.background, font)
+  -- The digits' ink centres in the pill, as a badge's letter does. Their line box has room for descenders.
+  local ink_top, ink_bottom = font:get_ink_extent(label)
+  local ty = ink_top and y + (h - ink_top - ink_bottom) / 2 or y + SCALE
+  text(label, right - w + math.floor((w - font:get_width(label)) / 2), math.floor(ty + 0.5), style.background, font)
   return right - w
 end
 
@@ -1889,7 +1896,11 @@ function SidebarView:draw_project(row, y, width, now)
   local size = m.badge
   local bx = left + 6 * SCALE
   look.draw_badge(project, bx, math.floor(cy - size / 2), size, font_variant("bold"), style.background2)
-  if row.pending and (row.collapsed or dormant) then right = self:draw_pending(row.pending, right, cy) end
+  -- The pill centres on the column of its Terminals' attention dots.
+  if row.pending and (row.collapsed or dormant) then
+    local tx, tw = self:tab_bounds(row, width)
+    right = self:draw_pending(row.pending, nil, cy, tx + tw - ATTENTION_DOT * SCALE)
+  end
   local note = look.note(project, self.window_id, now)
   local hints
   if dormant then
@@ -2010,7 +2021,7 @@ function SidebarView:draw_tab(row, x, y, width, now)
     width = width - draw_snooze(row.snooze, x + width, y + m.terminal / 2, now) - 6 * SCALE
   end
   if row.attention then
-    local radius = 3 * SCALE
+    local radius = ATTENTION_DOT * SCALE
     dot(x + width - radius, y + m.terminal / 2, radius, tab.attention_color(row.attention))
     width = width - radius * 2 - 6 * SCALE
     name_font = font_variant("bold")
