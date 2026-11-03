@@ -34,7 +34,13 @@ local function terminal_tab(index, group, session, title, age, busy, focused)
     terminal = {session = session, state = "running", busy = busy, activity = os.time() - age}}
 end
 
--- Every row kind: loaded Projects in two Windows, a starting Project, and Dormant Projects of each age.
+local function scratch(item)
+  item.scratch = true
+  return item
+end
+
+-- Every row kind: the Scratch Project, loaded Projects in two Windows, a starting Project, and Dormant Projects of
+-- each age.
 function Scene.model()
   return {
     project(1, "C:/Projects/anvil-editor", "ready", MINUTE, 1, {
@@ -69,7 +75,9 @@ function Scene.model()
       terminal("j", "pwsh", 5 * 60 * 60),
     }),
     project(4, "C:/Projects/website", "dormant", 12 * DAY),
-    project(5, "C:/Projects/scratch", "dormant", 20 * DAY),
+    scratch(project(5, "C:/Users/me/anvil/scratch", "ready", 20 * MINUTE, 1, {
+      terminal("k", "pwsh", 20 * MINUTE),
+    }, {active = 1, visible = 1, editor(1, 1, "download.csv", {dir = "Downloads" .. PATHSEP})})),
     project(6, "C:/Projects/old-tool", "dormant", 60 * DAY),
     windows = {{id = 1, selected_project = 1}, {id = 2, selected_project = 2}},
   }

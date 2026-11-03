@@ -210,6 +210,7 @@ The Sidebar surface covers the whole Window. Its strip ends at `content_x`, so a
 The Sidebar reports the menu's rectangles as raised areas. The shell draws them above the Project.
 While they show, the shell sends all pointer and keyboard input to the Sidebar.
 Project rows offer New Terminal, New Pi, Move, Unload or Open in New Window, Copy Path and Show in File Explorer. A loaded Project also offers Reopen Closed Pane.
+The Scratch Project offers only New Terminal, New Pi and Reopen Closed Pane. The Sidebar does not unload it.
 Tabs offer Duplicate and Close. Terminal Tabs also offer Snooze, and Mark as Read for an Unread Result.
 New items, Reopen, Duplicate and Close go through the select route, so the user sees the result or a close question.
 The `perform` Pane request runs a named command in its Pane, or in the Project. A View that it opens takes a new Pane.
@@ -437,7 +438,7 @@ Run the `launch-files`, `launch-forward` and `restore-argument` shell probes aft
 The Scratch Project's folder is `USERDIR/scratch`. The shell makes it at startup and again before a launch uses it.
 The shell marks its Sidebar row with `scratch`. The list bound never removes that row.
 The status scan reads its Terminal Sessions while it is Dormant.
-The Sidebar View lists it first and names it "Scratch". Its new Terminals start in `HOME`.
+The Sidebar View lists it first in every Window, also when another Window holds it. It draws it as a section header named "Scratch", like the age groups, with no badge. Its Tabs show below the header. Its new Terminals start in `HOME`.
 Scratch follows the selection. Selecting it in a Window that does not hold it moves it there, through the normal Project Move.
 New Window selects Scratch the same way. The Window that loses Scratch stays open, and shows its Sidebar if it has no other Project.
 An external launch into Scratch also moves it, to the Window that the user activated last.
@@ -479,7 +480,7 @@ Clicking a loaded Project row in this Window expands or collapses it without sel
 Dormant Projects and Projects in other Windows open when their rows are clicked.
 Loaded Projects start expanded unless this Window has a saved manual fold.
 Another Window's Project stays collapsed. It ignores this Window's saved fold. A search still lists its Tabs.
-Other Windows' Projects use 50% opacity and sit above the age groups in the Sidebar's bottom area. Their visible children stay with them. The Scratch Project stays first in its area.
+Other Windows' Projects use 50% opacity and sit above the age groups in the Sidebar's bottom area. Their visible children stay with them. The Scratch Project is not one of them: it stays first in the main list at full opacity.
 Selecting a Project expands it and saves that state. It stays expanded after it loses the selection. The first selection in a restored Window keeps its saved fold.
 Window IDs persist across restart. The saved allocation sequence prevents reuse of a closed Window's folding state.
 Run `anvil:shell-state`, `ui/sidebar_view.lua`, and the `windows-sidebar-layout`, `windows-sidebar-folding`, and `toggle-sidebar` shell probes after changes.

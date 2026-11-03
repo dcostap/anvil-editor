@@ -16,8 +16,9 @@ local icons = require("core.context_menu").icons
 -- A click on a loaded Project in this Window toggles its children. An empty Project opens its initial Pane.
 -- Dormant Projects and Projects in other Windows open on click.
 -- Left on a collapsed loaded Project asks to unload it. A second Left unloads it; any other input cancels.
--- Layout: a search field below the window caption, then the main list: loaded Projects with their Tabs, one for
--- each Pane, and the Terminal Sessions that no Pane shows. Other Windows' Projects sit above the unloaded Projects'
+-- Layout: a search field below the window caption, then the main list: the Scratch Project's section in every Window,
+-- then loaded Projects with their Tabs, one for each Pane, and the Terminal Sessions that no Pane shows.
+-- Other Windows' Projects sit above the unloaded Projects'
 -- collapsible age groups at the bottom. This area takes at most part of the height and scrolls on its own.
 -- Unloaded Project rows count their running Terminal Sessions.
 -- Each area that overflows shows a scrollbar; its thumb drags and its track pages.
@@ -251,7 +252,8 @@ end, {
 })
 
 -- The Context Menu items of a row. A Project has New Terminal and New Pi. While it is loaded, it also has Reopen
--- Closed Pane, Move and Unload, or else Open in New Window. A Tab has Duplicate and Close, and a Terminal Tab also
+-- Closed Pane, Move and Unload, or else Open in New Window. The Scratch Project's folder holds no work, and it follows
+-- the user, so it has no folder or Window actions. A Tab has Duplicate and Close, and a Terminal Tab also
 -- has Snooze times. A running Pi Tab also has Copy Agent Address. Other rows have no menu.
 function SidebarView:context_menu(row)
   if row.kind == "tab" then
@@ -297,6 +299,7 @@ function SidebarView:context_menu(row)
       items[#items + 1] = {label = "Reopen Closed Pane", icon = icons.reopen, command = "sidebar:perform",
         args = {self, project.path, "core:reopen_last_closed_pane"}}
     end
+    if project.scratch then return items end
     items[#items + 1] = "-"
   end
   if loaded then
@@ -482,7 +485,7 @@ function SidebarView:unload_cursor_project(repeating)
   self.focus_pending = nil
   self.unload_ask = nil
   local state = row.project.state
-  if not repeating and state ~= "dormant" and state ~= "closing" then
+  if not repeating and state ~= "dormant" and state ~= "closing" and not row.project.scratch then
     self.action("unload", row.project.row_id)
   end
   return true
@@ -536,7 +539,7 @@ function SidebarView:on_key_pressed(key, repeating)
     self:reveal_cursor()
   elseif row and (key == "left" or key == "right") and self.query == "" then
     if key == "left" and row.kind == "project" and (row.collapsed or not row.key) then
-      self:ask_unload(row, asked, repeating)
+      if not row.project.scratch then self:ask_unload(row, asked, repeating) end
     elseif row.key then
       if row.collapsed == (key == "right") then self:toggle(row.key, row.collapsed)
       elseif key == "right" then self:on_key_pressed("down") end
@@ -718,6 +721,10 @@ function SidebarView:rebuild_rows()
     local project_row = {kind = "project", project = project, key = key, collapsed = collapsed, tabs = #panes,
       id_key = "project:" .. project.path, current = is_selected,
       selected = is_selected and (not active or collapsed and not searching)}
+    if project.scratch then
+      -- Its section header counts the Tabs that it hides.
+      project_row.label, project_row.count = look.name(project), collapsed and #panes > 0 and #panes or nil
+    end
     add(project_row, m.project)
     only_attention = collapsed and not searching
     local shown, sizes, records, snoozed = {}, {}, {}, {}
@@ -798,15 +805,9 @@ function SidebarView:rebuild_rows()
   end
   area = "main"
   local other_windows = {}
-  -- The Scratch Project stays first in its area, even when it is Dormant.
+  -- The Scratch Project follows the user, so it comes first in every Window, even when it is Dormant.
   for _, project in ipairs(projects) do
-    if project.scratch then
-      if in_other_window(project, window_id) then
-        other_windows[#other_windows + 1] = project
-      else
-        add_loaded(project)
-      end
-    end
+    if project.scratch then add_loaded(project) end
   end
   local grouped = {}
   for _, project in ipairs(projects) do
@@ -1101,7 +1102,7 @@ function SidebarView:on_mouse_pressed(button, x, y)
   end
   if button == "middle" then
     -- A middle-click unloads at its release, so a press that moves to another row does nothing.
-    self.click_row = {button = button, row_id = row.project.row_id}
+    if not row.project.scratch then self.click_row = {button = button, row_id = row.project.row_id} end
   else
     self:activate_row(row)
   end
@@ -1647,7 +1648,7 @@ function SidebarView:step(dt)
     if drop.alpha <= 0 then self.marks.drop = nil end
   end
   for _, row in ipairs(self.rows) do
-    if row.key and row.kind ~= "project" then
+    if row.key and (row.kind ~= "project" or row.project.scratch) then
       local target = row.collapsed and 0 or 1
       self.chevrons[row.key] = ease(self.chevrons[row.key], target, MOVE_RATE * 0.8, 0.01)
     end
@@ -1674,7 +1675,7 @@ function SidebarView:autoscroll_speed(y)
 end
 
 -- Working agents and Terminals with a Snooze stay dim unless selected. Other Windows' Projects and their children
--- also stay dim.
+-- also stay dim, except the Scratch Project, which follows the user.
 -- A dragged or moved Tab dims further at its old place.
 function SidebarView:dim_target(row)
   local key = row.id_key
@@ -1682,7 +1683,7 @@ function SidebarView:dim_target(row)
   if drag and drag.key == key or pending and pending.key == key then return 0.35 end
   if not row.selected and (row.snooze or row.agent and not row.agent.command
     and tab.working(row.tab.terminal or {}, row.agent)) then return 0.5 end
-  if in_other_window(row.project, self.window_id) then return 0.5 end
+  if row.project and not row.project.scratch and in_other_window(row.project, self.window_id) then return 0.5 end
   return 1
 end
 
@@ -1814,17 +1815,17 @@ function SidebarView:draw_pending(pending, right, cy)
   return right - w
 end
 
--- A section header: a chevron, a small uppercase label, a line and a count. A collapsed group also shows the count
--- of its Terminals that need the user.
+-- A section header: a chevron when it folds, a small uppercase label, a line and a count. A collapsed group also
+-- shows the count of its Terminals that need the user.
 function SidebarView:draw_section(row, x, y, right)
   local cy = y + row.h / 2
   local hovered = self.hover == row
   local color = hovered and style.text or style.dim
-  chevron(x + 4 * SCALE, cy, self.chevrons[row.key], color)
+  if row.key then chevron(x + 4 * SCALE, cy, self.chevrons[row.key], color) end
   local font = font_variant("small")
   local label = row.label:upper()
   local lx = x + 14 * SCALE
-  local count = tostring(row.count)
+  local count = row.count and tostring(row.count) or ""
   local count_w = font:get_width(count)
   right = right - 8 * SCALE
   label = tab.fit(font, label, math.max(0, right - count_w - 12 * SCALE - lx))
@@ -1879,6 +1880,11 @@ function SidebarView:draw_row(row, y, width, now)
     return
   end
   if row.kind == "group" then
+    self:draw_section(row, left + 4 * SCALE, y, right)
+    return
+  end
+  -- The Scratch Project is a list of loose Tabs, not a folder, so it draws as a section, not as a Project.
+  if row.kind == "project" and row.project.scratch then
     self:draw_section(row, left + 4 * SCALE, y, right)
     return
   end
