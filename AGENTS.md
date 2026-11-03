@@ -194,6 +194,7 @@ The Pi extension also reports the selected model's display name, or its ID when 
 Model changes update the icon without a new agent turn. GPT names use OpenAI's knot; Claude and Fable names use Claude's starburst.
 DeepSeek names use DeepSeek's whale. Name matching ignores case.
 The icon stays while Pi is idle and ends when Pi ends. Unknown or missing models show Pi's icon.
+The extension reports the model again when terminal input resumes after a TUI pause, such as an SSH sudo prompt.
 Show only one logo: the detected model provider or Pi as the fallback. Logos have transparent backgrounds.
 Run `ui/terminal_agent_resume.lua` after model-report changes. It checks startup and model changes on Node and Bun.
 

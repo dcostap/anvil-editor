@@ -43,6 +43,15 @@ if (args.includes("--model-events")) {
       if (name === "idle") {
         emit("agent_end", { type: "agent_end" });
         process.stdout.write("\x1b]7501;state=idle:app=pi\x1b\\");
+      } else if (name === "suspend") {
+        // Pi clears all status records when its TUI stops for an external program.
+        process.stdout.write("\x1b]7501;state=clear\x1b\\");
+        process.stdin.pause();
+        setTimeout(() => {
+          process.stdin.resume();
+          process.stdout.write("\x1b]7501;state=working:app=pi\x1b\\");
+          console.log("FAKE_PI_RESUMED");
+        }, 100);
       } else {
         model = {id: "selected-model", name};
         emit("model_select", {type: "model_select", model, source: "set"});

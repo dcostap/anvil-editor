@@ -41,14 +41,24 @@ module.exports = function (pi) {
   const on = (event, handler) => pi.on(event, (...args) => { try { handler(...args); } catch {} });
 
   let currentModel;
+  const writeModel = () => {
+    if (currentModel === undefined || !process.stdout.isTTY) return;
+    try {
+      process.stdout.write(currentModel === null ? "\x1b]7501;state=clear:id=model\x1b\\"
+        : `\x1b]7501;state=idle:id=model:msg=${Buffer.from(currentModel, "utf8").toString("base64")}\x1b\\`);
+    } catch {}
+  };
   const reportModel = (model) => {
     const name = model && (model.name || model.id) || null;
     if (name === currentModel || !process.stdout.isTTY) return;
     currentModel = name;
-    process.stdout.write(name === null ? "\x1b]7501;state=clear:id=model\x1b\\"
-      : `\x1b]7501;state=idle:id=model:msg=${Buffer.from(name, "utf8").toString("base64")}\x1b\\`);
+    writeModel();
   };
-  on("session_start", (_, ctx) => reportModel(ctx.model));
+  on("session_start", (_, ctx) => {
+    // Pi clears all status records when its TUI stops. Report the unchanged model when input resumes.
+    process.stdin.on("resume", writeModel);
+    reportModel(ctx.model);
+  });
   on("model_select", (event) => reportModel(event.model));
 
   on("turn_start", () => report(newestTool() || "Waiting for the model"));
@@ -69,5 +79,8 @@ module.exports = function (pi) {
     report(newestTool() || "Waiting for the model");
   });
   on("agent_end", () => { tools.clear(); report(null); });
-  on("session_shutdown", () => { tools.clear(); report(null); reportModel(null); });
+  on("session_shutdown", () => {
+    process.stdin.off("resume", writeModel);
+    tools.clear(); report(null); reportModel(null);
+  });
 };
