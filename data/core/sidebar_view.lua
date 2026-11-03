@@ -873,7 +873,8 @@ function SidebarView:rebuild_rows()
   local main_y, bottom_y = 0, 0
   for _, row in ipairs(rows) do
     if row.area == "main" then
-      if row.kind == "project" and main_y > 0 then main_y = main_y + m.project_gap end
+      row.gap = row.kind == "project" and main_y > 0 or nil
+      if row.gap then main_y = main_y + m.project_gap end
       row.y, main_y = main_y, main_y + row.h
     else
       row.y, bottom_y = bottom_y, bottom_y + row.h
@@ -1850,6 +1851,11 @@ function SidebarView:draw_project(row, y, width, now)
   local left, right = m.pad, width - m.pad
   local project = row.project
   local dormant = project.state == "dormant"
+  -- A line in the middle of the gap above the Project separates it from the rows above. It takes no input.
+  if row.gap then
+    renderer.draw_rect(left, math.floor(y - m.project_gap / 2), right - left, math.max(1, math.floor(SCALE)),
+      style.divider)
+  end
   local asked = self.unload_shown
   local asking = asked and asked.key == row.id_key and asked.amount
   if asking then
@@ -1860,6 +1866,8 @@ function SidebarView:draw_project(row, y, width, now)
   -- Keep the badge dim, including for the Window's Selected Project.
   local size = m.badge
   local bx = left + 6 * SCALE
+  -- A collapsed Project that can open shows a chevron left of its badge, in the Pane number column.
+  if row.key and row.collapsed then chevron(5.5 * SCALE, cy, 0, self.hover == row and style.text or style.dim) end
   look.draw_badge(project, bx, math.floor(cy - size / 2), size, font_variant("bold"), style.background2)
   if row.pending and (row.collapsed or dormant) then right = self:draw_pending(row.pending, right, cy) end
   local note = look.note(project, self.window_id, now)

@@ -163,7 +163,7 @@ SCENARIOS["terminal-blocks"] = {
 SCENARIOS["project-sidebar"] = {
     "start_line": 1,
     "window_width": 1100,
-    "window_height": 900,
+    "window_height": 1000,
     "theme": "light",
     "visual": True,
     "paced": False,

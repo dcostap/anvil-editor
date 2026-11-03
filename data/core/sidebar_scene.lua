@@ -79,12 +79,14 @@ function Scene.model()
       terminal("k", "pwsh", 20 * MINUTE),
     }, {active = 1, visible = 1, editor(1, 1, "download.csv", {dir = "Downloads" .. PATHSEP})})),
     project(6, "C:/Projects/old-tool", "dormant", 60 * DAY),
+    project(8, "C:/Projects/docs-site", "ready", 30 * MINUTE, 1, {}, {active = 1, visible = 1,
+      editor(1, 1, "index.md"), editor(2, 2, "style.css")}),
     windows = {{id = 1, selected_project = 1}, {id = 2, selected_project = 2}},
   }
 end
 
 -- mode is nil, "search" or "drag". The second Project is collapsed, so it shows only its agent's question and its
--- count. The first Project's "npm run dev" Pane is snoozed. A Dormant Project in the collapsed "Last week" group
+-- count. docs-site is collapsed in the main list. The first Project's "npm run dev" Pane is snoozed. A Dormant Project in the collapsed "Last week" group
 -- has an Unread Result.
 function Scene:new(mode)
   Scene.super.new(self)
@@ -95,7 +97,8 @@ function Scene:new(mode)
   model[4].terminals[2] = terminal("j", "\u{03C0} - notes", 5 * 60 * 60, {agent_app = "pi", agent_state = "done",
     agent_since = os.time() - 4 * 60 * 60})
   self.sidebar = SidebarView(function() end,
-    {["project:D:/Work/Israel Mallo Mart\u{00ED}nez - ManualSistemas"] = true}, {}, false,
+    {["project:D:/Work/Israel Mallo Mart\u{00ED}nez - ManualSistemas"] = true, ["project:C:/Projects/docs-site"] = true},
+    {}, false,
     {c = os.time() + 3 * 60 * 60})
   self.sidebar:set_model(model, 1)
   if mode == "search" then
