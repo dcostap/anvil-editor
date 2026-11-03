@@ -229,7 +229,7 @@ oversized:
 bool anvil_surface_pane_request_valid(const void *packet, uint32_t size) {
   if (!packet || size <= sizeof(AnvilSurfacePaneRequest) || size > ANVIL_SURFACE_MAX_PAYLOAD) return false;
   const AnvilSurfacePaneRequest *request = packet;
-  if (request->route < ANVIL_SURFACE_PANE_ROUTE_SELECT || request->route > ANVIL_SURFACE_PANE_ROUTE_POINTER)
+  if (request->route < ANVIL_SURFACE_PANE_ROUTE_SELECT || request->route > ANVIL_SURFACE_PANE_ROUTE_SIDEBAR)
     return false;
   if (request->path_size >= 32768 || request->path_size >= size - sizeof(*request)) return false;
   if (request->route == ANVIL_SURFACE_PANE_ROUTE_POINTER) {

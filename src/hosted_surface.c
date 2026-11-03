@@ -896,7 +896,7 @@ static int SDLCALL reader_thread(void *data) {
         if (!hosted.sidebar || size != sizeof(uint32_t) || !*(uint32_t *)body) goto failed;
         break;
       case ANVIL_SURFACE_MSG_PANE_ACTION:
-        if (hosted.sidebar || !anvil_surface_pane_delivery_valid(body, size))
+        if (!anvil_surface_pane_delivery_valid(body, size))
           goto failed;
         break;
       default:

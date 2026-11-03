@@ -6,7 +6,7 @@
 -- `post(window, action, value)` posts the shell's routing probe message, and `trace()` reads the shell's log.
 return function(probe)
   local menus = {}
-  local KEYS = {right = 0x4000004F, ["return"] = 13, escape = 27}
+  local KEYS = {["return"] = 13, escape = 27}
 
   local function poll(fn, seconds)
     local deadline = system.get_time() + seconds
@@ -62,14 +62,16 @@ return function(probe)
     return menu
   end
 
-  ---Chooses the item at the label path, such as "Snooze", "2 Hours". Each label's first letter selects the next
-  ---item that starts with it, and Right opens a submenu. An empty path closes the menu with Escape.
+  ---Chooses the item at the label path, such as "Snooze", "2 Hours", through the menu's text search.
+  ---An empty path closes the menu with Escape.
   function menus.choose(window, ...)
     local path, mark = {...}, #probe.trace()
     if #path == 0 then press(window, "escape") end
-    for index, label in ipairs(path) do
-      press(window, label:sub(1, 1):lower())
-      press(window, index < #path and "right" or "return")
+    if #path > 0 then
+      for character in table.concat(path, " "):gmatch(".") do
+        probe.post(window, 11, character:byte())
+      end
+      press(window, "return")
     end
     if not poll(function() return popup_hidden(mark) end, 5) then
       error("The Sidebar menu stayed open after " .. (#path > 0 and table.concat(path, " > ") or "Escape"))

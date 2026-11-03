@@ -355,12 +355,32 @@ end
 -- Snoozes the Pane `target` for `hours` from now, or removes its Snooze for nil. The time is saved first, so the
 -- Project finds it when it snoozes or wakes the Pane.
 function SidebarView:set_snooze(target, hours)
+  return self:set_snooze_until(target, hours and os.time() + hours * 60 * 60 or nil)
+end
+
+function SidebarView:set_snooze_until(target, time)
   local session = target.session
-  self.snoozes[session] = hours and os.time() + hours * 60 * 60 or nil
-  core.log_quiet("Sidebar Snooze: session=%s Pane=%s hours=%s", session, tostring(target.pane), tostring(hours))
+  self.snoozes[session] = time
+  core.log_quiet("Sidebar Snooze: session=%s Pane=%s until=%s", session, tostring(target.pane), tostring(time))
   self.action("snooze", session)
-  self.action("request", "direct", target.path, {action = hours and "snooze" or "unsnooze", pane = target.pane})
+  self.action("request", "direct", target.path, {action = time and "snooze" or "unsnooze", pane = target.pane})
   self:rebuild_rows()
+end
+
+-- Agent control requests use absolute times, so delivery does not extend the requested Snooze.
+function SidebarView:on_snooze_request(text)
+  local ok, request = pcall(require("core.json").decode, text)
+  if not ok or type(request) ~= "table" or request.action ~= "snooze"
+    or type(request.path) ~= "string" or request.path == ""
+    or type(request.pane) ~= "string" or request.pane == ""
+    or type(request.session) ~= "string" or request.session == ""
+    or request.until_time ~= nil and (type(request.until_time) ~= "number"
+      or request.until_time <= 0 or request.until_time % 1 ~= 0) then
+    core.log_quiet("Sidebar Snooze request rejected")
+    return false
+  end
+  self:set_snooze_until(request, request.until_time)
+  return true
 end
 
 -- Closes the hours field. With `accept`, a whole number of hours above zero sets the Snooze; other text keeps

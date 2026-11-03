@@ -258,12 +258,13 @@ bool anvil_routing_probe_message(SDL_Window *window, uint32_t message, uintptr_t
     event.key.mod = SDL_GetModState();
   } else if (action == 11) {
     /* One ASCII character for owned search-routing checks. */
-    static char text[2];
+    /* SDL queues the pointer, so each character needs stable storage. */
+    static char text[128][2];
     if (point <= 0 || point > 127) return false;
-    text[0] = (char)point;
+    text[point][0] = (char)point;
     event.type = SDL_EVENT_TEXT_INPUT;
     event.text.windowID = SDL_GetWindowID(window);
-    event.text.text = text;
+    event.text.text = text[point];
   } else if (action == 0) {
     event.type = SDL_EVENT_MOUSE_MOTION;
     event.motion.windowID = SDL_GetWindowID(window);

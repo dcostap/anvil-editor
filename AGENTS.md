@@ -758,6 +758,8 @@ Interactive Pi gets `data/tools/agent-sessions/pi-control.cjs` through the exist
 
 Keep focus by default. Keep normal close confirmations. Use stable Pane, Terminal, and conversation IDs, not navigation numbers. A wait timeout never cancels a task. Retry keys last for the Project process; Pi persists accepted delivery receipts separately.
 
+The `snooze` control tool sets or removes a Terminal's Snooze. Without a target, it uses the calling agent's Terminal Session. The Sidebar owns the saved times. Requests use the shell's Sidebar route, then normal Project Snooze requests. A reply reports acceptance, not completed delivery. Run `ui/agent_control.lua` and the `terminal-focus` shell probe after changes.
+
 See [agent control](docs/agent-control.md) for tools, discovery, security, and limits. Run `runtime/net_server.lua`, `ui/agent_control.lua`, `ui/control_transport.lua`, and `ui/control_pi.lua` after changes. Also run `node --test tests/pi-control.test.cjs tests/agent-sessions.test.cjs`.
 
 `ui/control_pi.lua` runs real Pi TUI sessions against a local scripted model server. It uses no provider, API key, or inference. Keep these checks isolated from user sessions and settings.

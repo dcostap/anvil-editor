@@ -17,7 +17,15 @@ Right-click a running Pi's Tab and choose **Copy Agent Address**. This works in 
 
 The receiving agent calls `workspace_state` for that `project` and finds the copied `terminal`. It uses that Terminal's current `agent_instance` as `instance` for `agent_send`. The address identifies the Terminal, not a fixed Pi conversation. Inspect state again after a Project move.
 
-The default target is the caller's Project. Operations preserve focus unless `focus: true` requests a change. Close operations use normal confirmations. A confirmation can take focus.
+The default target is the caller's Project. Operations preserve focus unless `focus: true` requests a change. Close operations use normal confirmations. A confirmation can take focus. Snooze hides its Pane through the normal Snooze behavior.
+
+“Anvil integration” means these editor operations. A request such as “snooze for 5 hours” means Anvil's Snooze, not a timer or delayed message.
+
+Call `snooze` with `action: "set"`, `seconds: 18000`, and a new `request_id` for five hours. Omit `pane` and `terminal` to use the calling agent's own Terminal Session. To target another Terminal, supply either its `pane` or its `terminal` ID, not both. A client without a Terminal credential must name a target.
+
+Call `snooze` with `action: "remove"` and a new `request_id` to remove it. Do not supply `seconds` for removal. A duration must be a whole number of seconds, from one second through one year. The target must belong to a loaded Project and have a Terminal View. A retained Terminal cannot set Snooze when its Pane shows another Terminal.
+
+The result reports `accepted` when Anvil queues the request to the Project Sidebar. It includes the target IDs and `until_time` in Unix seconds for a set. The Sidebar saves the time and applies normal Snooze behavior. `workspace_state` reports each Pane's `snoozed` flag. Snooze does not stop the agent's work or send a message later. Retrying the same request does not extend its time.
 
 `pi_start` requires `cwd`, `provider`, `model`, and `thinking`. It opens an independent Pi conversation in a visible Terminal Pane. It copies no conversation or model choice from the caller. The starting directory must exist.
 
@@ -37,6 +45,7 @@ Steering and interruption return `delivered` after Pi accepts them. A steering r
 | --- | --- |
 | `workspace_state` | Inspect Panes, retained Terminal Views, agent identities, and Projects. |
 | `pane` | Create, split, move, focus, or close a Pane. |
+| `snooze` | Set or remove Snooze for a Terminal's Pane; default to the caller's Terminal. |
 | `open_file` | Open a file at a line in a new Pane or split. |
 | `terminal_start` | Open a shell, optionally with a structured executable and argument list. |
 | `terminal` | Read terminal text, send literal input, or close a Terminal View. |
@@ -86,6 +95,8 @@ Set `ANVIL_CONTROL=0` before starting Anvil to disable its server. Set `ANVIL_PI
 `node --test tests/pi-control.test.cjs` tests delivery, steering, interruption, settlement, and reload receipts.
 
 `ui/control_pi.lua` runs real Pi TUI processes inside real Terminal Sessions. A parent Pi uses MCP to launch a child, send work, and retrieve its answer. The test checks that the user's Pane keeps focus.
+
+The `terminal-focus` shell probe checks agent Snooze requests through the real shell and Sidebar, including persistence and removal.
 
 The test uses `tests/fixtures/control-model.cjs`, a local scripted model endpoint. It uses isolated Pi settings and sessions. It does not use providers, real API keys, inference, or the user's Pi data.
 

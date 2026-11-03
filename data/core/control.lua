@@ -59,6 +59,10 @@ local function tool(name, description, properties, required, readonly)
       destructiveHint = not readonly, idempotentHint = true}}
 end
 local id = string_schema(128)
+tool("snooze", "Set or remove Anvil's Snooze for a Terminal's Pane. Omit pane and terminal to target your own Terminal Session. For five hours, set seconds to 18000. Returns accepted when queued to the Sidebar. Snooze uses normal Pane hiding; it does not stop Pi or schedule a message.",
+  {action = choice("set", "remove"), pane = id, terminal = id,
+    seconds = {type = "integer", minimum = 1, maximum = 31536000}, request_id = id},
+  {"action", "request_id"}, false)
 tool("agent_send", "Send a task to a specific Pi conversation. Queue waits until idle; steer changes active work. Returns a task ID, not a completed answer.",
   {terminal = id, instance = id, text = string_schema(32768), delivery = choice("queue", "steer"), request_id = id},
   {"terminal", "instance", "text", "delivery", "request_id"}, false)
@@ -114,7 +118,7 @@ function M:workspace_state(_, caller)
     local view = pane.current_view
     state.panes[pane.id] = { id = pane.id, group = pane.group.id, title = view:get_name(),
       file = view.buffer and view.buffer.abs_filename, terminal = view.session_id,
-      terminal_state = view.state, agent_model = view.agent_model }
+      terminal_state = view.state, agent_model = view.agent_model, snoozed = panes.is_snoozed(pane) }
     local peer = view.session_id and self.peers[view.session_id]
     if peer then
       state.panes[pane.id].agent_instance = peer.instance
@@ -133,6 +137,33 @@ function M:workspace_state(_, caller)
     end
   end
   return state
+end
+
+function M:snooze(args, caller)
+  assert(not (args.pane and args.terminal), "Choose a Pane or a Terminal, not both")
+  assert(args.action == "set" and args.seconds or args.action == "remove" and not args.seconds,
+    "Set needs seconds; remove takes no seconds")
+  local snoozed = require "core.snoozed_panes"
+  local pane, session
+  if args.pane then
+    pane = assert(panes.find(args.pane), "Pane not found")
+    session = snoozed.session(pane)
+  else
+    session = args.terminal or caller
+    for _, member in ipairs(panes.ordered()) do
+      for _, view in ipairs(panes.views(member)) do
+        if view.terminal_view and view.session_id == session then pane = member; break end
+      end
+      if pane then break end
+    end
+  end
+  assert(pane and session, "Target must be a Terminal's Pane in this Project; otherwise specify pane or terminal")
+  assert(snoozed.session(pane) == session, "The Pane shows another Terminal Session; target that Terminal instead")
+  -- The Sidebar owns the shared times. Never replace its file from a Project process.
+  local until_time = args.action == "set" and os.time() + args.seconds or nil
+  local request = {action = "snooze", path = self.project, pane = pane.id, session = session, until_time = until_time}
+  assert(system.pane_request("sidebar", self.project, json.encode(request)), "Anvil's Project Sidebar is unavailable")
+  return {status = "accepted", pane = pane.id, terminal = session, until_time = until_time}
 end
 
 local function place_options(args)

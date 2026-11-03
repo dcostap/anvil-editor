@@ -512,6 +512,11 @@ function core.run() end
 function core.on_event(name, ...)
   if name == "quit" or name == "shelllost" then core.quit_request = true; return end
   if not current then return end
+  if name == "panerequest" then
+    current.view:on_snooze_request(...)
+    core.redraw = true
+    return
+  end
   local handlers = current.menu_host.handlers
   if handlers and menu_event(handlers, name, ...) then
     -- The open Context Menu took the event.
@@ -623,6 +628,8 @@ function core.run_step()
     elseif event[1] == "projectsidebarchanged" and not native_id then
       for _, surface in pairs(surfaces) do surface.request, surface.query_needed = nil, true end
       core.project_sidebar_request = nil
+    elseif event[1] == "panerequest" then
+      core.on_event(table.unpack(event, 1, event.n))
     elseif activate(id) or event[1] == "quit" or event[1] == "shelllost" then
       core.on_event(table.unpack(event, 1, event.n))
     end
