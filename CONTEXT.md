@@ -405,7 +405,7 @@ _Avoid_: Pane number, Tab number
 A Pane with an Unread Result, an agent waiting for an answer, or an ended Snooze. The first five Pending Panes have numbers 1 to 5 across Projects and Anvil Windows, oldest pending event first. Reading a result removes it from the queue. An agent waiting for an answer stays pending until it stops waiting.
 
 **Constrained Pane**:
-A Pane dedicated to one owner, such as a Git Log, commit comparison, or nonempty Untitled Editor.
+A Pane dedicated to one owner, such as a Git Log or commit comparison.
 Its Navigation History contains only Views related to that owner, including its text captures.
 
 **Unconstrained Pane**:
@@ -468,7 +468,7 @@ The retention of a non-current View through Pane Navigation History without clos
 _Avoid_: hidden tab, background tab
 
 **Untitled Editor**:
-An Editor showing an Untitled Buffer. It must close instead of entering View Suspension when another View replaces it.
+An Editor showing an Untitled Buffer. It must close before another View takes its place, including through Navigation History. Unsaved changes require confirmation.
 _Avoid_: scratch Editor, unnamed Editor
 
 **Focused View**:

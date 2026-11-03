@@ -362,6 +362,24 @@ test.describe("Terminal View", function()
     test.ok(panes.validate())
   end)
 
+  test.it("opens an Untitled Editor in the idle Terminal's Pane and returns to the Terminal", function(context)
+    local view = terminal.open()
+    local pane = panes.active()
+    test.ok(view:on_text_input("command"))
+    view:apply_status { kind = "running", busy = false }
+
+    test.ok(command.perform("editor:open"))
+    local editor = core.active_view
+    test.ok(editor:extends(Editor))
+    test.equal(panes.active(), pane)
+    test.equal(pane.current_view, editor)
+    test.ok(panes.validate())
+    test.equal(panes.back(pane), view)
+    test.is_nil(panes.pane_for_view(editor))
+    test.not_ok(context.sessions[1].closed)
+    test.ok(panes.validate())
+  end)
+
   test.it("does not rearrange history when a hidden terminal becomes busy", function()
     local original = View()
     local pane = panes.create { factory = function() return original end }
@@ -2240,7 +2258,7 @@ test.describe("Terminal View", function()
     })
     view:update_suspended()
 
-    panes.focus(pane)
+    test.equal(panes.back(pane), view)
     view:update()
 
     local other = panes.split(pane, "right", { factory = function()

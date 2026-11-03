@@ -1,4 +1,6 @@
 local core = require "core"
+local Buffer = require "core.buffer"
+local Editor = require "core.editor"
 local panes = require "core.panes"
 local View = require "core.view"
 local test = require "core.test"
@@ -72,6 +74,30 @@ test.describe("Pane View history", function()
     test.equal(panes.back(one):get_name(), "one")
     test.equal(two.current_view, two_next)
     test.equal(panes.back(two):get_name(), "two")
+  end)
+
+  test.it("asks before leaving an unsaved Untitled Editor through history", function()
+    local pane = panes.create { factory = factory("previous") }
+    local previous = pane.current_view
+    local editor = Editor(Buffer())
+    test.equal(panes.present(editor), pane)
+    editor.buffer:insert(1, 1, "keep this text")
+    local prompt
+    local enter = core.global_prompt_bar.enter
+    core.global_prompt_bar.enter = function(_, _, options) prompt = options end
+    local ok, err = pcall(function()
+      test.is_nil(panes.back_file(pane))
+      test.equal(pane.current_view, editor)
+      test.not_nil(prompt)
+      test.equal(editor.buffer:get_text(1, 1, 1, math.huge), "keep this text")
+      prompt.submit("", { text = "Close Without Saving" })
+      test.equal(pane.current_view, previous)
+      test.is_nil(panes.pane_for_view(editor))
+      test.is_nil(panes.forward_file(pane))
+      test.ok(panes.validate())
+    end)
+    core.global_prompt_bar.enter = enter
+    test.ok(ok, err)
   end)
 
   test.it("records each revisit without duplicating its live View", function()

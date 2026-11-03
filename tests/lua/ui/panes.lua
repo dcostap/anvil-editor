@@ -452,18 +452,17 @@ test.describe("Pane manager", function()
     test.not_ok(panes.contains(source))
   end)
 
-  test.it("rejects merging an Untitled Editor into unrelated history", function()
-    local destination = panes.create { factory = factory("destination") }
+  test.it("keeps unsaved Untitled text visible when a Pane merge would hide it", function()
     test.ok(command.perform("pane:new_group"))
-    local source = panes.active()
-    local untitled = source.current_view
-    test.ok(panes.is_disposable(source))
+    local destination = panes.active()
+    local editor = destination.current_view
+    editor.buffer:insert(1, 1, "keep this text")
+    local source = panes.create { factory = factory("source") }
 
     test.not_ok(panes.move_and_merge(source, destination))
 
-    test.equal(panes.history_length(destination), 1)
-    test.equal(destination.current_view:get_name(), "destination")
-    test.equal(source.current_view, untitled)
+    test.equal(destination.current_view, editor)
+    test.equal(editor.buffer:get_text(1, 1, 1, math.huge), "keep this text")
     test.ok(panes.contains(source))
     test.ok(panes.validate())
   end)
