@@ -75,15 +75,16 @@ Run the focused files:
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/markdown_syntax_contract.lua --print-errorlogs
 meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdown_commonmark.lua --print-errorlogs
 meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdown_inline_contract.lua --print-errorlogs
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdown_link_labels.lua --print-errorlogs
 ```
 
-The complete standards audit also runs known differences. It currently reports 120 passes and 18 failures: two code-padding differences, 15 syntax defects, and one link-label difference that needs review. The failures include the trailing-space bold case. They remain failures, not replacement expectations.
+The complete standards audit also runs known differences. It currently reports 120 passes and 17 failures: two code-padding differences and 15 syntax defects. The failures include the trailing-space bold case. They remain failures, not replacement expectations.
 
 ```sh
 meson test -C build-windows-x86_64 anvil:lua-ui --test-args tests/lua/markdown_spec --print-errorlogs
 ```
 
-This audit is outside the default `runtime/` and `ui/` test folders. It checks 137 selected CommonMark 0.31.2 examples and one link-label case, not the complete specification. [Markdown fixtures](fixtures/markdown/README.md) describes the scope, source license, importer, and reviewed differences. Do not change an Anvil rule solely to make the standards audit pass.
+This audit is outside the default `runtime/` and `ui/` test folders. It checks 137 selected CommonMark 0.31.2 examples, not the complete specification. [Markdown fixtures](fixtures/markdown/README.md) describes the scope, source license, importer, and reviewed differences. Do not change an Anvil rule solely to make the standards audit pass.
 
 ## Known failures
 

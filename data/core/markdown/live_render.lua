@@ -1528,7 +1528,7 @@ resolve_live_link = function(view, link)
   return { status = "pending", target = target, reason = "indexing" }
 end
 
-local function decorate_link_fragment(view, line, span, fragment, opts)
+local function decorate_link_fragment(view, line, span, fragment, opts, formatted_label)
   opts = opts or {}
   if semantic_comment_overlaps(view, line, span.col1, span.col2) then return nil end
   local resolution = resolve_live_link(view, span.link)
@@ -1547,6 +1547,10 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
     local missing = resolution.status == "missing" or resolution.subtarget_missing
     fragment.color = missing and style.markdown_live_link_error or style.markdown_live_link
     fragment.underline = true
+  end
+  if formatted_label then
+    fragment.semantic_id = span.semantic_id .. "+" .. (fragment.semantic_id or "")
+    return fragment
   end
   local bold, italic, strike, highlight, anchor = false, false, false, false, false
   local code = fragment.code_label or false
@@ -1690,6 +1694,58 @@ local function link_label_fragment(line_text, span, label)
   return fragment
 end
 
+function live._formatted_link_label_fragments(view, line_text, line, span, opts, reveal_units)
+  local link = span.link
+  if link.kind ~= "markdown" and link.kind ~= "reference" then return nil end
+  local label = textual_link_label(link)
+  local col1, col2 = span.col1 + 1, span.col1 + 1 + #label
+  local nested = false
+  for _, node in ipairs(semantic_line(view, line) or {}) do
+    local source = node.source
+    if (FORMATTING_TYPES[node.type] or node.type == "escape" or node.type == "comment")
+      and source.line1 == line and source.line2 == line
+      and source.col1 >= col1 and source.col2 <= col2
+    then
+      nested = true
+      break
+    end
+  end
+  if not nested then return nil end
+  if attachment_kind(link.path or link.raw_target) then return nil end
+  -- Keep the existing whole-code label's padding and source mapping.
+  if code_span_label(label) then return nil end
+  if line_text:sub(col1, col2 - 1) ~= label or line_text:sub(col2, col2) ~= "]" then
+    return nil
+  end
+  opts = opts or {}
+  local formatted = semantic_formatting_fragments(view, line_text, line, reveal_units or {}, {
+    col1 = col1, col2 = col2, base_font = opts.base_font,
+    base_bold = opts.base_bold, base_italic_font = opts.base_italic_font,
+  })
+  local fragments = { { source_col1 = span.col1, source_col2 = col1, hidden = true } }
+  local function append(fragment)
+    if not fragment.hidden then
+      fragment = decorate_link_fragment(view, line, span, fragment, opts, true)
+    end
+    if fragment then fragments[#fragments + 1] = fragment end
+  end
+  local function plain(a, b)
+    if a < b then
+      append({ source_col1 = a, source_col2 = b,
+        text = line_text:sub(a, b - 1), font = opts.base_font })
+    end
+  end
+  local cursor = col1
+  for _, fragment in ipairs(formatted) do
+    plain(cursor, fragment.source_col1)
+    append(fragment)
+    cursor = fragment.source_col2
+  end
+  plain(cursor, col2)
+  fragments[#fragments + 1] = { source_col1 = col2, source_col2 = span.col2, hidden = true }
+  return fragments
+end
+
 function live._image_attachment_link(view, line, span, opts)
   local link = span.link
   local embedded = images.is_data_image(link.path)
@@ -1740,6 +1796,8 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
       and is_image_target(span.link.path)
     local revealed = not (image_link and images.is_data_image(span.link.path))
       and reveal_unit_matches(reveal_units, span.semantic_id, span.col1, span.col2)
+    local label_fragments = not revealed
+      and live._formatted_link_label_fragments(view, line_text, line, span, opts, reveal_units)
     if image_link and revealed then
       for _, fragment in ipairs(revealed_link_fragments(view, line_text, line, span, opts)) do
         fragments[#fragments + 1] = fragment
@@ -1756,6 +1814,10 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
       end
     elseif span.link and revealed then
       for _, fragment in ipairs(revealed_link_fragments(view, line_text, line, span, opts)) do
+        fragments[#fragments + 1] = fragment
+      end
+    elseif label_fragments then
+      for _, fragment in ipairs(label_fragments) do
         fragments[#fragments + 1] = fragment
       end
     elseif span.link then
@@ -1868,15 +1930,18 @@ table_presentation.inline_pieces = function(view, line_text, line, reveal, base)
     then
       inserted = revealed_link_fragments(view, line_text, line, span, opts)
     else
-      local link = span.link
-      local kind, icon = attachment_kind(link.path or link.raw_target)
-      local label = textual_link_label(link)
-      local fragment = kind and {
-        source_col1 = span.col1, source_col2 = span.col2, text = icon .. " " .. label,
-      } or link_label_fragment(line_text, span, label)
-      fragment = decorate_link_fragment(view, line, span, fragment, opts)
-      if fragment and kind then fragment.background = style.markdown_live_attachment_bg end
-      inserted = fragment and { fragment } or nil
+      inserted = live._formatted_link_label_fragments(view, line_text, line, span, opts, reveal_units)
+      if not inserted then
+        local link = span.link
+        local kind, icon = attachment_kind(link.path or link.raw_target)
+        local label = textual_link_label(link)
+        local fragment = kind and {
+          source_col1 = span.col1, source_col2 = span.col2, text = icon .. " " .. label,
+        } or link_label_fragment(line_text, span, label)
+        fragment = decorate_link_fragment(view, line, span, fragment, opts)
+        if fragment and kind then fragment.background = style.markdown_live_attachment_bg end
+        inserted = fragment and { fragment } or nil
+      end
     end
     if inserted then
       pieces = splice_inline_pieces(pieces, line_text, span.col1, span.col2, inserted)

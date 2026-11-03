@@ -1298,7 +1298,7 @@ test.describe("Markdown Interactive Table Editing", function()
 
   test.it("renders inline formatting and link labels inside cells", function()
     local view, buffer = make_view(
-      "| A | B |\n| --- | --- |\n| ship **done** now | see [the docs](https://example.com/a/b) |\n\nplain"
+      "| A | B |\n| --- | --- |\n| ship **done** now | see [the **docs**](https://example.com/a/b) |\n\nplain"
     )
     buffer:set_selection(5, 1)
     refresh(view)
@@ -1311,6 +1311,12 @@ test.describe("Markdown Interactive Table Editing", function()
     end
     test.not_nil(strong, "bold text did not render as its own run")
     test.ok(strong.font ~= cells[1].font, "bold text used the cell's plain font")
+    local linked_bold
+    for _, run in ipairs(cells[2].text_lines[1].runs or {}) do
+      if run.text == "docs" then linked_bold = run end
+    end
+    test.not_nil(linked_bold, "bold link label did not render as its own run")
+    test.ok(linked_bold.font ~= cells[2].font, "bold link label used the cell's plain font")
   end)
 
   test.it("renders a link whose label is a code span as code", function()
@@ -1321,7 +1327,14 @@ test.describe("Markdown Interactive Table Editing", function()
     refresh(view)
     local line = table_cells(view, 3)[1].text_lines[1]
     test.equal(line.text, "notes/")
-    test.equal(line.runs[#line.runs].background, style.markdown_live_inline_code_bg)
+    local code_text = false
+    for _, run in ipairs(line.runs) do
+      if run.text and run.text ~= "" then
+        code_text = true
+        test.equal(run.background, style.markdown_live_inline_code_bg)
+      end
+    end
+    test.ok(code_text, "code label did not draw text")
   end)
 
   test.it("keeps unbreakable link labels inside their column", function()

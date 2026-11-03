@@ -2143,6 +2143,9 @@ static int treesitter_index_result_semantic_nodes_for_lines(lua_State *L) {
         family_match = capture_name_equal(parent, "span.footnote_reference")
           || capture_name_equal(parent, "span.footnote_inline")
           || capture_name_equal(parent, "span.footnote_definition");
+      else if (capture_name_equal(decoration, "content.link_text"))
+        family_match = capture_name_equal(parent, "span.link")
+          || capture_name_equal(parent, "span.link_reference");
       if (target_or_alias)
         family_match = capture_name_equal(parent, "span.wiki_link")
           || capture_name_equal(parent, "span.embed");

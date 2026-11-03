@@ -12,8 +12,6 @@ The tests compare visible text and font semantics through the Editor's line-rend
 
 These tests do not prove complete CommonMark compliance. They do not check link destinations, images, multiline inline constructs, raw HTML, or block layout. Runtime syntax contracts cover selected block rules and extension boundaries separately.
 
-`tests/lua/markdown_spec/links.lua` adds one link-label audit. The semantic model reports bold inside `[**bold**](target.md)`, but Live Preview shows the label's markers literally. This differs from CommonMark. Review the intended Anvil rule before changing it.
-
 ### Reviewed differences
 
 `commonmark_review.lua` lists exact example IDs that differ from the reference. Each entry gives a reason. It contains no replacement expected output.
@@ -54,3 +52,5 @@ Review the source, license, selection counts, and generated diff before changing
 `runtime/markdown_syntax_contract.lua` checks source ownership and selected block types. It covers headings, lists, quotes, code, links, images, HTML, frontmatter, tables, comments, highlights, tags, and Wikilinks. For example, `#not` is an Anvil tag, not an ATX heading.
 
 `ui/markdown_inline_contract.lua` checks composed styles, extension precedence, code padding, and resolved and unresolved references. Its edit cases compare the result with a fresh parse, then check undo and redo. This proves edit consistency, not standards compliance: two parses can agree on the same defect.
+
+`ui/markdown_link_labels.lua` checks standard formatting inside Markdown and resolved reference link labels. It covers mixed styles, enclosing styles, escapes, link targets, UTF-8 source positions, and source reveal. The table tests check the same formatting inside cells. Wikilink aliases, images, and attachment chips keep their own presentation.
