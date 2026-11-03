@@ -1,0 +1,1957 @@
+{
+  "version": "0.31.2",
+  "source": "https://spec.commonmark.org/0.31.2/spec.json",
+  "source_sha256": "d431b29d97b6f73e69d547109cf5081578fac931e72afe95639ebe766c1b2a20",
+  "sections": [
+    "Backslash escapes",
+    "Code spans",
+    "Emphasis and strong emphasis",
+    "Textual content"
+  ],
+  "excluded": {
+    "multiline source": 16,
+    "other HTML elements": 17
+  },
+  "cases": [
+    {
+      "example": 12,
+      "section": "Backslash escapes",
+      "markdown": "\\!\\\"\\#\\$\\%\\&\\'\\(\\)\\*\\+\\,\\-\\.\\/\\:\\;\\<\\=\\>\\?\\@\\[\\\\\\]\\^\\_\\`\\{\\|\\}\\~\n",
+      "html": "<p>!&quot;#$%&amp;'()*+,-./:;&lt;=&gt;?@[\\]^_`{|}~</p>\n",
+      "runs": [
+        {
+          "text": "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 13,
+      "section": "Backslash escapes",
+      "markdown": "\\\t\\A\\a\\ \\3\\φ\\«\n",
+      "html": "<p>\\\t\\A\\a\\ \\3\\φ\\«</p>\n",
+      "runs": [
+        {
+          "text": "\\\t\\A\\a\\ \\3\\φ\\«",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 15,
+      "section": "Backslash escapes",
+      "markdown": "\\\\*emphasis*\n",
+      "html": "<p>\\<em>emphasis</em></p>\n",
+      "runs": [
+        {
+          "text": "\\",
+          "style": "normal"
+        },
+        {
+          "text": "emphasis",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 17,
+      "section": "Backslash escapes",
+      "markdown": "`` \\[\\` ``\n",
+      "html": "<p><code>\\[\\`</code></p>\n",
+      "runs": [
+        {
+          "text": "\\[\\`",
+          "style": "code"
+        }
+      ]
+    },
+    {
+      "example": 328,
+      "section": "Code spans",
+      "markdown": "`foo`\n",
+      "html": "<p><code>foo</code></p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "code"
+        }
+      ]
+    },
+    {
+      "example": 329,
+      "section": "Code spans",
+      "markdown": "`` foo ` bar ``\n",
+      "html": "<p><code>foo ` bar</code></p>\n",
+      "runs": [
+        {
+          "text": "foo ` bar",
+          "style": "code"
+        }
+      ]
+    },
+    {
+      "example": 330,
+      "section": "Code spans",
+      "markdown": "` `` `\n",
+      "html": "<p><code>``</code></p>\n",
+      "runs": [
+        {
+          "text": "``",
+          "style": "code"
+        }
+      ]
+    },
+    {
+      "example": 331,
+      "section": "Code spans",
+      "markdown": "`  ``  `\n",
+      "html": "<p><code> `` </code></p>\n",
+      "runs": [
+        {
+          "text": " `` ",
+          "style": "code"
+        }
+      ]
+    },
+    {
+      "example": 332,
+      "section": "Code spans",
+      "markdown": "` a`\n",
+      "html": "<p><code> a</code></p>\n",
+      "runs": [
+        {
+          "text": " a",
+          "style": "code"
+        }
+      ]
+    },
+    {
+      "example": 333,
+      "section": "Code spans",
+      "markdown": "` b `\n",
+      "html": "<p><code> b </code></p>\n",
+      "runs": [
+        {
+          "text": " b ",
+          "style": "code"
+        }
+      ]
+    },
+    {
+      "example": 338,
+      "section": "Code spans",
+      "markdown": "`foo\\`bar`\n",
+      "html": "<p><code>foo\\</code>bar`</p>\n",
+      "runs": [
+        {
+          "text": "foo\\",
+          "style": "code"
+        },
+        {
+          "text": "bar`",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 339,
+      "section": "Code spans",
+      "markdown": "``foo`bar``\n",
+      "html": "<p><code>foo`bar</code></p>\n",
+      "runs": [
+        {
+          "text": "foo`bar",
+          "style": "code"
+        }
+      ]
+    },
+    {
+      "example": 340,
+      "section": "Code spans",
+      "markdown": "` foo `` bar `\n",
+      "html": "<p><code>foo `` bar</code></p>\n",
+      "runs": [
+        {
+          "text": "foo `` bar",
+          "style": "code"
+        }
+      ]
+    },
+    {
+      "example": 341,
+      "section": "Code spans",
+      "markdown": "*foo`*`\n",
+      "html": "<p>*foo<code>*</code></p>\n",
+      "runs": [
+        {
+          "text": "*foo",
+          "style": "normal"
+        },
+        {
+          "text": "*",
+          "style": "code"
+        }
+      ]
+    },
+    {
+      "example": 342,
+      "section": "Code spans",
+      "markdown": "[not a `link](/foo`)\n",
+      "html": "<p>[not a <code>link](/foo</code>)</p>\n",
+      "runs": [
+        {
+          "text": "[not a ",
+          "style": "normal"
+        },
+        {
+          "text": "link](/foo",
+          "style": "code"
+        },
+        {
+          "text": ")",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 343,
+      "section": "Code spans",
+      "markdown": "`<a href=\"`\">`\n",
+      "html": "<p><code>&lt;a href=&quot;</code>&quot;&gt;`</p>\n",
+      "runs": [
+        {
+          "text": "<a href=\"",
+          "style": "code"
+        },
+        {
+          "text": "\">`",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 345,
+      "section": "Code spans",
+      "markdown": "`<https://foo.bar.`baz>`\n",
+      "html": "<p><code>&lt;https://foo.bar.</code>baz&gt;`</p>\n",
+      "runs": [
+        {
+          "text": "<https://foo.bar.",
+          "style": "code"
+        },
+        {
+          "text": "baz>`",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 347,
+      "section": "Code spans",
+      "markdown": "```foo``\n",
+      "html": "<p>```foo``</p>\n",
+      "runs": [
+        {
+          "text": "```foo``",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 348,
+      "section": "Code spans",
+      "markdown": "`foo\n",
+      "html": "<p>`foo</p>\n",
+      "runs": [
+        {
+          "text": "`foo",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 349,
+      "section": "Code spans",
+      "markdown": "`foo``bar``\n",
+      "html": "<p>`foo<code>bar</code></p>\n",
+      "runs": [
+        {
+          "text": "`foo",
+          "style": "normal"
+        },
+        {
+          "text": "bar",
+          "style": "code"
+        }
+      ]
+    },
+    {
+      "example": 350,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*foo bar*\n",
+      "html": "<p><em>foo bar</em></p>\n",
+      "runs": [
+        {
+          "text": "foo bar",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 351,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "a * foo bar*\n",
+      "html": "<p>a * foo bar*</p>\n",
+      "runs": [
+        {
+          "text": "a * foo bar*",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 352,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "a*\"foo\"*\n",
+      "html": "<p>a*&quot;foo&quot;*</p>\n",
+      "runs": [
+        {
+          "text": "a*\"foo\"*",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 353,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "* a *\n",
+      "html": "<p>* a *</p>\n",
+      "runs": [
+        {
+          "text": "* a *",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 355,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo*bar*\n",
+      "html": "<p>foo<em>bar</em></p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "normal"
+        },
+        {
+          "text": "bar",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 356,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "5*6*78\n",
+      "html": "<p>5<em>6</em>78</p>\n",
+      "runs": [
+        {
+          "text": "5",
+          "style": "normal"
+        },
+        {
+          "text": "6",
+          "style": "emphasis"
+        },
+        {
+          "text": "78",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 357,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "_foo bar_\n",
+      "html": "<p><em>foo bar</em></p>\n",
+      "runs": [
+        {
+          "text": "foo bar",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 358,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "_ foo bar_\n",
+      "html": "<p>_ foo bar_</p>\n",
+      "runs": [
+        {
+          "text": "_ foo bar_",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 359,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "a_\"foo\"_\n",
+      "html": "<p>a_&quot;foo&quot;_</p>\n",
+      "runs": [
+        {
+          "text": "a_\"foo\"_",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 360,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo_bar_\n",
+      "html": "<p>foo_bar_</p>\n",
+      "runs": [
+        {
+          "text": "foo_bar_",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 361,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "5_6_78\n",
+      "html": "<p>5_6_78</p>\n",
+      "runs": [
+        {
+          "text": "5_6_78",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 362,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "пристаням_стремятся_\n",
+      "html": "<p>пристаням_стремятся_</p>\n",
+      "runs": [
+        {
+          "text": "пристаням_стремятся_",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 363,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "aa_\"bb\"_cc\n",
+      "html": "<p>aa_&quot;bb&quot;_cc</p>\n",
+      "runs": [
+        {
+          "text": "aa_\"bb\"_cc",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 364,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo-_(bar)_\n",
+      "html": "<p>foo-<em>(bar)</em></p>\n",
+      "runs": [
+        {
+          "text": "foo-",
+          "style": "normal"
+        },
+        {
+          "text": "(bar)",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 365,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "_foo*\n",
+      "html": "<p>_foo*</p>\n",
+      "runs": [
+        {
+          "text": "_foo*",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 366,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*foo bar *\n",
+      "html": "<p>*foo bar *</p>\n",
+      "runs": [
+        {
+          "text": "*foo bar *",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 368,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*(*foo)\n",
+      "html": "<p>*(*foo)</p>\n",
+      "runs": [
+        {
+          "text": "*(*foo)",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 369,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*(*foo*)*\n",
+      "html": "<p><em>(<em>foo</em>)</em></p>\n",
+      "runs": [
+        {
+          "text": "(foo)",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 370,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*foo*bar\n",
+      "html": "<p><em>foo</em>bar</p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "emphasis"
+        },
+        {
+          "text": "bar",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 371,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "_foo bar _\n",
+      "html": "<p>_foo bar _</p>\n",
+      "runs": [
+        {
+          "text": "_foo bar _",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 372,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "_(_foo)\n",
+      "html": "<p>_(_foo)</p>\n",
+      "runs": [
+        {
+          "text": "_(_foo)",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 373,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "_(_foo_)_\n",
+      "html": "<p><em>(<em>foo</em>)</em></p>\n",
+      "runs": [
+        {
+          "text": "(foo)",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 374,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "_foo_bar\n",
+      "html": "<p>_foo_bar</p>\n",
+      "runs": [
+        {
+          "text": "_foo_bar",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 375,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "_пристаням_стремятся\n",
+      "html": "<p>_пристаням_стремятся</p>\n",
+      "runs": [
+        {
+          "text": "_пристаням_стремятся",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 376,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "_foo_bar_baz_\n",
+      "html": "<p><em>foo_bar_baz</em></p>\n",
+      "runs": [
+        {
+          "text": "foo_bar_baz",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 377,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "_(bar)_.\n",
+      "html": "<p><em>(bar)</em>.</p>\n",
+      "runs": [
+        {
+          "text": "(bar)",
+          "style": "emphasis"
+        },
+        {
+          "text": ".",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 378,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "**foo bar**\n",
+      "html": "<p><strong>foo bar</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo bar",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 379,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "** foo bar**\n",
+      "html": "<p>** foo bar**</p>\n",
+      "runs": [
+        {
+          "text": "** foo bar**",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 380,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "a**\"foo\"**\n",
+      "html": "<p>a**&quot;foo&quot;**</p>\n",
+      "runs": [
+        {
+          "text": "a**\"foo\"**",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 381,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo**bar**\n",
+      "html": "<p>foo<strong>bar</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "normal"
+        },
+        {
+          "text": "bar",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 382,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "__foo bar__\n",
+      "html": "<p><strong>foo bar</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo bar",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 383,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "__ foo bar__\n",
+      "html": "<p>__ foo bar__</p>\n",
+      "runs": [
+        {
+          "text": "__ foo bar__",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 385,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "a__\"foo\"__\n",
+      "html": "<p>a__&quot;foo&quot;__</p>\n",
+      "runs": [
+        {
+          "text": "a__\"foo\"__",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 386,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo__bar__\n",
+      "html": "<p>foo__bar__</p>\n",
+      "runs": [
+        {
+          "text": "foo__bar__",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 387,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "5__6__78\n",
+      "html": "<p>5__6__78</p>\n",
+      "runs": [
+        {
+          "text": "5__6__78",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 388,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "пристаням__стремятся__\n",
+      "html": "<p>пристаням__стремятся__</p>\n",
+      "runs": [
+        {
+          "text": "пристаням__стремятся__",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 389,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "__foo, __bar__, baz__\n",
+      "html": "<p><strong>foo, <strong>bar</strong>, baz</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo, bar, baz",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 390,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo-__(bar)__\n",
+      "html": "<p>foo-<strong>(bar)</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo-",
+          "style": "normal"
+        },
+        {
+          "text": "(bar)",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 391,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "**foo bar **\n",
+      "html": "<p>**foo bar **</p>\n",
+      "runs": [
+        {
+          "text": "**foo bar **",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 392,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "**(**foo)\n",
+      "html": "<p>**(**foo)</p>\n",
+      "runs": [
+        {
+          "text": "**(**foo)",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 393,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*(**foo**)*\n",
+      "html": "<p><em>(<strong>foo</strong>)</em></p>\n",
+      "runs": [
+        {
+          "text": "(",
+          "style": "emphasis"
+        },
+        {
+          "text": "foo",
+          "style": "strong_emphasis"
+        },
+        {
+          "text": ")",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 395,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "**foo \"*bar*\" foo**\n",
+      "html": "<p><strong>foo &quot;<em>bar</em>&quot; foo</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo \"",
+          "style": "strong"
+        },
+        {
+          "text": "bar",
+          "style": "strong_emphasis"
+        },
+        {
+          "text": "\" foo",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 396,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "**foo**bar\n",
+      "html": "<p><strong>foo</strong>bar</p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "strong"
+        },
+        {
+          "text": "bar",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 397,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "__foo bar __\n",
+      "html": "<p>__foo bar __</p>\n",
+      "runs": [
+        {
+          "text": "__foo bar __",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 398,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "__(__foo)\n",
+      "html": "<p>__(__foo)</p>\n",
+      "runs": [
+        {
+          "text": "__(__foo)",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 399,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "_(__foo__)_\n",
+      "html": "<p><em>(<strong>foo</strong>)</em></p>\n",
+      "runs": [
+        {
+          "text": "(",
+          "style": "emphasis"
+        },
+        {
+          "text": "foo",
+          "style": "strong_emphasis"
+        },
+        {
+          "text": ")",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 400,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "__foo__bar\n",
+      "html": "<p>__foo__bar</p>\n",
+      "runs": [
+        {
+          "text": "__foo__bar",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 401,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "__пристаням__стремятся\n",
+      "html": "<p>__пристаням__стремятся</p>\n",
+      "runs": [
+        {
+          "text": "__пристаням__стремятся",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 402,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "__foo__bar__baz__\n",
+      "html": "<p><strong>foo__bar__baz</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo__bar__baz",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 403,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "__(bar)__.\n",
+      "html": "<p><strong>(bar)</strong>.</p>\n",
+      "runs": [
+        {
+          "text": "(bar)",
+          "style": "strong"
+        },
+        {
+          "text": ".",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 406,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "_foo __bar__ baz_\n",
+      "html": "<p><em>foo <strong>bar</strong> baz</em></p>\n",
+      "runs": [
+        {
+          "text": "foo ",
+          "style": "emphasis"
+        },
+        {
+          "text": "bar",
+          "style": "strong_emphasis"
+        },
+        {
+          "text": " baz",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 407,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "_foo _bar_ baz_\n",
+      "html": "<p><em>foo <em>bar</em> baz</em></p>\n",
+      "runs": [
+        {
+          "text": "foo bar baz",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 408,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "__foo_ bar_\n",
+      "html": "<p><em><em>foo</em> bar</em></p>\n",
+      "runs": [
+        {
+          "text": "foo bar",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 409,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*foo *bar**\n",
+      "html": "<p><em>foo <em>bar</em></em></p>\n",
+      "runs": [
+        {
+          "text": "foo bar",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 410,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*foo **bar** baz*\n",
+      "html": "<p><em>foo <strong>bar</strong> baz</em></p>\n",
+      "runs": [
+        {
+          "text": "foo ",
+          "style": "emphasis"
+        },
+        {
+          "text": "bar",
+          "style": "strong_emphasis"
+        },
+        {
+          "text": " baz",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 411,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*foo**bar**baz*\n",
+      "html": "<p><em>foo<strong>bar</strong>baz</em></p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "emphasis"
+        },
+        {
+          "text": "bar",
+          "style": "strong_emphasis"
+        },
+        {
+          "text": "baz",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 412,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*foo**bar*\n",
+      "html": "<p><em>foo**bar</em></p>\n",
+      "runs": [
+        {
+          "text": "foo**bar",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 413,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "***foo** bar*\n",
+      "html": "<p><em><strong>foo</strong> bar</em></p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "strong_emphasis"
+        },
+        {
+          "text": " bar",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 414,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*foo **bar***\n",
+      "html": "<p><em>foo <strong>bar</strong></em></p>\n",
+      "runs": [
+        {
+          "text": "foo ",
+          "style": "emphasis"
+        },
+        {
+          "text": "bar",
+          "style": "strong_emphasis"
+        }
+      ]
+    },
+    {
+      "example": 415,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*foo**bar***\n",
+      "html": "<p><em>foo<strong>bar</strong></em></p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "emphasis"
+        },
+        {
+          "text": "bar",
+          "style": "strong_emphasis"
+        }
+      ]
+    },
+    {
+      "example": 416,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo***bar***baz\n",
+      "html": "<p>foo<em><strong>bar</strong></em>baz</p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "normal"
+        },
+        {
+          "text": "bar",
+          "style": "strong_emphasis"
+        },
+        {
+          "text": "baz",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 417,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo******bar*********baz\n",
+      "html": "<p>foo<strong><strong><strong>bar</strong></strong></strong>***baz</p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "normal"
+        },
+        {
+          "text": "bar",
+          "style": "strong"
+        },
+        {
+          "text": "***baz",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 418,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*foo **bar *baz* bim** bop*\n",
+      "html": "<p><em>foo <strong>bar <em>baz</em> bim</strong> bop</em></p>\n",
+      "runs": [
+        {
+          "text": "foo ",
+          "style": "emphasis"
+        },
+        {
+          "text": "bar baz bim",
+          "style": "strong_emphasis"
+        },
+        {
+          "text": " bop",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 420,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "** is not an empty emphasis\n",
+      "html": "<p>** is not an empty emphasis</p>\n",
+      "runs": [
+        {
+          "text": "** is not an empty emphasis",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 421,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "**** is not an empty strong emphasis\n",
+      "html": "<p>**** is not an empty strong emphasis</p>\n",
+      "runs": [
+        {
+          "text": "**** is not an empty strong emphasis",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 424,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "__foo _bar_ baz__\n",
+      "html": "<p><strong>foo <em>bar</em> baz</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo ",
+          "style": "strong"
+        },
+        {
+          "text": "bar",
+          "style": "strong_emphasis"
+        },
+        {
+          "text": " baz",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 425,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "__foo __bar__ baz__\n",
+      "html": "<p><strong>foo <strong>bar</strong> baz</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo bar baz",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 426,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "____foo__ bar__\n",
+      "html": "<p><strong><strong>foo</strong> bar</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo bar",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 427,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "**foo **bar****\n",
+      "html": "<p><strong>foo <strong>bar</strong></strong></p>\n",
+      "runs": [
+        {
+          "text": "foo bar",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 428,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "**foo *bar* baz**\n",
+      "html": "<p><strong>foo <em>bar</em> baz</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo ",
+          "style": "strong"
+        },
+        {
+          "text": "bar",
+          "style": "strong_emphasis"
+        },
+        {
+          "text": " baz",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 429,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "**foo*bar*baz**\n",
+      "html": "<p><strong>foo<em>bar</em>baz</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "strong"
+        },
+        {
+          "text": "bar",
+          "style": "strong_emphasis"
+        },
+        {
+          "text": "baz",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 430,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "***foo* bar**\n",
+      "html": "<p><strong><em>foo</em> bar</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "strong_emphasis"
+        },
+        {
+          "text": " bar",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 431,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "**foo *bar***\n",
+      "html": "<p><strong>foo <em>bar</em></strong></p>\n",
+      "runs": [
+        {
+          "text": "foo ",
+          "style": "strong"
+        },
+        {
+          "text": "bar",
+          "style": "strong_emphasis"
+        }
+      ]
+    },
+    {
+      "example": 434,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "__ is not an empty emphasis\n",
+      "html": "<p>__ is not an empty emphasis</p>\n",
+      "runs": [
+        {
+          "text": "__ is not an empty emphasis",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 435,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "____ is not an empty strong emphasis\n",
+      "html": "<p>____ is not an empty strong emphasis</p>\n",
+      "runs": [
+        {
+          "text": "____ is not an empty strong emphasis",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 436,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo ***\n",
+      "html": "<p>foo ***</p>\n",
+      "runs": [
+        {
+          "text": "foo ***",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 437,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo *\\**\n",
+      "html": "<p>foo <em>*</em></p>\n",
+      "runs": [
+        {
+          "text": "foo ",
+          "style": "normal"
+        },
+        {
+          "text": "*",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 438,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo *_*\n",
+      "html": "<p>foo <em>_</em></p>\n",
+      "runs": [
+        {
+          "text": "foo ",
+          "style": "normal"
+        },
+        {
+          "text": "_",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 439,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo *****\n",
+      "html": "<p>foo *****</p>\n",
+      "runs": [
+        {
+          "text": "foo *****",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 440,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo **\\***\n",
+      "html": "<p>foo <strong>*</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo ",
+          "style": "normal"
+        },
+        {
+          "text": "*",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 441,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo **_**\n",
+      "html": "<p>foo <strong>_</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo ",
+          "style": "normal"
+        },
+        {
+          "text": "_",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 442,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "**foo*\n",
+      "html": "<p>*<em>foo</em></p>\n",
+      "runs": [
+        {
+          "text": "*",
+          "style": "normal"
+        },
+        {
+          "text": "foo",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 443,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*foo**\n",
+      "html": "<p><em>foo</em>*</p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "emphasis"
+        },
+        {
+          "text": "*",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 444,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "***foo**\n",
+      "html": "<p>*<strong>foo</strong></p>\n",
+      "runs": [
+        {
+          "text": "*",
+          "style": "normal"
+        },
+        {
+          "text": "foo",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 445,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "****foo*\n",
+      "html": "<p>***<em>foo</em></p>\n",
+      "runs": [
+        {
+          "text": "***",
+          "style": "normal"
+        },
+        {
+          "text": "foo",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 446,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "**foo***\n",
+      "html": "<p><strong>foo</strong>*</p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "strong"
+        },
+        {
+          "text": "*",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 447,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*foo****\n",
+      "html": "<p><em>foo</em>***</p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "emphasis"
+        },
+        {
+          "text": "***",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 448,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo ___\n",
+      "html": "<p>foo ___</p>\n",
+      "runs": [
+        {
+          "text": "foo ___",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 449,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo _\\__\n",
+      "html": "<p>foo <em>_</em></p>\n",
+      "runs": [
+        {
+          "text": "foo ",
+          "style": "normal"
+        },
+        {
+          "text": "_",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 450,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo _*_\n",
+      "html": "<p>foo <em>*</em></p>\n",
+      "runs": [
+        {
+          "text": "foo ",
+          "style": "normal"
+        },
+        {
+          "text": "*",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 451,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo _____\n",
+      "html": "<p>foo _____</p>\n",
+      "runs": [
+        {
+          "text": "foo _____",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 452,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo __\\___\n",
+      "html": "<p>foo <strong>_</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo ",
+          "style": "normal"
+        },
+        {
+          "text": "_",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 453,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "foo __*__\n",
+      "html": "<p>foo <strong>*</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo ",
+          "style": "normal"
+        },
+        {
+          "text": "*",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 454,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "__foo_\n",
+      "html": "<p>_<em>foo</em></p>\n",
+      "runs": [
+        {
+          "text": "_",
+          "style": "normal"
+        },
+        {
+          "text": "foo",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 455,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "_foo__\n",
+      "html": "<p><em>foo</em>_</p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "emphasis"
+        },
+        {
+          "text": "_",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 456,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "___foo__\n",
+      "html": "<p>_<strong>foo</strong></p>\n",
+      "runs": [
+        {
+          "text": "_",
+          "style": "normal"
+        },
+        {
+          "text": "foo",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 457,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "____foo_\n",
+      "html": "<p>___<em>foo</em></p>\n",
+      "runs": [
+        {
+          "text": "___",
+          "style": "normal"
+        },
+        {
+          "text": "foo",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 458,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "__foo___\n",
+      "html": "<p><strong>foo</strong>_</p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "strong"
+        },
+        {
+          "text": "_",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 459,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "_foo____\n",
+      "html": "<p><em>foo</em>___</p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "emphasis"
+        },
+        {
+          "text": "___",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 460,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "**foo**\n",
+      "html": "<p><strong>foo</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 461,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*_foo_*\n",
+      "html": "<p><em><em>foo</em></em></p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 462,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "__foo__\n",
+      "html": "<p><strong>foo</strong></p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 463,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "_*foo*_\n",
+      "html": "<p><em><em>foo</em></em></p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 464,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "****foo****\n",
+      "html": "<p><strong><strong>foo</strong></strong></p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 465,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "____foo____\n",
+      "html": "<p><strong><strong>foo</strong></strong></p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 466,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "******foo******\n",
+      "html": "<p><strong><strong><strong>foo</strong></strong></strong></p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 467,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "***foo***\n",
+      "html": "<p><em><strong>foo</strong></em></p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "strong_emphasis"
+        }
+      ]
+    },
+    {
+      "example": 468,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "_____foo_____\n",
+      "html": "<p><em><strong><strong>foo</strong></strong></em></p>\n",
+      "runs": [
+        {
+          "text": "foo",
+          "style": "strong_emphasis"
+        }
+      ]
+    },
+    {
+      "example": 469,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*foo _bar* baz_\n",
+      "html": "<p><em>foo _bar</em> baz_</p>\n",
+      "runs": [
+        {
+          "text": "foo _bar",
+          "style": "emphasis"
+        },
+        {
+          "text": " baz_",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 470,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*foo __bar *baz bim__ bam*\n",
+      "html": "<p><em>foo <strong>bar *baz bim</strong> bam</em></p>\n",
+      "runs": [
+        {
+          "text": "foo ",
+          "style": "emphasis"
+        },
+        {
+          "text": "bar *baz bim",
+          "style": "strong_emphasis"
+        },
+        {
+          "text": " bam",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 471,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "**foo **bar baz**\n",
+      "html": "<p>**foo <strong>bar baz</strong></p>\n",
+      "runs": [
+        {
+          "text": "**foo ",
+          "style": "normal"
+        },
+        {
+          "text": "bar baz",
+          "style": "strong"
+        }
+      ]
+    },
+    {
+      "example": 472,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*foo *bar baz*\n",
+      "html": "<p>*foo <em>bar baz</em></p>\n",
+      "runs": [
+        {
+          "text": "*foo ",
+          "style": "normal"
+        },
+        {
+          "text": "bar baz",
+          "style": "emphasis"
+        }
+      ]
+    },
+    {
+      "example": 478,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "*a `*`*\n",
+      "html": "<p><em>a <code>*</code></em></p>\n",
+      "runs": [
+        {
+          "text": "a ",
+          "style": "emphasis"
+        },
+        {
+          "text": "*",
+          "style": "code"
+        }
+      ]
+    },
+    {
+      "example": 479,
+      "section": "Emphasis and strong emphasis",
+      "markdown": "_a `_`_\n",
+      "html": "<p><em>a <code>_</code></em></p>\n",
+      "runs": [
+        {
+          "text": "a ",
+          "style": "emphasis"
+        },
+        {
+          "text": "_",
+          "style": "code"
+        }
+      ]
+    },
+    {
+      "example": 650,
+      "section": "Textual content",
+      "markdown": "hello $.;'there\n",
+      "html": "<p>hello $.;'there</p>\n",
+      "runs": [
+        {
+          "text": "hello $.;'there",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 651,
+      "section": "Textual content",
+      "markdown": "Foo χρῆν\n",
+      "html": "<p>Foo χρῆν</p>\n",
+      "runs": [
+        {
+          "text": "Foo χρῆν",
+          "style": "normal"
+        }
+      ]
+    },
+    {
+      "example": 652,
+      "section": "Textual content",
+      "markdown": "Multiple     spaces\n",
+      "html": "<p>Multiple     spaces</p>\n",
+      "runs": [
+        {
+          "text": "Multiple     spaces",
+          "style": "normal"
+        }
+      ]
+    }
+  ]
+}
