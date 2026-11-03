@@ -949,7 +949,7 @@ static void release_reconnect(ReconnectJob *job) {
   anvil_ipc_pipe_close(&job->pipe);
   if (job->process) CloseHandle(job->process);
   free(job->userdir); free(job->project); free(job->shell); free(job->cwd); free(job->datadir); free(job->revive_from);
-  if (job->environment) FreeEnvironmentStringsW(job->environment);
+  if (job->environment) HeapFree(GetProcessHeap(), 0, job->environment);
   DeleteCriticalSection(&job->lock);
   free(job);
 }
@@ -1015,6 +1015,54 @@ static bool start_reconnect(TerminalSession *session, bool wait_for_exit) {
   return true;
 }
 
+/* A process keeps the PATH it started with, so a PATH change in Windows never reaches it.
+   New shells read the PATH from the registry instead. Free the result with HeapFree. */
+static wchar_t *registry_path(HKEY root, const wchar_t *subkey) {
+  HKEY key;
+  if (RegOpenKeyExW(root, subkey, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS) return NULL;
+  DWORD type = 0, bytes = 0;
+  wchar_t *raw = NULL, *expanded = NULL;
+  if (RegQueryValueExW(key, L"Path", NULL, &type, NULL, &bytes) == ERROR_SUCCESS &&
+      (type == REG_SZ || type == REG_EXPAND_SZ) && (raw = calloc(bytes / sizeof(wchar_t) + 1, sizeof(wchar_t))) &&
+      RegQueryValueExW(key, L"Path", NULL, NULL, (BYTE *)raw, &bytes) == ERROR_SUCCESS) {
+    DWORD chars = ExpandEnvironmentStringsW(raw, NULL, 0);
+    expanded = chars ? calloc(chars, sizeof(wchar_t)) : NULL;
+    if (expanded && !ExpandEnvironmentStringsW(raw, expanded, chars)) { free(expanded); expanded = NULL; }
+  }
+  free(raw);
+  RegCloseKey(key);
+  return expanded;
+}
+
+static wchar_t *terminal_launch_environment(void) {
+  wchar_t *inherited = GetEnvironmentStringsW();
+  if (!inherited) return NULL;
+  wchar_t *machine = registry_path(HKEY_LOCAL_MACHINE,
+    L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment");
+  wchar_t *user = registry_path(HKEY_CURRENT_USER, L"Environment");
+  bool replace_path = machine || user;
+  size_t chars = 2 + 5 + (machine ? wcslen(machine) : 0) + (user ? wcslen(user) : 0) + 2;
+  for (const wchar_t *entry = inherited; *entry; entry += wcslen(entry) + 1) chars += wcslen(entry) + 1;
+  wchar_t *block = HeapAlloc(GetProcessHeap(), 0, chars * sizeof(wchar_t));
+  if (block) {
+    wchar_t *out = block;
+    for (const wchar_t *entry = inherited; *entry; entry += wcslen(entry) + 1) {
+      if (replace_path && _wcsnicmp(entry, L"Path=", 5) == 0) continue;
+      size_t length = wcslen(entry) + 1;
+      memcpy(out, entry, length * sizeof(wchar_t));
+      out += length;
+    }
+    if (replace_path)
+      out += _snwprintf(out, chars - (size_t)(out - block), L"Path=%ls%ls%ls",
+        machine ? machine : L"", machine && user ? L";" : L"", user ? user : L"") + 1;
+    *out = L'\0';
+  }
+  free(machine);
+  free(user);
+  FreeEnvironmentStringsW(inherited);
+  return block;
+}
+
 static bool start_launch(TerminalSession *session, const char *id, const char *path,
                          const char *userdir, const char *project, const char *shell,
                          const char *cwd, const char *datadir) {
@@ -1029,7 +1077,7 @@ static bool start_launch(TerminalSession *session, const char *id, const char *p
   job->userdir = _strdup(userdir); job->project = _strdup(project);
   job->shell = _strdup(shell ? shell : ""); job->cwd = _strdup(cwd ? cwd : "");
   job->datadir = _strdup(datadir); job->revive_from = path ? _strdup(path) : NULL;
-  job->environment = GetEnvironmentStringsW();
+  job->environment = terminal_launch_environment();
   job->prepared = session->prepared;
   job->size = (AnvilTerminalSize){ session->cols, session->rows, session->cell_width, session->cell_height };
   job->scrollback_lines = session->scrollback_lines; job->has_scrollback_lines = session->has_scrollback_lines;
@@ -1089,7 +1137,7 @@ static void terminate_terminal_process(TerminalSession *session) {
 static void close_session(TerminalSession *session) {
   if (!session || session->closed) return;
   session->closed = true;
-  if (session->prepared_environment) FreeEnvironmentStringsW(session->prepared_environment);
+  if (session->prepared_environment) HeapFree(GetProcessHeap(), 0, session->prepared_environment);
   session->prepared_environment = NULL;
   uint16_t final_type = session->prepared ? ANVIL_TERMINAL_CLOSE : session->ended ? ANVIL_TERMINAL_END
     : session->detached ? ANVIL_TERMINAL_DETACH : ANVIL_TERMINAL_CLOSE;
@@ -2116,7 +2164,7 @@ static int f_terminal_stats(lua_State *L) {
 
 static int f_terminal_activate(lua_State *L) {
   TerminalSession *session = check_session(L, 1);
-  wchar_t *current = GetEnvironmentStringsW();
+  wchar_t *current = terminal_launch_environment();
   bool same_environment = current && session->prepared_environment;
   if (same_environment) {
     const wchar_t *a = current, *b = session->prepared_environment;
@@ -2125,13 +2173,13 @@ static int f_terminal_activate(lua_State *L) {
       a += wcslen(a) + 1; b += wcslen(b) + 1;
     }
   }
-  if (current) FreeEnvironmentStringsW(current);
+  if (current) HeapFree(GetProcessHeap(), 0, current);
   bool ok = session->prepared && session->state == TERMINAL_STATE_RUNNING && session->replay_finished &&
     same_environment && !session->transport_released && enqueue_record(session, ANVIL_TERMINAL_ACTIVATE, NULL, 0);
   if (ok) {
     session->prepared = false;
     session->activated_prepared = true;
-    FreeEnvironmentStringsW(session->prepared_environment); session->prepared_environment = NULL;
+    HeapFree(GetProcessHeap(), 0, session->prepared_environment); session->prepared_environment = NULL;
   }
   lua_pushboolean(L, ok);
   return 1;

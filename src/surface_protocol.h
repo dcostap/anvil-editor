@@ -168,7 +168,8 @@ typedef struct {
 typedef enum {
   ANVIL_SURFACE_PANE_ROUTE_SELECT = 1,
   ANVIL_SURFACE_PANE_ROUTE_DIRECT = 2,
-  ANVIL_SURFACE_PANE_ROUTE_POINTER = 3
+  ANVIL_SURFACE_PANE_ROUTE_POINTER = 3,
+  ANVIL_SURFACE_PANE_ROUTE_SIDEBAR = 4
 } AnvilSurfacePaneRoute;
 typedef struct {
   uint32_t route;

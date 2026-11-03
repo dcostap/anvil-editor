@@ -159,6 +159,28 @@ test.describe("Sidebar title tooltips", function()
       test.ok(box.x >= 0 and box.x + box.w <= view.width, "The tooltip leaves the Sidebar")
     end)
   end)
+
+  test.it("dismisses a title tooltip when its Context Menu opens", function()
+    local view = sidebar([[C:\tools\tool.exe]])
+    local y = row_y(view, "tab")
+    local function tooltip_text()
+      local texts = {}
+      view.clock = system.get_time() + 10
+      with_renderer({draw_text = function(_, text) texts[#texts + 1] = text end}, function()
+        view:draw_tooltip(view.width, view.view_h)
+      end)
+      return table.concat(texts)
+    end
+    view:on_mouse_moved(100, y)
+    test.not_equal(tooltip_text(), "", "The title tooltip did not appear")
+    view:on_mouse_pressed("right", 100, y)
+    test.equal(tooltip_text(), "", "The tooltip stayed behind the Context Menu")
+    -- A model refresh must not restore the old hover while the menu takes pointer input.
+    view:rebuild_rows()
+    test.equal(tooltip_text(), "")
+    view:on_mouse_moved(100, y)
+    test.not_equal(tooltip_text(), "", "A new hover did not restore the tooltip")
+  end)
 end)
 
 test.describe("Sidebar list actions", function()
@@ -379,12 +401,12 @@ test.describe("Sidebar list actions", function()
     test.same(actions[#actions], {"request", "select", "C:/B", {action="focus", pane="b"}})
   end)
 
-  test.it("does not select an empty loaded Project when clicked", function()
+  test.it("selects an empty loaded Project and requests its initial Pane when clicked", function()
     local actions, action = recorder()
     local view = SidebarView(action)
     view:set_model({{row_id=7,path="C:/A",state="ready",panes={},terminals={}}})
     view:on_mouse_pressed("left", 60, row_y(view, "project"))
-    test.same(actions, {})
+    test.same(actions, {{"request", "select", "C:/A", {action="open_project"}}})
   end)
 
   test.it("toggles the Selected Project's children when its row is clicked", function()

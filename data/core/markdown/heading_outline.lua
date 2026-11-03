@@ -308,10 +308,10 @@ end
 -- The current entry's text color. While the marker glides, the entry that it
 -- leaves dims as the entry that it reaches brightens. At most two entries are
 -- between those colors, one with an odd index and one with an even index.
-local function entry_color(state, index, row_h, dim, bright)
+local function entry_color(state, index, row_h, offset, dim, bright)
   local marker = state.marker
   if not marker.alpha then return dim end
-  local near = 1 - math.abs(marker.y + marker.h / 2 - (index - 0.5) * row_h) / row_h
+  local near = 1 - math.abs(marker.y + marker.h / 2 + offset - (index - 0.5) * row_h) / row_h
   local amount = common.clamp(near, 0, 1) * marker.alpha
   if amount <= 0 then return dim end
   if amount >= 1 then return bright end
@@ -336,7 +336,11 @@ local function animate(view)
   view:move_towards(state, "offset", layout.offset_target, 0.25, TRANSITION)
   if layout.current then
     local marker_h = math.floor(layout.row_h * MARKER_HEIGHT)
-    state.marker:step((layout.current - 1) * layout.row_h + math.floor((layout.row_h - marker_h) / 2), marker_h)
+    -- Animate in the visible column, not the scrolling list. Two sections in
+    -- its middle share one marker position while the headings move past it.
+    -- Independent content-space animations can send the marker offscreen.
+    state.marker:step((layout.current - 1) * layout.row_h - layout.offset_target
+      + math.floor((layout.row_h - marker_h) / 2), marker_h)
   else
     state.marker:step()
   end
@@ -355,13 +359,13 @@ function heading_outline.draw(view)
   core.push_clip_rect(layout.x, layout.y, layout.w, layout.h)
   renderer.draw_rect(layout.x + math.floor((marker_w - track_w) / 2), list_top,
     track_w, layout.content_h, faded(state, "track_color", style.divider, alpha))
-  state.marker:draw(layout.x, list_top, marker_w, marker_w / 2, faded(state, "marker_color", style.accent, alpha))
+  state.marker:draw(layout.x, layout.y, marker_w, marker_w / 2, faded(state, "marker_color", style.accent, alpha))
   local dim = faded(state, "dim_color", style.dim, alpha)
   local bright = faded(state, "bright_color", style.text, alpha)
   local text_y = math.floor((layout.row_h - font:get_height()) / 2)
   for index, entry in ipairs(layout.entries) do
     if entry.y + entry.h >= layout.y and entry.y <= layout.y + layout.h then
-      local color = index == state.hover and bright or entry_color(state, index, layout.row_h, dim, bright)
+      local color = index == state.hover and bright or entry_color(state, index, layout.row_h, layout.offset, dim, bright)
       renderer.draw_text(font, entry.shown_title, entry.text_x, entry.y + text_y, color)
     end
   end

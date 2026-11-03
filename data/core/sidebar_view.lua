@@ -13,7 +13,7 @@ local icons = require("core.context_menu").icons
 -- The shell owns identity and lifecycle. This view sends only Project, Pane and Terminal Session actions.
 -- A right-click on a Project or a Terminal Tab, or the Context Menu key on the cursor's row, opens that row's
 -- Context Menu. The menu can extend over the Project, because the Sidebar's surface covers the whole Window.
--- A click on a loaded Project in this Window toggles its children without selecting it.
+-- A click on a loaded Project in this Window toggles its children. An empty Project opens its initial Pane.
 -- Dormant Projects and Projects in other Windows open on click.
 -- Left on a collapsed loaded Project asks to unload it. A second Left unloads it; any other input cancels.
 -- Layout: a search field below the window caption, then the main list: loaded Projects with their Tabs, one for
@@ -331,6 +331,8 @@ function SidebarView:open_menu(row, x, y, button)
   if not items then return false end
   self.focus_pending = nil
   self.unload_ask = nil
+  -- The menu takes pointer input, so end the row's hover until the pointer returns.
+  self:on_mouse_left()
   self.action("menu", items, x, y, button, row.project.row_id)
   return true
 end
@@ -353,12 +355,32 @@ end
 -- Snoozes the Pane `target` for `hours` from now, or removes its Snooze for nil. The time is saved first, so the
 -- Project finds it when it snoozes or wakes the Pane.
 function SidebarView:set_snooze(target, hours)
+  return self:set_snooze_until(target, hours and os.time() + hours * 60 * 60 or nil)
+end
+
+function SidebarView:set_snooze_until(target, time)
   local session = target.session
-  self.snoozes[session] = hours and os.time() + hours * 60 * 60 or nil
-  core.log_quiet("Sidebar Snooze: session=%s Pane=%s hours=%s", session, tostring(target.pane), tostring(hours))
+  self.snoozes[session] = time
+  core.log_quiet("Sidebar Snooze: session=%s Pane=%s until=%s", session, tostring(target.pane), tostring(time))
   self.action("snooze", session)
-  self.action("request", "direct", target.path, {action = hours and "snooze" or "unsnooze", pane = target.pane})
+  self.action("request", "direct", target.path, {action = time and "snooze" or "unsnooze", pane = target.pane})
   self:rebuild_rows()
+end
+
+-- Agent control requests use absolute times, so delivery does not extend the requested Snooze.
+function SidebarView:on_snooze_request(text)
+  local ok, request = pcall(require("core.json").decode, text)
+  if not ok or type(request) ~= "table" or request.action ~= "snooze"
+    or type(request.path) ~= "string" or request.path == ""
+    or type(request.pane) ~= "string" or request.pane == ""
+    or type(request.session) ~= "string" or request.session == ""
+    or request.until_time ~= nil and (type(request.until_time) ~= "number"
+      or request.until_time <= 0 or request.until_time % 1 ~= 0) then
+    core.log_quiet("Sidebar Snooze request rejected")
+    return false
+  end
+  self:set_snooze_until(request, request.until_time)
+  return true
 end
 
 -- Closes the hours field. With `accept`, a whole number of hours above zero sets the Snooze; other text keeps
@@ -370,6 +392,11 @@ function SidebarView:close_hours(accept)
   self.hours = nil
   if count then self:set_snooze(hours.target, count) else self:rebuild_rows() end
   if hours.return_focus then self.action("return_focus") end
+end
+
+local function in_other_window(project, window_id)
+  local owner = project and project.window_id
+  return window_id and owner and owner ~= 0 and owner ~= window_id
 end
 
 -- The shell keeps a Window's old selection until a chosen Pane renders, and opens a Terminal Session's Pane after
@@ -388,7 +415,12 @@ end
 function SidebarView:activate_row(row, from_keyboard)
   if not row then return end
   if row.kind == "project" or row.kind == "tab" or row.kind == "terminal" then self:choose(row, from_keyboard) end
-  if row.kind == "project" then self.action("select", row.project.row_id)
+  if row.kind == "project" then
+    if row.project.state == "ready" and not row.key and not in_other_window(row.project, self.window_id) then
+      self.action("request", "select", row.project.path, {action = "open_project"})
+    else
+      self.action("select", row.project.row_id)
+    end
   elseif row.kind == "tab" then self.action("request", "select", row.project.path, {action = "focus", pane = row.tab.id})
   elseif row.kind == "terminal" then self.action("select_terminal", row.project.row_id, row.terminal.id)
   elseif row.key then self:toggle(row.key, row.collapsed) end
@@ -572,11 +604,6 @@ local function age_bucket(activity, now)
   local age = now - activity
   if age < WEEK then return "week" end
   return age < MONTH and "month" or "older"
-end
-
-local function in_other_window(project, window_id)
-  local owner = project and project.window_id
-  return window_id and owner and owner ~= 0 and owner ~= window_id
 end
 
 function SidebarView:is_collapsed(key, default)
@@ -1067,8 +1094,9 @@ function SidebarView:on_mouse_pressed(button, x, y)
     return
   end
   if row.kind ~= "project" then return end
-  if button == "left" and row.project.state ~= "dormant" and not in_other_window(row.project, self.window_id) then
-    if row.key then self:toggle(row.key, row.collapsed) end
+  if button == "left" and row.project.state ~= "dormant" and row.key
+    and not in_other_window(row.project, self.window_id) then
+    self:toggle(row.key, row.collapsed)
     return
   end
   if button == "middle" then

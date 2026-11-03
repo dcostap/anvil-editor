@@ -2280,7 +2280,7 @@ static int f_set_project_panes(lua_State *L) {
 }
 
 static int f_pane_request(lua_State *L) {
-  static const char *const routes[] = {"select", "direct", "pointer", NULL};
+  static const char *const routes[] = {"select", "direct", "pointer", "sidebar", NULL};
   uint32_t route = 1 + luaL_checkoption(L, 1, NULL, routes);
   size_t path_size = 0, text_size = 0;
   const char *path = route == ANVIL_SURFACE_PANE_ROUTE_POINTER ? NULL : luaL_checklstring(L, 2, &path_size);

@@ -670,6 +670,29 @@ local function set_history_index(pane, index, opts)
   if index == history.index and not (opts and opts.restore_current) then return pane.current_view end
   local old = pane.current_view
   local next_view = history.entries[index].view
+  if old ~= next_view and old.can_suspend and old:can_suspend() == false
+      and not M.constraint(pane) then
+    local entry = history.entries[index]
+    local result
+    local function approved()
+      if not M.contains(pane) or pane.current_view ~= old then return end
+      local found = false
+      for _, candidate in ipairs(history.entries) do
+        if candidate == entry then found = true; break end
+      end
+      if not found then return end
+      quiet("Navigation History: closing non-suspendable View in %s before traversal", pane.id)
+      if not M.close_view(pane, { view = old, keep_pane = true, force = true, focus = false }) then return end
+      for target, candidate in ipairs(history.entries) do
+        if candidate == entry then
+          result = set_history_index(pane, target, { restore_current = true, focus = not opts or opts.focus })
+          return
+        end
+      end
+    end
+    if old.can_close then old:can_close(approved) else approved() end
+    return result
+  end
   if old ~= next_view then
     history.entries[history.index].state = capture_navigation_state(old)
   end
@@ -868,13 +891,19 @@ function M.move_and_merge(source_target, destination_target)
   if not M.accepts(destination, source.current_view) then
     return nil, "Pane owners are incompatible"
   end
+  local disposable = M.is_disposable(destination)
+  local current = destination.current_view
+  if not disposable and current.can_suspend and current:can_suspend() == false then
+    quiet("Pane merge: %s cannot suspend its Current View", destination.id)
+    return nil, "Destination View cannot be suspended"
+  end
 
   source.history.entries[source.history.index].state = capture_navigation_state(source.current_view)
   destination.history.entries[destination.history.index].state =
     capture_navigation_state(destination.current_view)
 
   local destination_entries = destination.history.entries
-  if M.is_disposable(destination) then
+  if disposable then
     local placeholder = destination.current_view
     call_lifecycle(placeholder, "on_suspend")
     release_view(destination, placeholder)

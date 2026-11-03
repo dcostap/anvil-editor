@@ -700,6 +700,13 @@ test.describe("line wrapping visual navigation", function()
     line, col = buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, #buffer.lines[1])
+
+    buffer:set_selection(1, 12, 1, 12)
+    command.perform("core:select_to_end_of_line")
+    test.same({ buffer:get_selection() }, { 1, 17, 1, 12 })
+
+    command.perform("core:select_to_end_of_line")
+    test.same({ buffer:get_selection() }, { 1, #buffer.lines[1], 1, 12 })
   end)
 
   test.it("deletes to wrapped visual row boundaries", function(context)

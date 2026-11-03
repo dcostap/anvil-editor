@@ -46,6 +46,10 @@ local function find_runtime(name)
   else
     candidates[1] = home .. "/.bun/bin/bun.exe"
     candidates[2] = localappdata .. "/Microsoft/WinGet/Links/bun.exe"
+    local packages = localappdata .. "/Microsoft/WinGet/Packages"
+    for _, entry in ipairs(system.list_dir(packages) or {}) do
+      if entry:find("^Oven%-sh%.Bun_") then candidates[#candidates + 1] = packages .. "/" .. entry .. "/bun-windows-x64/bun.exe" end
+    end
   end
   for _, path in ipairs(candidates) do
     if system.get_file_info(path) then return path end
@@ -147,7 +151,7 @@ test.describe("Terminal agent resume", function()
         local saved
         test.ok(wait_for(view, function()
           saved = record(state.session_id)
-          return saved.agent_step ~= nil
+          return saved.agent_step == "bash: npm test"
         end, 15), "Pi's step is missing: " .. screen_text(view))
         test.equal(saved.agent_step, "bash: npm test")
         test.equal(saved.agent_state, "working")
@@ -155,7 +159,7 @@ test.describe("Terminal agent resume", function()
           saved = record(state.session_id)
           return saved.agent_model == "GPT Test" and view.agent_model == "GPT Test"
         end, 15), "Pi's selected model is missing")
-        for _, name in ipairs {"Claude Test", "Fable Test", "Other Model"} do
+        for _, name in ipairs {"Other Model", "Fable Test", "Claude Test"} do
           test.ok(view.session:write(name .. "\r"))
           test.ok(wait_for(view, function()
             saved = record(state.session_id)
@@ -166,9 +170,18 @@ test.describe("Terminal agent resume", function()
           local item = require("core.tab").describe({current_view=view}, 1)
           test.equal(item.terminal.model, name)
         end
+        test.ok(view.session:write("suspend\r"))
+        test.ok(wait_for(view, function()
+          return screen_text(view):find("FAKE_PI_RESUMED", 1, true)
+        end, 15), "Pi did not return from its external program")
+        test.ok(wait_for(view, function()
+          saved = record(state.session_id)
+          return saved.agent_model == "Claude Test" and view.agent_model == "Claude Test"
+        end, 15), "Pi lost its selected model after its terminal resumed")
+        test.equal(require("core.tab").describe({current_view=view}, 1).terminal.model, "Claude Test")
         test.ok(view.session:write("idle\r"))
         test.ok(wait_for(view, function() return record(state.session_id).agent_state == "idle" end, 15))
-        test.equal(record(state.session_id).agent_model, "Other Model", "An idle Pi lost its selected model")
+        test.equal(record(state.session_id).agent_model, "Claude Test", "An idle Pi lost its selected model")
       end)
       view:on_close()
       test.ok(ok, err)

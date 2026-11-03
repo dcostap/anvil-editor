@@ -52,6 +52,63 @@ test.describe("Agent editor control", function()
     test.is_nil(panes.find(pane.id))
   end)
 
+  test.it("sets and removes the caller's Snooze through the Sidebar without taking another Pane's focus", function()
+    local storage = require "core.storage"
+    local SidebarView = require "core.sidebar_view"
+    local snoozes, requests = {}, 0
+    local source = panes.create {factory = function()
+      local view = View()
+      view.terminal_view, view.session_id = true, "caller-terminal"
+      function view:close_status() return {} end
+      return view
+    end}
+    local focused = panes.create {factory = function() return View() end}
+    panes.focus(focused)
+    local sidebar = SidebarView(function(action, route, path, value)
+      if action == "snooze" then storage.save("sidebar", "snoozes", snoozes)
+      elseif action == "request" then
+        test.equal(route, "direct")
+        test.equal(path, control.project)
+        core.on_event("panerequest", require("core.common").serialize(value, {escape = true}), -1, -1, 0)
+      end
+    end, {}, {}, false, snoozes)
+    local send = system.pane_request
+    system.pane_request = function(route, path, text)
+      test.equal(route, "sidebar")
+      test.equal(path, control.project)
+      requests = requests + 1
+      return sidebar:on_snooze_request(text)
+    end
+    local ok, err = pcall(function()
+      local before = os.time()
+      local args = {action = "set", seconds = 5 * 3600, request_id = "snooze-self"}
+      local result = control:call("snooze", args, "caller-terminal")
+      test.equal(result.status, "accepted")
+      test.equal(result.pane, source.id)
+      test.equal(result.terminal, "caller-terminal")
+      test.ok(result.until_time >= before + 5 * 3600 and result.until_time <= os.time() + 5 * 3600)
+      test.equal(storage.load("sidebar", "snoozes")["caller-terminal"], result.until_time)
+      test.ok(panes.is_snoozed(source))
+      test.equal(panes.active(), focused)
+      test.ok(control:call("workspace_state", {}, "caller-terminal").panes[source.id].snoozed)
+      test.same(control:call("snooze", args, "caller-terminal"), result)
+      test.equal(requests, 1, "A retry must not extend or resend the Snooze")
+      control:call("snooze", {action = "remove", pane = source.id, request_id = "wake"}, "local")
+      test.is_nil(storage.load("sidebar", "snoozes")["caller-terminal"])
+      test.not_ok(panes.is_snoozed(source))
+      test.equal(panes.active(), focused)
+      test.equal(pcall(function()
+        control:call("snooze", {action = "set", seconds = 60, pane = focused.id, request_id = "file"}, "local")
+      end), false, "A file Pane cannot snooze")
+      test.equal(pcall(function()
+        control:call("snooze", {action = "set", seconds = 60, request_id = "no-caller"}, "local")
+      end), false, "A client without a Terminal must name a target")
+    end)
+    system.pane_request = send
+    storage.clear("sidebar", "snoozes")
+    assert(ok, err)
+  end)
+
   test.it("sends a task once to the selected Pi instance and keeps its result", function()
     control:exchange("terminal-b", {instance = "pi-one", session = "session.jsonl", busy = false,
       receipts = {}, tasks = {}})

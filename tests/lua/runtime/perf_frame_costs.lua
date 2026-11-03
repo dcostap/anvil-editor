@@ -7,7 +7,7 @@ local Buffer = require "core.buffer"
 local panes = require "core.panes"
 
 test.describe("performance frame cost report", function()
-  local frames, original_stats, original_diff_layout
+  local frames, original_stats, original_diff_layout, recording_root
   test.after_each(function()
     if perf.is_recording() then perf.stop_recording() end
     if original_diff_layout then
@@ -21,6 +21,10 @@ test.describe("performance frame cost report", function()
         "_file_opens.csv", "_lua_samples.csv", "_api_calls.csv", "_details.csv", "_native.csv" } do
         os.remove(frames:gsub("_frames%.csv$", suffix))
       end
+    end
+    if recording_root then
+      test.ok(test.remove_tree(recording_root))
+      recording_root = nil
     end
   end)
 
@@ -42,6 +46,28 @@ test.describe("performance frame cost report", function()
     test.match(text, "target_fps=165")
     test.match(text, "Recording overhead")
     test.match(text, "Renderer paths: test")
+  end)
+
+  test.it("writes redraw interval statistics after a long recording", function()
+    recording_root = USERDIR .. PATHSEP .. "perf-long-recording"
+    test.ok(require("core.common").mkdirp(recording_root))
+    original_stats = renderer.get_last_frame_stats
+    renderer.get_last_frame_stats = function() return {} end
+    frames = perf.start_recording {
+      base_path = recording_root .. PATHSEP .. "capture", quiet = true, instruction_samples = false,
+    }
+    -- More redraws than LuaJIT can return as one list of function results.
+    local snapshot = { did_redraw = true, target_fps = 60 }
+    for i = 0, 20000 do
+      snapshot.time = i / 100
+      perf.on_frame(snapshot)
+    end
+    local path = perf.stop_recording()
+    local file = assert(io.open(path, "rb"))
+    local text = file:read("*a")
+    file:close()
+    test.contains(text, "Redraw frames: 20001")
+    test.contains(text, "p50 10.000 p90 10.000 p95 10.000 p99 10.000 max 10.000")
   end)
 
   test.it("writes an isolated capture without changing the clipboard or debug hook", function()

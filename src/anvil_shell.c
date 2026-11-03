@@ -3953,6 +3953,13 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     path[request->path_size] = 0;
     const char *text = bytes + request->path_size;
     uint32_t text_size = message->size - sizeof(*request) - request->path_size;
+    if (request->route == ANVIL_SURFACE_PANE_ROUTE_SIDEBAR) {
+      AnvilSurfacePaneDelivery delivery = {-1, -1};
+      if (!window->closing && !project->sidebar && shell.sidebar_process && shell.sidebar_process->connected)
+        shell_send(shell.sidebar_process, ANVIL_SURFACE_MSG_PANE_ACTION, &delivery, sizeof(delivery), text, text_size);
+      else SDL_Log("Shell dropped a Sidebar Pane request: Sidebar unavailable");
+      break;
+    }
     if (request->route == ANVIL_SURFACE_PANE_ROUTE_SELECT && !window->closing) {
       if (!select_pane_path(window, path, text, text_size)) SDL_Log("Shell dropped a Pane selection request");
       break;

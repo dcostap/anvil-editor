@@ -405,7 +405,7 @@ _Avoid_: Pane number, Tab number
 A Pane with an Unread Result, an agent waiting for an answer, or an ended Snooze. The first five Pending Panes have numbers 1 to 5 across Projects and Anvil Windows, oldest pending event first. Reading a result removes it from the queue. An agent waiting for an answer stays pending until it stops waiting.
 
 **Constrained Pane**:
-A Pane dedicated to one owner, such as a Git Log, commit comparison, or nonempty Untitled Editor.
+A Pane dedicated to one owner, such as a Git Log or commit comparison.
 Its Navigation History contains only Views related to that owner, including its text captures.
 
 **Unconstrained Pane**:
@@ -468,7 +468,7 @@ The retention of a non-current View through Pane Navigation History without clos
 _Avoid_: hidden tab, background tab
 
 **Untitled Editor**:
-An Editor showing an Untitled Buffer. It must close instead of entering View Suspension when another View replaces it.
+An Editor showing an Untitled Buffer. It must close before another View takes its place, including through Navigation History. Unsaved changes require confirmation.
 _Avoid_: scratch Editor, unnamed Editor
 
 **Focused View**:
@@ -644,12 +644,15 @@ _Avoid_: agent conversation, Pi session file
 What a coding agent in a Terminal Session reports about itself: working, waiting for an answer, done, failed, or idle. While it works, it also reports its current step, such as thinking or running a command. The Project Sidebar shows the Agent Status on a second line of the agent's Tab. The status ends when the agent ends.
 _Avoid_: agent state, program status, agent activity
 
+**Anvil Integration**:
+The connection that lets a coding agent work with Anvil's Projects, Panes and Terminal Sessions. A Snooze request refers to the agent's own Terminal Session unless the user names another target.
+
 **Unread Result**:
 An agent's done or failed Agent Status, or a terminal bell, that came after the user last looked at its Terminal Session. The user looks at a Terminal Session when its Tab is the active Tab of a Selected Project.
 _Avoid_: notification, unseen result, badge
 
 **Snooze**:
-A time until which a Terminal's Pane is a Snoozed Pane. Until then, the Terminal Session needs nothing: its Unread Result, its agent's question, and its bell wait. Looking at it earlier does not end the Snooze; only the user can remove it. At that time, the Pane returns to the work area and needs the user until the user looks at it, even when nothing else happened.
+A time until which a Terminal's Pane is a Snoozed Pane. Until then, the Terminal Session needs nothing: its Unread Result, its agent's question, and its bell wait. Looking at it earlier does not end the Snooze; the user or an agent acting on request can remove it. At that time, the Pane returns to the work area and needs the user until the user looks at it, even when nothing else happened.
 _Avoid_: Reminder, timer
 
 **Snoozed Pane**:

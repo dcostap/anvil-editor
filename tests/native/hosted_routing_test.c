@@ -199,6 +199,8 @@ static int pane_payloads(void) {
   CHECK(anvil_surface_pane_request_valid(&packet, size));
   packet.request.route = ANVIL_SURFACE_PANE_ROUTE_DIRECT;
   CHECK(anvil_surface_pane_request_valid(&packet, size));
+  packet.request.route = ANVIL_SURFACE_PANE_ROUTE_SIDEBAR;
+  CHECK(anvil_surface_pane_request_valid(&packet, size));
   packet.request.x = 1;
   CHECK(!anvil_surface_pane_request_valid(&packet, size));
   packet.request.x = 0;
@@ -320,6 +322,24 @@ int main(int test_argc, char **test_argv) {
     CHECK(x == 30.5f && y == 40.25f);
   }
   CHECK(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS));
+  /* Queued probe text keeps each character until the consumer takes it. */
+  SDL_Window *probe_window = SDL_CreateWindow("owned text probe", 100, 100, SDL_WINDOW_HIDDEN);
+  CHECK(probe_window);
+  SDL_SetEnvironmentVariable(SDL_GetEnvironment(), "ANVIL_INPUT_ROUTING_PROBE", "1", true);
+  SDL_SetEventEnabled(SDL_EVENT_TEXT_INPUT, true);
+  const char *probe_text = "a2x";
+  for (const char *p = probe_text; *p; p++)
+    CHECK(anvil_routing_probe_message(probe_window, ANVIL_ROUTING_PROBE_MESSAGE, 11, *p));
+  SDL_Event probe_event;
+  unsigned text_index = 0;
+  while (SDL_PollEvent(&probe_event)) {
+    if (probe_event.type != SDL_EVENT_TEXT_INPUT) continue;
+    CHECK(text_index < strlen(probe_text) && probe_event.text.text[0] == probe_text[text_index++]);
+    CHECK(!probe_event.text.text[1]);
+  }
+  CHECK(text_index == strlen(probe_text));
+  SDL_DestroyWindow(probe_window);
+  SDL_UnsetEnvironmentVariable(SDL_GetEnvironment(), "ANVIL_INPUT_ROUTING_PROBE");
   CHECK(init_custom_events());
   CHECK(register_custom_event("panerequest", NULL));
   if (dialogs) {

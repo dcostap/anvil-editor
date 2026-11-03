@@ -48,6 +48,17 @@ test.describe("Pane requests", function()
     test.same(panes.ordered(), {a})
   end)
 
+  test.it("opens an empty Project with a File Tree and keeps an existing Pane", function()
+    local FileTreeView = require("plugins.filetree").View
+    request {action = "open_project"}
+    test.equal(panes.count(), 1)
+    local pane = panes.active()
+    test.ok(pane.current_view:is(FileTreeView))
+    request {action = "open_project"}
+    test.same(panes.ordered(), {pane})
+    test.equal(panes.active(), pane)
+  end)
+
   test.it("runs a Sidebar key in the named Pane, or in the active Pane", function()
     local stroke, ran = "ctrl+alt+shift+f12", {}
     command.add(nil, {["test:sidebar_key"] = function() ran[#ran + 1] = panes.active() end})

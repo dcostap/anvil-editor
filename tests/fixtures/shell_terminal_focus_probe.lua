@@ -2,7 +2,7 @@
 -- Seam: an owned hosted Window on a private desktop. A click on a Terminal Session's Sidebar row focuses it in the
 -- Project. A right-click on the row opens its Context Menu, and its Snooze choices reach the Sidebar's saved
 -- Snoozes. Keys choose them, while the Project keeps the keyboard focus. A Snooze moves the Pane into its Project's
--- Snoozed fold, and a click there still focuses it.
+-- Snoozed fold, and a click there still focuses it. Agent control sets and removes the same saved Snooze.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if action ~= "terminal-focus" then return end
 local core, common = require "core", require "core.common"
@@ -56,7 +56,8 @@ if path:match("/driver$") then
   local ok, err = pcall(function()
    shell = assert(require("core.process").start({EXEFILE, "--shell", root .. "/Project"},
     {stdin=process.REDIRECT_DISCARD, stdout=process.REDIRECT_DISCARD, stderr=process.REDIRECT_DISCARD}))
-   local ready = wait(function() return load("ready") end, 30, "The Project did not open its Terminal Session")
+   local ready = wait(function() return load("ready") end, 60, "The Project did not open its Terminal Session")
+   assert(ready.agent_snooze_checked, "The Project did not check agent Snooze requests")
    local id = ready.session_id
    local window = wait(function() return shell_window(shell:pid()) end, 10, "shell Window not found")
    -- Wait until the Sidebar lists the session under the Project.
@@ -163,7 +164,24 @@ elseif path == root .. "/Project" then
    wait(function() return core.active_view == terminal end, 5)
    coroutine.yield(.5)
    core.set_active_view(editor)
-   save("ready", {session_id = terminal.session_id})
+   -- Real Project -> shell -> Sidebar -> Project round trip, without focusing the Terminal.
+   local panes, storage = require "core.panes", require "core.storage"
+   local control = require("core.control").new()
+   local pane = assert(panes.pane_for_view(terminal))
+   local focused = panes.active()
+   local result = control:call("snooze", {action = "set", seconds = 5 * 3600,
+    request_id = "probe-snooze-self"}, terminal.session_id)
+   assert(result.status == "accepted" and result.terminal == terminal.session_id and result.pane == pane.id)
+   wait(function() return panes.is_snoozed(pane) end, 20, "The agent request did not snooze its Pane")
+   assert(storage.load("sidebar", "snoozes")[terminal.session_id] == result.until_time,
+    "The Sidebar did not save the agent's Snooze time")
+   assert(panes.active() == focused and core.active_view == editor, "The agent Snooze took focus")
+   control:call("snooze", {action = "remove", terminal = terminal.session_id,
+    request_id = "probe-remove-snooze"}, terminal.session_id)
+   wait(function() return not panes.is_snoozed(pane) end, 20, "The agent request did not wake its Pane")
+   assert(storage.load("sidebar", "snoozes")[terminal.session_id] == nil, "The Sidebar kept the removed Snooze")
+   assert(panes.active() == focused and core.active_view == editor, "Removing the agent Snooze took focus")
+   save("ready", {session_id = terminal.session_id, agent_snooze_checked = true})
    wait(function()
     return core.active_view.terminal_view and core.active_view.session_id == terminal.session_id
    end, 30, "The Project did not focus the clicked Terminal Session")

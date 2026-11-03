@@ -72,6 +72,7 @@ They also close when their client disconnects. An activated shell keeps the norm
 `config.plugins.terminal.prepare_session` controls preparation. It defaults to true and has a Terminal setting.
 Preparation uses extra memory and runs the shell profile early.
 Run `runtime/terminal_prepared.lua` and `ui/terminal_prepared.lua` after changes.
+New shells get their PATH from the Windows registry (system PATH, then user PATH), not from the Anvil process. A PATH change then reaches new Terminal Sessions without a restart. A prepared shell with an older PATH is not used. Running shells keep their PATH. Run `runtime/terminal_path_environment.lua` after changes.
 
 Copy View on a running Pi Terminal starts `pi` in a new Terminal with the same directory and shell. It starts a fresh conversation with Pi's normal defaults, not the source conversation or its command arguments.
 The visible Selected Project also prepares one Pi while at least one of its Panes runs Pi. The focused Pi supplies the directory and shell. Other Views keep the last Pi's choice while that Pi runs.
@@ -194,6 +195,7 @@ The Pi extension also reports the selected model's display name, or its ID when 
 Model changes update the icon without a new agent turn. GPT names use OpenAI's knot; Claude and Fable names use Claude's starburst.
 DeepSeek names use DeepSeek's whale. Name matching ignores case.
 The icon stays while Pi is idle and ends when Pi ends. Unknown or missing models show Pi's icon.
+The extension reports the model again when terminal input resumes after a TUI pause, such as an SSH sudo prompt.
 Show only one logo: the detected model provider or Pi as the fallback. Logos have transparent backgrounds.
 Run `ui/terminal_agent_resume.lua` after model-report changes. It checks startup and model changes on Node and Bun.
 
@@ -473,7 +475,7 @@ A slide shows one step at each display refresh. A docked Sidebar keeps its space
 A Sidebar that focus shows floats: it slides opaque over the Project, and the Project keeps its layout. The toggle docks it.
 The shell moves the Project's last frame to a docked Sidebar's edge, so a Project that has not drawn its new width shows no content under the Sidebar.
 Sidebar width and the Project list remain shared. Each Window saves its own Project and group folds.
-Clicking a loaded Project row in this Window expands or collapses it without selecting it. Clicking a Tab selects its Project.
+Clicking a loaded Project row in this Window expands or collapses it without selecting it. An empty Project selects itself and opens its initial File Tree Pane. Clicking a Tab selects its Project.
 Dormant Projects and Projects in other Windows open when their rows are clicked.
 Loaded Projects start expanded unless this Window has a saved manual fold.
 Another Window's Project stays collapsed. It ignores this Window's saved fold. A search still lists its Tabs.
@@ -757,6 +759,8 @@ Interactive Pi gets `data/tools/agent-sessions/pi-control.cjs` through the exist
 
 Keep focus by default. Keep normal close confirmations. Use stable Pane, Terminal, and conversation IDs, not navigation numbers. A wait timeout never cancels a task. Retry keys last for the Project process; Pi persists accepted delivery receipts separately.
 
+The `snooze` control tool sets or removes a Terminal's Snooze. Without a target, it uses the calling agent's Terminal Session. The Sidebar owns the saved times. Requests use the shell's Sidebar route, then normal Project Snooze requests. A reply reports acceptance, not completed delivery. Run `ui/agent_control.lua` and the `terminal-focus` shell probe after changes.
+
 See [agent control](docs/agent-control.md) for tools, discovery, security, and limits. Run `runtime/net_server.lua`, `ui/agent_control.lua`, `ui/control_transport.lua`, and `ui/control_pi.lua` after changes. Also run `node --test tests/pi-control.test.cjs tests/agent-sessions.test.cjs`.
 
 `ui/control_pi.lua` runs real Pi TUI sessions against a local scripted model server. It uses no provider, API key, or inference. Keep these checks isolated from user sessions and settings.
@@ -829,6 +833,7 @@ The top heading level and two levels below it show. The current section is the l
 After the caret moves, the current section is the caret's section instead, until the user scrolls with the wheel or the scrollbar.
 Each Pane's outline follows its own caret. The Buffer's selection belongs to the focused Pane, so the outline uses a selection listener on its Text View.
 A click moves the caret to the heading and scrolls it near the top with `scroll_to_line`'s `top_margin`. That heading is then the caret's section.
+The selection marker stays in the visible column while a long heading list scrolls. Sections in the middle share one marker position.
 Run `ui/markdown_heading_outline.lua` after changes. Check the `markdown-heading-outline` render scenario after visual changes.
 
 ## Binary files

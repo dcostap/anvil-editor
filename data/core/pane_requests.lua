@@ -93,6 +93,7 @@ local schemas = {
   snooze = {pane = true}, unsnooze = {pane = true},
   open = {files = true, text = true, target = true},
   launch = {files = true},
+  open_project = {},
   drop = {pane = true, files = true, text = true},
   export = {pane = true, to = true, target = true, transfer = true},
   import = {snapshot = true, target = true, source = true, transfer = true},
@@ -174,6 +175,10 @@ end
 
 local function execute(request, x, y)
   local action = request.action
+  if action == "open_project" then
+    core.ensure_initial_filetree_pane()
+    return true
+  end
   if action == "drag" then
     -- A Tab of another Project has the same Pane IDs, so the source Project must be this one. The Sidebar names a
     -- Project on a Machine by its key.
