@@ -73,7 +73,9 @@ end
 -- Records each text's position, colour and effective opacity at `width` x `height`.
 local function drawn_texts(view, width, height)
   local texts, stack, opacity = {}, {}, 1
+  local clip_bottom
   with_renderer({
+    set_clip_rect = function(_, y, _, h) clip_bottom = y + h end,
     push_transform = function(x, y, scale, alpha)
       stack[#stack + 1] = opacity
       opacity = opacity * (alpha or 1)
@@ -81,7 +83,7 @@ local function drawn_texts(view, width, height)
     pop_transform = function() opacity = table.remove(stack) end,
     draw_text = function(font, text, x, y, color)
       texts[#texts + 1] = {text = text, x = x, y = y, color = color, right = x + font:get_width(text),
-        opacity = opacity * (color[4] or 255) / 255}
+        opacity = opacity * (color[4] or 255) / 255, clip_bottom = clip_bottom}
     end,
   }, function() view:draw(width or 400, height or 800) end)
   return texts
@@ -1766,6 +1768,13 @@ test.describe("Sidebar motion", function()
       local function labels()
         local texts = drawn_texts(view)
         local function y(label) return test.not_nil(find_text(texts, label), label .. " is not drawn").y end
+        local first, second = find_text(texts, "Old2"), find_text(texts, "Old3")
+        if first and second then
+          test.ok(second.y >= first.y + style.font:get_height(), "The expanded Project labels overlap")
+          if second.y + style.font:get_height() > y("OLDER") then
+            test.ok(second.clip_bottom <= y("OLDER"), "The expanded Projects draw over the next group")
+          end
+        end
         return y("LAST MONTH"), y("OLDER")
       end
       view:set_model({project(1, "Alpha"), dormant(2, 10 * DAY), dormant(3, 12 * DAY), dormant(4, 60 * DAY)})
@@ -1785,6 +1794,35 @@ test.describe("Sidebar motion", function()
       test.ok(target < header_y, "The expanded group did not move up")
       test.ok(moving < header_y and moving > target,
         ("The expanded group did not slide: %s to %s, at %s"):format(header_y, target, moving))
+    end)
+  end)
+
+  test.it("reveals children below their header without overlapping each other or the next Project", function()
+    with_clock(true, function(advance)
+      local alpha = project(1, "Alpha")
+      alpha.panes = {{id="a1",group=1,name="first.lua"}, {id="a2",group=2,name="second.lua"},
+        {id="a3",group=3,name="third.lua"}}
+      local view = SidebarView(function() end, {["project:C:/Alpha"] = true})
+      view:set_model({alpha, project(2, "Beta")})
+      drawn_texts(view)
+      local header = text_y(view, "Alpha")
+      view:on_mouse_pressed("left", 20, view:row_y(1) + 2, 400)
+      for _ = 1, 30 do
+        advance(1 / 120)
+        local texts = drawn_texts(view)
+        test.equal(find_text(texts, "Alpha").y, header, "The header moved during expansion")
+        local first = test.not_nil(find_text(texts, "first.lua"))
+        local second = test.not_nil(find_text(texts, "second.lua"))
+        local third = test.not_nil(find_text(texts, "third.lua"))
+        test.ok(second.y >= first.y + style.font:get_height(), "The first two child labels overlap")
+        test.ok(third.y >= second.y + style.font:get_height(), "The last two child labels overlap")
+        local below = find_text(texts, "Beta").y
+        if third.y + style.font:get_height() > below then
+          test.ok(third.clip_bottom <= below, "Children draw over the next Project")
+        end
+      end
+      for _ = 1, 60 do advance(1 / 30); drawn_texts(view) end
+      test.is_nil(view:animation_delay(advance(0)), "The reveal did not finish")
     end)
   end)
 

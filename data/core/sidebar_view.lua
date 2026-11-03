@@ -1540,29 +1540,47 @@ function SidebarView:step(dt)
   end
   shown.scroll = ease(shown.scroll, self.scroll, SCROLL_RATE)
   shown.bottom_scroll = ease(shown.bottom_scroll, self.bottom_scroll, SCROLL_RATE)
+  shown.main_h = ease(shown.main_h, self.main_h, MOVE_RATE * ROW_SPEED)
   -- The groups' area grows and shrinks with its rows, so the rows below an expanding group stay in place.
   shown.bottom_h = ease(shown.bottom_h, self.bottom_h, MOVE_RATE * ROW_SPEED)
   shown.search = ease(shown.search, self:search_open() and 1 or 0, SEARCH_RATE, 0.01)
-  -- Rows. A new row unfolds from the row above it, which already showed. A row that leaves fades where it was.
+  -- New children keep their full spacing below the header. The next existing row reveals them as it moves down.
+  -- A row that leaves fades where it was.
   local old, visuals = self.visuals, {}
-  local unfold = {}
+  local previous
   for _, row in ipairs(self.rows) do
     local key, before = row.id_key, old[row.id_key]
     local visual
     local dim = self:dim_target(row)
-    if before and before.area == row.area then
+    if before and before.area == row.area and not before.entering then
       visual = {area = row.area, y = ease(before.y, row.y + (nudge[key] or 0), MOVE_RATE * ROW_SPEED),
         alpha = ease(before.alpha, 1, FADE_RATE * ROW_SPEED, 0.01), dim = ease(before.dim, dim, FADE_RATE * 1.5, 0.01)}
     elseif animate then
-      local start = unfold[row.area]
-      visual = {area = row.area, y = start or row.y, alpha = 0, dim = dim}
+      local y = row.y
+      if previous and previous.area == row.area then y = row.y + (previous.shown.y - previous.y) end
+      visual = {area = row.area, y = y, entering = true,
+        alpha = ease(before and before.alpha or 0, 1, FADE_RATE * ROW_SPEED, 0.01), dim = dim}
       moving = true
     else
       visual = {area = row.area, y = row.y, alpha = 1, dim = dim}
     end
-    if before and before.area == row.area then unfold[row.area] = before.y + row.h end
     visuals[key] = visual
     row.shown = visual
+    previous = row
+  end
+  local following
+  for index = #self.rows, 1, -1 do
+    local row = self.rows[index]
+    local visual = row.shown
+    if visual.entering then
+      visual.clip_bottom = following and following.area == row.area and following.shown.y
+        or (row.area == "main" and shown.main_h or shown.bottom_h)
+      if visual.y == row.y and visual.clip_bottom >= visual.y + row.h then
+        visual.entering, visual.clip_bottom = nil, nil
+      end
+    else
+      following = row
+    end
   end
   local leaving = {}
   for _, item in ipairs(self.leaving) do
@@ -2023,14 +2041,17 @@ function SidebarView:draw_containers(area, width)
       if row.bracket.last then
         local top = origin + first.shown.y
         local bottom = origin + row.shown.y + row.h
+        if row.shown.clip_bottom then bottom = math.min(bottom, origin + row.shown.clip_bottom) end
         local alpha = math.min(first.shown.alpha * first.shown.dim, row.shown.alpha * row.shown.dim)
         local x, w = m.tab_left, width - m.pad - m.tab_left
-        if joined then
+        if joined and bottom - top > 2 then
           renderer.draw_rounded_rect(x, top + 1, w, bottom - top - 2, m.radius,
             fade(style.drop_target_background, alpha * mark.alpha))
         end
-        renderer.draw_rect(m.rail_x, top + 6 * SCALE, m.rail, bottom - top - 12 * SCALE,
-          fade(row.bracket.visible and style.titlebar_group_indicator or style.divider, alpha))
+        if bottom - top > 12 * SCALE then
+          renderer.draw_rect(m.rail_x, top + 6 * SCALE, m.rail, bottom - top - 12 * SCALE,
+            fade(row.bracket.visible and style.titlebar_group_indicator or style.divider, alpha))
+        end
         first = nil
       end
     end
@@ -2042,7 +2063,12 @@ function SidebarView:draw_mark(name, area, width, color)
   if not mark or mark.area ~= area or mark.alpha <= 0.01 then return end
   local m = self:metrics()
   local y = self:shown_origin(area) + mark.y
-  renderer.draw_rounded_rect(mark.x, y + 1, width - m.pad - mark.x, mark.h - 2, m.radius, fade(color, mark.alpha))
+  local h = mark.h - 2
+  local visual = self.visuals[mark.key]
+  if visual and visual.clip_bottom then h = math.min(h, self:shown_origin(area) + visual.clip_bottom - y - 1) end
+  if h > 0 then
+    renderer.draw_rounded_rect(mark.x, y + 1, width - m.pad - mark.x, h, m.radius, fade(color, mark.alpha))
+  end
 end
 
 -- The drop target's mark. Below the rows: the box's fill. Above them: the line, or the box's outline.
@@ -2218,7 +2244,10 @@ function SidebarView:draw(width, height)
       if row.area == name then
         local y = origin + row.shown.y
         if y + row.h > area_top and y < area_bottom then
+          local clip_bottom = row.shown.clip_bottom and math.min(area_bottom, origin + row.shown.clip_bottom)
+          if clip_bottom then renderer.set_clip_rect(0, area_top, width, math.max(0, clip_bottom - area_top)) end
           self:draw_shown(row, y, row.shown.alpha * row.shown.dim, width, now)
+          if clip_bottom then renderer.set_clip_rect(0, area_top, width, math.max(0, area_bottom - area_top)) end
         end
       end
     end
