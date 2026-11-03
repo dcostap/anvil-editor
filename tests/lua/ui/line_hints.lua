@@ -70,7 +70,8 @@ test.describe("File Tree Line Hints", function()
       if contains(hint_texts(view, folder), "2") and contains(hint_texts(view, empty), "0") then break end
       coroutine.yield(0.01)
     until system.get_time() >= deadline
-    test.ok(contains(hint_texts(view, folder), "2"), "expected direct children, not descendants")
+    local hints = hint_texts(view, folder)
+    test.ok(contains(hints, "2"), "Expected two direct children; hint: " .. table.concat(hints, " | "))
     test.ok(contains(hint_texts(view, empty), "0"), "expected an empty folder count")
     local fuzzy = require("plugins.fuzzy_searcher")._test
     for name, count in pairs { folder = "2", empty = "0" } do

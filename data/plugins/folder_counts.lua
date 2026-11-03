@@ -26,7 +26,10 @@ function counts.get(path, modified, show_hidden)
         -- A Machine's folder counts come from its listing, which has no folder time to check.
         local machine = fs.on_machine(task.path)
         local info = machine and { type = "dir", modified = task.modified } or system.get_file_info(task.path)
-        if info and info.type == "dir" and info.modified == task.modified then
+        if info and info.type == "dir" then
+          if info.modified ~= task.modified then
+            core.log_quiet("Folder count: using current directory metadata for %s", task.path)
+          end
           local entries, err
           if machine then
             entries = machine_folders.wait(task.path)
@@ -45,7 +48,9 @@ function counts.get(path, modified, show_hidden)
             end
           end
           local latest = machine and info or system.get_file_info(task.path)
-          if latest and latest.type == "dir" and latest.modified == task.modified then
+          if latest and latest.type == "dir" and latest.modified == info.modified then
+            -- The caller's listing can be older than the directory stat. Cache
+            -- the stable count under that listing's key, not its disk timestamp.
             cache[task.key] = { modified = task.modified, count = entries and total or nil, error = err }
             counts.generation = counts.generation + 1
             if not entries then

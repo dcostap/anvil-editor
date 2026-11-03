@@ -23,17 +23,18 @@ test.describe("Folder counts", function()
       return entries
     end
 
-    local function wait_for_count(expected)
+    local function wait_for_count(expected, listed_modified)
       local deadline = system.get_time() + 30
       repeat
-        local result, pending = counts.get(path, modified, true)
+        local result, pending = counts.get(path, listed_modified or modified, true)
         if result and result.count == expected and not pending then return result end
         coroutine.yield(0.01)
       until system.get_time() >= deadline
       test.ok(false, "The folder count did not complete")
     end
 
-    test.equal(wait_for_count(2).count, 2)
+    -- A directory listing can carry an older timestamp than a direct stat.
+    test.equal(wait_for_count(2, modified - 1).count, 2)
     modified, total = 2, 3
     local previous, pending = counts.get(path, modified, true)
     test.not_nil(previous, "A pending update must not remove the previous count")
