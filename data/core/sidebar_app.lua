@@ -273,8 +273,8 @@ local function add_surface(id, window)
     end
     if action == "request" then
       local route, path, request, x, y = row_id, target, ...
-      -- Focusing a Pane gives the keyboard back to the Project. The shell gets both messages in this order.
-      if request.action == "focus" then system.focus_project_sidebar(false) end
+      -- Opening a Project or focusing a Pane gives it the keyboard. The shell gets both messages in this order.
+      if request.action == "focus" or request.action == "open_project" then system.focus_project_sidebar(false) end
       local text = common.serialize(request, {escape = true})
       local sent = system.pane_request(route, path, text, x, y)
       -- A drag over the work area sends a request for each pointer move. Log only its end.

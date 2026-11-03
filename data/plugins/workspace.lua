@@ -261,7 +261,7 @@ function core.refresh_project_path_consumers(reason)
   return refresh_project_path_consumers(reason)
 end
 
-local function ensure_initial_filetree_pane()
+function core.ensure_initial_filetree_pane()
   if panes.count() > 0 then return false end
   local ok, filetree = pcall(require, "plugins.filetree")
   if not ok or not filetree or not filetree.open then
@@ -450,7 +450,7 @@ local function load_workspace()
         diffview.load_workspace_state(nil)
         language_mode.load_workspace_state(nil)
         project_paths.load_workspace_state(nil)
-        ensure_initial_filetree_pane()
+        core.ensure_initial_filetree_pane()
         core.log_quiet("Workspace: skipped restore for an empty Anvil window")
         return
       end
@@ -479,7 +479,7 @@ local function load_workspace()
         panes.restore_workspace_state(workspace.pane_state, load_view)
       end
       untitled_recovery.restore_project(machine_project.root_key(core.root_project().path))
-      ensure_initial_filetree_pane()
+      core.ensure_initial_filetree_pane()
     end
 
     restore_workspace_state()

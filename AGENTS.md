@@ -474,7 +474,7 @@ A slide shows one step at each display refresh. A docked Sidebar keeps its space
 A Sidebar that focus shows floats: it slides opaque over the Project, and the Project keeps its layout. The toggle docks it.
 The shell moves the Project's last frame to a docked Sidebar's edge, so a Project that has not drawn its new width shows no content under the Sidebar.
 Sidebar width and the Project list remain shared. Each Window saves its own Project and group folds.
-Clicking a loaded Project row in this Window expands or collapses it without selecting it. Clicking a Tab selects its Project.
+Clicking a loaded Project row in this Window expands or collapses it without selecting it. An empty Project selects itself and opens its initial File Tree Pane. Clicking a Tab selects its Project.
 Dormant Projects and Projects in other Windows open when their rows are clicked.
 Loaded Projects start expanded unless this Window has a saved manual fold.
 Another Window's Project stays collapsed. It ignores this Window's saved fold. A search still lists its Tabs.

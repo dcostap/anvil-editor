@@ -13,7 +13,7 @@ local icons = require("core.context_menu").icons
 -- The shell owns identity and lifecycle. This view sends only Project, Pane and Terminal Session actions.
 -- A right-click on a Project or a Terminal Tab, or the Context Menu key on the cursor's row, opens that row's
 -- Context Menu. The menu can extend over the Project, because the Sidebar's surface covers the whole Window.
--- A click on a loaded Project in this Window toggles its children without selecting it.
+-- A click on a loaded Project in this Window toggles its children. An empty Project opens its initial Pane.
 -- Dormant Projects and Projects in other Windows open on click.
 -- Left on a collapsed loaded Project asks to unload it. A second Left unloads it; any other input cancels.
 -- Layout: a search field below the window caption, then the main list: loaded Projects with their Tabs, one for
@@ -374,6 +374,11 @@ function SidebarView:close_hours(accept)
   if hours.return_focus then self.action("return_focus") end
 end
 
+local function in_other_window(project, window_id)
+  local owner = project and project.window_id
+  return window_id and owner and owner ~= 0 and owner ~= window_id
+end
+
 -- The shell keeps a Window's old selection until a chosen Pane renders, and opens a Terminal Session's Pane after
 -- it selects the Project. The chosen row shows the selection meanwhile, so the highlight does not go back.
 -- With `jump`, the highlight goes to the chosen row at once instead of gliding there.
@@ -390,7 +395,12 @@ end
 function SidebarView:activate_row(row, from_keyboard)
   if not row then return end
   if row.kind == "project" or row.kind == "tab" or row.kind == "terminal" then self:choose(row, from_keyboard) end
-  if row.kind == "project" then self.action("select", row.project.row_id)
+  if row.kind == "project" then
+    if row.project.state == "ready" and not row.key and not in_other_window(row.project, self.window_id) then
+      self.action("request", "select", row.project.path, {action = "open_project"})
+    else
+      self.action("select", row.project.row_id)
+    end
   elseif row.kind == "tab" then self.action("request", "select", row.project.path, {action = "focus", pane = row.tab.id})
   elseif row.kind == "terminal" then self.action("select_terminal", row.project.row_id, row.terminal.id)
   elseif row.key then self:toggle(row.key, row.collapsed) end
@@ -574,11 +584,6 @@ local function age_bucket(activity, now)
   local age = now - activity
   if age < WEEK then return "week" end
   return age < MONTH and "month" or "older"
-end
-
-local function in_other_window(project, window_id)
-  local owner = project and project.window_id
-  return window_id and owner and owner ~= 0 and owner ~= window_id
 end
 
 function SidebarView:is_collapsed(key, default)
@@ -1069,8 +1074,9 @@ function SidebarView:on_mouse_pressed(button, x, y)
     return
   end
   if row.kind ~= "project" then return end
-  if button == "left" and row.project.state ~= "dormant" and not in_other_window(row.project, self.window_id) then
-    if row.key then self:toggle(row.key, row.collapsed) end
+  if button == "left" and row.project.state ~= "dormant" and row.key
+    and not in_other_window(row.project, self.window_id) then
+    self:toggle(row.key, row.collapsed)
     return
   end
   if button == "middle" then
