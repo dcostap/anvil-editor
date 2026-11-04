@@ -46,12 +46,10 @@ test.describe("File Tree instances", function()
   end)
 
   test.after_each(function()
+    if core.active_view == core.global_prompt_bar then core.global_prompt_bar:exit() end
     panes.reset_for_tests()
     core.set_active_view = set_active_view
-    if system.get_file_info(root) then
-      local ok, err = common.rm(root, true)
-      test.ok(ok, err)
-    end
+    test.ok(test.remove_tree(root))
   end)
 
   test.it("requiring the plugin creates no File Tree", function()
@@ -274,6 +272,28 @@ test.describe("File Tree instances", function()
     test.equal(panes.back(pane), tree)
     test.equal(pane.current_view, tree)
     test.equal(tree.root_dir, common.normalize_path(root))
+  end)
+
+  test.it("keeps pending edits and close confirmation when returning to a File Tree", function()
+    local tree = assert(filetree.new(file))
+    local pane = panes.create { factory = function() return tree end }
+    local line = tree.buffer:get_selection(true)
+    tree.buffer:insert(line, 1, "renamed-")
+    panes.present(View(), { pane = pane })
+
+    test.not_ok(panes.close(pane))
+    test.equal(core.active_view, core.global_prompt_bar)
+    core.global_prompt_bar:exit()
+    test.equal(panes.back(pane), tree)
+
+    test.equal(tree.buffer.lines[line], "renamed-target.lua\n")
+    test.not_ok(panes.close(pane))
+    test.equal(core.active_view, core.global_prompt_bar)
+    core.global_prompt_bar:exit()
+
+    tree.buffer:undo()
+    test.equal(tree.buffer.lines[line], "target.lua\n")
+    test.ok(panes.close(pane))
   end)
 
   test.it("restores a live File Tree without changing its Buffer", function()

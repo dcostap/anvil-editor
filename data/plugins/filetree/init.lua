@@ -615,6 +615,12 @@ end
 
 function FileTreeView:set_navigation_state(state)
   if type(state) ~= "table" or type(state.root) ~= "string" then return false end
+  -- A live edit takes priority over a saved directory, expansion or selection.
+  -- Rebuilding the tree here would discard the edit and its undo history.
+  if self.has_possible_edits then
+    core.log_quiet("File Tree Navigation kept pending edits: directory=%s", self.current_dir)
+    return false
+  end
   local root_info = project_files.info(state.root)
   local current_info = state.current_dir and project_files.info(state.current_dir)
   if not (root_info and root_info.type == "dir" and current_info and current_info.type == "dir") then
@@ -629,7 +635,6 @@ function FileTreeView:set_navigation_state(state)
     and self.rendered_project_paths_generation == project_paths.generation()
     and self.rendered_show_hidden == filetree_config.show_hidden
     and self.rendered_sort_mode == self:get_sort_mode()
-    and not self.has_possible_edits
   if reuse then
     local expanded = self:capture_expanded_paths()
     local wanted = state.expanded_paths or {}
