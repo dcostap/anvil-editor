@@ -171,6 +171,26 @@ test.describe("Recent Panes in a Project", function()
     test.equal(numbered.local_numbers()[two.id], 1)
   end)
 
+  test.it("selects the reported Pane number when a more recent Pane is snoozed", function()
+    local numbered = require "core.numbered_panes"
+    local command = require "core.command"
+    local build = panes.create { factory = factory("build") }
+    local agent = panes.create { factory = factory("agent") }
+    local held = panes.create { factory = factory("held") }
+    local current = panes.create { factory = factory("current") }
+    focus(build)
+    focus(agent)
+    focus(held)
+    panes.snooze(held)
+    focus(current)
+
+    local numbers = numbered.numbers({{path = "C:/Here", panes = last_report()}}, {}, {})
+    test.equal(numbers[numbered.key("C:/Here", agent.id)], 1)
+    test.equal(numbers[numbered.key("C:/Here", build.id)], 2)
+    test.ok(command.perform("pane:focus_number_2"))
+    test.equal(panes.active(), build, "The command did not select the Pane numbered 2 in the report")
+  end)
+
   test.it("asks the shell to focus a Recent Pane in another Project", function()
     local one = panes.create { factory = factory("one") }
     local two = panes.create { factory = factory("two") }

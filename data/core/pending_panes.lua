@@ -113,7 +113,7 @@ local function model()
   local active = panes.active()
   for index, pane in ipairs(panes.ordered()) do
     local view = pane.current_view
-    items[index] = {id = pane.id, focused = recent.focused_at(pane)}
+    items[index] = {id = pane.id, focused = recent.focused_at(pane), snoozed = pane.group.snoozed}
     if view.terminal_view then
       items[index].terminal = {session = view.session_id, state = view.state, bell = view.bell_at}
     end
@@ -139,6 +139,7 @@ function pending.focus(number)
     return false
   end
   if common.path_compare_key(item.path) == common.path_compare_key(path) then
+    core.log_quiet("Pending Pane %d: Project=%s pane=%s local=true", number, path, tostring(item.id))
     return require("core.panes").focus(item.id, "numbered") ~= nil
   end
   local sent = pending.request(item.path, item.id)
