@@ -88,6 +88,29 @@ test.describe("Context Menu", function()
     core.root_panel.size.x, core.root_panel.size.y = saved.size[1], saved.size[2]
   end)
 
+  test.it("draws a custom icon beside a menu item", function()
+    open_editor("alpha")
+    local bounds
+    context_menu.open(100, 100, {{
+      label = "New Pi", command = "core:select_all",
+      icon = function(x, y, height)
+        bounds = {x = x, y = y, height = height}
+        context_menu.icons.pi(x, y, height)
+      end,
+    }})
+    local window = renwindow.create("context-menu-icon", 800, 600)
+    local old_clip = core.clip_rect_stack[1]
+    renderer.begin_frame(window)
+    core.clip_rect_stack[1] = {0, 0, 800, 600}
+    renderer.set_clip_rect(0, 0, 800, 600)
+    local ok, err = pcall(context_menu.draw)
+    renderer.end_frame()
+    core.clip_rect_stack[1] = old_clip
+    if not ok then error(err, 0) end
+    test.not_nil(bounds, "The menu did not draw its custom icon")
+    test.ok(bounds.x >= 100 and bounds.y >= 100 and bounds.height > 0)
+  end)
+
   test.it("pastes at the right-clicked place when Paste is chosen", function()
     local view = open_editor("alpha beta")
     system.set_clipboard("X")

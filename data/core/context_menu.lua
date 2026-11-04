@@ -14,7 +14,7 @@ local LineInput = require "core.line_input"
 ---
 ---An item is `"-"` for a separator, or a table:
 ---  `label`   the visible name
----  `icon`    an optional glyph from `context_menu.icons`
+---  `icon`    a glyph or draw function from `context_menu.icons`; functions receive (x, y, height, color)
 ---  `command` a command name, or a list of names; the first valid one runs
 ---  `args`    arguments for the command and its predicate
 ---  `items`   a submenu instead of a command
@@ -26,7 +26,7 @@ local LineInput = require "core.line_input"
 ---through `on_mouse_pressed`, and shows the menu above the other layer through `show_above_sidebar`.
 local context_menu = {}
 
----Icons from the Material Design set of the bundled Nerd Font, for the `icon` field of items.
+---Icons for menu items: Material Design glyphs from the bundled Nerd Font, or draw functions for program logos.
 context_menu.icons = {
   open = "\u{F03CC}", definition = "\u{F0169}", search = "\u{F0349}",
   cut = "\u{F0190}", copy = "\u{F018F}", paste = "\u{F0192}", select_all = "\u{F0486}",
@@ -44,6 +44,7 @@ context_menu.icons = {
   reveal = "\u{F0DCF}", terminal = "\u{F018D}", sort = "\u{F04BA}",
   close = "\u{F0156}", close_others = "\u{F0C5E}", reopen = "\u{F099B}",
   insert = "\u{F0704}", format = "\u{F06D6}", reset = "\u{F0450}",
+  pi = function(x, y, height) require("core.agent_icons").draw("pi", x, y, height) end,
 }
 
 
@@ -575,7 +576,12 @@ local function draw_level(level)
       local selected = level.selected == index
       local tx, tw = row.x + m.row_x, row.w - m.row_x * 2
       if row.icon then
-        common.draw_text(m.icon_font, selected and style.text or style.card_text, row.icon, "left", tx, row.y, level.icon_w, row.h)
+        local color = selected and style.text or style.card_text
+        if type(row.icon) == "function" then
+          row.icon(tx, row.y, row.h, color)
+        else
+          common.draw_text(m.icon_font, color, row.icon, "left", tx, row.y, level.icon_w, row.h)
+        end
       end
       local lx = tx + level.icon_w
       if row.path then

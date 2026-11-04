@@ -293,7 +293,7 @@ function SidebarView:context_menu(row)
   if project.exists then
     items[#items + 1] = {label = "New Terminal", icon = icons.terminal, command = "sidebar:perform",
       args = {self, project.path, "terminal:open_at_project_root"}}
-    items[#items + 1] = {label = "New Pi", command = "sidebar:perform", args = {self, project.path, "terminal:open_pi"}}
+    items[#items + 1] = {label = "New Pi", icon = icons.pi, command = "sidebar:perform", args = {self, project.path, "terminal:open_pi"}}
     -- A Project keeps its closed Panes in memory, so an unloaded Project has none.
     if loaded then
       items[#items + 1] = {label = "Reopen Closed Pane", icon = icons.reopen, command = "sidebar:perform",
