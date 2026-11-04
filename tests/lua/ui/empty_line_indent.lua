@@ -1,6 +1,7 @@
 local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
+local linewrapping = require "core.linewrapping"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
 local test = require "core.test"
@@ -80,6 +81,36 @@ test.describe("empty line indentation", function()
     test.equal(text(buffer), "if ok then\n\nend\n")
     test.same(caret(view), { 2, 1, 2, 1 })
     near(caret_dx(view, 2, 1), view:get_font():get_width("  "))
+  end)
+
+  test.it("selection endpoints on empty lines stay at the text edge in either direction", function(context)
+    local buffer, view = new_editor(context, "if ok then\n\n\n\nend", "sample.lua")
+    for _, wrapped in ipairs { false, true } do
+      view:set_wrapping_enabled(wrapped)
+      linewrapping.complete_async_reconstruction(view)
+      for _, selection in ipairs { { 4, 1, 2, 1 }, { 2, 1, 4, 1 } } do
+        view:set_selection_state { selections = selection }
+
+        near(caret_dx(view, selection[1], 1), 0)
+        near(caret_dx(view, selection[3], 1), 0)
+        near(view:get_caret_x_offset(selection[1], 1), view:get_col_x_offset(selection[1], 1))
+      end
+
+      view:set_selection_state { selections = { 4, 1, 4, 1 } }
+      near(caret_dx(view, 4, 1), view:get_font():get_width("  "))
+    end
+    test.equal(text(buffer), "if ok then\n\n\n\nend\n")
+  end)
+
+  test.it("an empty-line selection leaves other carets and Views at their shown indentation", function(context)
+    local buffer, view = new_editor(context, "if ok then\n\n\n\nend", "sample.lua")
+    local other = TextView(buffer)
+    other:set_selection_state { selections = { 2, 1, 2, 1 } }
+    view:set_selection_state { selections = { 2, 1, 3, 1, 4, 1, 4, 1 } }
+
+    near(caret_dx(view, 2, 1), 0)
+    near(caret_dx(view, 4, 1), view:get_font():get_width("  "))
+    near(caret_dx(other, 2, 1), other:get_font():get_width("  "))
   end)
 
   test.it("typing on an empty line writes its indentation first, and one undo removes both", function(context)

@@ -222,12 +222,19 @@ local function indent_width(view, indent)
 end
 
 ---Returns how far right of column 1 a caret at `line`, `col` shows.
+---Selection endpoints use real text positions, without Shown Indentation.
 ---@param view core.textview
 ---@param line integer
 ---@param col integer
 ---@return number
 function empty_line_indent.caret_offset(view, line, col)
   if col ~= 1 or view.buffer.lines[line] ~= "\n" then return 0 end
+  local selections = view.buffer.bound_selection_view == view
+    and view.buffer.selections or view.selection_state.selections
+  for i = 1, #selections, 4 do
+    local line1, col1, line2, col2 = selections[i], selections[i + 1], selections[i + 2], selections[i + 3]
+    if (line == line1 or line == line2) and (line1 ~= line2 or col1 ~= col2) then return 0 end
+  end
   local found = entry(view.buffer, line)
   if not found then return 0 end
   local indent, reference = empty_line_indent.get(view.buffer, line), found.reference
