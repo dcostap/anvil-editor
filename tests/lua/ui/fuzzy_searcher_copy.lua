@@ -111,8 +111,8 @@ test.describe("Fuzzy Searcher selected-result copy", function()
     test.ok(draw_order.copy > draw_order.match, "expected copy feedback to overlay fuzzy matches")
   end)
 
-  -- Copies the only result, draws the picker, and returns where `label` and the copy feedback start.
-  local function copy_feedback_start(results, label)
+  -- Copies the only result and draws the picker. Returns the span of each drawn text and of the copy feedback.
+  local function draw_copy_feedback(results)
     local original_feedback_color = style.fuzzy_searcher_copy_feedback
     local probe_color = { 251, 2, 3, 255 }
     style.fuzzy_searcher_copy_feedback = probe_color
@@ -131,14 +131,15 @@ test.describe("Fuzzy Searcher selected-result copy", function()
     local original_set_clip_rect = renderer.set_clip_rect
     local original_draw_canvas = renderer.draw_canvas
     local original_draw_canvas_scaled = renderer.draw_canvas_scaled
-    local label_x, feedback_x
-    renderer.draw_rect = function(x, _, _, _, color)
-      if same_rgb(color, probe_color) then feedback_x = x end
+    local drawn, feedback = {}, nil
+    renderer.draw_rect = function(x, _, w, _, color)
+      if same_rgb(color, probe_color) then feedback = { x, x + w } end
     end
     renderer.draw_rounded_rect = function() end
     renderer.draw_text = function(font, text, x)
-      if text == label and not label_x then label_x = x end
-      return x + (font and font:get_width(text) or 0)
+      local end_x = x + (font and font:get_width(text) or 0)
+      if not drawn[text] then drawn[text] = { x, end_x } end
+      return end_x
     end
     renderer.draw_text_known_bounds = function() end
     renderer.set_clip_rect = function() end
@@ -154,19 +155,42 @@ test.describe("Fuzzy Searcher selected-result copy", function()
     renderer.draw_canvas_scaled = original_draw_canvas_scaled
     style.fuzzy_searcher_copy_feedback = original_feedback_color
     if not ok then error(err, 0) end
-    return label_x, feedback_x
+    test.not_nil(feedback, "expected copy feedback")
+    return drawn, feedback
   end
 
-  test.it("starts symbol copy feedback at the rendered symbol label", function()
-    local label_x, feedback_x = copy_feedback_start({
+  -- Checks that the copy feedback covers the drawn text from `first` to `last`.
+  local function test_feedback_covers(results, first, last)
+    local drawn, feedback = draw_copy_feedback(results)
+    test.not_nil(drawn[first], "expected the drawn text " .. first)
+    test.not_nil(drawn[last], "expected the drawn text " .. last)
+    test.same(feedback, { drawn[first][1], drawn[last][2] })
+  end
+
+  test.it("covers the drawn path of a copied file", function()
+    test_feedback_covers({ { kind = "file", label = "src/app.lua", file = "src/app.lua" } }, "src/", "app.lua")
+  end)
+
+  test.it("covers the drawn line of a copied Text Search result", function()
+    test_feedback_covers({
+      { kind = "grep", file = "src/main.c", line = 4, col = 5, text = "    needle content" },
+    }, "needle content", "needle content")
+  end)
+
+  test.it("covers the drawn label of a copied symbol", function()
+    test_feedback_covers({
       {
         kind = "symbol", file = "src/basegame.cpp", line = 12,
         label = "check_damage", name = "check_damage", symbol_kind = "method",
       },
-    }, "check_damage")
-    test.not_nil(label_x, "expected the rendered symbol label")
-    test.not_nil(feedback_x, "expected symbol copy feedback")
-    test.equal(feedback_x, label_x)
+    }, "check_damage", "check_damage")
+    test_feedback_covers({
+      {
+        kind = "symbol", file = "src/basegame.cpp", line = 12, symbol_kind = "method",
+        label = "check_damage", name = "check_damage",
+        declaration = "void check_damage(int amount)", declaration_name_span = { 6, 17 },
+      },
+    }, "check_damage", "check_damage")
   end)
 
   test.it("copies a prompt text selection before the selected result", function()
@@ -215,12 +239,9 @@ test.describe("Fuzzy Searcher selected-result copy", function()
     test.equal(picker.copy_flash.text, "src/app.lua")
   end)
 
-  test.it("starts Project copy feedback at the rendered Project name", function()
+  test.it("covers the drawn name of a copied Project", function()
     local path = "C:" .. PATHSEP .. "Projects" .. PATHSEP .. "decomps" .. PATHSEP .. "oot"
-    local label_x, feedback_x = copy_feedback_start({ { kind = "project", label = path, project = path } }, "oot")
-    test.not_nil(label_x, "expected the rendered Project name")
-    test.not_nil(feedback_x, "expected Project copy feedback")
-    test.equal(feedback_x, label_x)
+    test_feedback_covers({ { kind = "project", label = path, project = path } }, "oot", "oot")
   end)
 
   test.it("keeps result rows tall enough for Prose when Code Zoom is smaller", function()

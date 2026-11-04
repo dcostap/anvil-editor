@@ -2241,6 +2241,11 @@ local function draw_highlighted_text(font, text, x, y, width, color, spans, matc
   return cx
 end
 
+-- A row records where it drew the text that Copy copies, so the copy feedback covers that text.
+function fuzzy_searcher.set_copy_span(r, x, end_x)
+  r._copy_x, r._copy_w = x, math.max(0, end_x - x)
+end
+
 local function draw_prefixed_highlighted_text(font, prefix, text, x, y, width, color, spans, match_color, anchor_to_match)
   prefix = prefix or ""
   if prefix == "" then
@@ -2452,7 +2457,9 @@ local function draw_project_result_row(font, r, x, y, width)
     and project_spans(r.match_spans, name_start, #label, 0) or {}
   local name_color = project.state == "dormant" and not project.exists and style.dim or style.text
   local name_y = y + math.floor((h - bold:get_height()) / 2)
+  local name_x = cx
   cx = draw_highlighted_text(bold, name, cx, name_y, math.max(0, right - cx), name_color, name_spans)
+  fuzzy_searcher.set_copy_span(r, name_x, cx)
   if parent and cx + gap < right then
     draw_highlighted_text(small, parent, cx + gap, y + math.floor((h - small:get_height()) / 2),
       right - cx - gap, style.dim, project_spans(r.match_spans, 1, #parent, 0))
@@ -2647,7 +2654,8 @@ local function draw_new_project_result_row(font, r, x, y, width)
   local cx = renderer.draw_text(font, prefix, x, y, style.dim)
   local project_font = style.view_text_font
   local project_y = y + math.max(0, math.floor((font:get_height() - project_font:get_height()) / 2))
-  draw_highlighted_text(project_font, r.project or r.label or "", cx, project_y, math.max(0, x + width - cx), style.text, {})
+  fuzzy_searcher.set_copy_span(r, cx, draw_highlighted_text(project_font, r.project or r.label or "", cx, project_y,
+    math.max(0, x + width - cx), style.text, {}))
 end
 
 local draw_file_result_row
@@ -2666,16 +2674,24 @@ function fuzzy_searcher.symbol_declaration_text(symbol, include_suffix)
   return include_suffix and signature ~= "" and (label .. " " .. signature) or label
 end
 
+-- Returns the end of the drawn text, then the start and end of the drawn name.
 function fuzzy_searcher.draw_symbol_declaration(font, symbol, x, y, width, name_spans, include_suffix, declaration_spans)
   if include_suffix == nil then include_suffix = true end
   local declaration = tostring(symbol and symbol.declaration or "")
   if declaration_spans and #declaration_spans > 0 and declaration ~= "" then
     local text = declaration
-    if not include_suffix and symbol.declaration_name_span then
-      local name_end = math.min(#text, tonumber(symbol.declaration_name_span[2]) or 0)
+    local name_span = symbol.declaration_name_span
+    if not include_suffix and name_span then
+      local name_end = math.min(#text, tonumber(name_span[2]) or 0)
       text = text:sub(1, name_end)
     end
-    return draw_highlighted_text(font, text, x, y, width, style.dim, declaration_spans)
+    local cx = draw_highlighted_text(font, text, x, y, width, style.dim, declaration_spans)
+    local name_start, name_end = tonumber(name_span and name_span[1]), tonumber(name_span and name_span[2])
+    if name_start and name_end and name_start <= name_end and font:get_width(text) <= width then
+      local name_x = x + font:get_width(text:sub(1, name_start - 1))
+      return cx, name_x, name_x + font:get_width(text:sub(name_start, name_end))
+    end
+    return cx, x, cx
   end
   if declaration ~= "" and symbol.declaration_name_span then
     local name_start = math.max(1, tonumber(symbol.declaration_name_span[1]) or 1)
@@ -2691,13 +2707,15 @@ function fuzzy_searcher.draw_symbol_declaration(font, symbol, x, y, width, name_
       if before_width > 0 then
         cx = renderer.draw_text(font, truncate_text(font, before, before_width), cx, y, style.dim)
       end
+      local name_x = cx
       if cx < right then
         cx = draw_highlighted_text(font, name, cx, y, math.max(0, right - cx), style.text, name_spans or {})
       end
+      local name_end_x = cx
       if after ~= "" and cx < right then
         cx = renderer.draw_text(font, truncate_text(font, after, right - cx), cx, y, style.dim)
       end
-      return cx
+      return cx, name_x, name_end_x
     end
   end
 
@@ -2707,10 +2725,11 @@ function fuzzy_searcher.draw_symbol_declaration(font, symbol, x, y, width, name_
   local signature_width = math.min(width * 0.55, font:get_width(signature_text))
   local label_width = math.max(0, width - signature_width)
   local cx = draw_highlighted_text(font, label, x, y, label_width, style.text, name_spans or {})
+  local label_end = cx
   if signature_width > 0 and cx < x + width then
     cx = renderer.draw_text(font, truncate_text(font, signature_text, x + width - cx), cx, y, style.dim)
   end
-  return cx
+  return cx, x, label_end
 end
 
 function fuzzy_searcher.draw_grep_symbol_context(font, symbol, x, y, width, row_height)
@@ -2863,10 +2882,11 @@ function fuzzy_searcher.draw_symbol_result_row(
     symbol_icons.draw(r.symbol_kind or "symbol", text_x, y, row_height, icon_size)
   end
   text_x = text_x + icon_column_width
-  fuzzy_searcher.draw_symbol_declaration(
+  local _, name_x, name_end = fuzzy_searcher.draw_symbol_declaration(
     preview_font, r, text_x, preview_y, math.max(0, text_w - icon_column_width),
     r.match_spans or {}, nil, r.declaration_spans
   )
+  fuzzy_searcher.set_copy_span(r, name_x, name_end)
   return line_x
 end
 
@@ -2898,9 +2918,7 @@ local function draw_path_result_row(font, r, x, y, width)
     path_x, y, math.max(0, x + width - path_x), nil, nil, nil, false
   )
   path_end = math.min(x + width, path_end or path_x)
-
-  r._path_copy_x = path_x
-  r._path_copy_width = math.max(0, path_end - r._path_copy_x)
+  fuzzy_searcher.set_copy_span(r, path_x, path_end)
 
   local available = math.max(0, x + width - path_end - gap)
   if available <= 0 then return end
@@ -2956,6 +2974,7 @@ local function draw_command_result_row(font, r, x, y, width)
     status_w = 0
   end
   local label_end = draw_prefixed_highlighted_text(font, prefix, label, x, y, command_label_w, style.text, spans)
+  fuzzy_searcher.set_copy_span(r, x + font:get_width(prefix), label_end)
   if status_w > 0 then
     draw_command_status(font, r.status, label_end, y, status_w)
   end
@@ -3003,6 +3022,7 @@ draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix, 
   local path_y = y + math.max(0, math.floor((line_h - path_font:get_height()) / 2))
 
   local cx = renderer.draw_text(font, prefix, x, y, prefix_color)
+  local text_x = cx
   local right = x + width
   local available = math.max(0, right - cx)
   if available <= 0 then return cx end
@@ -3052,7 +3072,7 @@ draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix, 
   if suffix ~= "" and cx < right then
     cx = renderer.draw_text(font, truncate_text(font, suffix, right - cx), cx, y, suffix_color)
   end
-  return cx, suffix_x
+  return cx, suffix_x, text_x
 end
 
 grep_row_columns = function(width, ratio)
@@ -3142,7 +3162,8 @@ local function draw_grep_result_row(
     spans = project_spans(spans, leading + 1, leading + #text, 0)
     if type(anchor) == "number" then anchor = math.max(1, anchor - leading) end
   end
-  draw_highlighted_text(preview_font, text, text_x, preview_y, text_w, style.text, spans, nil, anchor)
+  fuzzy_searcher.set_copy_span(result, text_x,
+    draw_highlighted_text(preview_font, text, text_x, preview_y, text_w, style.text, spans, nil, anchor))
   return line_x, context_x
 end
 
@@ -4542,60 +4563,6 @@ function FSView:copy_flash_color(idx)
   if flash.index ~= idx or flash.result ~= self.results[idx] then return nil end
   core.redraw = true
   return color
-end
-
-function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
-  local flash = self.copy_flash
-  local text = flash and flash.text or ""
-  local text_font = font
-  local x = row_x
-  local width = row_text_w
-
-  if r.kind == "grep" then
-    local path_w, gap = grep_row_columns(row_text_w)
-    x = row_x + path_w + gap
-    width = math.max(0, row_text_w - path_w - gap)
-    text_font = style.get_small_font(font)
-  elseif r.kind == "symbol" then
-    local path_w, gap = grep_row_columns(row_text_w, 0.33)
-    local row_height = font:get_height() + style.fuzzy_searcher_result_row_padding * 2
-    local icon_column_width = fuzzy_searcher.symbol_icon_column_width(row_height)
-    x = row_x + path_w + gap + icon_column_width
-    width = math.max(0, row_text_w - path_w - gap - icon_column_width)
-    text_font = style.get_small_font(font)
-  elseif r.kind == "command" then
-    local icon_column_width = font:get_height()
-      + math.max(2 * (SCALE or 1), style.padding.x / 3)
-    x = row_x + icon_column_width
-    width = math.max(0, row_text_w - icon_column_width)
-  elseif r.kind == "folder" or r.kind == "path" or r.kind == "create_path" or r.path_search then
-    if r._path_copy_x and r._path_copy_width then
-      x = r._path_copy_x
-      width = r._path_copy_width
-    else
-      local icon_w = fuzzy_searcher.file_icons.column_width(font:get_height())
-      x = row_x + icon_w
-      width = math.max(0, row_text_w - icon_w)
-    end
-    text = r.label or r.path or r.project or r.file or ""
-    text_font = style.view_text_font
-  elseif r.kind == "project" then
-    local badge_w = font:get_height() + math.floor(style.padding.x / 2)
-    text = fuzzy_searcher.project_look.name(fuzzy_searcher.projects.of(r))
-    text_font = fuzzy_searcher.projects.bold(style.font)
-    x = row_x + badge_w
-    width = math.max(0, row_text_w - badge_w)
-  elseif r.kind == "new_project" then
-    local prefix = "Open this new folder as project: "
-    x = row_x + font:get_width(prefix)
-    width = math.max(0, row_text_w - font:get_width(prefix))
-    text = r.project or r.label or ""
-    text_font = style.view_text_font
-  end
-
-  local text_w = text_font:get_width(text)
-  if text_w > 0 then width = math.min(width, text_w) end
-  return x, math.max(0, width)
 end
 
 function FSView:preview_bounds()
@@ -8973,6 +8940,7 @@ function FSView:draw_open_content()
           yy + math.floor((lh - header_font:get_height()) / 2), style.dim)
       end
     else
+      r._copy_x = nil
       if not r.revision and (r.kind == "file" or (r.kind == "path" and r.file)) then
         local path = fullpath(r)
         local marker = path and pane_markers[common.path_compare_key(path)]
@@ -9008,17 +8976,19 @@ function FSView:draw_open_content()
         local icon_width = view_icons.draw(icon, cx, row_y, font:get_height())
         if icon_width > 0 then cx = cx + icon_width + style.padding.x end
         local path_w, gap, text_w = grep_row_columns(math.max(0, x + pad + row_text_w - cx))
-        draw_highlighted_text(style.view_text_font, r.label, cx, row_y, path_w, style.text, r.match_spans)
+        fuzzy_searcher.set_copy_span(r, cx,
+          draw_highlighted_text(style.view_text_font, r.label, cx, row_y, path_w, style.text, r.match_spans))
         draw_highlighted_text(style.get_small_font(font), r.text, cx + path_w + gap,
           row_y, text_w, style.dim, r.content_spans)
       elseif r.kind == "file" then
         reset_rendered_file_group()
         local file_text_w = fuzzy_searcher.draw_file_metadata(
           font, r, x + pad, row_y, row_text_w, metadata_rows[idx], metadata_columns, true)
-        draw_file_result_row(
+        local _, name_end, text_x = draw_file_result_row(
           font, r.file or r.label, r.match_spans, "", x + pad, row_y,
           file_text_w, nil, r.prefix_span, r.root_role, true, nil, r.revision
         )
+        if text_x then fuzzy_searcher.set_copy_span(r, text_x, name_end) end
       elseif r.kind == "folder" then
         reset_rendered_file_group()
         local file_text_w = fuzzy_searcher.draw_file_metadata(
@@ -9056,21 +9026,20 @@ function FSView:draw_open_content()
         reset_rendered_file_group()
         -- The label lines up with the file names above it, in their font.
         local indent, label_font = fuzzy_searcher.file_icons.column_width(font:get_height()), style.view_text_font
-        renderer.draw_text(label_font, truncate_text(label_font, r.label, row_text_w - indent), x + pad + indent,
-          row_y + math.floor((font:get_height() - label_font:get_height()) / 2), style.dim)
+        fuzzy_searcher.set_copy_span(r, x + pad + indent, renderer.draw_text(label_font,
+          truncate_text(label_font, r.label, row_text_w - indent), x + pad + indent,
+          row_y + math.floor((font:get_height() - label_font:get_height()) / 2), style.dim))
       else
         local label, spans, prefix = result_list_label_and_spans(r)
-        draw_prefixed_highlighted_text(font, prefix, label, x + pad, row_y, row_text_w, style.text, spans)
+        fuzzy_searcher.set_copy_span(r, x + pad + font:get_width(prefix or ""),
+          draw_prefixed_highlighted_text(font, prefix, label, x + pad, row_y, row_text_w, style.text, spans))
         reset_rendered_file_group()
       end
       -- Draw after the row so copied-result feedback takes precedence over
       -- fuzzy-match backgrounds as well as the selected-row background.
       local flash_color = self:copy_flash_color(idx)
-      if flash_color then
-        local flash_x, flash_w = self:copy_flash_bounds(font, r, x + pad, row_text_w)
-        if flash_w > 0 then
-          renderer.draw_rect(flash_x, yy + 1, flash_w, math.max(1, lh - 2), flash_color)
-        end
+      if flash_color and r._copy_x and r._copy_w > 0 then
+        renderer.draw_rect(r._copy_x, yy + 1, r._copy_w, math.max(1, lh - 2), flash_color)
       end
     end
     fuzzy_searcher._perf_scope_end(row_scope)
