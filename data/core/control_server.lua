@@ -1,7 +1,8 @@
 -- A local, stateless Streamable HTTP MCP endpoint. No SSE stream or browser access.
 local core = require "core"
 local net = require "net"
-local json = require "core.json"
+-- Preserve empty JSON arrays in conversation pages and activity reports.
+local json = require "core.lsp.json"
 local Control = require "core.control"
 local common = require "core.common"
 local M = {}
@@ -111,13 +112,15 @@ function M:dispatch(client, body)
         if not target then return tool_result(false, "Project is not loaded or has no control endpoint") end
         args.project = nil -- The destination already identifies the Project. Never forward twice.
         params._meta = {anvil_caller = client.caller}
-        require("core.http").post(target.url .. "/mcp", "application/json", request, {
-          headers = {Authorization = "Bearer " .. target.token}, timeout = 35,
+        require("core.http").post(target.url .. "/mcp", "application/json", nil, {
+          body = json.encode(request), decode_json = false,
+          headers = {Authorization = "Bearer " .. target.token, ["Content-Type"] = "application/json"}, timeout = 35,
           is_cancelled = function() return client.dead end,
           on_redirect = function(response)
             for key in pairs(response.headers) do if key:lower() == "location" then response.headers[key] = nil end end
           end,
           on_done = function(ok, err, body)
+            if ok and type(body) == "string" then body = json.decode(body) end
             if ok and type(body) == "table" and body.jsonrpc == "2.0" then reply(client, "200 OK", body)
             else tool_result(false, "Project control is unavailable") end
           end})
@@ -128,6 +131,11 @@ function M:dispatch(client, body)
       caller = params._meta.anvil_caller
     end
     local ok, value = pcall(self.control.call, self.control, params.name, args, caller)
+    if ok and params.name == "agent_transcript" then
+      client.transcript = {query = value, result = tool_result}
+      client.deadline = value.deadline + 5
+      return
+    end
     if ok and params.name == "workspace_state" then
       return self:discover(client, function(endpoints)
         value.projects = {}
@@ -208,7 +216,15 @@ function M:poll()
   local stop = system.get_time() + 0.002
   for i = #self.clients, 1, -1 do
     local client = self.clients[i]
-    if client.waiting and not client.dead then
+    if client.transcript and not client.dead then
+      local read = client.transcript
+      local ok, value = pcall(self.control.transcript_read, self.control, read.query)
+      if not ok or value then
+        self.control:cancel_transcript(read.query)
+        client.transcript = nil
+        read.result(ok, value)
+      end
+    elseif client.waiting and not client.dead then
       local wait = client.waiting
       if not wait.next_read or system.get_time() >= wait.next_read then
         wait.next_read = system.get_time() + 0.1
@@ -224,6 +240,7 @@ function M:poll()
     elseif not client.replied and not client.dead and not client.forwarding then self:read(client) end
     if client.dead or system.get_time() > client.deadline
         or client.replied and (client.socket:get_pending_writes() or 0) == 0 then
+      if client.transcript then self.control:cancel_transcript(client.transcript.query) end
       client.socket:close()
       client.dead = true
       table.remove(self.clients, i)
@@ -234,7 +251,10 @@ function M:poll()
 end
 
 function M:close()
-  for _, client in ipairs(self.clients) do client.dead = true; client.socket:close() end
+  for _, client in ipairs(self.clients) do
+    if client.transcript then self.control:cancel_transcript(client.transcript.query) end
+    client.dead = true; client.socket:close()
+  end
   self.clients = {}
   if self.listener then self.listener:close(); self.listener = nil end
 end

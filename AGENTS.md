@@ -760,6 +760,8 @@ The connection logs with the tag `AnvilMachine`. Read them with `adb logcat -s A
 
 Interactive Pi gets `data/tools/agent-sessions/pi-control.cjs` through the existing preload. It registers Anvil's MCP server and handles attributed messages, steering, interruption, and settled results. Pi remains a TUI. Pi launches require explicit provider, model, and thinking choices.
 
+`agent_transcript` reads the current Pi branch through bounded, read-only exchange requests. `pi-inspection.cjs` extracts text and tracks live activity without starting model turns or writing session entries. History pages use entry IDs; truncated messages use UTF-16 offsets. System and thinking blocks stay excluded. `agent_read` reports parallel tools, start times, and observation freshness. Active tool calls are not a background process registry. Keep empty protocol arrays as arrays through local and cross-Project responses.
+
 Keep focus by default. Keep normal close confirmations. Use stable Pane, Terminal, and conversation IDs, not navigation numbers. A wait timeout never cancels a task. Retry keys last for the Project process; Pi persists accepted delivery receipts separately.
 
 The `snooze` control tool sets or removes a Terminal's Snooze. Without a target, it uses the calling agent's Terminal Session. The Sidebar owns the saved times. Requests use the shell's Sidebar route, then normal Project Snooze requests. A reply reports acceptance, not completed delivery. Run `ui/agent_control.lua` and the `terminal-focus` shell probe after changes.

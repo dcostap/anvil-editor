@@ -91,7 +91,7 @@ On a Machine, split `core.control` into two parts:
 
 `anvil serve` publishes Pi's discovery files on the Machine, so their owner does not depend on a View.
 
-`agent_read` gives status and bounded task results today. It does not give the conversation history. A chat view reads Pi's session file through the Files service.
+`agent_read` gives status, live tool activity, and bounded task results. `agent_transcript` reads paged conversation text through a connected Pi. A chat view that needs offline history reads Pi's session file through the Files service.
 
 ### Server lifetime
 

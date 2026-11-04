@@ -35,6 +35,54 @@ Use `agent_send` with `delivery: "queue"` to wait for an idle Pi. Use `delivery:
 
 Use `agent_read` or `agent_wait` with the returned task ID. Completion follows Pi's `agent_settled` event, after retries and automatic recovery. Results include the final assistant text and a truncation flag when necessary.
 
+### Read another Pi
+
+Use `agent_read` for status and live activity. Use `agent_transcript` for conversation text. Neither read starts a model turn, changes focus, or adds session entries. Both require the Terminal ID and current conversation `instance` from `workspace_state`.
+
+`workspace_state` includes a compact `agent_activity` for connected Pi sessions: `phase`, `since`, `tool_count`, and `stale`. Call `agent_read` for details:
+
+```json
+{
+  "terminal": "<terminal ID>",
+  "instance": "<conversation instance>"
+}
+```
+
+The result includes `connected`, `activity_stale`, and the Pi's supported `capabilities`. `observation_age_ms` gives the observation age when available. `activity` contains its phase, phase start time, and active tools. Each tool has an ID, name, start time, and a command or path detail when available. Nested tools also name their parent. Times use Unix milliseconds. Details have explicit truncation flags. The list contains at most 32 tools; `tool_count` gives the full count and `tools_truncated` reports omitted tools.
+
+Phases are `idle`, `waiting_model`, `thinking`, `writing`, `preparing_tool`, `running_tools`, `waiting_user`, and `compacting`. Activity updates through Pi's control exchange, normally every 500 milliseconds. After 10 seconds without an exchange, Anvil marks the activity stale. Stale activity describes the last observation, not current work. Set `include_activity: false` to omit tool details.
+
+A tool call can finish while its background command continues. Activity lists active tool calls, not a complete process registry. It does not prove that background work finished. A thinking phase reveals no thinking text.
+
+Read the latest conversation entries:
+
+```json
+{
+  "terminal": "<terminal ID>",
+  "instance": "<conversation instance>",
+  "limit": 5
+}
+```
+
+`agent_transcript` returns `messages` in chronological order. Each entry has `id`, `timestamp`, `role`, and `text`. User, assistant, custom messages, and summaries are included. Custom messages retain their type; Anvil messages also retain their source Terminal. They are not human instructions. System messages, thinking blocks, credentials in extension state, and image bytes are excluded. Images appear as `[image]`. Conversation text and tool arguments can still contain sensitive user data. Apply the same trust rules as local file access.
+
+The read uses the current branch's recorded history, including messages from before compaction. It does not reproduce the model's edited or compacted context. A recorded message can belong to a turn that is still active; `active_turn` reports this. The result also includes the leaf ID and session name when available.
+
+| Argument | Behavior |
+| --- | --- |
+| `limit` | Return the latest 1–100 eligible entries. Default: 10. Summaries count as entries. |
+| `before` | Return entries before this ID. Pass the previous result's `next_before` for older pages. |
+| `include_summaries` | Include compaction and branch summaries. Default: true. |
+| `include_tools` | Include assistant tool calls and tool-result messages. Default: false. |
+| `max_chars` | Share a 256–32000 character budget across the page's text. Default: 12000. |
+| `entry_id` | Read one entry instead of a history page. Keep the same content filters. |
+| `offset` | Start within `entry_id` text. Default: 0. Offsets use UTF-16 code units. |
+| `include_partial` | Add a separate streaming `partial_message` preview, up to 1000 characters. Default: false. |
+
+Long entries include `truncated`, `total_chars`, `offset`, and `next_offset`. To read the rest, pass their ID as `entry_id` and `next_offset` as `offset`. Text chunks never split a surrogate pair. Use `next_before` for older entries, not for the rest of a long entry. An absent `next_before` means no older eligible entries remain. `partial_message` is unstable and has no history cursor; it does not replace a finalized message.
+
+Reads fail when a cursor ID is not on the current branch, the conversation instance changes, or Pi disconnects. A read times out after 10 seconds without a reply. It never interrupts work. Pending reads are bounded and are not agent tasks. `capabilities.transcript` identifies Pi sessions that support these reads. Existing Pi sessions need `/reload` after the updated extension is installed.
+
 A wait timeout does not cancel work. A disconnect does not mean completion. A reported question ends the wait with `waiting_for_user`. Use `agent_interrupt` to stop active work and cancel queued Anvil tasks without closing the Terminal.
 
 Steering and interruption return `delivered` after Pi accepts them. A steering receipt can include `related_task`, the active Anvil task. Wait for that task to retrieve its final answer.
@@ -52,7 +100,8 @@ Steering and interruption return `delivered` after Pi accepts them. A steering r
 | `pi_start` | Start an independent interactive Pi with explicit model choices. |
 | `operation_read` | Read launch progress and readiness. |
 | `agent_send` | Queue a task or steer active work. |
-| `agent_read` | Read agent status, a receipt, or a task result. |
+| `agent_read` | Read agent status, live activity, a receipt, or a task result. |
+| `agent_transcript` | Read paged conversation text, summaries, and optional tool messages. |
 | `agent_wait` | Wait for completion, a question, a disconnect, or a timeout. |
 | `agent_interrupt` | Interrupt active work and cancel queued Anvil tasks. |
 
@@ -68,7 +117,7 @@ Retry receipts belong to the running Project process. Repeating an ID with diffe
 
 Pi persists accepted task receipts in its session. Reload does not replay accepted tasks. An interrupted run remains interrupted. Discovery reconnects when Anvil restarts while Terminal hosts keep running.
 
-Queues, receipts, and output have bounds. Full queues reject new tasks. Capacity errors require a new Pi conversation or Project process, as their error states. Terminal reads contain at most 32 KB. Task answers contain at most 8 KB; read the Pi session or visible Terminal for longer output.
+Queues, receipts, and output have bounds. Full queues reject new tasks. Capacity errors require a new Pi conversation or Project process, as their error states. Terminal reads contain at most 32 KB. Task answers contain at most 8 KB; use `agent_transcript` to read longer answers.
 
 Only loaded Projects accept operations. Cross-Project calls do not load, select, or move Projects. Discovery is limited to the same executable and user folder. A stale endpoint after a crash returns an availability error.
 
@@ -92,9 +141,9 @@ Set `ANVIL_CONTROL=0` before starting Anvil to disable its server. Set `ANVIL_PI
 
 `ui/agent_control.lua` tests editor operations and retry behavior. `ui/control_transport.lua` tests MCP authorization and Project routing. `runtime/net_server.lua` tests socket lifecycle and private credential directories.
 
-`node --test tests/pi-control.test.cjs` tests delivery, steering, interruption, settlement, and reload receipts.
+`node --test tests/pi-control.test.cjs` tests delivery, steering, interruption, settlement, reload receipts, conversation pages, and live activity.
 
-`ui/control_pi.lua` runs real Pi TUI processes inside real Terminal Sessions. A parent Pi uses MCP to launch a child, send work, and retrieve its answer. The test checks that the user's Pane keeps focus.
+`ui/control_pi.lua` runs real Pi TUI processes inside real Terminal Sessions. A parent Pi uses MCP to launch a child, send work, and retrieve its answer and conversation. The test checks that the user's Pane keeps focus.
 
 The `terminal-focus` shell probe checks agent Snooze requests through the real shell and Sidebar, including persistence and removal.
 

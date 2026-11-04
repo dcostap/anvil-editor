@@ -636,6 +636,9 @@ A new Terminal View that has received no user input and has no running command. 
 Opening an unrelated View replaces it in the same Disposable Pane, closes its Terminal Session, and removes it from Navigation History.
 Successful input ends this state, even if the user then deletes that input. Restored Terminal Sessions are not ephemeral.
 
+**Anvil Agent**:
+An Anvil Agent is an agent running inside Anvil.
+
 **Agent Session**:
 A coding agent's saved conversation, such as a Pi session. When a Terminal Session revives after its shell ended, it resumes the Agent Session that its agent had open.
 _Avoid_: agent conversation, Pi session file

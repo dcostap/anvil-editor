@@ -133,6 +133,28 @@ test.describe("Agent editor control", function()
     end), false, "A stale request cannot target a replacement conversation")
   end)
 
+  test.it("returns observed activity without treating stale commands as live work", function()
+    control:exchange("terminal-b", {instance = "pi-one", busy = true, receipts = {}, tasks = {},
+      capabilities = {transcript = true, activity = true},
+      activity = {phase = "running_tools", since = 1767225600000, tool_count = 1, tools_truncated = false,
+        tools = {{id = "call-a", name = "bash", detail = "npm test", started_at = 1767225600000, detail_truncated = false}}}})
+    local result = control:call("agent_read", {terminal = "terminal-b", instance = "pi-one"}, "terminal-a")
+    test.equal(result.activity.phase, "running_tools")
+    test.equal(result.activity.tools[1].detail, "npm test")
+    test.equal(result.activity_stale, false)
+    test.ok(result.observation_age_ms >= 0)
+    test.ok(result.capabilities.transcript)
+    result = control:call("agent_read", {terminal = "terminal-b", instance = "pi-one", include_activity = false}, "terminal-a")
+    test.is_nil(result.activity)
+    -- A replaced conversation must not inherit the old one's tools or capabilities.
+    control:exchange("terminal-b", {instance = "pi-two", busy = false, receipts = {}, tasks = {}})
+    result = control:call("agent_read", {terminal = "terminal-b", instance = "pi-two"}, "terminal-a")
+    test.is_nil(result.activity)
+    test.equal(pcall(function()
+      control:call("agent_transcript", {terminal = "terminal-b", instance = "pi-two"}, "terminal-a")
+    end), false, "An older Pi must report that it needs a reload, not queue an unreadable request")
+  end)
+
   test.it("opens a file and a Terminal in explicit Panes without changing focus", function()
     test.skip_if(PLATFORM ~= "Windows", "Windows Terminal test")
     local folder = USERDIR .. "/control-open"

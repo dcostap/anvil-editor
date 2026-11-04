@@ -35,6 +35,74 @@ end)
 
 -- Seam: authenticated MCP over a real loopback connection.
 test.describe("Anvil MCP", function()
+  test.it("reads conversation pages through Pi without creating agent tasks or changing focus", function()
+    local server = require("core.control_server").open()
+    local endpoint = server:add_client("reader-target")
+    local headers = {Authorization = "Bearer " .. server.token}
+    local agent_headers = {Authorization = "Bearer " .. endpoint.token}
+    local function begin(path, message, auth)
+      local request = {}
+      http.post(server.url .. path, "application/json", message, {headers = auth, on_done = function(ok, err, body)
+        request.done, request.ok, request.body, request.error = true, ok, body, err
+      end})
+      return request
+    end
+    local function wait(request)
+      local deadline = system.get_time() + 15
+      repeat server:poll(); coroutine.yield() until request.done or system.get_time() > deadline
+      test.ok(request.done and request.ok, request.error or "MCP response timed out")
+      return request.body
+    end
+    local function exchange(extra)
+      local report = {instance = "pi-one", busy = true, receipts = {}, tasks = {}, capabilities = {transcript = true}}
+      for key, value in pairs(extra or {}) do report[key] = value end
+      return wait(begin("/agent", report, agent_headers))
+    end
+    local function read(args)
+      return begin("/mcp", {jsonrpc = "2.0", id = 1, method = "tools/call",
+        params = {name = "agent_transcript", arguments = args}}, headers)
+    end
+    local focused = core.active_view
+    local ok, err = pcall(function()
+      exchange()
+      local request = read {terminal = "reader-target", instance = "pi-one", limit = 2, include_tools = true}
+      local queries
+      local deadline = system.get_time() + 15
+      repeat queries = exchange().transcript_requests until queries and #queries > 0 or system.get_time() > deadline
+      test.ok(queries and #queries == 1, "Pi did not receive a conversation read")
+      test.equal(queries[1].options.limit, 2)
+      test.ok(queries[1].options.include_tools)
+      local reply = exchange {transcripts = {{id = queries[1].id, result = {
+        messages = {{id = "message-a", role = "user", text = "Review this", timestamp = "2026-01-01T00:00:00Z"}},
+        next_before = "message-a", active_turn = true, truncated = false,
+      }}}}
+      test.equal(reply.transcript_acks[1], queries[1].id)
+      test.equal(#reply.commands, 0)
+      local result = wait(request).result
+      test.equal(result.isError, false)
+      test.equal(result.structuredContent.messages[1].text, "Review this")
+      test.equal(result.structuredContent.terminal, "reader-target")
+      test.equal(result.structuredContent.instance, "pi-one")
+      test.equal(result.structuredContent.next_before, "message-a")
+      test.equal(core.active_view, focused)
+      local invalid = wait(read {terminal = "reader-target", instance = "pi-one", offset = 4})
+      test.ok(invalid.result.isError, "An offset needs an entry ID")
+      local pending = read {terminal = "reader-target", instance = "pi-one"}
+      deadline = system.get_time() + 15
+      repeat queries = exchange().transcript_requests until #queries > 0 or system.get_time() > deadline
+      test.ok(#queries > 0, "Pi did not receive the second conversation read")
+      exchange {instance = "pi-two"}
+      test.ok(wait(pending).result.isError, "A replacement conversation must end the pending read")
+      server:remove_client(endpoint.token)
+      local status = server.control:call("agent_read", {terminal = "reader-target", instance = "pi-two"})
+      test.equal(status.connected, false)
+      test.equal(status.activity_stale, true)
+      test.ok(wait(read {terminal = "reader-target", instance = "pi-two"}).result.isError)
+    end)
+    server:close()
+    assert(ok, err)
+  end)
+
   test.it("discovers tools and refuses unauthorized or browser requests", function()
     local server = require("core.control_server").open()
     local function post(path, message, headers)
@@ -107,6 +175,29 @@ test.describe("Anvil Project routing", function()
       test.equal(result.result.isError, false)
       test.equal(result.result.structuredContent.project, USERDIR .. "/other-project")
       test.not_equal(core.root_project().path, USERDIR .. "/other-project")
+      -- Empty arrays must survive both the target response and Project forwarding.
+      remote.control:exchange("remote-pi", {instance = "pi-one", receipts = {}, tasks = {}, capabilities = {transcript = true}})
+      done, result, failure = nil, nil, nil
+      http.post(source.url .. "/mcp", "application/json", {jsonrpc = "2.0", id = 8, method = "tools/call",
+        params = {name = "agent_transcript", arguments = {project = USERDIR .. "/other-project", terminal = "remote-pi", instance = "pi-one"}}}, {
+        headers = {Authorization = "Bearer " .. source.token}, decode_json = false,
+        on_done = function(success, error, body) done, result, failure = true, body, not success and error end})
+      deadline = system.get_time() + 20
+      local protocol_json = require "core.lsp.json"
+      repeat
+        source:poll(); remote:poll()
+        local queries = remote.control:exchange("remote-pi", {instance = "pi-one", receipts = {}, tasks = {},
+          capabilities = {transcript = true}}).transcript_requests
+        if #queries > 0 then
+          remote.control:exchange("remote-pi", {instance = "pi-one", receipts = {}, tasks = {},
+            transcripts = {{id = queries[1].id, result = {messages = protocol_json.array(), active_turn = false, truncated = false}}}})
+        end
+        coroutine.yield()
+      until done or system.get_time() > deadline
+      test.ok(done and not failure, failure or "Cross-Project conversation read timed out")
+      result = assert(protocol_json.decode(result))
+      test.not_ok(result.result.isError, result.result.content[1].text)
+      test.ok(protocol_json.is_array(result.result.structuredContent.messages), "An empty history must remain a JSON array")
     end)
     source:close(); remote:close(); os.remove(path)
     assert(ok, err)

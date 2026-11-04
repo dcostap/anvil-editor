@@ -2,6 +2,7 @@
 local core = require "core"
 local panes = require "core.panes"
 local json = require "core.json"
+local protocol_json = require "core.lsp.json"
 local net = require "net"
 local common = require "core.common"
 local M = {}
@@ -66,8 +67,14 @@ tool("snooze", "Set or remove Anvil's Snooze for a Terminal's Pane. Omit pane an
 tool("agent_send", "Send a task to a specific Pi conversation. Queue waits until idle; steer changes active work. Returns a task ID, not a completed answer.",
   {terminal = id, instance = id, text = string_schema(32768), delivery = choice("queue", "steer"), request_id = id},
   {"terminal", "instance", "text", "delivery", "request_id"}, false)
-tool("agent_read", "Read Pi status or the saved result of a task. Use the instance ID from workspace_state. A disconnected Pi is not complete.",
-  {terminal = id, instance = id, task = id}, {"terminal", "instance"}, true)
+tool("agent_read", "Read Pi status, live activity, parallel tools, or a saved task result. Activity includes command/path details and start times. Set include_activity=false for status only. Disconnected activity is stale; a finished tool call does not prove its background command finished.",
+  {terminal = id, instance = id, task = id, include_activity = {type = "boolean"}}, {"terminal", "instance"}, true)
+tool("agent_transcript", "Read Pi conversation text without starting a turn. Returns the latest limit entries (default 10, chronological). Pass next_before as before for older pages. Summaries count as entries; include_summaries defaults true. include_tools adds tool calls/results. System and thinking blocks are excluded. max_chars is a shared text budget (default 12000). Continue truncated text with entry_id and next_offset as offset (UTF-16 units). include_partial adds a separate, unstable streaming preview (up to 1000 characters). Reads use the current branch; missing IDs fail. Requires a connected Pi with transcript support.",
+  {terminal = id, instance = id, limit = {type = "integer", minimum = 1, maximum = 100}, before = id,
+    entry_id = id, offset = {type = "integer", minimum = 0, maximum = 1000000000},
+    max_chars = {type = "integer", minimum = 256, maximum = 32000},
+    include_tools = {type = "boolean"}, include_summaries = {type = "boolean"}, include_partial = {type = "boolean"}},
+  {"terminal", "instance"}, true)
 tool("agent_interrupt", "Interrupt Pi's active work and cancel its queued Anvil tasks. Keep its Terminal Session open.",
   {terminal = id, instance = id, request_id = id}, {"terminal", "instance", "request_id"}, false)
 tool("agent_wait", "Wait up to 30 seconds for a task. Timeout does not cancel it. A question or disconnect ends the wait.",
@@ -111,6 +118,12 @@ function M.new(project)
     receipts = {}, receipt_count = 0, peers = {}, jobs = {}, starting = {} }, M)
 end
 
+local function activity_summary(peer)
+  if not peer or not peer.activity then return end
+  return {phase = peer.activity.phase, since = peer.activity.since, tool_count = peer.activity.tool_count,
+    stale = system.get_time() - peer.seen >= 10}
+end
+
 function M:workspace_state(_, caller)
   local state = { project = self.project, panes = {}, terminals = {},
     active_pane = panes.active() and panes.active().id, caller_terminal = caller }
@@ -123,6 +136,7 @@ function M:workspace_state(_, caller)
     if peer then
       state.panes[pane.id].agent_instance = peer.instance
       state.panes[pane.id].agent_connected = system.get_time() - peer.seen < 10
+      state.panes[pane.id].agent_activity = activity_summary(peer)
     end
     for _, owned in ipairs(panes.views(pane)) do
       if owned.session_id == caller then state.caller_pane = pane.id end
@@ -132,6 +146,7 @@ function M:workspace_state(_, caller)
         state.terminals[owned.session_id] = {terminal = owned.session_id, pane = pane.id, current = owned == view,
           state = owned.state, program = owned.agent_app, agent_status = status.agent_state,
           agent_model = owned.agent_model, agent_instance = peer and peer.instance,
+          agent_activity = activity_summary(peer),
           agent_connected = peer and system.get_time() - peer.seen < 10}
       end
     end
@@ -228,6 +243,11 @@ function M:pi_start(args, caller) return self:launch(args, caller, true) end
 function M:operation_read(args) return assert(self.jobs[args.operation], "Operation not found").result end
 
 function M:tick()
+  for _, peer in pairs(self.peers) do
+    for token, query in pairs(peer.transcripts) do
+      if system.get_time() >= query.deadline then peer.transcripts[token] = nil end
+    end
+  end
   for operation, job in pairs(self.starting) do
     local view, result = job.view, job.result
     if view and result.status == "starting" then
@@ -289,19 +309,35 @@ function M:terminal(args)
 end
 
 local terminal_status = {completed = true, failed = true, interrupted = true}
+local timestamp = {type = "integer", minimum = 0, maximum = 1000000000000000}
+local activity_schema = object({
+  phase = choice("idle", "waiting_model", "thinking", "writing", "preparing_tool", "running_tools", "waiting_user", "compacting"),
+  since = timestamp, tool_count = {type = "integer", minimum = 0, maximum = 1000000},
+  tools_truncated = {type = "boolean"},
+  tools = {type = "array", maxItems = 32, items = object({id = string_schema(512), name = string_schema(),
+    parent_id = string_schema(512), detail = {type = "string", maxLength = 2048},
+    detail_truncated = {type = "boolean"}, started_at = timestamp}, {"id", "name", "started_at"})},
+  prompt = object({kind = string_schema(), title = {type = "string", maxLength = 2048}}, {"kind"}),
+}, {"phase", "since", "tool_count", "tools", "tools_truncated"})
 
 function M:exchange(terminal, report)
   check(id, report.instance, "Pi instance")
   assert(type(report.receipts) == "table" and #report.receipts <= 256, "Invalid receipts")
   assert(type(report.tasks) == "table" and #report.tasks <= 32, "Invalid tasks")
+  if report.activity then check(activity_schema, report.activity, "activity") end
+  if report.capabilities then
+    check(object({transcript = {type = "boolean"}, activity = {type = "boolean"}}), report.capabilities, "capabilities")
+  end
+  assert(report.transcripts == nil or type(report.transcripts) == "table" and #report.transcripts <= 1, "Invalid transcripts")
   local peer = self.peers[terminal]
   if not peer or peer.instance ~= report.instance then
-    peer = {instance = report.instance, commands = {}, receipts = {}, tasks = {}}
+    peer = {instance = report.instance, commands = {}, receipts = {}, tasks = {}, transcripts = {}}
     self.peers[terminal] = peer
     core.log_quiet("Control: Pi connected Terminal=%s instance=%s", terminal, report.instance)
   end
   peer.seen, peer.busy = system.get_time(), report.busy == true
   peer.session, peer.model, peer.thinking = report.session, report.model, report.thinking
+  peer.activity, peer.capabilities = report.activity, report.capabilities
   peer.capacity = type(report.capacity) == "number" and math.max(0, math.min(256, report.capacity)) or 256
   for _, receipt in ipairs(report.receipts) do
     check(id, receipt.id, "receipt ID")
@@ -320,7 +356,22 @@ function M:exchange(terminal, report)
   local commands = {}
   for _, command in pairs(peer.commands) do commands[#commands + 1] = command end
   table.sort(commands, function(a, b) return a.order < b.order end)
-  return {commands = commands}
+  local acks, requests = protocol_json.array(), protocol_json.array()
+  for _, reply in ipairs(report.transcripts or {}) do
+    check(id, reply.id, "transcript ID")
+    local query = peer.transcripts[reply.id]
+    if query then
+      assert(type(reply.result) == "table" or type(reply.error) == "string", "Invalid transcript reply")
+      assert(#protocol_json.encode(reply) <= 256 * 1024, "Transcript reply is too large")
+      query.result, query.error = reply.result, reply.error
+      peer.transcripts[reply.id] = nil
+    end
+    acks[#acks + 1] = reply.id
+  end
+  for token, query in pairs(peer.transcripts) do
+    if system.get_time() < query.deadline then requests[#requests + 1] = {id = token, options = query.options} end
+  end
+  return {commands = protocol_json.array(commands), transcript_requests = requests, transcript_acks = acks}
 end
 
 function M:peer(args, live)
@@ -348,13 +399,21 @@ function M:agent_interrupt(args, caller) return self:send(args, caller, "interru
 
 function M:agent_read(args)
   local peer = self:peer(args)
-  local connected = system.get_time() - peer.seen < 10
+  local age = system.get_time() - peer.seen
+  local connected = age < 10
   local result = {terminal = args.terminal, instance = peer.instance, connected = connected,
     status = connected and (peer.busy and "working" or "idle") or "disconnected",
-    model = peer.model, thinking = peer.thinking}
+    model = peer.model, thinking = peer.thinking, capabilities = peer.capabilities,
+    activity_stale = not connected,
+    observation_age_ms = age < math.huge and math.max(0, math.floor(age * 1000)) or nil}
+  if args.include_activity ~= false then result.activity = peer.activity end
+  if peer.activity then result.waiting_for_user = connected and peer.activity.phase == "waiting_user" end
   if connected then
     for _, view in ipairs(require("plugins.terminal").open_views()) do
-      if view.session_id == args.terminal then result.waiting_for_user = view:close_status().agent_state == "blocked"; break end
+      if view.session_id == args.terminal then
+        result.waiting_for_user = result.waiting_for_user or view:close_status().agent_state == "blocked"
+        break
+      end
     end
   end
   if args.task then
@@ -369,6 +428,42 @@ function M:agent_read(args)
     result.error = task and task.error or receipt and receipt.error
   end
   return result
+end
+
+-- The transport waits on this read-only ticket while Pi answers through its next exchange.
+-- Tickets never enter the model's task queue or the session's delivery receipts.
+function M:agent_transcript(args)
+  local peer = self:peer(args, true)
+  assert(peer.capabilities and peer.capabilities.transcript, "Pi needs /reload to enable conversation reads")
+  assert(not (args.before and args.entry_id), "Use before or entry_id, not both")
+  assert(args.offset == nil or args.entry_id, "An offset needs entry_id")
+  local count = 0
+  for _ in pairs(peer.transcripts) do count = count + 1 end
+  assert(count < 16, "Too many pending conversation reads")
+  local options = {}
+  for _, key in ipairs {"limit", "before", "entry_id", "offset", "max_chars", "include_tools", "include_summaries", "include_partial"} do
+    options[key] = args[key]
+  end
+  local query = {id = net.random_token(), terminal = args.terminal, instance = args.instance,
+    options = options, deadline = system.get_time() + 10}
+  peer.transcripts[query.id] = query
+  core.log_quiet("Control: conversation read Terminal=%s instance=%s", args.terminal, args.instance)
+  return query
+end
+
+function M:cancel_transcript(query)
+  local peer = self.peers[query.terminal]
+  if peer and peer.instance == query.instance then peer.transcripts[query.id] = nil end
+end
+
+function M:transcript_read(query)
+  self:peer(query, true)
+  if query.error then error(query.error, 0) end
+  if query.result then
+    query.result.terminal, query.result.instance = query.terminal, query.instance
+    return query.result
+  end
+  assert(system.get_time() < query.deadline, "Pi conversation read timed out; no work was interrupted")
 end
 
 function M:agent_wait(args) return self:agent_read(args) end

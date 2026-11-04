@@ -10,7 +10,7 @@ local terminal = require "plugins.terminal"
 -- Seam: real Pi TUI -> native MCP client -> real editor -> another real Pi TUI.
 -- Only the external model is scripted. The test never calls a provider.
 test.describe("Pi controls Anvil", function()
-  test.it("starts a visible child and receives its answer without moving user focus", function()
+  test.it("starts a visible child and reads its answer and conversation without moving user focus", function()
     test.skip_if(PLATFORM ~= "Windows", "Windows Terminal test")
     local pi, node = os.getenv("ANVIL_TEST_PI"), os.getenv("ANVIL_TEST_NODE")
     test.skip_if(not pi or not node, "Meson must find Pi and Node on PATH; configure again after installing them")
@@ -96,9 +96,44 @@ test.describe("Pi controls Anvil", function()
       test.equal(count, 2, "The parent and child each need one visible Pane")
     end)
     runtime.stop()
+    -- Retain exact process handles before closing the Views. Pane Close is asynchronous;
+    -- these disposable hosts must not outlive the test or keep its working folder locked.
+    local ffi = require "ffi"
+    ffi.cdef [[
+      void * __stdcall OpenProcess(unsigned long access, int inherit, unsigned long pid);
+      int __stdcall TerminateProcess(void *process, unsigned int code);
+      unsigned long __stdcall WaitForSingleObject(void *handle, unsigned long milliseconds);
+      int __stdcall CloseHandle(void *handle);
+    ]]
+    local kernel, hosts = ffi.load("kernel32"), {}
+    for _, pane in ipairs(panes.ordered()) do
+      if not initial[pane.id] then
+        for _, view in ipairs(panes.views(pane)) do
+          if view.session then
+            local pid = view.session:stats().host_pid
+            local handle = pid and pid > 0 and kernel.OpenProcess(0x100001, 0, pid)
+            if handle ~= nil and handle then hosts[#hosts + 1] = {pid = pid, handle = handle} end
+          end
+        end
+      end
+    end
     for _, pane in ipairs(panes.ordered()) do if not initial[pane.id] then panes.close(pane, {force = true}) end end
     panes.close(source, {force = true})
     stream:cancel()
+    local function hosts_exited()
+      for _, host in ipairs(hosts) do if kernel.WaitForSingleObject(host.handle, 0) ~= 0 then return false end end
+      return true
+    end
+    if not wait(hosts_exited, 5) then
+      for _, host in ipairs(hosts) do
+        if kernel.WaitForSingleObject(host.handle, 0) == 258 then
+          core.log_quiet("Control test cleanup: ending retained test Terminal host pid=%d", host.pid)
+          kernel.TerminateProcess(host.handle, 0)
+        end
+      end
+    end
+    local ended = wait(hosts_exited, 30)
+    for _, host in ipairs(hosts) do kernel.CloseHandle(host.handle) end
     system.setenv("PATH", saved.path)
     system.setenv("PI_CODING_AGENT_DIR", saved.agent or "")
     system.setenv("PI_CODING_AGENT_SESSION_DIR", saved.sessions or "")
@@ -111,7 +146,9 @@ test.describe("Pi controls Anvil", function()
         if file then core.log_quiet("Control test: %s", file:read("*a")); file:close() end
       end
     end
-    test.ok(test.remove_tree(root))
+    local removed, removal_error = test.remove_tree(root)
     assert(ok, err)
+    test.ok(ended, "A test Terminal host did not exit")
+    test.ok(removed, removal_error)
   end)
 end)

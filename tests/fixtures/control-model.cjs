@@ -38,7 +38,15 @@ const server = http.createServer(async (req, res) => {
       } else if (data.terminal && data.instance && data.task && data.status !== "completed") {
         if (data.status === "failed" || data.status === "interrupted") throw new Error(JSON.stringify(data));
         name = "agent_wait"; args = {terminal: data.terminal, instance: data.instance, task: data.task, timeout_ms: 10000};
-      } else if (data.status === "completed" && data.result === "ANVIL_CHILD_RESULT") answer = "ANVIL_PARENT_RESULT";
+      } else if (data.status === "completed" && data.result === "ANVIL_CHILD_RESULT") {
+        name = "agent_transcript"; args = {terminal: data.terminal, instance: data.instance, limit: 2};
+      } else if (call.function.name.endsWith("agent_transcript")) {
+        if (!Array.isArray(data.messages) || !data.messages.some(m => m.role === "assistant" && m.text === "ANVIL_CHILD_RESULT")
+            || !data.messages.some(m => m.role === "custom" && m.custom_type === "anvil-task")) {
+          throw new Error("Pi did not receive the child's conversation: " + JSON.stringify(data));
+        }
+        answer = "ANVIL_PARENT_RESULT";
+      }
       else throw new Error("Unexpected tool result: " + JSON.stringify(data));
     }
     const delta = answer ? {role: "assistant", content: answer} : {role: "assistant", tool_calls: [{index: 0,
