@@ -106,7 +106,7 @@ test("Pi exposes paged conversation text and live parallel tools without startin
   const old = process.env.ANVIL_TERMINAL_AGENT_REPORT;
   process.env.ANVIL_TERMINAL_AGENT_REPORT = path.join(dir, "terminal-sessions", "inspect.agent");
   const handlers = new Map();
-  let requests = [], acks = [], latest, idle = false, sent = 0;
+  let requests = [], acks = [], latest, idle = false, sent = 0, sessionName = "Inspection";
   const timestamp = "2026-01-01T00:00:00.000Z";
   const entries = [
     {id: "system", type: "message", timestamp, message: {role: "system", content: "PRIVATE SYSTEM"}},
@@ -124,7 +124,7 @@ test("Pi exposes paged conversation text and live parallel tools without startin
   ];
   const ctx = {mode: "tui", isIdle: () => idle, model: {provider: "local", id: "scripted"},
     sessionManager: {getSessionFile: () => "inspect.jsonl", getBranch: () => entries,
-      getLeafId: () => entries.at(-1)?.id, getSessionName: () => "Inspection"}};
+      getLeafId: () => entries.at(-1)?.id, getSessionName: () => sessionName}};
   const pi = {on(name, fn) {
       const previous = handlers.get(name);
       handlers.set(name, async (...args) => { await previous?.(...args); return fn(...args); });
@@ -136,6 +136,12 @@ test("Pi exposes paged conversation text and live parallel tools without startin
     let body = "";
     for await (const chunk of req) body += chunk;
     latest = JSON.parse(body);
+    // Anvil bounds each transcript reply, including metadata outside the text budget.
+    if (latest.transcripts?.some(reply => Buffer.byteLength(JSON.stringify(reply)) > 256 * 1024)) {
+      res.writeHead(400);
+      res.end();
+      return;
+    }
     for (const reply of latest.transcripts || []) {
       replies.set(reply.id, reply);
       requests = requests.filter(request => request.id !== reply.id);
@@ -208,6 +214,14 @@ test("Pi exposes paged conversation text and live parallel tools without startin
     await until(() => latest.activity?.tool_count === 1);
     assert.equal(latest.activity.tools[0].id, "b");
     await handlers.get("tool_execution_end")({toolCallId: "b"}, ctx);
+    await handlers.get("session_before_compact")({}, ctx);
+    await until(() => latest.activity?.phase === "compacting");
+    await handlers.get("ui_prompt_start")({kind: "confirm", title: "Use this summary?"}, ctx);
+    await until(() => latest.activity?.phase === "waiting_user");
+    await handlers.get("ui_prompt_end")({}, ctx);
+    await until(() => latest.activity?.phase === "compacting");
+    await handlers.get("session_compact")({}, ctx);
+    await until(() => latest.activity?.phase === "waiting_model");
     await handlers.get("message_update")({message: {role: "assistant", content: [{type: "text", text: "Still writing"}]},
       assistantMessageEvent: {type: "text_delta"}}, ctx);
     await until(() => latest.activity?.phase === "writing");
@@ -219,6 +233,10 @@ test("Pi exposes paged conversation text and live parallel tools without startin
     assert.equal(latest.activity.tool_count, 0);
     entries.splice(0);
     assert.deepEqual((await read({})).messages, []);
+    sessionName = "界".repeat(100000);
+    await assert.rejects(read({max_chars: 256}), /too large/);
+    sessionName = "Inspection";
+    assert.deepEqual((await read({})).messages, [], "A failed read must not block later control exchanges");
     assert.equal(sent, 0);
   } finally {
     await handlers.get("session_shutdown")?.({reason: "quit"}, ctx);

@@ -87,6 +87,17 @@ test.describe("Anvil MCP", function()
       test.equal(core.active_view, focused)
       local invalid = wait(read {terminal = "reader-target", instance = "pi-one", offset = 4})
       test.ok(invalid.result.isError, "An offset needs an entry ID")
+      local oversized = read {terminal = "reader-target", instance = "pi-one"}
+      deadline = system.get_time() + 15
+      repeat queries = exchange().transcript_requests until #queries > 0 or system.get_time() > deadline
+      test.ok(#queries > 0, "Pi did not receive the oversized conversation read")
+      reply = exchange {transcripts = {{id = queries[1].id, result = {
+        messages = {}, session_name = string.rep("x", 300 * 1024),
+      }}}}
+      test.equal(reply.transcript_acks[1], queries[1].id)
+      local rejected = wait(oversized).result
+      test.ok(rejected.isError, "An oversized reply must fail only its conversation read")
+      test.contains(rejected.content[1].text, "too large")
       local pending = read {terminal = "reader-target", instance = "pi-one"}
       deadline = system.get_time() + 15
       repeat queries = exchange().transcript_requests until #queries > 0 or system.get_time() > deadline

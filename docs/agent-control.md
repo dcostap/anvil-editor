@@ -83,6 +83,8 @@ Long entries include `truncated`, `total_chars`, `offset`, and `next_offset`. To
 
 Reads fail when a cursor ID is not on the current branch, the conversation instance changes, or Pi disconnects. A read times out after 10 seconds without a reply. It never interrupts work. Pending reads are bounded and are not agent tasks. `capabilities.transcript` identifies Pi sessions that support these reads. Existing Pi sessions need `/reload` after the updated extension is installed.
 
+Each transcript reply has a 256 KiB limit, including metadata and JSON escaping. An oversized reply fails that read without blocking status reports or commands.
+
 A wait timeout does not cancel work. A disconnect does not mean completion. A reported question ends the wait with `waiting_for_user`. Use `agent_interrupt` to stop active work and cancel queued Anvil tasks without closing the Terminal.
 
 Steering and interruption return `delivered` after Pi accepts them. A steering receipt can include `related_task`, the active Anvil task. Wait for that task to retrieve its final answer.

@@ -362,8 +362,12 @@ function M:exchange(terminal, report)
     local query = peer.transcripts[reply.id]
     if query then
       assert(type(reply.result) == "table" or type(reply.error) == "string", "Invalid transcript reply")
-      assert(#protocol_json.encode(reply) <= 256 * 1024, "Transcript reply is too large")
-      query.result, query.error = reply.result, reply.error
+      if #protocol_json.encode(reply) > 256 * 1024 then
+        query.error = "Transcript reply is too large"
+        core.log_quiet("Control: oversized conversation reply Terminal=%s instance=%s", terminal, peer.instance)
+      else
+        query.result, query.error = reply.result, reply.error
+      end
       peer.transcripts[reply.id] = nil
     end
     acks[#acks + 1] = reply.id

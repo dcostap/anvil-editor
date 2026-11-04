@@ -96,13 +96,13 @@ function readTranscript(ctx, options = {}, partial) {
 }
 
 module.exports = function inspection(pi) {
-  let phase = "idle", since = Date.now(), prompt, partial;
+  let phase = "idle", since = Date.now(), prompt, partial, compacting = false;
   const tools = new Map();
   const setPhase = value => {
     if (phase !== value) { phase = value; since = Date.now(); }
   };
-  const resume = ctx => setPhase(tools.size ? "running_tools" : ctx.isIdle() ? "idle" : "waiting_model");
-  pi.on("session_start", () => { tools.clear(); prompt = partial = undefined; setPhase("idle"); });
+  const resume = ctx => setPhase(tools.size ? "running_tools" : compacting ? "compacting" : ctx.isIdle() ? "idle" : "waiting_model");
+  pi.on("session_start", () => { tools.clear(); prompt = partial = undefined; compacting = false; setPhase("idle"); });
   pi.on("agent_start", () => setPhase("waiting_model"));
   pi.on("turn_start", () => { partial = undefined; if (!prompt) setPhase(tools.size ? "running_tools" : "waiting_model"); });
   pi.on("message_update", event => {
@@ -129,11 +129,11 @@ module.exports = function inspection(pi) {
     setPhase("waiting_user");
   });
   pi.on("ui_prompt_end", (_, ctx) => { prompt = undefined; resume(ctx); });
-  pi.on("session_before_compact", () => { if (!prompt) setPhase("compacting"); });
-  pi.on("session_compact", (_, ctx) => { if (!prompt) resume(ctx); });
-  pi.on("session_compact_failed", (_, ctx) => { if (!prompt) resume(ctx); });
+  pi.on("session_before_compact", () => { compacting = true; if (!prompt) setPhase("compacting"); });
+  pi.on("session_compact", (_, ctx) => { compacting = false; if (!prompt) resume(ctx); });
+  pi.on("session_compact_failed", (_, ctx) => { compacting = false; if (!prompt) resume(ctx); });
   pi.on("agent_settled", () => { tools.clear(); partial = undefined; if (!prompt) setPhase("idle"); });
-  pi.on("session_shutdown", () => { tools.clear(); prompt = partial = undefined; setPhase("idle"); });
+  pi.on("session_shutdown", () => { tools.clear(); prompt = partial = undefined; compacting = false; setPhase("idle"); });
   return {
     activity(ctx) {
       if (!prompt && phase !== "compacting" && !tools.size) {

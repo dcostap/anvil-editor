@@ -93,6 +93,7 @@ module.exports = function (pi) {
 
   async function exchange() {
     if (stopped || !ctx) return;
+    for (const [id, reply] of transcripts) if (Date.now() - reply.created > 15000) transcripts.delete(id);
     try {
       const next = JSON.parse(await fs.readFile(discovery, "utf8"));
       if (next.version !== 1 || !/^http:\/\/127\.0\.0\.1:\d+$/.test(next.url)
@@ -136,12 +137,19 @@ module.exports = function (pi) {
         for (const [key, text] of changes) reported.set(key, text);
         if (!stopped) {
           for (const id of data.transcript_acks || []) transcripts.delete(id);
-          for (const [id, reply] of transcripts) if (Date.now() - reply.created > 15000) transcripts.delete(id);
           for (const request of data.transcript_requests || []) {
             if (transcripts.has(request.id) || transcripts.size >= 16) continue;
             let result, error;
-            try { result = inspect.transcript(ctx, request.options); }
-            catch (err) { error = String(err.message || err).slice(0, 512); }
+            try {
+              result = inspect.transcript(ctx, request.options);
+              // Match Anvil's reply limit, including metadata and JSON escaping.
+              if (Buffer.byteLength(JSON.stringify({id: request.id, result})) > 256 * 1024) {
+                throw new Error("Transcript reply is too large");
+              }
+            } catch (err) {
+              result = undefined;
+              error = String(err.message || err).slice(0, 512);
+            }
             transcripts.set(request.id, {id: request.id, result, error, created: Date.now()});
           }
           if (Array.isArray(data.commands)) for (const command of data.commands) receive(command);
