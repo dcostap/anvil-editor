@@ -191,6 +191,16 @@ test.describe("autocomplete popup layout", function()
     test.equal(long_width, short_width, "information text must use the width available beside the symbol")
   end)
 
+  test.it("fits plain word suggestions to their text", function(context)
+    local view, _, items = open_popup(context, 1)
+    local _, _, detail_width = autocomplete._test.get_suggestions_rect(view)
+    items[1].preview_text = nil
+    autocomplete.trigger()
+    local _, _, plain_width = autocomplete._test.get_suggestions_rect(view)
+    test.ok(plain_width >= view:get_font():get_width("test01"), "the popup must hold the word")
+    test.ok(plain_width < detail_width, "plain words must not reserve space for details")
+  end)
+
   test.it("keeps the popup below the caret when a full page fits", function(context)
     local view = open_popup(context, 20)
     local row_y, row_height = view:get_caret_highlight_geometry(1, 5)

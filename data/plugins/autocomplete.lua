@@ -1660,6 +1660,7 @@ local function get_suggestions_rect(av)
   end
 
   local content_width = 0
+  local has_details = false
   for _, s in ipairs(suggestions) do
     -- Names determine the width. Clip signatures and other details to fit.
     local label_font = s.preview_text and style.get_small_font(font) or font
@@ -1671,6 +1672,8 @@ local function get_suggestions_rect(av)
       end
     end
     content_width = math.max(content_width, w)
+    has_details = has_details or s.preview_text ~= nil
+      or (not config.plugins.autocomplete.hide_info and display_info(s) ~= nil)
   end
 
   local below_rect_y = math.max(view_top, row_y + row_height)
@@ -1696,7 +1699,9 @@ local function get_suggestions_rect(av)
   )
   local column_width = font:get_width("M")
   local max_width = math.min(view_right - view_left, column_width * MAX_POPUP_COLUMNS)
-  local rect_width = math.min(math.max(column_width * MIN_POPUP_COLUMNS, desired_width), max_width)
+  -- Rows with details get a fixed width. Plain words fit their text.
+  local min_width = has_details and column_width * MIN_POPUP_COLUMNS or 0
+  local rect_width = math.min(math.max(min_width, desired_width), max_width)
   -- Keep the natural width near the right edge, but never leave this Editor.
   rect_x = common.clamp(rect_x, view_left, view_right - rect_width)
 
