@@ -95,7 +95,7 @@ local schemas = {
   launch = {files = true},
   open_project = {},
   drop = {pane = true, files = true, text = true},
-  export = {pane = true, to = true, target = true, transfer = true},
+  export = {pane = true, to = true, target = true, transfer = true, focus = true},
   import = {snapshot = true, target = true, source = true, transfer = true},
   transferred = {transfer = true, ok = true, error = true},
   drag = {phase = true, source = true, pane = true},
@@ -133,6 +133,9 @@ local function validate(request)
   end
   if schema.transfer and not identifier(request.transfer) then return nil, "invalid transfer ID" end
   if schema.snapshot and type(request.snapshot) ~= "table" then return nil, "invalid snapshot" end
+  if request.action == "export" and request.focus ~= nil and type(request.focus) ~= "boolean" then
+    return nil, "invalid focus"
+  end
   if request.action == "transferred" and (type(request.ok) ~= "boolean"
     or (request.error ~= nil and type(request.error) ~= "string")) then return nil, "invalid transfer result" end
   if request.action == "terminal_find" and (not identifier(request.session) or not identifier(request.query)

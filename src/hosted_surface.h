@@ -82,6 +82,8 @@ bool anvil_hosted_surface_open_project_picker(void);
 /* Sends a Color Theme preview for the Sidebar to draw, or "" to draw the saved Color Theme again. */
 bool anvil_hosted_surface_preview_color_theme(const char *preview);
 bool anvil_hosted_surface_unload_project(const char *path);
+/* Loads a Project in this Window. The Window keeps its Selected Project. */
+bool anvil_hosted_surface_load_project(const char *path);
 /* Sends this Project's Pane report for the Project Sidebar. The shell gets it again after an adoption. */
 bool anvil_hosted_surface_set_panes(const char *panes);
 /* Reports successful Lua startup, including Workspace restore. Replayed after adoption. */

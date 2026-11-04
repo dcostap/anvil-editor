@@ -109,6 +109,67 @@ test.describe("Agent editor control", function()
     assert(ok, err)
   end)
 
+  test.it("moves a Pane to another Project, which the shell selects only when focus is requested", function()
+    local Capture = require("core.text_capture").View
+    local sent = {}
+    local send = system.pane_request
+    system.pane_request = function(route, path, text)
+      sent[#sent + 1] = {route = route, path = path, request = assert(load("return " .. text, "request", "t", {}))()}
+      return true
+    end
+    local ok, err = pcall(function()
+      local pane = panes.create {factory = function() return Capture {title = "Notes", text = "one"} end}
+      local other = panes.create {factory = function() return Capture {title = "Other", text = "two"} end}
+      local result = control:call("pane", {action = "move", pane = pane.id, target_project = "C:/Other",
+        request_id = "move-out"}, "test-client")
+      test.equal(result.status, "accepted")
+      test.same({sent[1].route, sent[1].path, sent[1].request.action}, {"direct", "C:/Other", "import"})
+      control:call("pane", {action = "move", pane = other.id, target_project = "C:/Other", focus = true,
+        request_id = "move-focus"}, "test-client")
+      test.equal(sent[2].route, "select")
+      test.equal(pcall(function()
+        control:call("pane", {action = "move", pane = pane.id, target_project = control.project,
+          request_id = "move-same"}, "test-client")
+      end), false, "A Pane cannot move to its own Project")
+    end)
+    system.pane_request = send
+    assert(ok, err)
+  end)
+
+  test.it("opens Projects without selecting them and refuses to unload its own Project or Scratch", function()
+    local saved_system = {hosted = system.is_hosted_surface, load = system.load_project,
+      select = system.select_project, unload = system.unload_project}
+    local calls = {}
+    system.is_hosted_surface = function() return true end
+    for _, name in ipairs {"load_project", "select_project", "unload_project"} do
+      system[name] = function(path) calls[#calls + 1] = {name, path}; return true end
+    end
+    local folder = USERDIR .. PATHSEP .. "control-project"
+    require("core.common").mkdirp(folder)
+    local ok, err = pcall(function()
+      local opened = control:call("project", {action = "open", path = folder, request_id = "open"}, "test-client")
+      test.equal(opened.status, "accepted")
+      test.ok(require("core.common").path_equals(opened.path, folder))
+      control:call("project", {action = "open", path = folder, focus = true, request_id = "show"}, "test-client")
+      control:call("project", {action = "unload", path = folder, request_id = "unload"}, "test-client")
+      local path = opened.path
+      test.same(calls, {{"load_project", path}, {"select_project", path}, {"unload_project", path}})
+      for _, path in ipairs {control.project, USERDIR .. PATHSEP .. "scratch"} do
+        test.equal(pcall(function()
+          control:call("project", {action = "unload", path = path, request_id = "unload " .. path}, "test-client")
+        end), false)
+      end
+      test.equal(pcall(function()
+        control:call("project", {action = "open", path = folder .. PATHSEP .. "missing", request_id = "missing"}, "test-client")
+      end), false, "A missing folder opens no Project")
+      test.equal(#calls, 3)
+    end)
+    system.is_hosted_surface, system.load_project = saved_system.hosted, saved_system.load
+    system.select_project, system.unload_project = saved_system.select, saved_system.unload
+    test.ok(test.remove_tree(folder))
+    assert(ok, err)
+  end)
+
   test.it("sends a task once to the selected Pi instance and keeps its result", function()
     control:exchange("terminal-b", {instance = "pi-one", session = "session.jsonl", busy = false,
       receipts = {}, tasks = {}})

@@ -94,7 +94,8 @@ Steering and interruption return `delivered` after Pi accepts them. A steering r
 | Tool | Operation |
 | --- | --- |
 | `workspace_state` | Inspect Panes, retained Terminal Views, agent identities, and Projects. |
-| `pane` | Create, split, move, focus, or close a Pane. |
+| `pane` | Create, split, move, focus, or close a Pane. Move it to another loaded Project. |
+| `project` | Open or unload a Project in the caller's Window. |
 | `snooze` | Set or remove Snooze for a Terminal's Pane; default to the caller's Terminal. |
 | `open_file` | Open a file at a line in a new Pane or split. |
 | `terminal_start` | Open a shell, optionally with a structured executable and argument list. |
@@ -109,6 +110,10 @@ Steering and interruption return `delivered` after Pi accepts them. A steering r
 
 Tool schemas describe their required fields. Terminal launch currently requires Windows. Structured executable launch requires PowerShell. Literal Terminal input is not a Pi messaging API; Anvil rejects it for Pi.
 
+`project` with `action: "open"` loads a folder in the caller's Window. The Window keeps its Selected Project unless `focus: true` selects the new Project. A Project that is already loaded stays in its Window. `action: "unload"` makes a Project Dormant through the normal close questions. The tool refuses Scratch and the Project that serves the call. Both actions return `accepted` when the shell has the request. The opened Project shows in the `projects` of `workspace_state` when its endpoint is ready.
+
+`pane` with `action: "move"` and `target_project` moves the Pane to the end of that Project as a new Pane Group. The target must have a control endpoint. The source exports the Pane. Its Terminal Sessions keep running, and a moved Pi keeps its conversation. The source closes its copy after the target confirms, and attaches the Terminals again when the target refuses. The reply is `accepted`. Inspect the target's `workspace_state` for the new Pane ID. `focus: true` also selects the target Project.
+
 For `terminal_start`, readiness describes the shell, not the optional program. Read its Terminal output to check program startup. `pi_start` also waits for Pi's control connection.
 
 ## Identity and limits
@@ -121,7 +126,7 @@ Pi persists accepted task receipts in its session. Reload does not replay accept
 
 Queues, receipts, and output have bounds. Full queues reject new tasks. Capacity errors require a new Pi conversation or Project process, as their error states. Terminal reads contain at most 32 KB. Task answers contain at most 8 KB; use `agent_transcript` to read longer answers.
 
-Only loaded Projects accept operations. Cross-Project calls do not load, select, or move Projects. Discovery is limited to the same executable and user folder. A stale endpoint after a crash returns an availability error.
+Only loaded Projects accept operations. Use `project` to load one. Cross-Project calls do not load or select Projects. Discovery is limited to the same executable and user folder. A stale endpoint after a crash returns an availability error.
 
 ## Other MCP clients
 

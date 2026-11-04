@@ -477,6 +477,7 @@ static void finish_resolutions(void);
 static bool queue_resolution(ShellWindow *window, const char *path, int argc, char **argv, bool initial, bool unload,
                              bool new_window, AnvilShellLaunchRequest *external);
 static bool unload_project_path(ShellWindow *window, const char *path);
+static bool load_project_path(ShellWindow *window, const char *path);
 static void begin_unload(ShellProject *project);
 static bool drain_retired_projects(void);
 static void service_sidebar(void);
@@ -1233,6 +1234,7 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     return size >= 1 && ((const char *)payload)[size - 1] == 0 && !memchr(payload, 0, size - 1);
   case ANVIL_SURFACE_MSG_SELECT_PROJECT:
   case ANVIL_SURFACE_MSG_UNLOAD_PROJECT:
+  case ANVIL_SURFACE_MSG_LOAD_PROJECT:
     return size > 1 && size < 32768 && ((const char *)payload)[size - 1] == 0 &&
            !memchr(payload, 0, size - 1);
   case ANVIL_SURFACE_MSG_DIALOG:
@@ -3937,6 +3939,10 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     if (!window->closing)
       unload_project_path(window, payload);
     break;
+  case ANVIL_SURFACE_MSG_LOAD_PROJECT:
+    SDL_Log("Shell background Project load requested: Window=%u", window->id);
+    if (!window->closing && !load_project_path(window, payload)) window_notice(window, "Cannot open Project");
+    break;
   case ANVIL_SURFACE_MSG_SELECT_TERMINAL: {
     if (project->sidebar) focus_sidebar(window, false);
     const char *path = (const char *)payload + ANVIL_SURFACE_TERMINAL_ID_LEN + 1;
@@ -3979,7 +3985,11 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
       delivery.x = (int32_t)SDL_clamp((int64_t)request->x + origin_x - target->last_config.origin_x, INT32_MIN, INT32_MAX);
       delivery.y = (int32_t)SDL_clamp((int64_t)request->y + origin_y - target->last_config.origin_y, INT32_MIN, INT32_MAX);
     }
-    if (!window->closing && target && target->connected && target->state == SHELL_READY && target->runtime_ready)
+    /* A background Project has no first frame, so it stays Starting. Its ready runtime takes direct requests, as a
+     * selection's pending Panes. A pointer request needs the frame's origin. */
+    bool ready = target && (target->state == SHELL_READY ||
+                            (target->state == SHELL_STARTING && request->route == ANVIL_SURFACE_PANE_ROUTE_DIRECT));
+    if (!window->closing && ready && target->connected && target->runtime_ready)
       shell_send(target, ANVIL_SURFACE_MSG_PANE_ACTION, &delivery, sizeof(delivery), text, text_size);
     else SDL_Log("Shell dropped a Pane request: route=%u Project is not Ready", request->route);
     break;
@@ -5980,6 +5990,8 @@ struct ProjectResolve {
   /* A restored Window's initial resolution names its Project, because the Window's selection can change first. */
   Uint32 project_id;
   bool restored;
+  /* A background load starts the Project in this Window. The Window keeps its selection. */
+  bool background;
   /* A Sidebar Terminal Session click: focus this session once the Project is selected. */
   char terminal[ANVIL_SURFACE_TERMINAL_ID_LEN + 1];
   char *pane;
@@ -6449,6 +6461,16 @@ static bool unload_project_path(ShellWindow *window, const char *path) {
     return false;
   return queue_resolution(window, path, 0, NULL, false, true, false, NULL);
 }
+/* A Project that is already loaded stays in its Window. */
+static bool load_project_path(ShellWindow *window, const char *path) {
+  if (window->closing || !path || !*path) return false;
+  unsigned revision = window->resolve_revision;
+  if (!queue_resolution(window, path, 0, NULL, false, false, false, NULL)) return false;
+  /* A background load does not replace the Window's pending selection. */
+  window->resolve_revision = revision;
+  shell.resolvers->background = true;
+  return true;
+}
 static bool open_project_window(ShellWindow *window, const char *path) {
   if (window->closing || !path || !*path) return false;
   if (!queue_resolution(window, path, 0, NULL, false, false, true, NULL)) {
@@ -6743,7 +6765,8 @@ static void finish_resolutions(void) {
       project->failed_close = true;
     } else if (!job->initial && (window->closing || job->close_generation != window->close_generation)) {
       SDL_Log("Shell discarded Project identity result after its requesting Window began Close: Window=%u", job->window_id);
-    } else if (!job->initial && !job->new_window && !job->unload && job->revision != window->resolve_revision) {
+    } else if (!job->initial && !job->new_window && !job->unload && !job->background &&
+               job->revision != window->resolve_revision) {
       SDL_Log("Shell discarded outdated Project selection result: Window=%u path=%s", window->id, job->path);
     } else if (!job->success) {
       SDL_Log("Shell rejected Project identity: Windows error=%lu path=%s",
@@ -6764,6 +6787,11 @@ static void finish_resolutions(void) {
       if (job->unload) {
         if (project)
           begin_unload(project);
+        free_resolution(job);
+        continue;
+      }
+      if (job->background && project) {
+        SDL_Log("Shell background load: Project=%u is already loaded", project->id);
         free_resolution(job);
         continue;
       }
@@ -6833,14 +6861,18 @@ static void finish_resolutions(void) {
           project->sidebar_pane_request = pending->request;
         } else if (job->pane) SDL_Log("Shell dropped a Pane request: allocation failed");
         /* The user may have selected another Project in a restored Window while this one resolved. */
-        if (!job->restored || window->selected == project) select_project(project, pending && !job->launched);
+        if (job->background) {
+          SDL_Log("Shell background load: Project=%u Window=%u", project->id, window->id);
+          windows_changed();
+        } else if (!job->restored || window->selected == project)
+          select_project(project, pending && !job->launched);
         if (job->launched) {
           /* Windows decides whether the raise takes the foreground. Without the launcher's grant it may only flash. */
           SDL_Log("Shell external launch raise: Project=%u foreground grant=%d", project->id,
                   job->external ? anvil_shell_launch_foreground_granted(job->external) : 1);
           if (project->restore_waiting) project->restore_rank = -1;
         }
-        if (!job->initial) raise_owner(project);
+        if (!job->initial && !job->background) raise_owner(project);
         if (job->terminal[0]) focus_terminal(project, job->terminal);
         if (created || (project->failed_close && project->process.hProcess &&
                         WaitForSingleObject(project->process.hProcess, 0) ==

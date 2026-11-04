@@ -14,7 +14,7 @@ end
 
 local function export(pane, id)
   return perform { action = "export", pane = pane.id, to = USERDIR,
-    transfer = id or transfer_id, target = { mode = "group", side = "after" } }
+    transfer = id or transfer_id, target = { mode = "group", side = "after" }, focus = true }
 end
 
 test.describe("Pane transfer", function()

@@ -2428,6 +2428,13 @@ static int f_unload_project(lua_State *L) {
   lua_pushboolean(L, anvil_hosted_surface_unload_project(path));
   return 1;
 }
+static int f_load_project(lua_State *L) {
+  size_t size = 0;
+  const char *path = luaL_checklstring(L, 1, &size);
+  luaL_argcheck(L, size > 0 && size < 32768 && !memchr(path, 0, size), 1, "invalid Project path");
+  lua_pushboolean(L, anvil_hosted_surface_load_project(path));
+  return 1;
+}
 static int f_publish_project_sidebar(lua_State *L) {
   size_t directory_size, source_size;
   const char *directory = luaL_checklstring(L, 1, &directory_size);
@@ -3170,6 +3177,7 @@ static const luaL_Reg lib[] = {
   { "open_project_window",  f_open_project_window  },
   { "open_project_picker",  f_open_project_picker  },
   { "unload_project",        f_unload_project        },
+  { "load_project",          f_load_project          },
   { "publish_project_sidebar", f_publish_project_sidebar },
   { "is_sidebar_surface", f_is_sidebar_surface },
   { "request_project_sidebar", f_request_project_sidebar },

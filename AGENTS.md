@@ -766,6 +766,11 @@ Keep focus by default. Keep normal close confirmations. Use stable Pane, Termina
 
 The `snooze` control tool sets or removes a Terminal's Snooze. Without a target, it uses the calling agent's Terminal Session. The Sidebar owns the saved times. Requests use the shell's Sidebar route, then normal Project Snooze requests. A reply reports acceptance, not completed delivery. Run `ui/agent_control.lua` and the `terminal-focus` shell probe after changes.
 
+The `project` tool opens or unloads a Project in the caller's Window. Open sends `system.load_project`: the shell starts the Project and the Window keeps its Selected Project. `focus: true` selects the Project instead. Unload keeps the normal close questions. It refuses Scratch and the Project that serves the call.
+`pane` move with `target_project` exports the Pane through `core.pane_transfer`. An export detaches the Pane's Terminals, so the transport first checks that the target has a control endpoint. Without focus, the import goes through the direct route, and the target stays unselected.
+A background Project has no first frame, so the shell keeps it Starting. The direct route also delivers to a Starting Project whose runtime is ready.
+Run `ui/agent_control.lua`, `ui/pane_transfer.lua` and the `agent-projects` and `launch-terminal-move` shell probes after changes.
+
 See [agent control](docs/agent-control.md) for tools, discovery, security, and limits. Run `runtime/net_server.lua`, `ui/agent_control.lua`, `ui/control_transport.lua`, and `ui/control_pi.lua` after changes. Also run `node --test tests/pi-control.test.cjs tests/agent-sessions.test.cjs`.
 
 `ui/control_pi.lua` runs real Pi TUI sessions against a local scripted model server. It uses no provider, API key, or inference. Keep these checks isolated from user sessions and settings.

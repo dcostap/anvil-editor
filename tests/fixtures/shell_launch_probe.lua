@@ -433,7 +433,7 @@ elseif names[path] then
      local pane, id = panes.pane_for_view(view), view.session_id
      save("terminal-move-id", {id=id})
      assert(require("core.pane_transfer").perform {action="export", pane=pane.id, to=root .. "/Replacement",
-      transfer="probe-terminal-move", target={mode="group"}})
+      transfer="probe-terminal-move", target={mode="group"}, focus=true})
      wait(function() return not panes.find(pane.id) end, 30, "the source kept the moved Pane")
      view = nil
      return

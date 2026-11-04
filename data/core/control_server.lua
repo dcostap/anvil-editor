@@ -130,28 +130,43 @@ function M:dispatch(client, body)
     if caller == "local" and type(params._meta) == "table" and type(params._meta.anvil_caller) == "string" then
       caller = params._meta.anvil_caller
     end
-    local ok, value = pcall(self.control.call, self.control, params.name, args, caller)
-    if ok and params.name == "agent_transcript" then
-      client.transcript = {query = value, result = tool_result}
-      client.deadline = value.deadline + 5
-      return
+    local function run()
+      local ok, value = pcall(self.control.call, self.control, params.name, args, caller)
+      if ok and params.name == "agent_transcript" then
+        client.transcript = {query = value, result = tool_result}
+        client.deadline = value.deadline + 5
+        return
+      end
+      if ok and params.name == "workspace_state" then
+        return self:discover(client, function(endpoints)
+          value.projects = {}
+          value.projects[self.control.project] = {project = self.control.project}
+          for _, endpoint in ipairs(endpoints) do value.projects[endpoint.project] = {project = endpoint.project} end
+          tool_result(true, value)
+        end)
+      end
+      if ok and params.name == "agent_wait" and value.connected
+          and (value.status == "pending" or value.status == "queued" or value.status == "running" or value.status == "accepted") then
+        client.waiting = {args = params.arguments, result = tool_result,
+          until_time = system.get_time() + (params.arguments.timeout_ms or 30000) / 1000}
+        client.deadline = client.waiting.until_time + 5
+        return
+      end
+      return tool_result(ok, value)
     end
-    if ok and params.name == "workspace_state" then
+    -- An export detaches the Pane's Terminals, so move only to a Project that runs. Use its own name for it.
+    if params.name == "pane" and type(args.target_project) == "string" then
       return self:discover(client, function(endpoints)
-        value.projects = {}
-        value.projects[self.control.project] = {project = self.control.project}
-        for _, endpoint in ipairs(endpoints) do value.projects[endpoint.project] = {project = endpoint.project} end
-        tool_result(true, value)
+        local target
+        for _, endpoint in ipairs(endpoints) do
+          if common.path_equals(endpoint.project, args.target_project) then target = endpoint.project end
+        end
+        if not target then return tool_result(false, "Target Project is not loaded or has no control endpoint") end
+        args.target_project = target
+        run()
       end)
     end
-    if ok and params.name == "agent_wait" and value.connected
-        and (value.status == "pending" or value.status == "queued" or value.status == "running" or value.status == "accepted") then
-      client.waiting = {args = params.arguments, result = tool_result,
-        until_time = system.get_time() + (params.arguments.timeout_ms or 30000) / 1000}
-      client.deadline = client.waiting.until_time + 5
-      return
-    end
-    return tool_result(ok, value)
+    return run()
   end
   return failure(-32601, "Method not found")
 end

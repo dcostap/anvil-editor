@@ -134,6 +134,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_CLOSE_ALL_WINDOWS = 111,
   /* Open the Window that closed last, with its placement and Projects. No payload. */
   ANVIL_SURFACE_MSG_REOPEN_CLOSED_WINDOW = 112,
+  /* Load a Project in this Window without selecting it. Payload: NUL-terminated path. */
+  ANVIL_SURFACE_MSG_LOAD_PROJECT = 113,
 } AnvilSurfaceMessageType;
 
 typedef enum {

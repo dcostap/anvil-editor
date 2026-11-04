@@ -1307,7 +1307,7 @@ function SidebarView:drop_request(target, source, files, text)
     local from = source.project.path
     if path == from then return "direct", from, {action = "move", pane = source.tab.id, target = target.place} end
     self.transfers = (self.transfers or 0) + 1
-    return "direct", from, {action = "export", pane = source.tab.id, to = path, target = target.place,
+    return "direct", from, {action = "export", pane = source.tab.id, to = path, target = target.place, focus = true,
       transfer = string.format("%d-%d-%d", self.window_id or 0, os.time(), self.transfers)}
   end
   files = files and #files > 0 and files or nil

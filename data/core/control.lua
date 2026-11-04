@@ -47,10 +47,11 @@ end
 M.tools = {
   { name = "workspace_state", description = "List this Project's Panes and identify the caller. IDs, not Pane numbers, select targets.",
     inputSchema = object({}, nil), annotations = { readOnlyHint = true, destructiveHint = false } },
-  { name = "pane", description = "Create, split, move, focus or close a Pane. Focus stays unchanged unless requested. Close keeps normal confirmation. Reuse request_id only for retries of the same operation.",
+  { name = "pane", description = "Create, split, move, focus or close a Pane. Move takes a target and direction, or target_project to move the Pane to another loaded Project as a new Pane Group; that move returns accepted, and its Terminals keep running. Focus stays unchanged unless requested. Close keeps normal confirmation. Reuse request_id only for retries of the same operation.",
     inputSchema = object({ action = choice("create", "split", "move", "focus", "close"),
       pane = string_schema(), target = string_schema(), direction = choice("left", "right", "up", "down"),
-      focus = {type = "boolean"}, request_id = string_schema(128) }, {"action", "request_id"}),
+      target_project = string_schema(32768), focus = {type = "boolean"}, request_id = string_schema(128) },
+      {"action", "request_id"}),
     annotations = { readOnlyHint = false, destructiveHint = true, idempotentHint = true } },
 }
 
@@ -103,6 +104,10 @@ tool("terminal", "Read bounded terminal text, send literal terminal input, or en
 for _, definition in ipairs(M.tools) do
   definition.inputSchema.properties.project = string_schema(32768)
 end
+-- The caller's own Project serves this tool. `path` names the Project that it opens or unloads.
+tool("project", "Open or unload a Project in this Window. Open loads a folder without selecting it; focus=true selects it. Unload keeps the normal close questions. You cannot unload Scratch or the Project that serves this call. Returns accepted; inspect workspace_state for the loaded Projects.",
+  {action = choice("open", "unload"), path = string_schema(32768), focus = {type = "boolean"}, request_id = id},
+  {"action", "path", "request_id"}, false)
 
 local function canonical(value)
   if type(value) ~= "table" then return json.encode(value) end
@@ -472,8 +477,47 @@ end
 
 function M:agent_wait(args) return self:agent_read(args) end
 
+function M:project(args)
+  assert(system.is_hosted_surface(), "Opening and unloading Projects needs Anvil's shell")
+  assert(args.action == "open" or not args.focus, "Unload takes no focus")
+  local machine_project = require "core.machine_project"
+  local path = machine_project.folder_key(args.path)
+  -- The shell checks a Machine Project's key itself.
+  local folder = not machine_project.is_key(path)
+  if folder then
+    assert(common.is_absolute_path(path), "Use an absolute Project path")
+    path = system.absolute_path(path) or path
+  end
+  local sent
+  if args.action == "unload" then
+    assert(not common.path_equals(path, machine_project.root_key(self.project)), "Cannot unload the Project that serves this call")
+    assert(not core.is_scratch_project(path), "Cannot unload the Scratch Project")
+    sent = core.unload_project(path)
+  else
+    local info = folder and system.get_file_info(path)
+    assert(not folder or info and info.type == "dir", "Project folder not found")
+    if args.focus then sent = core.open_project_in_same_window(path) else sent = system.load_project(path) end
+  end
+  assert(sent, "Anvil's shell is unavailable")
+  core.log_quiet("Control: Project %s focus=%s path=%s", args.action, tostring(args.focus == true), path)
+  return {status = "accepted", path = path}
+end
+
+-- The source exports the Pane. The target imports it and confirms, then the source closes its copy.
+function M:move_to_project(source, args)
+  assert(source and not args.target and not args.direction, "A move to another Project needs a Pane, and no target or direction")
+  assert(not common.path_equals(args.target_project, self.project), "The Pane is already in that Project")
+  local transfer = net.random_token()
+  local ok, err = require("core.pane_transfer").perform {action = "export", pane = source.id, to = args.target_project,
+    target = {mode = "group"}, transfer = transfer, focus = args.focus == true}
+  assert(ok, err)
+  return {pane = source.id, project = args.target_project, transfer = transfer, status = "accepted"}
+end
+
 function M:pane(args)
   local source = args.pane and assert(panes.find(args.pane), "Pane not found")
+  assert(not args.target_project or args.action == "move", "Only a move takes target_project")
+  if args.target_project then return self:move_to_project(source, args) end
   local previous, active_view = panes.active(), core.active_view
   local result
   if args.action == "create" then result = assert(panes.create {focus = args.focus == true})
@@ -517,7 +561,8 @@ function M:call(name, args, caller)
     -- Reserve before executing. A failed partial operation must not run twice.
     self.receipts[key] = { fingerprint = fingerprint, error = "Operation did not finish" }
   end
-  local ok, result = pcall(self[name], self, args, caller)
+  -- Tool methods live on the class. The `project` field would hide the `project` tool.
+  local ok, result = pcall(M[name], self, args, caller)
   if key then
     self.receipts[key].result, self.receipts[key].error = ok and result or nil, not ok and tostring(result) or nil
     core.log_quiet("Control: %s caller=%s request=%s ok=%s", name, caller or "local", args.request_id, tostring(ok))

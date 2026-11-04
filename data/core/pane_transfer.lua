@@ -96,7 +96,8 @@ local function export(request)
   for _, view in ipairs(terminals) do view:detach_session() end
   pending[request.transfer] = { pane = pane, views = views, buffers = buffers, terminals = terminals }
   local ok
-  ok, err = send("select", request.to, { action = "import", snapshot = snapshot,
+  -- A focused move selects the target Project, as a Sidebar drop does. The direct route leaves the selection.
+  ok, err = send(request.focus and "select" or "direct", request.to, { action = "import", snapshot = snapshot,
     source = machine_project.root_key(project and project.path or system.getcwd()), target = request.target,
     transfer = request.transfer })
   if not ok then
