@@ -1639,7 +1639,7 @@ end
 
 -- Snoozes `target`: it leaves its Pane Group for its own Snoozed one. If it had focus, the nearest Pane that
 -- navigation reaches takes focus. Without one, the Snoozed Pane stays shown.
-function M.snooze(target)
+function M.snooze(target, keep_focus)
   local pane = M.find(target)
   if not pane then return nil, "invalid Pane" end
   if pane.group.snoozed then return pane end
@@ -1653,7 +1653,9 @@ function M.snooze(target)
     create_group(pane, group_index(old_group) + 1)
   end
   pane.group.snoozed = true
-  if M.active_pane == pane or M.visible_group_value == pane.group then
+  if keep_focus and M.active_pane == pane then
+    M.visible_group_value = pane.group
+  elseif not keep_focus and (M.active_pane == pane or M.visible_group_value == pane.group) then
     local survivors = old_group ~= pane.group and layout.leaves(old_group.root) or {}
     local next_pane = nearest_after_removal(survivors, member_index)
       or nearest_after_removal(M.navigable(), old_index)

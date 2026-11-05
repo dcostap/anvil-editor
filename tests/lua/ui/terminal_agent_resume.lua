@@ -99,17 +99,44 @@ test.describe("Terminal agent resume", function()
         int __stdcall TerminateProcess(void *process, unsigned int code);
         unsigned long __stdcall WaitForSingleObject(void *handle, unsigned long milliseconds);
         int __stdcall CloseHandle(void *handle);
+        int __stdcall MultiByteToWideChar(unsigned int, unsigned long, const char *, int, wchar_t *, int);
+        void * __stdcall CreateFileW(const wchar_t *, unsigned long, unsigned long, void *, unsigned long, unsigned long, void *);
       ]])
       local kernel = ffi.load("kernel32")
       local handle = kernel.OpenProcess(0x100001, 0, view.session:stats().host_pid)
-      local restored
+      local restored, held_record
       local ok, err = pcall(function()
-        test.ok(view.session:write(string.format('"%s" "%s" --session-dir "%s"\r', exe, cli, dir)))
+        test.ok(view.session:write(string.format('"%s" "%s" --session-dir "%s" --model-events\r', exe, cli, dir)))
         test.ok(wait_for(view, function()
           local saved = record(state.session_id)
           return screen_text(view):find("FAKE_PI_READY", 1, true)
             and saved.interrupted_command and saved.interrupted_command:find("cli.js", 1, true)
         end), "Pi did not start: " .. screen_text(view))
+        local first, current = session_file_name(dir)
+        local record_path = USERDIR .. "/terminal-sessions/" .. state.session_id .. ".lua"
+        local length = kernel.MultiByteToWideChar(65001, 0, record_path, -1, nil, 0)
+        local wide = ffi.new("wchar_t[?]", length)
+        test.equal(kernel.MultiByteToWideChar(65001, 0, record_path, -1, wide, length), length)
+        -- Model a scanner that permits reads but blocks replacement of the record.
+        held_record = kernel.CreateFileW(wide, 0x80000000, 1, nil, 3, 128, nil)
+        test.ok(held_record ~= ffi.cast("void *", -1))
+        local function read_log()
+          local file = assert(io.open(USERDIR .. "/logs/terminal-session-" .. state.session_id .. ".log", "rb"))
+          local text = file:read("*a"); file:close(); return text
+        end
+        local log_start = #read_log() + 1
+        test.ok(view:write_input("new\r"))
+        test.ok(wait_for(view, function()
+          return read_log():find("failure: registry write Windows error=", log_start, true)
+        end), "the locked record did not block its replacement")
+        kernel.CloseHandle(held_record); held_record = nil
+        test.ok(wait_for(view, function()
+          for _, name in ipairs(system.list_dir(dir)) do
+            if name:match("%.jsonl$") and name ~= first then current = name end
+          end
+          local report = record(state.session_id).recovery_agent
+          return current and report and report:find(current, 1, true)
+        end), "the saved recovery report did not follow Pi's new conversation")
         checkpoint_on_detach(view, state)
         kernel.TerminateProcess(handle, 99); kernel.WaitForSingleObject(handle, 5000)
         restored = panes.place(function() return terminal.from_state(state) end, { placement = "current" })
@@ -118,10 +145,11 @@ test.describe("Terminal agent resume", function()
         local resumed = without_extension(launches(dir)[2])
         test.equal(#resumed, 2)
         test.equal(resumed[1], "--session")
-        test.equal(resumed[2]:match("[^/\\]+$"), session_file_name(dir))
+        test.equal(resumed[2]:match("[^/\\]+$"), current)
         local option = core.nag_view.options and core.nag_view.options[1]
         test.ok(not (option and option.rerun), "revival asked before resuming Pi")
       end)
+      if held_record and held_record ~= ffi.cast("void *", -1) then kernel.CloseHandle(held_record) end
       if core.nag_view.options and core.nag_view.options[1] and core.nag_view.options[1].rerun then
         core.nag_view.hovered_item = 2; require("core.command").perform("core:select_dialog_entry")
       end
@@ -129,6 +157,7 @@ test.describe("Terminal agent resume", function()
       view:on_close()
       if kernel.WaitForSingleObject(handle, 0) == 258 then kernel.TerminateProcess(handle, 99) end
       kernel.CloseHandle(handle)
+      test.ok(test.remove_tree(dir))
       test.ok(ok, err)
     end)
 

@@ -53,6 +53,27 @@ test.describe("Agent editor control", function()
     test.is_nil(panes.find(pane.id))
   end)
 
+  test.it("lists other Panes when a restored Terminal cannot open its session", function()
+    local terminal = require "plugins.terminal"
+    local id = "0123456789abcdef0123456789abcdef"
+    local other = panes.create { factory = function() return View() end }
+    -- The native record reader is the external boundary. Access failure leaves no native session.
+    terminal._set_native_for_tests { read_session_record = function() return nil, 5 end }
+    local view
+    local ok, err = pcall(function()
+      view = terminal.open { session_id = id, placement = "new" }
+      local pane = panes.pane_for_view(view)
+      local state = control:call("workspace_state", {}, id)
+      test.ok(state.panes[other.id], "the failed Terminal hid another Pane")
+      test.equal(state.panes[pane.id].terminal_state, "failed")
+      test.equal(state.terminals[id].state, "failed")
+      test.equal(state.caller_pane, pane.id)
+    end)
+    if view then view:on_close() end
+    terminal._set_native_for_tests(nil)
+    test.ok(ok, err)
+  end)
+
   for _, case in ipairs {
     {tool = "pane"}, {tool = "terminal"},
     {tool = "pane", history = true}, {tool = "terminal", history = true},

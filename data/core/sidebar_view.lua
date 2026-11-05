@@ -365,11 +365,18 @@ end
 
 function SidebarView:set_snooze_until(target, time)
   local session = target.session
+  local previous = self.snoozes[session]
   self.snoozes[session] = time
+  local saved, err = self.action("snooze", session)
+  if saved == false then
+    self.snoozes[session] = previous
+    core.error("Could not save Snooze: %s", tostring(err))
+    return false
+  end
   core.log_quiet("Sidebar Snooze: session=%s Pane=%s until=%s", session, tostring(target.pane), tostring(time))
-  self.action("snooze", session)
   self.action("request", "direct", target.path, {action = time and "snooze" or "unsnooze", pane = target.pane})
   self:rebuild_rows()
+  return true
 end
 
 -- Agent control requests use absolute times, so delivery does not extend the requested Snooze.
@@ -384,8 +391,7 @@ function SidebarView:on_snooze_request(text)
     core.log_quiet("Sidebar Snooze request rejected")
     return false
   end
-  self:set_snooze_until(request, request.until_time)
-  return true
+  return self:set_snooze_until(request, request.until_time)
 end
 
 -- Closes the hours field. With `accept`, a whole number of hours above zero sets the Snooze; other text keeps

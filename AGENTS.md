@@ -101,7 +101,9 @@ Viewers show the Controller's screen at its size. They send no query answers, fo
 Typed input in a Viewer takes control. The client sends `TAKE` with the control generation that it saw last, then the input on the same pipe. The host refuses an old generation and drops a Viewer's input.
 After a grant or a resize, the host sends a `ROLE` record to each Client at that place in the output. Each Client resizes its own screen there. A handoff sends no snapshot.
 A `ROLE` also counts the attached Clients. The host sends one to the others when a Client attaches or leaves. The session status reports the count as `clients`.
-A CLOSE or END from one Client only detaches that Client while another Client is attached. The last Client's close ends the shell. A control connection's CLOSE or END does nothing while a Client is attached.
+A CLOSE or END from one Client only detaches that Client while another Client is attached. The last Client's close ends the shell. A control connection without a Client ID cannot end a shell while a Client is attached.
+New Clients request a connection ID in WELCOME. Their final control CLOSE or END names that exact Client and its process, so a delayed disconnect cannot hide the last Close. Another Client in the same process stays attached. Older hosts reject the request flag; the Client then repeats the old handshake without an ID.
+A saved host uses both its process ID and creation time. If Windows reuses the ID, revival keeps the saved Session and screen. For a process that denies access, the native system process list can prove that the creation time differs. An identity that cannot be verified stays blocked. A failed Terminal without a native session still appears in agent workspace inspection.
 So Pane Close asks no question for a session that another device shows, and keeps no Reopen record for it. When the Controller leaves, no other Client gets control until it asks.
 A Client on the host's own PC takes control when it attaches, if the Controller is also on this PC. A Pane move attaches before the old View's detach arrives, so the target still controls. A remote Controller keeps control.
 A Viewer whose 8 MiB queue is full is dropped. It attaches again with a snapshot, so it never stalls the Controller.
@@ -171,6 +173,14 @@ Run `ui/terminal_agent_resume.lua` after changes. It runs a fake Pi on Node and 
 Compiled programs must also have the executable name `pi` or `pi.exe` before the preload checks their package.
 Run `node --test tests/agent-sessions.test.cjs` to check compiled Pi and unrelated programs. It requires Bun.
 
+Windows sign-out and shutdown are not normal Terminal exits. `src/session_end.c` receives the Windows messages on a separate thread through a hidden top-level window. Editors get an earlier shutdown priority than Terminal hosts; hosts get an earlier priority than ordinary shells. `SM_SHUTTINGDOWN` also guards recovery. Restart Manager's application-only close does not freeze the Windows session state.
+The host keeps a separate recovery copy of the interrupted command, process ID, submitted input and validated Pi report. Shutdown output can change live status, but cannot clear that copy. If Windows cancels sign-out after Pi ends, the copy stays until a live or new command replaces it. The Pi report must still match the saved process ID.
+The record's `recovery_agent` holds that report beside its process ID. An empty field means no verified report. Only records without the field use the separate `.agent` file. Each process probe checks for a changed conversation in the same Pi process. A failed record write retries while the host runs.
+A revived host loads this copy before its first record write. `RESUME_AGENT` marks automatic resume input. The host keeps the copy until the new Pi reports its identity, a new command starts, or the resume ends normally. Another restart during startup can then resume the same conversation. A Project permits one automatic host revival per Windows shutdown attempt, not an unlimited crash loop.
+A shell that ends during sign-out sends no ordinary EXITED record. Its Pane and Snooze stay. After cancellation, its host ends without EXITED so the same View can revive. An editor also treats EXITED from an older host as an interruption while Windows ends the session. It starts no revival or prepared shell until cancellation. Hosts keep their loaded native code across a dev update; existing hosts need an End and revival to get host changes.
+The notification thread checks whether the shell runs at query and cancellation. It remembers a shutdown death while the monitor stalls. Windows can finish console termination after cancellation; its `0x40010004` status still protects that shell after a shutdown query. A normal exit after cancellation stays normal.
+Run `anvil:terminal-recovery`, `ui/terminal_signout.lua`, `ui/terminal_revival.lua` and `ui/terminal_agent_resume.lua` after changes. The sign-out tests send Windows messages only to their own processes. They never sign out the user.
+
 The host reads program status reports (OSC 7501) and keeps the Agent Status in the session record.
 A report can carry `since=<Unix seconds>` for a state that began earlier. A time in the future is ignored.
 It sets `PI_PROGRAM_STATUS=1`, so Pi reports without a query.
@@ -228,6 +238,7 @@ The fold shows the mark of a Snoozed Pane that needs the user, also in a collaps
 Collapsed Projects and Dormant Projects show a coloured count of Terminals that need the user. Collapsed age groups show their total.
 A Pi question counts during a Snooze. Other attention stays hidden until the Snooze ends.
 Each Project checks the saved times every 5 seconds (`core.snoozed_panes`). It does not change focus.
+Saved times repair a current Terminal View's missing Snooze flag, also after Workspace restore. A Terminal in Navigation History cannot hide the current View. A failed or invalid read wakes nothing. The Sidebar applies a Snooze change only after its save succeeds; a failed save keeps the previous time and sends no Pane change.
 Due Panes wake into new Pane Groups at the end, at most three side by side, oldest Snooze first. A shown Pane wakes in place.
 Run `ui/snoozed_panes.lua`, `ui/sidebar_view.lua`, `ui/pending_panes.lua` and the `terminal-focus` shell probe after changes.
 
@@ -876,8 +887,9 @@ Run `ui/wallpaper.lua`, `anvil:image-decode` and the `shell-empty` shell probe a
 
 `core.storage` reads generated Lua data through `system.load_file`. Windows readers share deletion, so a replacement can leave them reading the old file.
 `system.replace_file` uses Windows POSIX rename semantics to publish the new file while those readers stay open. Do not replace this with `MoveFileExW` alone: it refuses an open target, even when the reader shares deletion.
+Windows can briefly hide the target name during that rename. `src/shared_file.c` gives each canonical path a named mutex. Writers hold it through publication. A reader that gets not found takes the same mutex and opens again. Existing files stay lock-free; missing keys have no fixed delay. A lock timeout is a read failure, not a missing key.
 Filesystems without POSIX rename support keep the previous, bounded-retry rename behavior. The native log reports that fallback once. They do not have the same concurrent-reader guarantee.
-Run `runtime/storage.lua` after changes. It checks concurrent reads and saves, and replacement while a reader keeps the old data.
+Run `anvil:shared-file` and `runtime/storage.lua` after changes. They check a missing-name interval, concurrent reads and saves, and replacement while a reader keeps the old data.
 
 ## Reload from disk
 

@@ -57,6 +57,22 @@ function worker_pool_test.run(payload, ctx)
     return
   end
 
+  if op == "storage_load_loop" then
+    USERDIR = payload.userdir
+    local storage = require "core.storage"
+    local loads, missing = 0, 0
+    local deadline = system.get_time() + 120
+    while not ctx.cancelled() do
+      local value = storage.load(payload.module, payload.key)
+      loads = loads + 1
+      if type(value) ~= "table" then missing = missing + 1
+      elseif value.value == payload.count then break end
+      if system.get_time() >= deadline then error("Storage reader timed out") end
+    end
+    ctx.send({ type = "final", payload = { loads = loads, missing = missing } })
+    return
+  end
+
   if op == "fail" then
     error(payload.message or "worker-pool-test-failure")
   end

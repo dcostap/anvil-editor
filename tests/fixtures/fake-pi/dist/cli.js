@@ -43,6 +43,11 @@ if (args.includes("--model-events")) {
       if (name === "idle") {
         emit("agent_end", { type: "agent_end" });
         process.stdout.write("\x1b]7501;state=idle:app=pi\x1b\\");
+      } else if (name === "new") {
+        // Change the conversation without changing the process, title, or status.
+        const id = crypto.randomUUID();
+        file = path.join(dir, `2026-10-18T10-00-00-000Z_${id}.jsonl`);
+        fs.appendFileSync(file, JSON.stringify({ type: "session", id }) + "\n");
       } else if (name === "suspend") {
         // Pi clears all status records when its TUI stops for an external program.
         process.stdout.write("\x1b]7501;state=clear\x1b\\");

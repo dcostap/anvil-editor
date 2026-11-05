@@ -192,6 +192,9 @@ if host_machine.system() == 'windows'
         'terminal_model.c',
         'terminal_snapshot.c',
         'terminal_host.c',
+        'terminal_recovery.c',
+        'session_end.c',
+        'shared_file.c',
         'terminal_contrast.c',
     ]
     terminal_replay_test = executable('terminal_replay_test',
@@ -380,6 +383,13 @@ launch_mode_test = executable('launch_mode_test',
 )
 test('launch-mode', launch_mode_test, env: anvil_test_env, suite: 'anvil')
 
+terminal_recovery_test = executable('terminal_recovery_test',
+    ['../tests/native/terminal_recovery_test.c', 'terminal_recovery.c'],
+    include_directories: anvil_includes,
+    c_args: anvil_cargs,
+)
+test('terminal-recovery', terminal_recovery_test, env: anvil_test_env, suite: 'anvil')
+
 machine_frame_test = executable('machine_frame_test',
     ['../tests/native/machine_frame_test.c', 'machine_frame.c'],
     include_directories: anvil_includes,
@@ -392,6 +402,11 @@ if host_machine.system() == 'windows'
         ['../tests/native/keymap_layout_test.c', 'key_text.c'],
         include_directories: anvil_includes, dependencies: [sdl_dep], c_args: anvil_cargs)
     test('keymap-layout', keymap_layout_test, env: anvil_test_env, suite: 'anvil')
+
+    shared_file_test = executable('shared_file_test',
+        ['../tests/native/shared_file_test.c', 'shared_file.c'],
+        include_directories: anvil_includes, dependencies: [cc.find_library('user32')], c_args: anvil_cargs)
+    test('shared-file', shared_file_test, env: anvil_test_env, suite: 'anvil')
 
     sidebar_scan_test = executable('sidebar_scan_test',
         ['../tests/native/project_sidebar_scan_test.c', 'project_sidebar.c', 'project_sidebar_scan.c'],

@@ -6,7 +6,10 @@
 #include "conpty.h"
 #include "terminal_model.h"
 #include "terminal_snapshot.h"
+#include "session_end.h"
+#include "terminal_recovery.h"
 #include <tlhelp32.h>
+#include <winternl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -55,6 +58,7 @@ typedef struct {
   bool used, attached, controller, view_only, local, status_pending;
   /* Changes with each connection in this slot, so late output and replies skip a new Client. */
   uint32_t epoch;
+  uint32_t id, pid;
   HANDLE reader, writer;
   char name[ANVIL_TERMINAL_NAME_LENGTH];
 } HostClient;
@@ -71,10 +75,11 @@ struct TerminalHost {
   /* The controlling slot or -1, and the control generation. Each grant makes a new generation. */
   int controller;
   uint32_t generation;
+  uint32_t last_client_id;
   char computer[ANVIL_TERMINAL_NAME_LENGTH];
   HANDLE listen;
   bool busy, status_pending;
-  volatile LONG backpressured, registry_requested;
+  volatile LONG backpressured, registry_requested, registry_failed;
   volatile LONG stop, reader_stop, reader_done;
   volatile LONG64 last_output, exit_sent_ms, last_input;
   HANDLE reader, console_close;
@@ -86,9 +91,20 @@ struct TerminalHost {
   char last_cwd[32768], interrupted_command[16384], agent_report_path[32768];
   /* The busy child that interrupted_command came from. An agent report names it. */
   DWORD interrupted_pid;
+  /* Recovery is separate from live state: sign-out can end Pi, then be canceled.
+     Keep that interrupted command until it is still live or the user starts another command. */
+  struct {
+    AnvilTerminalRecovery saved;
+    unsigned long session_generation, command_generation;
+    unsigned long resume_generation, resume_session_generation;
+    DWORD resume_pid;
+    bool held, starting, resuming;
+  } recovery;
+  unsigned long command_generation;
   /* The last older process that named the shell's reused ID as its parent. It is logged once. */
   DWORD ignored_child_pid;
   bool explicit_close, shell_ended;
+  bool snapshot_frozen, shell_interrupted;
   bool prepared;
   uint64_t prepared_deadline;
   volatile LONG activate_requested;
@@ -172,6 +188,67 @@ bool anvil_terminal_host_identity(HANDLE process, DWORD pid, const char *time) {
     strcmp(actual, time) == 0;
 }
 
+/* A protected process can reuse the PID of an old host. The system list gives its creation time
+   without granting a process handle. A failed or incomplete query proves nothing. */
+static DWORD inaccessible_host_state(DWORD pid, const char *time) {
+  typedef NTSTATUS (NTAPI *QueryProcesses)(SYSTEM_INFORMATION_CLASS, void *, ULONG, ULONG *);
+  HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+  QueryProcesses query = ntdll ? (QueryProcesses)GetProcAddress(ntdll, "NtQuerySystemInformation") : NULL;
+  if (!query) return ERROR_ACCESS_DENIED;
+  ULONG capacity = 65536;
+  for (unsigned attempt = 0; attempt < 4 && capacity <= 16 * 1024 * 1024; attempt++) {
+    uint8_t *bytes = malloc(capacity);
+    if (!bytes) return ERROR_NOT_ENOUGH_MEMORY;
+    ULONG length = 0;
+    NTSTATUS status = query(SystemProcessInformation, bytes, capacity, &length);
+    if ((ULONG)status == 0xc0000004u) { /* STATUS_INFO_LENGTH_MISMATCH */
+      free(bytes);
+      capacity = length > capacity ? length : capacity * 2;
+      continue;
+    }
+    DWORD result = ERROR_ACCESS_DENIED;
+    if (status >= 0 && length <= capacity) {
+      size_t offset = 0;
+      while (offset <= length && length - offset >= sizeof(SYSTEM_PROCESS_INFORMATION)) {
+        SYSTEM_PROCESS_INFORMATION *entry = (SYSTEM_PROCESS_INFORMATION *)(bytes + offset);
+        if ((uintptr_t)entry->UniqueProcessId == pid) {
+          char actual[17];
+          snprintf(actual, sizeof(actual), "%016llx", (unsigned long long)entry->CreateTime.QuadPart);
+          result = strcmp(actual, time) ? ERROR_PROCESS_ABORTED : ERROR_ACCESS_DENIED;
+          break;
+        }
+        if (!entry->NextEntryOffset) { result = ERROR_PROCESS_ABORTED; break; }
+        if (entry->NextEntryOffset < sizeof(*entry) || entry->NextEntryOffset > length - offset) break;
+        offset += entry->NextEntryOffset;
+      }
+    }
+    free(bytes);
+    return result;
+  }
+  return ERROR_ACCESS_DENIED;
+}
+
+HANDLE anvil_terminal_host_open(DWORD pid, const char *time, DWORD *error) {
+  *error = ERROR_INVALID_DATA;
+  if (!pid || !time || strlen(time) != 16 || strspn(time, "0123456789abcdef") != 16) return NULL;
+  HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (!process) {
+    *error = GetLastError();
+    if (*error == ERROR_INVALID_PARAMETER) *error = ERROR_PROCESS_ABORTED;
+    else if (*error == ERROR_ACCESS_DENIED) *error = inaccessible_host_state(pid, time);
+    return NULL;
+  }
+  char actual[17];
+  DWORD waited = WaitForSingleObject(process, 0);
+  if (waited == WAIT_OBJECT_0) *error = ERROR_PROCESS_ABORTED;
+  else if (waited != WAIT_TIMEOUT || !creation_time(process, actual)) *error = GetLastError();
+  else if (strcmp(actual, time)) *error = ERROR_PROCESS_ABORTED;
+  else { *error = ERROR_SUCCESS; return process; }
+  if (*error == ERROR_SUCCESS) *error = ERROR_GEN_FAILURE;
+  CloseHandle(process);
+  return NULL;
+}
+
 /* Registry strings use Lua decimal escapes, including quotes and backslashes. */
 static void registry_string(FILE *file, const char *key, const char *text) {
   fprintf(file, "  %s = \"", key);
@@ -200,21 +277,40 @@ static bool registry_host_live(TerminalHost *host) {
   unsigned long pid = 0; unsigned long long expected = 0;
   if (!pid_field || !time_field || sscanf(pid_field, "host_pid = %lu", &pid) != 1 ||
       sscanf(time_field, "host_creation_time = \"%llx", &expected) != 1) return true;
-  HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-  if (!process) return GetLastError() != ERROR_INVALID_PARAMETER;
-  char created[17], wanted[17]; snprintf(wanted, sizeof(wanted), "%016llx", expected);
-  bool live = WaitForSingleObject(process, 0) != WAIT_OBJECT_0 &&
-    (!creation_time(process, created) || !strcmp(created, wanted));
-  CloseHandle(process);
-  return live;
+  char wanted[17]; snprintf(wanted, sizeof(wanted), "%016llx", expected);
+  DWORD error;
+  HANDLE process = anvil_terminal_host_open(pid, wanted, &error);
+  if (process) CloseHandle(process);
+  return error != ERROR_PROCESS_ABORTED;
+}
+
+static char *read_text(const char *path, size_t limit) {
+  wchar_t *wide = wide_string(path);
+  HANDLE file = wide ? CreateFileW(wide, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL) : INVALID_HANDLE_VALUE;
+  free(wide);
+  if (file == INVALID_HANDLE_VALUE) return NULL;
+  LARGE_INTEGER size;
+  char *text = NULL;
+  if (GetFileSizeEx(file, &size) && size.QuadPart >= 0 && (uint64_t)size.QuadPart < limit) {
+    text = malloc((size_t)size.QuadPart + 1);
+    DWORD got = 0;
+    if (text && ReadFile(file, text, (DWORD)size.QuadPart, &got, NULL) && got == size.QuadPart && !memchr(text, 0, got))
+      text[got] = 0;
+    else { free(text); text = NULL; }
+  }
+  CloseHandle(file);
+  return text;
 }
 
 static bool write_registry(TerminalHost *host) {
+  /* Windows can end Pi before its shell. The resulting idle prompt is not a user exit.
+     Keep the last running identity until Windows cancels sign-out or ends this host. */
   if (host->prepared) return true;
   char temporary[32772], created[17];
-  if (!creation_time(GetCurrentProcess(), created)) return false;
+  if (!creation_time(GetCurrentProcess(), created)) { InterlockedExchange(&host->registry_failed, 1); return false; }
   HANDLE mutex = registry_lock(host->id);
-  if (!mutex) return false;
+  if (!mutex) { InterlockedExchange(&host->registry_failed, 1); return false; }
   snprintf(temporary, sizeof(temporary), "%s.tmp", host->record_path);
   wchar_t *path = wide_string(host->record_path), *temp = wide_string(temporary);
   FILE *file = temp ? _wfopen(temp, L"wb") : NULL;
@@ -239,16 +335,32 @@ static bool write_registry(TerminalHost *host) {
     fprintf(file, "  activity = %lld,\n", (long long)host->activity);
     registry_string(file, "status", host->shell_ended ? "exited" : "running");
     registry_string(file, "snapshot_path", host->snapshot_path);
-    registry_string(file, "interrupted_command", host->interrupted_command);
-    fprintf(file, "  interrupted_pid = %lu,\n", (unsigned long)host->interrupted_pid);
+    char *report = read_text(host->agent_report_path, sizeof(host->recovery.saved.agent));
     EnterCriticalSection(&host->lock);
+    unsigned long generation = anvil_session_end_generation();
+    if (anvil_session_end_pending() || generation != host->recovery.session_generation) host->recovery.held = true;
+    host->recovery.session_generation = generation;
+    if (!host->recovery.held) {
+      bool same_command = host->recovery.saved.pid == host->interrupted_pid &&
+        host->recovery.command_generation == host->command_generation;
+      strcpy(host->recovery.saved.command, host->interrupted_command);
+      strcpy(host->recovery.saved.input, host->interrupted_input);
+      host->recovery.saved.pid = host->interrupted_pid;
+      host->recovery.command_generation = host->command_generation;
+      if (!same_command) host->recovery.saved.agent[0] = 0;
+      if (anvil_terminal_agent_matches(report, host->interrupted_pid)) strcpy(host->recovery.saved.agent, report);
+    }
+    registry_string(file, "interrupted_command", host->recovery.saved.command);
+    fprintf(file, "  interrupted_pid = %lu,\n", (unsigned long)host->recovery.saved.pid);
+    registry_string(file, "recovery_agent", host->recovery.saved.agent);
     AgentRecord agent = host->agent, step = host->step;
     char model[sizeof(host->agent_model)];
     memcpy(model, host->agent_model, sizeof(model));
-    registry_string(file, "interrupted_input", host->interrupted_input);
+    registry_string(file, "interrupted_input", host->recovery.saved.input);
     fprintf(file, "  command_started = %lld,\n  command_finished = %lld,\n  command_exit = %d,\n",
       (long long)host->command_started, (long long)host->command_finished, host->command_exit);
     LeaveCriticalSection(&host->lock);
+    free(report);
     if (agent.state[0]) {
       registry_string(file, "agent_state", agent.state);
       registry_string(file, "agent_kind", agent.kind);
@@ -279,7 +391,9 @@ static bool write_registry(TerminalHost *host) {
   }
   if (!ok && temp) DeleteFileW(temp);
   free(path); free(temp);
-  if (!ok) host_log(host, "failure: registry write Windows error=%lu", (unsigned long)GetLastError());
+  LONG failed_before = InterlockedExchange(&host->registry_failed, ok ? 0 : 1);
+  if (!ok && !failed_before) host_log(host, "failure: registry write Windows error=%lu", (unsigned long)GetLastError());
+  else if (ok && failed_before) host_log(host, "registry writes resumed");
   ReleaseMutex(mutex); CloseHandle(mutex);
   return ok;
 }
@@ -565,6 +679,7 @@ static void apply_mark(TerminalHost *host) {
   if (text[4] == 'C' || (text[4] == 'D' && host->command_running)) {
     EnterCriticalSection(&host->lock);
     if (text[4] == 'C') {
+      host->command_generation++;
       host->command_started = (int64_t)time(NULL);
       host->command_finished = 0;
       host->command_exit = 0;
@@ -743,10 +858,28 @@ static DWORD WINAPI host_client(void *userdata) {
   if (!attach_client(client)) { stop_client(client); return 0; }
   AnvilIPCHeader header; uint8_t bytes[ANVIL_TERMINAL_MAX_PAYLOAD];
   while (anvil_ipc_pipe_read(&client->pipe, &header, bytes, sizeof(bytes))) {
-    if (header.type == ANVIL_TERMINAL_INPUT && header.size) {
+    if ((header.type == ANVIL_TERMINAL_INPUT && header.size) || header.type == ANVIL_TERMINAL_RESUME_AGENT) {
       /* Input of a Viewer, such as a late query answer, never reaches the program. */
       EnterCriticalSection(&host->input_lock);
-      if (client->controller) write_input(client, bytes, header.size);
+      if (client->controller) {
+        if (header.type == ANVIL_TERMINAL_RESUME_AGENT) {
+          EnterCriticalSection(&host->lock);
+          if (host->recovery.starting) {
+            host->recovery.resuming = header.size != 0;
+            if (header.size) {
+              host->recovery.resume_generation = host->command_generation + 1;
+              host->recovery.resume_session_generation = anvil_session_end_generation();
+            } else {
+              host->recovery.starting = false;
+              host->recovery.saved.pid = 0;
+              host->recovery.saved.command[0] = host->recovery.saved.agent[0] = 0;
+            }
+          }
+          LeaveCriticalSection(&host->lock);
+          InterlockedExchange(&host->registry_requested, 1);
+        }
+        if (header.size) write_input(client, bytes, header.size);
+      }
       LeaveCriticalSection(&host->input_lock);
     } else if (header.type == ANVIL_TERMINAL_RESIZE && header.size == sizeof(AnvilTerminalSize)) {
       AnvilTerminalSize size; memcpy(&size, bytes, sizeof(size));
@@ -857,16 +990,27 @@ static bool attach_client(HostClient *client) {
       header.type != ANVIL_TERMINAL_HELLO ||
       (header.size != sizeof(*hello) && header.size != sizeof(message)) ||
       memcmp(hello->id, host->id, ANVIL_TERMINAL_ID_LENGTH + 1) != 0 || hello->client_pid != actual_pid ||
-      hello->replay > 1) {
+      (hello->replay != 0 && hello->replay != 1 && hello->replay != (1 | ANVIL_TERMINAL_REPLAY_CLIENT_ID))) {
     host_log(host, "rejected client: HELLO identity or protocol mismatch"); return false;
   }
   bool has_info = header.size == sizeof(message);
+  client->pid = actual_pid;
   if (!hello->replay) {
     /* A close must work even when snapshot encoding is unavailable. */
     AnvilTerminalWelcome welcome = { GetCurrentProcessId(), GetProcessId(host->pty.process), 1, host->size };
+    uint32_t origin = 0;
     if (anvil_ipc_pipe_write(&client->pipe, ANVIL_TERMINAL_WELCOME, &welcome, sizeof(welcome), NULL, 0) &&
-        anvil_ipc_pipe_read(&client->pipe, &header, NULL, 0) && !header.size) {
+        anvil_ipc_pipe_read(&client->pipe, &header, &origin, sizeof(origin)) &&
+        (header.size == 0 || header.size == sizeof(origin))) {
       EnterCriticalSection(&host->lock);
+      /* The old pipe can close before its reader observes the disconnect. Name that exact Client,
+         not every Client in the process: another Pane in this process can still show the shell. */
+      if (origin && (header.type == ANVIL_TERMINAL_CLOSE || header.type == ANVIL_TERMINAL_END)) {
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+          HostClient *old = &host->clients[i];
+          if (old->attached && old->local && old->id == origin && old->pid == actual_pid) stop_client(old);
+        }
+      }
       bool shown = any_attached(host);
       LeaveCriticalSection(&host->lock);
       if ((header.type == ANVIL_TERMINAL_CLOSE || header.type == ANVIL_TERMINAL_END) && shown) {
@@ -904,7 +1048,7 @@ static bool attach_client(HostClient *client) {
   /* A restored View has no layout yet. Keep the live grid, not a temporary 80x24
      grid that makes ConPTY repaint its old physical screen over a cleared model. */
   if (!size.cols && !size.rows) { size.cols = host->size.cols; size.rows = host->size.rows; }
-  bool ok = !host->stop && (!control || apply_size(host, size)) &&
+  bool ok = !host->stop && host->last_client_id != UINT32_MAX && (!control || apply_size(host, size)) &&
     anvil_terminal_snapshot_encode(host->model, &snapshot, &length);
   if (ok) {
     client->writer = CreateThread(NULL, 0, host_writer, client, 0, NULL);
@@ -912,6 +1056,7 @@ static bool attach_client(HostClient *client) {
   }
   if (ok) {
     client->attached = true;
+    client->id = ++host->last_client_id;
     client->epoch++;
     /* The snapshot goes out whole. Later output waits behind it, within the normal queue limit. */
     client->allowance = length + (length / ANVIL_TERMINAL_MAX_PAYLOAD + 4) * sizeof(HostRecord) + 1024;
@@ -923,8 +1068,9 @@ static bool attach_client(HostClient *client) {
     }
     /* The others learn the new generation, size and number of Clients before any output at that size. */
     send_roles(host, client);
-    AnvilTerminalWelcome welcome = { GetCurrentProcessId(), GetProcessId(host->pty.process), 1, host->size };
-    ok = queue_record(client, ANVIL_TERMINAL_WELCOME, &welcome, sizeof(welcome));
+    AnvilTerminalWelcomeClient welcome = {{ GetCurrentProcessId(), GetProcessId(host->pty.process), 1, host->size }, client->id};
+    ok = queue_record(client, ANVIL_TERMINAL_WELCOME, &welcome,
+      hello->replay & ANVIL_TERMINAL_REPLAY_CLIENT_ID ? sizeof(welcome) : sizeof(welcome.welcome));
     AnvilTerminalRole role; fill_role(host, client, &role);
     ok = ok && queue_record(client, ANVIL_TERMINAL_ROLE, &role, sizeof(role));
     for (size_t offset = 0; ok && offset < length;) {
@@ -1057,7 +1203,7 @@ static void capture_cwd(TerminalHost *host, GhosttyTerminal snapshot) {
 
 /* Runs in the host, never in the editor's UI thread. */
 static bool save_snapshot(TerminalHost *host, bool final) {
-  if (host->prepared) return true;
+  if (host->prepared || host->snapshot_frozen) return true;
   uint8_t *bytes = NULL; size_t length = 0;
   EnterCriticalSection(&host->lock);
   uint64_t started = GetTickCount64();
@@ -1228,6 +1374,20 @@ int anvil_terminal_host_main(int argc, char **argv) {
   if (argc == 16) {
     revival_lock = registry_lock(host.id);
     if (!revival_lock || registry_host_live(&host)) { error = ERROR_PIPE_BUSY; goto cleanup; }
+    char *record = read_text(host.record_path, 1024 * 1024);
+    bool recovery_ok = record && anvil_terminal_recovery_parse(record, &host.recovery.saved);
+    free(record);
+    if (!recovery_ok) { error = ERROR_INVALID_DATA; goto cleanup; }
+    if (!host.recovery.saved.has_agent) {
+      host.recovery.saved.agent[0] = 0;
+      char *report = read_text(host.agent_report_path, sizeof(host.recovery.saved.agent));
+      if (anvil_terminal_agent_matches(report, host.recovery.saved.pid)) strcpy(host.recovery.saved.agent, report);
+      free(report);
+    } else if (!anvil_terminal_agent_matches(host.recovery.saved.agent, host.recovery.saved.pid)) {
+      host.recovery.saved.agent[0] = 0;
+    }
+    host.recovery.held = host.recovery.starting = true;
+    host.recovery.session_generation = anvil_session_end_generation();
     /* The path is derived from the validated session ID, never from a record's arbitrary path. */
     if (strcmp(argv[15], host.snapshot_path) ||
         !anvil_terminal_snapshot_load(host.snapshot_path, host.project, host.id, &host.model, &error)) goto cleanup;
@@ -1245,7 +1405,9 @@ int anvil_terminal_host_main(int argc, char **argv) {
   /* A revived shell starts at the restored screen size, which client resizes compare against. */
   host.pty.cols = size.cols; host.pty.rows = size.rows;
   if (!size.cols || !size.rows || size.cols > 32767 || size.rows > 32767 || !size.cell_width || !size.cell_height ||
-      !anvil_conpty_start(&host.pty, argv[5], argv[6], argv[13], host.nonce, &error) || !write_registry(&host)) goto cleanup;
+      !anvil_conpty_start(&host.pty, argv[5], argv[6], argv[13], host.nonce, &error)) goto cleanup;
+  anvil_session_end_watch_process(host.pty.process);
+  if (!write_registry(&host)) goto cleanup;
   if (revival_lock) { ReleaseMutex(revival_lock); CloseHandle(revival_lock); revival_lock = NULL; }
   host_log(&host, "shell integration: %s", host.pty.shell_integration ? "on" : "off");
   host.reader = CreateThread(NULL, 0, host_reader, &host, 0, NULL);
@@ -1254,7 +1416,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
   exit_code = 0;
   uint64_t exited_at = 0, drain_started = 0, idle_since = GetTickCount64(), busy_probe_at = 0;
   /* Title changes reach the record at most once a second, and typing at most once a minute. */
-  uint64_t title_probe_at = 0, title_written_at = 0, input_seen = 0;
+  uint64_t title_probe_at = 0, title_written_at = 0, input_seen = 0, registry_retry_at = 0;
   int64_t activity_written = host.activity;
   bool title_pending = false;
   /* Agent status reaches the record at most every 200 ms. */
@@ -1262,8 +1424,25 @@ int anvil_terminal_host_main(int argc, char **argv) {
   uint64_t agent_written_at = 0;
   char agent_logged[sizeof(host.agent.state)] = "";
   bool exit_queued = false, final_snapshot_saved = false;
+  bool session_ending = false;
   host.prepared_deadline = GetTickCount64() + 30000;
   while (!host.stop) {
+    bool ending = anvil_session_end_pending();
+    if (ending != session_ending) {
+      session_ending = ending;
+      host_log(&host, "Windows session end: %s", ending ? "protect recovery record" : "canceled; resume writes");
+      /* Save the screen before shutdown output replaces it. On cancellation, publish the live record again. */
+      if (ending) {
+        save_snapshot(&host, false);
+        host.snapshot_frozen = true;
+      } else {
+        busy_probe_at = 0;
+        if (!host.shell_interrupted) {
+          host.snapshot_frozen = false;
+          save_snapshot(&host, false);
+        }
+      }
+    }
     if (InterlockedExchange(&host.project_requested, 0)) {
       /* The screen file names its Project, and revival compares it with the record. Save both. */
       EnterCriticalSection(&host.lock);
@@ -1287,7 +1466,12 @@ int anvil_terminal_host_main(int argc, char **argv) {
         reap_client(client); write_registry(&host); idle_since = now;
       }
     }
-    if (InterlockedExchange(&host.registry_requested, 0)) { write_registry(&host); idle_since = 0; }
+    bool registry_requested = InterlockedExchange(&host.registry_requested, 0) != 0;
+    if (registry_requested || (InterlockedCompareExchange(&host.registry_failed, 0, 0) && now >= registry_retry_at)) {
+      write_registry(&host);
+      registry_retry_at = GetTickCount64() + 1000;
+      if (registry_requested) idle_since = 0;
+    }
     EnterCriticalSection(&host.lock);
     bool attached = any_attached(&host);
     LeaveCriticalSection(&host.lock);
@@ -1337,16 +1521,40 @@ int anvil_terminal_host_main(int argc, char **argv) {
       if (!client->reader) InterlockedExchange(&client->stop, 1);
       idle_since = 0;
     }
-    if (!exited_at && WaitForSingleObject(host.pty.process, 0) == WAIT_OBJECT_0) {
+    bool shell_exited = WaitForSingleObject(host.pty.process, 0) == WAIT_OBJECT_0;
+    /* Check after blocking saves and Client cleanup. The notifier observes the shell at cancellation,
+       so an exit typed after cancellation is not mistaken for an interrupted shell. */
+    if (!exited_at && !host.shell_interrupted && anvil_session_end_interrupted()) {
+      EnterCriticalSection(&host.lock);
+      host.recovery.held = true;
+      host.recovery.session_generation = anvil_session_end_generation();
+      LeaveCriticalSection(&host.lock);
+      host.shell_interrupted = true;
+      if (!host.snapshot_at) save_snapshot(&host, false);
+      host.snapshot_frozen = true;
+      host_log(&host, "Windows session end interrupted the shell; preserve its recovery record");
+    }
+    ending = anvil_session_end_pending();
+    if (!ending && host.shell_interrupted) {
+      host_log(&host, "Windows session end canceled after shell loss; keep the Pane for revival");
+      break;
+    }
+    if (!ending && !exited_at && shell_exited) {
+      /* An intentional shell exit must not leave an older Pi waiting for revival. */
+      EnterCriticalSection(&host.lock);
+      host.recovery.held = host.recovery.starting = host.recovery.resuming = false;
+      host.interrupted_pid = 0;
+      host.interrupted_command[0] = host.interrupted_input[0] = 0;
+      LeaveCriticalSection(&host.lock);
       host.shell_ended = true;
       exited_at = now; GetExitCodeProcess(host.pty.process, &exit_code); drain_started = now;
       host.console_close = CreateThread(NULL, 0, close_console, &host, 0, NULL);
       host_log(&host, "shell exit code=%lu; drain", (unsigned long)exit_code);
     }
-    if (!exited_at && host.reader_done) {
+    if (!ending && !exited_at && host.reader_done) {
       host_log(&host, "failure: ConPTY output ended while shell was running"); break;
     }
-    if (exited_at && !exit_queued) {
+    if (!anvil_session_end_pending() && exited_at && !exit_queued) {
       uint64_t last = InterlockedCompareExchange64(&host.last_output, 0, 0);
       bool backpressured = host.backpressured != 0;
       if (backpressured) drain_started = now;
@@ -1382,7 +1590,33 @@ int anvil_terminal_host_main(int argc, char **argv) {
       busy = busy || InterlockedCompareExchange(&host.command_running, 0, 0);
       bool command_changed = strcmp(command, host.interrupted_command) != 0 || command_pid != host.interrupted_pid;
       if (command_changed) { strcpy(host.interrupted_command, command); host.interrupted_pid = command_pid; }
+      char *report = command_pid ? read_text(host.agent_report_path, sizeof(host.recovery.saved.agent)) : NULL;
       EnterCriticalSection(&host.lock);
+      /* Use this fresh process probe, not cached busy state, when a canceled shutdown releases recovery. */
+      bool release = command_pid || host.command_running || host.command_generation != host.recovery.command_generation;
+      if (host.recovery.starting) {
+        release = host.command_generation != host.recovery.command_generation;
+        if (host.recovery.resuming) {
+          bool acknowledged = anvil_terminal_agent_matches(report, command_pid) && strcmp(report, host.recovery.saved.agent);
+          bool completed = host.command_generation >= host.recovery.resume_generation &&
+            !host.command_running && host.command_finished > 0;
+          if (host.recovery.resume_pid && !command_pid && !busy) completed = true;
+          release = acknowledged || host.command_generation > host.recovery.resume_generation ||
+            (host.recovery.resume_pid && command_pid && host.recovery.resume_pid != command_pid) ||
+            (completed && anvil_session_end_generation() == host.recovery.resume_session_generation);
+          if (command_pid && !host.recovery.resume_pid &&
+              (!host.pty.shell_integration || host.command_generation >= host.recovery.resume_generation))
+            host.recovery.resume_pid = command_pid;
+        }
+      }
+      if (!anvil_session_end_pending() && host.recovery.held && release) {
+        host.recovery.held = host.recovery.starting = host.recovery.resuming = false;
+        host.recovery.session_generation = anvil_session_end_generation();
+        command_changed = true;
+        host_log(&host, "Windows session recovery: live or new command released the interrupted command");
+      }
+      if (!host.recovery.held && anvil_terminal_agent_matches(report, command_pid) &&
+          strcmp(report, host.recovery.saved.agent)) command_changed = true;
       bool busy_changed = host.busy != busy;
       if (busy_changed) {
         host.busy = busy;
@@ -1403,6 +1637,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
         }
       }
       LeaveCriticalSection(&host.lock);
+      free(report);
       if (busy_changed) host.activity = (int64_t)time(NULL);
       if (command_changed || busy_changed) {
         write_registry(&host);
@@ -1497,6 +1732,7 @@ cleanup:
     save_snapshot(&host, true);
   for (int i = 0; i < MAX_CLIENTS; i++) if (host.clients[i].used) reap_client(&host.clients[i]);
   if (host.console_close) { CloseHandle(host.console_close); host.pty.pseudoconsole = NULL; }
+  anvil_session_end_watch_process(NULL);
   anvil_conpty_close(&host.pty);
   if (host.listen) CloseHandle(host.listen);
   if (host.model) ghostty_terminal_free(host.model);
@@ -1523,7 +1759,9 @@ static size_t quote_arg(wchar_t *out, const wchar_t *arg) {
 
 static bool host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
                          DWORD *shell_pid, const char *id, AnvilTerminalSize *size,
-                         const AnvilTerminalClientInfo *info, bool replay, DWORD timeout_ms, DWORD *error) {
+                         const AnvilTerminalClientInfo *info, bool replay, uint32_t *client_id,
+                         DWORD timeout_ms, DWORD *error) {
+  if (client_id) *client_id = 0;
   if (!anvil_terminal_id_valid(id)) { *error = ERROR_INVALID_DATA; return false; }
   char name[128]; snprintf(name, sizeof(name), "\\\\.\\pipe\\anvil-terminal-%s", id);
   uint64_t deadline = GetTickCount64() + timeout_ms;
@@ -1548,46 +1786,55 @@ static bool host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
   }
   pipe->timeout_ms = timeout_ms;
   AnvilTerminalHello hello = { .size = *size, .client_pid = GetCurrentProcessId(), .replay = replay };
+  if (replay && client_id) hello.replay |= ANVIL_TERMINAL_REPLAY_CLIENT_ID;
   memcpy(hello.id, id, sizeof(hello.id));
   if (!anvil_ipc_pipe_write(pipe, ANVIL_TERMINAL_HELLO, &hello, sizeof(hello), info,
         info ? (uint32_t)sizeof(*info) : 0)) {
     *error = GetLastError(); return false;
   }
-  AnvilIPCHeader header; AnvilTerminalWelcome welcome;
-  if (!anvil_ipc_pipe_read(pipe, &header, &welcome, sizeof(welcome))) {
+  AnvilIPCHeader header; AnvilTerminalWelcomeClient response = {0};
+  if (!anvil_ipc_pipe_read(pipe, &header, &response, sizeof(response))) {
     *error = GetLastError();
     if (!*error) *error = ERROR_PIPE_NOT_CONNECTED;
+    /* Detached hosts keep their old executable. They reject the optional HELLO flag. */
+    if (replay && client_id && (*error == ERROR_BROKEN_PIPE || *error == ERROR_PIPE_NOT_CONNECTED || *error == ERROR_NO_DATA)) {
+      anvil_ipc_pipe_close(pipe);
+      return host_connect(pipe, process, host_pid, shell_pid, id, size, info, replay, NULL, timeout_ms, error);
+    }
     return false;
   }
-  if (header.type != ANVIL_TERMINAL_WELCOME || header.size != sizeof(welcome) ||
+  AnvilTerminalWelcome welcome = response.welcome;
+  if (header.type != ANVIL_TERMINAL_WELCOME ||
+      (header.size != sizeof(welcome) && (!client_id || header.size != sizeof(response) || !response.client_id)) ||
       welcome.host_pid != host_pid || !welcome.shell_pid || welcome.state != 1 ||
       !welcome.size.cols || !welcome.size.rows || welcome.size.cols > 32767 || welcome.size.rows > 32767 ||
       !welcome.size.cell_width || !welcome.size.cell_height) {
     *error = ERROR_INVALID_DATA; return false;
   }
   *shell_pid = welcome.shell_pid; pipe->timeout_ms = INFINITE;
+  if (client_id) *client_id = response.client_id;
   *size = welcome.size;
   *error = ERROR_SUCCESS; return true;
 }
 
 bool anvil_terminal_host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
-                                 DWORD *shell_pid, const char *id, AnvilTerminalSize *size, DWORD *error) {
-  return host_connect(pipe, process, host_pid, shell_pid, id, size, NULL, true, CONNECT_TIMEOUT_MS, error);
+                                 DWORD *shell_pid, const char *id, AnvilTerminalSize *size, uint32_t *client_id, DWORD *error) {
+  return host_connect(pipe, process, host_pid, shell_pid, id, size, NULL, true, client_id, CONNECT_TIMEOUT_MS, error);
 }
 
 bool anvil_terminal_host_connect_as(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid, DWORD *shell_pid,
                                     const char *id, AnvilTerminalSize *size, const AnvilTerminalClientInfo *info,
                                     DWORD *error) {
-  return host_connect(pipe, process, host_pid, shell_pid, id, size, info, true, CONNECT_TIMEOUT_MS, error);
+  return host_connect(pipe, process, host_pid, shell_pid, id, size, info, true, NULL, CONNECT_TIMEOUT_MS, error);
 }
 
 bool anvil_terminal_host_control(HANDLE process, DWORD host_pid, const char *id,
-                                 uint16_t type, DWORD *error) {
+                                 uint16_t type, uint32_t client_id, DWORD *error) {
   AnvilIPCPipe pipe = {0}; DWORD shell_pid; AnvilTerminalSize size = {0};
-  bool ok = host_connect(&pipe, process, host_pid, &shell_pid, id, &size, NULL, false, CONNECT_TIMEOUT_MS, error);
+  bool ok = host_connect(&pipe, process, host_pid, &shell_pid, id, &size, NULL, false, NULL, CONNECT_TIMEOUT_MS, error);
   if (ok) {
     pipe.timeout_ms = 5000;
-    ok = anvil_ipc_pipe_write(&pipe, type, NULL, 0, NULL, 0);
+    ok = anvil_ipc_pipe_write(&pipe, type, client_id ? &client_id : NULL, client_id ? sizeof(client_id) : 0, NULL, 0);
     if (!ok) *error = GetLastError();
   }
   anvil_ipc_pipe_close(&pipe);
@@ -1601,7 +1848,7 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
                                 const char *datadir,
                                 const char *revive_from, const wchar_t *environment, bool prepared,
                                 AnvilTerminalSize *size, const size_t *scrollback_lines,
-                                const AnvilTerminalClientInfo *client, DWORD *error) {
+                                const AnvilTerminalClientInfo *client, uint32_t *client_id, DWORD *error) {
   uint8_t random[16]; char name[128];
   bool random_ok = revive_from ? anvil_terminal_id_valid(id) : random_bytes(random, sizeof(random));
   if (!random_ok) { *error = ERROR_GEN_FAILURE; return false; }
@@ -1642,7 +1889,7 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
   CloseHandle(info.hThread); *process = info.hProcess; *host_pid = info.dwProcessId;
   *replay_bytes = 0;
   if (revive_from) { size->cols = 0; size->rows = 0; }
-  return host_connect(pipe, *process, *host_pid, shell_pid, id, size, client, true, LAUNCH_TIMEOUT_MS, error);
+  return host_connect(pipe, *process, *host_pid, shell_pid, id, size, client, true, client_id, LAUNCH_TIMEOUT_MS, error);
 }
 
 void anvil_terminal_host_discard(const char *userdir, const char *id) {

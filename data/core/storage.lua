@@ -36,6 +36,7 @@ function storage.load(module, key)
     return func()
   elseif reason ~= "not_found" then
     log("error", "error loading storage file for %s[%s]: %s", module, key, err)
+    return nil, err or reason or "Storage read failed"
   end
   return nil
 end

@@ -1,5 +1,4 @@
 local core = require "core"
-local common = require "core.common"
 local test = require "core.test"
 local terminal = require "plugins.terminal"
 local panes = require "core.panes"
@@ -41,15 +40,51 @@ local function mark(view, marker)
   test.ok(wait_for(view, function() return printed(view, marker) end), "shell did not print " .. marker)
 end
 
+local function restrict_process(context, pid, denied)
+  local ffi = require "ffi"
+  ffi.cdef [[
+    int __stdcall GetKernelObjectSecurity(void *, unsigned long, void *, unsigned long, unsigned long *);
+    int __stdcall SetKernelObjectSecurity(void *, unsigned long, void *);
+    int __stdcall ConvertStringSecurityDescriptorToSecurityDescriptorA(const char *, unsigned long, void **, unsigned long *);
+    void * __stdcall LocalFree(void *);
+  ]]
+  local advapi = ffi.load("advapi32")
+  local handle = context.kernel.OpenProcess(0x60000, 0, pid) -- READ_CONTROL | WRITE_DAC
+  test.ok(handle ~= nil, "could not change the private test process permissions")
+  local saved = { handle = handle, advapi = advapi }
+  context.protections[#context.protections + 1] = saved
+  local needed = ffi.new("unsigned long[1]")
+  advapi.GetKernelObjectSecurity(handle, 4, nil, 0, needed)
+  test.ok(needed[0] > 0)
+  local original = ffi.new("char[?]", needed[0])
+  test.ok(advapi.GetKernelObjectSecurity(handle, 4, original, needed[0], needed) ~= 0)
+  saved.original = original
+  local descriptor = ffi.new("void *[1]")
+  test.ok(advapi.ConvertStringSecurityDescriptorToSecurityDescriptorA(
+    string.format("D:(D;;0x%x;;;WD)(A;;GA;;;OW)(A;;GA;;;SY)", denied), 1, descriptor, nil) ~= 0)
+  local changed = advapi.SetKernelObjectSecurity(handle, 4, descriptor[0])
+  context.kernel.LocalFree(descriptor[0])
+  test.ok(changed ~= 0)
+  local refused = context.kernel.OpenProcess(denied, 0, pid)
+  if refused ~= nil then context.kernel.CloseHandle(refused) end
+  test.ok(refused == nil, "the test process did not deny the requested rights")
+end
+
 test.describe("Terminal Session restoration", function()
   test.before_each(function(context)
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
     context.views = {}
     context.processes = {}
+    context.protections = {}
   end)
 
   test.after_each(function(context)
+    for _, saved in ipairs(context.protections or {}) do
+      if saved.original then saved.advapi.SetKernelObjectSecurity(saved.handle, 4, saved.original) end
+      context.kernel.CloseHandle(saved.handle)
+    end
+    if context.private_process then context.private_process:kill() end
     for _, view in ipairs(context.views or {}) do view:on_close() end
     for _, handles in ipairs(context.processes or {}) do
       if handles[1] ~= nil then
@@ -167,23 +202,92 @@ test.describe("Terminal Session restoration", function()
     test.not_equal(own_status().viewer, true)
     test.ok(wait_for(view, function() return view.session:snapshot(nil, false).cols ~= 50 end),
       "the new Controller did not set its own size")
+    -- Both Clients belong to this process. Closing one must not close the other's shell.
+    other:close()
+    test.ok(wait_for(view, function() return own_status().clients == 1 end))
+    mark(view, "after_other_close")
+    view:on_close()
+    local host = context.processes[1][1]
+    test.ok(wait_for(view, function() return context.kernel.WaitForSingleObject(host, 0) == 0 end),
+      "closing the last Client left its host running")
   end)
 
-  test.it("starts a new shell when the record has a different creation time", function(context)
+  for _, case in ipairs {
+    { name = "another process", denied = 0 },
+    { name = "a process that denies termination", denied = 1 },
+    { name = "a process that denies query access", denied = 0x1001 },
+  } do
+  test.it("revives the saved session when its PID now belongs to " .. case.name, function(context)
     local view = open(context)
-    mark(view, "original_host_marker")
+    mark(view, "preserved_reused_pid_history")
     local state = view:get_state()
     local path = USERDIR .. "/terminal-sessions/" .. state.session_id .. ".lua"
-    local record = assert(loadfile(path))()
-    record.host_creation_time = "0000000000000000"
+    local snapshot = assert(loadfile(path))().snapshot_path
+    os.remove(snapshot)
+    view:detach_session()
+    test.ok(wait_for(view, function()
+      return assert(loadfile(path))().attached == false and system.get_file_info(snapshot)
+    end))
+    local host = context.processes[1][1]
+    test.ok(context.kernel.TerminateProcess(host, 99) ~= 0)
+    test.equal(context.kernel.WaitForSingleObject(host, 5000), 0)
+    local saved_file = assert(io.open(path, "rb"))
+    local saved_record = saved_file:read("*a")
+    assert(saved_file:close())
+    context.private_process = require("process").start {
+      "powershell.exe", "-NoLogo", "-NoProfile", "-Command", "Start-Sleep -Seconds 120"
+    }
+    local unrelated = context.private_process:pid()
+    if case.denied ~= 0 then restrict_process(context, unrelated, case.denied) end
+    -- Keep the host's record format. Only its saved PID now names a different process.
+    local changed
+    saved_record, changed = saved_record:gsub("(\n  host_pid = )%d+", "%1" .. unrelated, 1)
+    test.equal(changed, 1)
     local file = assert(io.open(path, "wb"))
-    assert(file:write("return " .. common.serialize(record)))
+    assert(file:write(saved_record))
     assert(file:close())
     local restored = open(context, state)
-    test.not_equal(restored.session:stats().host_pid, view.session:stats().host_pid)
-    test.not_equal(restored:get_state().session_id, state.session_id)
-    mark(restored, "fresh_host_marker")
-    mark(view, "original_still_works")
+    test.equal(restored.session_id, state.session_id)
+    test.not_equal(restored.session:stats().host_pid, unrelated)
+    test.ok(wait_for(restored, function() return printed(restored, "preserved_reused_pid_history") end))
+    test.ok(context.private_process:running(), "revival ended the unrelated process")
+    mark(restored, "after_reused_pid_revival")
+  end)
+  end
+
+  test.it("does not revive a live host whose identity cannot be read", function(context)
+    local view = open(context)
+    local state = view:get_state()
+    restrict_process(context, view.session:stats().host_pid, 0x1000)
+    local restored = terminal.from_state(state)
+    context.views[#context.views + 1] = restored
+    test.equal(restored.state, "failed")
+    test.is_nil(restored.session, "an inaccessible identity started another shell")
+    mark(view, "inaccessible_host_still_runs")
+  end)
+
+  test.it("keeps a saved session when attachment fails without proving the host ended", function(context)
+    local view = open(context)
+    local state = view:get_state()
+    local native = require "terminal_native"
+    local failed = false
+    terminal._set_native_for_tests {
+      read_session_record = native.read_session_record,
+      new = function(options)
+        if not failed then
+          failed = true
+          return nil, "Fixture: process query could not allocate memory", 8
+        end
+        return native.new(options)
+      end,
+    }
+    local ok, restored = pcall(terminal.from_state, state)
+    terminal._set_native_for_tests(nil)
+    test.ok(ok, restored)
+    context.views[#context.views + 1] = restored
+    test.equal(restored.state, "failed", "an unknown attach failure started another shell")
+    test.ok(native.read_session_record(state.session_id), "an unknown attach failure retired the saved session")
+    mark(view, "unknown_failure_host_still_runs")
   end)
 
   test.it("reattaches after a writer stall without ending the shell", function(context)

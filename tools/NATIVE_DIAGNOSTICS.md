@@ -75,6 +75,24 @@ Connection recovery records report discarded outbound bytes and the adoption dec
 
 These logs do not guarantee recovery of unsaved file text. Check actual save records. See [shutdown diagnostics](SHUTDOWN_DIAGNOSTICS.md) for cleanup phases and pending Close recovery.
 
+## Windows sign-out and Terminal recovery
+
+Read `recovery_agent` in the Terminal's session record first. It holds the validated report with its matching process ID. Older records without that field use the separate `.agent` report. The report names Pi's conversation file. Do not assume that a missing Pi Tab means the conversation file is gone.
+
+Each host logs `Windows session end: protect recovery record` when shutdown starts. It saves the screen and keeps its recovery command, process ID and submitted input. Live status can still become idle. A canceled sign-out logs `canceled; resume writes`. If its command ended during shutdown, the recovery copy stays until a live or new command replaces it. That release has its own log entry.
+
+If the shell ended during a canceled sign-out, the host keeps its record and exits without an ordinary EXITED record. The editor can then revive the same Terminal View. An ordinary shell exit still removes its View. Compare those records with the Project's Pane and Workspace logs.
+
+The notification thread counts shutdown attempts and checks the shell at query and cancellation. It remembers an interrupted shell while the monitor stalls, also during a record save. This path logs `Windows session end interrupted the shell`. A shell that exits after cancellation keeps its normal exit. A Project permits one automatic host revival per shutdown attempt.
+
+A revived host keeps the saved recovery copy while Pi starts. A new preload can replace `.agent` before the host accepts its identity. The record's embedded report still names the saved conversation during that gap. Same-process conversation changes update this report at the process probe. A failed record replacement logs its Windows error and retries while the host runs.
+
+Older hosts have no shutdown guard. A dev update leaves those hosts running. Check the host's start time before assuming that it contains a new native fix.
+
+A saved process ID can belong to another program after its host ends. Compare its creation time, not only its ID. Attachment probes identity before requesting termination rights. The system process list can identify a reused ID even when the process denies access. Unknown identity stays blocked. Attachment errors say `Could not attach to Terminal Session`; they are not process-creation failures.
+
+`ui/terminal_signout.lua` tests shutdown and cancellation with private hosts and synthetic Windows messages. It does not test the OS's actual shutdown ordering or force a real sign-out.
+
 ## Window placement after restart
 
 `Shell saved Window placement` records each Window's normal and last visible rectangles before shutdown. `max` records its maximized state. The normal rectangle uses Windows workspace coordinates. The visible rectangle uses screen coordinates. These rectangles can differ when the user snaps a Window.

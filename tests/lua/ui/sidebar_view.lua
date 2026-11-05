@@ -1356,6 +1356,24 @@ test.describe("Sidebar Snoozes", function()
     end)
   end)
 
+  test.it("keeps the previous Snooze and sends no Pane change when saving fails", function()
+    with_clock(function()
+      local snoozes, requests = {}, {}
+      local view = SidebarView(function(action, ...)
+        if action == "snooze" then return false, "Access denied" end
+        if action == "request" then requests[#requests + 1] = {...} end
+      end, {}, {}, false, snoozes)
+      view:set_model(model(), 1)
+      local target = {session = "done", pane = "done", path = "C:/P"}
+      test.equal(view:set_snooze_until(target, start + 3600), false)
+      test.is_nil(snoozes.done, "a failed save changed the Snooze")
+      snoozes.done = start + 600
+      test.equal(view:set_snooze_until(target, nil), false)
+      test.equal(snoozes.done, start + 600, "a failed save removed the Snooze")
+      test.same(requests, {}, "a failed save changed the Pane")
+    end)
+  end)
+
   test.it("marks a Terminal's result read, and duplicates or closes a Tab's Pane in its Project", function()
     with_clock(function()
       local actions, action = recorder()

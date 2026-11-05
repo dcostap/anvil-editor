@@ -12,15 +12,17 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
                                 const char *datadir,
                                 const char *revive_from, const wchar_t *environment, bool prepared,
                                 AnvilTerminalSize *size, const size_t *scrollback_lines,
-                                const AnvilTerminalClientInfo *client, DWORD *error);
+                                const AnvilTerminalClientInfo *client, uint32_t *client_id, DWORD *error);
 /* Deletes the record, screen and agent report of a session whose host has ended. */
 void anvil_terminal_host_discard(const char *userdir, const char *id);
 bool anvil_terminal_id_valid(const char *id);
 bool anvil_terminal_host_identity(HANDLE process, DWORD pid, const char *creation_time);
+/* NULL with ERROR_PROCESS_ABORTED proves the saved process ended. Other errors do not. */
+HANDLE anvil_terminal_host_open(DWORD pid, const char *creation_time, DWORD *error);
 /* Authentication and handshake. This may wait; recurring reconnects use a worker. */
 bool anvil_terminal_host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
                                  DWORD *shell_pid, const char *id, AnvilTerminalSize *size,
-                                 DWORD *error);
+                                 uint32_t *client_id, DWORD *error);
 /* Connects as a Client on another device, such as a Machine server's link for a remote Client. `info` names
    the device, and can make the connection view-only. Hosts without `shared = true` refuse it. */
 bool anvil_terminal_host_connect_as(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid, DWORD *shell_pid,
@@ -28,6 +30,6 @@ bool anvil_terminal_host_connect_as(AnvilIPCPipe *pipe, HANDLE process, DWORD ho
                                     DWORD *error);
 /* A fresh authenticated control connection needs no snapshot or model resize. */
 bool anvil_terminal_host_control(HANDLE process, DWORD host_pid, const char *id,
-                                 uint16_t type, DWORD *error);
+                                 uint16_t type, uint32_t client_id, DWORD *error);
 #endif
 #endif

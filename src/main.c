@@ -14,6 +14,7 @@
 #include "win32_single_instance.h"
 #include "anvil_shell.h"
 #include "terminal_host.h"
+#include "session_end.h"
 #ifdef _WIN32
 #include "process_exit.h"
 #endif
@@ -374,12 +375,14 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   /* ExitProcess ends every other thread first. GPU driver threads at idle priority starve on a busy CPU. */
   atexit(anvil_process_prepare_exit);
   if (argc > 1 && strcmp(argv[1], "--terminal-session") == 0) {
+    anvil_session_end_init(true);
     /* No Lua, single-instance forwarding, window, or SDL initialization. */
     exit(anvil_terminal_host_main(argc, argv));
   }
 #endif
 #ifdef _WIN32
   if (anvil_launch_runs_shell(&argc, argv)) {
+    anvil_session_end_init(false);
     shell_mode = true;
     if (argc > 1 && strcmp(argv[1], ANVIL_SHELL_ARG) == 0) return anvil_shell_init(appstate, argc, argv);
     /* The shell reads its launch from argv[2]. The array lives as long as the process. */
