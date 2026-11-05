@@ -203,6 +203,38 @@ test.describe("Selection surrounding", function()
     test.same(buffer.selections, { 1, 6, 1, 2 })
   end)
 
+  test.it("wraps selected Markdown with typed emphasis markers and keeps the text selected", function(context)
+    for _, source_mode in ipairs({ false, true }) do
+      for _, marker in ipairs({ "*", "_" }) do
+        local view, buffer = new_view(context, "alpha beta", "note.md")
+        panes.present(view, { placement = "new", focus = true })
+        markdown_live.set_source_mode(view, source_mode, "selection-surround-test")
+
+        type_over_selection(view, 1, 1, 1, 6, marker)
+
+        test.equal(buffer_text(buffer), marker .. "alpha" .. marker .. " beta\n")
+        test.equal(selection_text(buffer), "alpha")
+
+        view:with_selection_state(function() view:on_text_input(marker) end)
+
+        test.equal(buffer_text(buffer), marker:rep(2) .. "alpha" .. marker:rep(2) .. " beta\n")
+        test.equal(selection_text(buffer), "alpha")
+      end
+    end
+  end)
+
+  test.it("types emphasis markers normally without a Markdown selection", function(context)
+    for _, marker in ipairs({ "*", "_" }) do
+      local view, buffer = new_view(context, "alpha", "note.txt")
+      type_over_selection(view, 1, 1, 1, 6, marker)
+      test.equal(buffer_text(buffer), marker .. "\n")
+
+      view, buffer = new_view(context, "alpha", "note.md")
+      type_over_selection(view, 1, 3, 1, 3, marker)
+      test.equal(buffer_text(buffer), "al" .. marker .. "pha\n")
+    end
+  end)
+
   test.it("surrounds selected Markdown in Live Preview and Source Mode", function(context)
     local view, buffer = new_view(context, "alpha beta", "note.md")
     panes.present(view, { placement = "new", focus = true })
