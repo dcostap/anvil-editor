@@ -24,7 +24,8 @@
 /* Each Window is one line: `window <id> <x> <y> <w> <h> <maximized> <sidebar hidden> <path bytes> <path>`.
  * A closed Window has the same fields after `closed` instead of `window`.
  * Its optional `screen <id> <x> <y> <w> <h>` line keeps the last visible rectangle.
- * Each Project activity is one line: `project <unix seconds> <path bytes> <path>`.
+ * Each Project is one line, in Project Sidebar order: `project <unix seconds> <path bytes> <path>`.
+ * The time is the Project's last activity, or 0 when it has none.
  * Other loaded Projects follow their Window: `loaded <window id> <path bytes> <path>`.
  * The shared Sidebar width is one optional line: `sidebar <points>`.
  * `sequence <last Window id>` prevents reuse of a closed Window's saved folds.
@@ -244,7 +245,7 @@ bool anvil_shell_state_decode(const char *data, size_t size, AnvilShellState *st
       long activity, length;
       AnvilShellProjectActivity *project = &state->projects[state->project_count];
       if (state->project_count >= ANVIL_SHELL_STATE_MAX_PROJECTS || !read_long(&cursor, end, &activity, ' ') ||
-          activity <= 0 || !read_long(&cursor, end, &length, ' ') || length == 0 ||
+          activity < 0 || !read_long(&cursor, end, &length, ' ') || length == 0 ||
           !read_path(&cursor, end, length, &project->path))
         break;
       project->activity = activity;

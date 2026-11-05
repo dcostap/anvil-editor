@@ -478,7 +478,10 @@ A slide shows one step at each display refresh. A docked Sidebar keeps its space
 A Sidebar that focus shows floats: it slides opaque over the Project, and the Project keeps its layout. The toggle docks it.
 The shell moves the Project's last frame to a docked Sidebar's edge, so a Project that has not drawn its new width shows no content under the Sidebar.
 Sidebar width and the Project list remain shared. Each Window saves its own Project and group folds.
-Clicking a loaded Project row in this Window expands or collapses it without selecting it. An empty Project selects itself and opens its initial File Tree Pane. Clicking a Tab selects its Project.
+A click on a Project row acts when the button is released on the same row. Clicking a loaded Project row in this Window expands or collapses it without selecting it. An empty Project selects itself and opens its initial File Tree Pane. Clicking a Tab selects its Project.
+A drag of a loaded Project row in the main list moves that Project. The other Projects slide out of its way, and the dragged Project lifts on a card. The drop sends `reorder` with the row, its new neighbour, and before or after. The Sidebar keeps the new order until the shell's model shows it.
+The shell keeps one Project order for all Windows (`anvil_sidebar_move`). The `project` lines of Shell App State are in Sidebar order. At startup, `anvil_sidebar_apply_order` applies that order after the first recents merge. A Project that the saved order does not name goes first. Scratch stays first and Dormant Projects stay in their age groups.
+Run `anvil:project-sidebar`, `anvil:shell-state`, `ui/sidebar_view.lua` and the `restore-order` and `project-reorder` shell probes after changes. Check the `project-sidebar-reorder` render scenario after visual changes.
 Dormant Projects and Projects in other Windows open when their rows are clicked.
 Loaded Projects start expanded unless this Window has a saved manual fold.
 Another Window's Project stays collapsed. It ignores this Window's saved fold. A search still lists its Tabs.

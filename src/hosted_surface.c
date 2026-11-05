@@ -1126,6 +1126,12 @@ bool anvil_hosted_surface_move_project(uint32_t project_id, uint32_t target_wind
   send_message(ANVIL_SURFACE_MSG_MOVE_PROJECT, &request, sizeof(request));
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
+bool anvil_hosted_surface_reorder_project(uint32_t row_id, uint32_t anchor_row_id, bool after) {
+  if (!hosted.active || !row_id || !anchor_row_id || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
+  AnvilSurfaceReorderProject request = {row_id, anchor_row_id, after};
+  send_message(ANVIL_SURFACE_MSG_REORDER_PROJECT, &request, sizeof(request));
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
 
 uint32_t anvil_hosted_surface_window_id(void) { return view->config.window_id; }
 bool anvil_hosted_surface_open_project_window(const char *path) {
@@ -1778,6 +1784,9 @@ bool anvil_hosted_surface_open_project_window(const char *path) { (void)path; re
 bool anvil_hosted_surface_open_project_picker(void) { return false; }
 bool anvil_hosted_surface_preview_color_theme(const char *preview) { (void)preview; return false; }
 bool anvil_hosted_surface_unload_project(const char *path) { (void)path; return false; }
+bool anvil_hosted_surface_reorder_project(uint32_t row_id, uint32_t anchor_row_id, bool after) {
+  (void)row_id; (void)anchor_row_id; (void)after; return false;
+}
 bool anvil_hosted_surface_load_project(const char *path) { (void)path; return false; }
 bool anvil_hosted_surface_color_theme_saved(void) { return false; }
 bool anvil_hosted_surface_zoom_saved(double interface_zoom, double code_zoom) {

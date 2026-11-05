@@ -174,6 +174,9 @@ SCENARIOS["project-sidebar-dark"] = dict(SCENARIOS["project-sidebar"], theme="de
 # A Tab held over a drop line inside a Pane Group, in the light and dark themes.
 SCENARIOS["project-sidebar-drag"] = dict(SCENARIOS["project-sidebar"])
 SCENARIOS["project-sidebar-drag-dark"] = dict(SCENARIOS["project-sidebar"], theme="default")
+# A loaded Project dragged part of the way over the Project above it, in the light and dark themes.
+SCENARIOS["project-sidebar-reorder"] = dict(SCENARIOS["project-sidebar"])
+SCENARIOS["project-sidebar-reorder-dark"] = dict(SCENARIOS["project-sidebar"], theme="default")
 SCENARIOS["focus-feedback"] = dict(SCENARIOS["project-sidebar"], window_height=500)
 # A loaded Project that asks "Unload?" after Left.
 SCENARIOS["project-sidebar-unload"] = dict(SCENARIOS["project-sidebar"], theme="default")

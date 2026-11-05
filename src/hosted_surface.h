@@ -57,6 +57,8 @@ void anvil_hosted_surface_unregister_window(SDL_Window *window);
 size_t anvil_hosted_surface_sidebar_views(uint32_t *ids, bool *removed, size_t capacity);
 bool anvil_hosted_surface_sidebar_activate(uint32_t id);
 bool anvil_hosted_surface_move_project(uint32_t project_id, uint32_t target_window_id);
+/* The Sidebar places a Project's row before or after another row. */
+bool anvil_hosted_surface_reorder_project(uint32_t row_id, uint32_t anchor_row_id, bool after);
 bool anvil_hosted_surface_is_window(SDL_Window *window);
 
 void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, int width, int height);

@@ -32,7 +32,7 @@ typedef struct {
   int32_t screen_x, screen_y, screen_w, screen_h;
 } AnvilShellWindowState;
 
-/* The last time the user worked in a Project, in Unix seconds. The Project Sidebar groups Projects by it. */
+/* The last time the user worked in a Project, in Unix seconds, or 0. The Project Sidebar groups Projects by it. */
 typedef struct {
   char *path;
   int64_t activity;
@@ -42,6 +42,7 @@ typedef struct {
   /* Front to back. */
   AnvilShellWindowState *windows;
   size_t count;
+  /* In Project Sidebar order. */
   AnvilShellProjectActivity *projects;
   size_t project_count;
   /* The Project Sidebar's width in points, shared by every Window. 0 means the default. */

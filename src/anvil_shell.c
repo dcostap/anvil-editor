@@ -398,6 +398,9 @@ typedef struct {
   /* Saved Project activity for Projects the Project Sidebar does not list yet. */
   AnvilShellProjectActivity saved_activity[ANVIL_SHELL_STATE_MAX_PROJECTS];
   size_t saved_activity_count;
+  /* The saved Project Sidebar order. It applies after the first scan lists the recent Projects. */
+  AnvilShellProjectActivity saved_order[ANVIL_SHELL_STATE_MAX_PROJECTS];
+  size_t saved_order_count;
   UINT_PTR sidebar_timer;
   AnvilSidebarWatch *sidebar_watch;
   uint64_t sidebar_notified_revision;
@@ -482,6 +485,7 @@ static void begin_unload(ShellProject *project);
 static bool drain_retired_projects(void);
 static void service_sidebar(void);
 static void notify_sidebar_changes(void);
+static void reorder_project(const AnvilSurfaceReorderProject *request);
 static void broadcast_color_theme(ShellProject *source);
 static void broadcast_zoom(ShellProject *source, const AnvilSurfaceZoom *zoom);
 static void preview_color_theme(ShellProject *source, const char *preview, uint32_t size);
@@ -1144,6 +1148,7 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     case ANVIL_SURFACE_MSG_FRAME: case ANVIL_SURFACE_MSG_CURSOR: case ANVIL_SURFACE_MSG_HIT_TEST:
     case ANVIL_SURFACE_MSG_SELECT_PROJECT: case ANVIL_SURFACE_MSG_UNLOAD_PROJECT:
     case ANVIL_SURFACE_MSG_MOVE_PROJECT: case ANVIL_SURFACE_MSG_SELECT_TERMINAL: case ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW:
+    case ANVIL_SURFACE_MSG_REORDER_PROJECT:
     case ANVIL_SURFACE_MSG_PANE_REQUEST: case ANVIL_SURFACE_MSG_SIDEBAR_QUERY: case ANVIL_SURFACE_MSG_SIDEBAR_REFRESH:
     case ANVIL_SURFACE_MSG_TEXT_INPUT: case ANVIL_SURFACE_MSG_TITLE: case ANVIL_SURFACE_MSG_SIDEBAR_FOCUS:
     case ANVIL_SURFACE_MSG_VISIBLE: case ANVIL_SURFACE_MSG_SET_BOUNDS: case ANVIL_SURFACE_MSG_BORDERED:
@@ -1184,6 +1189,8 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     return size == sizeof(uint32_t) && *(const uint32_t *)payload != 0;
   case ANVIL_SURFACE_MSG_MOVE_PROJECT:
     return size == sizeof(AnvilSurfaceMoveProject) && ((const AnvilSurfaceMoveProject *)payload)->project_id;
+  case ANVIL_SURFACE_MSG_REORDER_PROJECT:
+    return size == sizeof(AnvilSurfaceReorderProject) && ((const AnvilSurfaceReorderProject *)payload)->after <= 1;
   case ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW:
     return size > sizeof(uint32_t) + 1 && size < 32768 && *(const uint32_t *)payload &&
            ((const char *)payload)[size - 1] == 0 &&
@@ -3864,6 +3871,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
       message->type != ANVIL_SURFACE_MSG_SELECT_PROJECT &&
       message->type != ANVIL_SURFACE_MSG_UNLOAD_PROJECT &&
       message->type != ANVIL_SURFACE_MSG_MOVE_PROJECT &&
+      message->type != ANVIL_SURFACE_MSG_REORDER_PROJECT &&
       message->type != ANVIL_SURFACE_MSG_SELECT_TERMINAL &&
       message->type != ANVIL_SURFACE_MSG_PANE_REQUEST &&
       message->type != ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW &&
@@ -3898,6 +3906,9 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     move_project(window, request->project_id, request->target_window_id, false);
     break;
   }
+  case ANVIL_SURFACE_MSG_REORDER_PROJECT:
+    if (project->sidebar) reorder_project(payload);
+    break;
   case ANVIL_SURFACE_MSG_TIMING_CAPTURE: {
     const char *base = payload;
     char path[32768];
@@ -4235,6 +4246,35 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
   default:
     break;
   }
+}
+
+static void apply_saved_order(void) {
+  if (!shell.saved_order_count) return;
+  const char *paths[ANVIL_SHELL_STATE_MAX_PROJECTS];
+  for (size_t i = 0; i < shell.saved_order_count; i++) paths[i] = shell.saved_order[i].path;
+  uint32_t revision = shell.sidebar.revision;
+  anvil_sidebar_apply_order(&shell.sidebar, paths, shell.saved_order_count);
+  SDL_Log("Shell Project Sidebar order restored: saved=%u listed=%u changed=%d", (unsigned)shell.saved_order_count,
+          (unsigned)shell.sidebar.count, shell.sidebar.revision != revision);
+  for (size_t i = 0; i < shell.saved_order_count; i++) free(shell.saved_order[i].path);
+  shell.saved_order_count = 0;
+}
+
+static AnvilSidebarProject *sidebar_row(uint32_t row_id) {
+  for (size_t i = 0; i < shell.sidebar.count; i++)
+    if (shell.sidebar.projects[i]->row_id == row_id) return shell.sidebar.projects[i];
+  return NULL;
+}
+
+/* A Sidebar drag places a Project before or after another Project. All Windows share the order. */
+static void reorder_project(const AnvilSurfaceReorderProject *request) {
+  AnvilSidebarProject *project = sidebar_row(request->row_id), *anchor = sidebar_row(request->anchor_row_id);
+  bool moved = project && anchor && anvil_sidebar_move(&shell.sidebar, project, anchor, request->after != 0);
+  SDL_Log("Shell Project Sidebar reorder: row=%u anchor=%u after=%u moved=%d", request->row_id,
+          request->anchor_row_id, request->after, moved);
+  if (!moved) return;
+  windows_changed();
+  notify_sidebar_changes();
 }
 
 /* ------------------------------------------------------------------------ */
@@ -7268,6 +7308,7 @@ static void service_sidebar(void) {
         shell.sidebar.seeded = false;
       if (anvil_sidebar_merge_recents(&shell.sidebar, paths, result->count)) {
         shell.sidebar_seeded = true;
+        apply_saved_order();
         restore_project_activity();
         for (size_t i = 0; i < result->count; i++) {
           const AnvilSidebarProject *source = result->projects[i];
@@ -7682,21 +7723,28 @@ static void save_windows(bool final) {
               entry->maximized);
     }
   }
-  /* Most recent first, so the bound drops the oldest. */
+  /* In Project Sidebar order. Projects that the Sidebar does not list follow, so the bound drops them first.
+   * Before the first scan, the saved order stays, after the Projects that this run added. */
   static AnvilShellProjectActivity activity[ANVIL_SHELL_STATE_MAX_PROJECTS];
   size_t activity_count = 0;
+  const AnvilSidebarProject *saved_rows[ANVIL_SHELL_STATE_MAX_PROJECTS];
+  for (size_t i = 0; i < shell.saved_order_count; i++)
+    saved_rows[i] = anvil_sidebar_find(&shell.sidebar, shell.saved_order[i].path);
   for (size_t i = 0; i < shell.sidebar.count && activity_count < SDL_arraysize(activity); i++) {
     const AnvilSidebarProject *row = shell.sidebar.projects[i];
-    if (row->activity > 0) activity[activity_count++] = (AnvilShellProjectActivity){row->path, row->activity};
+    bool saved = false;
+    for (size_t j = 0; j < shell.saved_order_count; j++) saved |= saved_rows[j] == row;
+    if (!saved) activity[activity_count++] = (AnvilShellProjectActivity){row->path, row->activity};
   }
-  for (size_t i = 0; i < shell.saved_activity_count && activity_count < SDL_arraysize(activity); i++)
-    activity[activity_count++] = shell.saved_activity[i];
-  for (size_t i = 1; i < activity_count; i++)
-    for (size_t j = i; j > 0 && activity[j].activity > activity[j - 1].activity; j--) {
-      AnvilShellProjectActivity swap = activity[j];
-      activity[j] = activity[j - 1];
-      activity[j - 1] = swap;
-    }
+  for (size_t i = 0; i < shell.saved_order_count && activity_count < SDL_arraysize(activity); i++) {
+    const AnvilShellProjectActivity *saved = &shell.saved_order[i];
+    const AnvilSidebarProject *row = saved_rows[i];
+    activity[activity_count++] = row ? (AnvilShellProjectActivity){row->path, SDL_max(row->activity, saved->activity)}
+                                     : *saved;
+  }
+  if (!shell.saved_order_count)
+    for (size_t i = 0; i < shell.saved_activity_count && activity_count < SDL_arraysize(activity); i++)
+      activity[activity_count++] = shell.saved_activity[i];
   AnvilShellState state = {entries, count, activity, activity_count, shell.sidebar_points, shell.next_window,
                            shell.alt_navigation, shell.closed, shell.closed_count};
   size_t size = 0;
@@ -8068,6 +8116,8 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   size_t adoptable_count = userdir ? anvil_adoption_scan(adoptable, SDL_arraysize(adoptable)) : 0;
   /* The state file keeps the paths; the shell keeps them until the Project Sidebar lists their Projects. */
   for (size_t i = 0; i < saved.project_count && i < SDL_arraysize(shell.saved_activity); i++) {
+    char *copy = strdup(saved.projects[i].path);
+    if (copy) shell.saved_order[shell.saved_order_count++] = (AnvilShellProjectActivity){copy, saved.projects[i].activity};
     shell.saved_activity[shell.saved_activity_count++] = saved.projects[i];
     saved.projects[i].path = NULL;
   }

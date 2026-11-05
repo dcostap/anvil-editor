@@ -306,6 +306,13 @@ local function add_surface(id, window)
       if core.session_log then core.session_log:flush() end
       return
     end
+    if action == "reorder" then
+      local after = ...
+      local sent = system.reorder_project(row_id, target, after)
+      core.log_quiet("Sidebar reorder: Window=%d row=%d anchor=%d after=%s sent=%s", id, row_id, target,
+        tostring(after), tostring(sent))
+      return sent
+    end
     if action == "focus" then
       local sent = system.focus_project_sidebar(true)
       core.log_quiet("Sidebar takes the keyboard: Window=%d sent=%s", id, tostring(sent))

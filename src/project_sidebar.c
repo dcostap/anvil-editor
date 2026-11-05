@@ -148,6 +148,51 @@ failed:
     free_project(created_rows[i]);
   return false;
 }
+void anvil_sidebar_apply_order(AnvilSidebarModel *model, const char *const *paths, size_t count) {
+  AnvilSidebarProject *ordered[ANVIL_SIDEBAR_PROJECT_LIMIT];
+  bool named[ANVIL_SIDEBAR_PROJECT_LIMIT] = {0};
+  size_t named_count = 0;
+  for (size_t i = 0; i < count && named_count < model->count; i++) {
+    AnvilSidebarProject *row = paths[i] ? anvil_sidebar_find(model, paths[i]) : NULL;
+    for (size_t j = 0; row && j < model->count; j++)
+      if (model->projects[j] == row && !named[j]) {
+        named[j] = true;
+        ordered[named_count++] = row;
+      }
+  }
+  size_t front = 0;
+  for (size_t i = 0; i < model->count; i++)
+    if (!named[i]) front++;
+  AnvilSidebarProject *projects[ANVIL_SIDEBAR_PROJECT_LIMIT];
+  size_t next = 0;
+  for (size_t i = 0; i < model->count; i++)
+    if (!named[i]) projects[next++] = model->projects[i];
+  memcpy(projects + front, ordered, named_count * sizeof(*ordered));
+  if (memcmp(model->projects, projects, model->count * sizeof(*projects))) {
+    memcpy(model->projects, projects, model->count * sizeof(*projects));
+    model->revision++;
+  }
+}
+bool anvil_sidebar_move(AnvilSidebarModel *model, AnvilSidebarProject *project, AnvilSidebarProject *anchor,
+                        bool after) {
+  size_t from = model->count, to = model->count;
+  for (size_t i = 0; i < model->count; i++) {
+    if (model->projects[i] == project) from = i;
+    if (model->projects[i] == anchor) to = i;
+  }
+  if (from == model->count || to == model->count || from == to) return false;
+  /* The anchor's index after the Project leaves its place. */
+  if (to > from) to--;
+  if (after) to++;
+  if (to == from) return false;
+  if (to > from)
+    memmove(model->projects + from, model->projects + from + 1, (to - from) * sizeof(*model->projects));
+  else
+    memmove(model->projects + to + 1, model->projects + to, (from - to) * sizeof(*model->projects));
+  model->projects[to] = project;
+  model->revision++;
+  return true;
+}
 void anvil_sidebar_set_runtime(AnvilSidebarModel *model, AnvilSidebarProject *project, uint32_t id,
                                uint32_t pid, uint32_t window_id, AnvilSidebarState state, bool selected,
                                bool deferred_dialog, bool close_choice) {
