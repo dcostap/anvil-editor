@@ -116,6 +116,7 @@ test.describe("Context Menu", function()
     system.set_clipboard("X")
     right_click(point(view, 1, 7))
     test.ok(context_menu.is_open())
+    test.equal(context_menu.selected_label(), nil)
     -- Typed text filters the menu and selects the best match; Enter runs it.
     type_text("pas")
     test.equal(context_menu.selected_label(), "Paste")
@@ -208,11 +209,12 @@ test.describe("Context Menu", function()
     test.ok(not context_menu.is_open())
   end)
 
-  test.it("opens from the keyboard at the caret", function()
+  test.it("opens from the keyboard at the caret with its first item selected", function()
     local view = open_editor("alpha")
     test.ok(command.perform("core:show_context_menu"))
     test.ok(context_menu.is_open())
     test.ok(contains(context_menu.labels(), "Select All"))
+    test.equal(context_menu.selected_label(), context_menu.labels()[1])
   end)
 
   test.it("keeps the caret where it is when opened from the keyboard", function()
@@ -297,7 +299,6 @@ test.describe("Context Menu", function()
       return top
     end
     local ok, err = pcall(function()
-      core.on_event("keypressed", "down", {})
       local first
       for _ = 1, 120 do first = highlight_top() end
       core.on_event("keypressed", "down", {})
