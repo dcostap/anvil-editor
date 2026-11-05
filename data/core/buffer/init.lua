@@ -2656,6 +2656,7 @@ function Buffer:raw_insert(line, col, text, undo_stack, time, restore_observer_s
   local observer_transaction = { observer_state = observer_state, restore_observer_state = restore_observer_state }
   observer_transaction.edits = { { line1 = line, col1 = col, line2 = line, col2 = col, text = text } }
   self:notify_text_change_listeners("before", { type = "raw_insert", kind = "raw_insert", line = line, col = col, text = text, transaction = observer_transaction })
+  push_selection_undo(self, undo_stack, time)
   local start_offset = position_to_offset(line_offsets_for(self.lines), line, col)
   -- split text into lines and merge with line at insertion point
   local lines = split_lines(text)
@@ -2684,7 +2685,6 @@ function Buffer:raw_insert(line, col, text, undo_stack, time, restore_observer_s
 
   -- push undo
   local line2, col2 = self:position_offset(line, col, #text)
-  push_selection_undo(self, undo_stack, time)
   push_undo(undo_stack, time, "remove", line, col, line2, col2).observer_state = observer_state
 
   -- update highlighter and assure selection is in bounds
@@ -3150,7 +3150,7 @@ function Buffer:replace(fn)
       type = "replace",
       selections = selections,
       last_selection = last_selection,
-      merge_cursors = false,
+      merge_cursors = true,
     })
   end
   return results

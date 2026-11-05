@@ -474,6 +474,13 @@ local function block_comment(comment, line1, col1, line2, col2)
       stop_len = stop_len + 1
     end
 
+    if line1 == line2 and col1 + start_len >= col2 - stop_len then
+      -- An empty comment can share one space between both delimiters.
+      buffer():apply_edits({
+        { line1 = line1, col1 = col1, line2 = line2, col2 = col2, text = "" },
+      }, { type = "remove", merge_cursors = false })
+      return line1, col1, line1, col1
+    end
     buffer():apply_edits({
       { line1 = line1, col1 = col1, line2 = line1, col2 = col1 + start_len, text = "" },
       { line1 = line2, col1 = col2 - stop_len, line2 = line2, col2 = col2, text = "" },
@@ -2348,11 +2355,32 @@ local commands = {
   end,
 
   ["core:select_lines"] = function(dv)
+    local ranges = {}
     for idx, line1, _, line2 in dv.buffer:get_selections(true) do
-      if not append_line_if_last_line(line2) then return end
-      dv.buffer:set_selections(idx, line2 + 1, 1, line1, 1)
+      ranges[#ranges + 1] = { idx = idx, line1 = line1, line2 = line2 }
     end
-    dv.buffer:merge_cursors()
+    sort_line_actions(ranges)
+    local groups = {}
+    for _, range in ipairs(ranges) do
+      local group = groups[#groups]
+      if group and range.line1 <= group.line2 then
+        group.line2 = math.max(group.line2, range.line2)
+      else
+        group = range
+        groups[#groups + 1] = group
+      end
+      if range.idx == dv.buffer.last_selection then group.active = true end
+    end
+    local selections, last_selection = {}, 1
+    for idx, group in ipairs(groups) do
+      if not append_line_if_last_line(group.line2) then return end
+      selections[#selections + 1] = group.line2 + 1
+      selections[#selections + 1] = 1
+      selections[#selections + 1] = group.line1
+      selections[#selections + 1] = 1
+      if group.active then last_selection = idx end
+    end
+    dv.buffer:set_selection_list(selections, last_selection)
     set_primary_selection(dv.buffer)
   end,
 
@@ -2414,7 +2442,7 @@ local commands = {
       end
       removed_before = removed_before + action.line2 - action.line1
     end
-    dv.buffer:apply_edits(edits, { type = "replace", selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = false })
+    dv.buffer:apply_edits(edits, { type = "replace", selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = true })
   end),
 
   ["core:indent"] = function(dv)
@@ -2679,12 +2707,16 @@ local commands = {
       local target_line = block.line2 < #dv.buffer.lines
         and block.line1 - removed_before
         or math.max(1, block.line1 - removed_before - 1)
+      local source_line = block.line2 < #dv.buffer.lines and block.line2 + 1 or block.line1 - 1
+      local target_text = dv.buffer.lines[source_line] or "\n"
       for _, member in ipairs(block.members) do
+        local col = math.min(member.col1, #target_text)
+        while col > 1 and common.is_utf8_cont(target_text, col) do col = col - 1 end
         local offset = (member.idx - 1) * 4
         selections[offset + 1] = target_line
-        selections[offset + 2] = member.col1
+        selections[offset + 2] = col
         selections[offset + 3] = target_line
-        selections[offset + 4] = member.col1
+        selections[offset + 4] = col
       end
       removed_before = removed_before + block.line2 - block.line1 + 1
     end
@@ -2710,6 +2742,7 @@ local commands = {
     local undo_idx = dv.buffer.undo_stack.idx
     auto_indent_lines(dv.buffer, merged)
     dv.buffer:join_undo_since(undo_idx)
+    dv.buffer:merge_cursors()
   end),
 
   ["editor:move_lines_up"] = command.palette(function(dv)
@@ -2779,6 +2812,7 @@ local commands = {
     else
       dv.buffer:set_selection_list(selections, dv.buffer.last_selection)
     end
+    dv.buffer:merge_cursors()
   end),
 
   ["editor:move_lines_down"] = command.palette(function(dv)
@@ -2855,6 +2889,7 @@ local commands = {
     else
       dv.buffer:set_selection_list(selections, dv.buffer.last_selection)
     end
+    dv.buffer:merge_cursors()
   end),
 
   ["editor:toggle_block_comments"] = command.palette(function(dv)
