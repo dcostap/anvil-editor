@@ -655,6 +655,51 @@ test.describe("Markdown Interactive Table Editing", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("keeps the whole starting cell selected when a drag leaves the table", function()
+    local view, buffer = make_view(
+      "before\n\n| A | B |\n| --- | --- |\n| one | two |\n| four | five |\n\nafter"
+    )
+    buffer:set_selection(8, 1)
+    refresh(view)
+    local line_x, line_y = view:get_line_screen_position(5)
+    local start_x = line_x + view:get_col_x_offset(5, 4)
+    local start_y = line_y + view:get_position_visual_row_height(5, 4) / 2
+    local finish_x, finish_y = cell_center(view, 6, 2)
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      test.equal(command.perform("core:set_cursor", start_x, start_y), true)
+      test.same({ buffer:get_selection() }, { 5, 4, 5, 4 })
+      view:on_mouse_moved(finish_x, finish_y, finish_x - start_x, finish_y - start_y)
+      test.same(selected_cells(view), { "5:1", "5:2", "6:1", "6:2" })
+
+      local function move_to(line, col)
+        local x, y = view:get_line_screen_position(line)
+        x = x + view:get_col_x_offset(line, col)
+        y = y + view:get_position_visual_row_height(line, col) / 2
+        view:on_mouse_moved(x, y, 0, 0)
+        return x, y
+      end
+
+      move_to(8, 3)
+      test.equal(markdown_tables.cell_selection(view), nil)
+      test.equal(selected_text(buffer), "one | two |\n| four | five |\n\naf")
+      move_to(8, 6)
+      test.equal(selected_text(buffer), "one | two |\n| four | five |\n\nafter")
+
+      -- Reversing the same drag selects through the starting cell's end.
+      move_to(1, 1)
+      test.equal(selected_text(buffer), "before\n\n| A | B |\n| --- | --- |\n| one")
+
+      -- Returning to the starting cell restores character selection from the press.
+      local x, y = move_to(5, 5)
+      view:on_mouse_released("left", x, y)
+      test.equal(selected_text(buffer), "n")
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
   test.it("keeps a drag within one cell as an ordinary text selection", function()
     local view, buffer = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")
     buffer:set_selection(5, 1)

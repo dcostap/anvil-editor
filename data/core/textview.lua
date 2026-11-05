@@ -7020,7 +7020,7 @@ function TextView:on_mouse_moved(x, y, ...)
     local special_handled = false
     local anchor_render = self:get_line_render(l2)
     if anchor_render and anchor_render.on_mouse_selection then
-      local ok, handled = pcall(
+      local ok, handled, anchor_col = pcall(
         anchor_render.on_mouse_selection, self, l2, c2, l1, c1
       )
       if not ok then
@@ -7030,6 +7030,8 @@ function TextView:on_mouse_moved(x, y, ...)
         )
       end
       special_handled = ok and handled == true
+      -- A rendered selection can return to text selection at a whole-cell edge.
+      if ok and anchor_col then c2 = anchor_col end
     end
     if special_handled then
       -- The rendered interaction owns Selection State for this drag.

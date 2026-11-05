@@ -1451,7 +1451,13 @@ function tables.select_rectangle(view, anchor_line, anchor_col, line, col)
   -- pointer crosses it, instead of falling back to source text selection.
   if anchor and line == anchor.delimiter_line then return true end
   local target = context_at(view, line, col, false)
-  if not same_table(anchor, target) then return false end
+  if not same_table(anchor, target) then
+    if not anchor then return false end
+    -- Outside the table, keep the starting cell's whole text selected.
+    -- Leave the press position intact for a drag back into that cell.
+    local forward = line > anchor_line or line == anchor_line and col >= anchor_col
+    return false, forward and anchor.cell.content_col1 or anchor.cell.content_col2
+  end
   if anchor.grid_row == target.grid_row and anchor.column == target.column then
     -- A drag that remains inside one cell is ordinary character selection.
     -- Crossing a cell boundary promotes the same gesture to rectangular
