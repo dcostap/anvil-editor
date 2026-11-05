@@ -221,7 +221,7 @@ function M:launch(args, caller, pi)
   end
   local command
   if executable then
-    local shell = require("core.config").plugins.terminal.shell:lower()
+    local shell = (require("core.config").plugins.terminal.shell or ""):lower()
     assert(shell == "" or shell:find("powershell", 1, true) or shell:find("pwsh", 1, true),
       "Structured program launch requires a PowerShell Terminal")
     local parts = {quote_argument(executable)}

@@ -302,13 +302,17 @@ test.describe("Agent editor control", function()
     file:write("first\nsecond\n"); file:close()
     local source = panes.create {factory = function() return View() end}
     local terminal
+    local terminal_config = require("core.config").plugins.terminal
+    local shell = terminal_config.shell
+    -- The default shell is unset.
+    terminal_config.shell = nil
     local ok, err = pcall(function()
       local opened = control:call("open_file", {path = folder .. "/note.txt", line = 2,
         pane = source.id, placement = "split", direction = "right", request_id = "open-note"}, "test-client")
       test.equal(panes.find(opened.pane).current_view.buffer.abs_filename:gsub("\\", "/"), folder .. "/note.txt")
       test.equal(panes.active(), source)
-      terminal = control:call("terminal_start", {cwd = folder, pane = source.id, placement = "split",
-        direction = "down", request_id = "open-terminal"}, "test-client")
+      terminal = control:call("terminal_start", {cwd = folder, executable = "hostname.exe", pane = source.id,
+        placement = "split", direction = "down", request_id = "open-terminal"}, "test-client")
       test.equal(panes.active(), source)
       local deadline = system.get_time() + 30
       local result
@@ -322,6 +326,7 @@ test.describe("Agent editor control", function()
       test.ok(result.terminal)
       test.equal(panes.active(), source)
     end)
+    terminal_config.shell = shell
     if terminal and panes.find(terminal.pane) then panes.close(terminal.pane, {force = true}) end
     test.ok(test.remove_tree(folder))
     assert(ok, err)
