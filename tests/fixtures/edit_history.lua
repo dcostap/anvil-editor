@@ -90,22 +90,47 @@ end
 
 ---Undoes back to the first state, then redoes to the last one. `undo` and
 ---`redo` change the text, and `text` reads it.
-function edit_history.walk(model, undo, redo, text)
+function edit_history.walk(model, undo, redo, text, validate)
   local last = #model.states
   while model.index > 1 do
     undo()
     local err = edit_history.compare("undo to state " .. (model.index - 1), model:undo(), text())
+    if not err and validate then err = validate() end
     if err then return err end
   end
+  undo()
+  local err = edit_history.compare("undo at the oldest state", model.states[1], text())
+  if not err and validate then err = validate() end
+  if err then return err end
   while model.index < last do
     redo()
     local err = edit_history.compare("redo to state " .. (model.index + 1), model:redo(), text())
+    if not err and validate then err = validate() end
     if err then return err end
   end
   -- Undo and redo at the ends of the history change nothing.
   redo()
   local err = edit_history.compare("redo at the newest state", model.states[last], text())
+  if not err and validate then err = validate() end
   if err then return err end
+end
+
+---Check the public text and selection invariants after an edit or history move.
+function edit_history.validate(buffer)
+  if #buffer.lines == 0 then return "Buffer has no lines" end
+  for i, line in ipairs(buffer.lines) do
+    if line:sub(-1) ~= "\n" then return "line " .. i .. " has no final newline" end
+  end
+  for _, line1, col1, line2, col2 in buffer:get_selections() do
+    for _, point in ipairs({ { line1, col1 }, { line2, col2 } }) do
+      local line, col = point[1], point[2]
+      if not buffer.lines[line] or col < 1 or col > #buffer.lines[line] then
+        return "selection outside the text: " .. line .. ":" .. col
+      end
+      local byte = buffer.lines[line]:byte(col)
+      if byte >= 128 and byte < 192 then return "selection inside a UTF-8 character" end
+    end
+  end
 end
 
 local function copy(value)
@@ -125,7 +150,7 @@ local function smaller(scenario)
     candidates[#candidates + 1] = candidate
   end
   for i, step in ipairs(scenario.steps) do
-    for _, field in ipairs({ "carets", "edits" }) do
+    for _, field in ipairs({ "carets", "edits", "batches" }) do
       local list = step[field]
       if type(list) == "table" and #list > 1 then
         for j = #list, 1, -1 do

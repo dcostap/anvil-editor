@@ -7354,8 +7354,13 @@ function TextView:dedent_typed_closer(text)
   local buffer = self.buffer
   if not typed_closers[text] or buffer.overwrite then return false end
   local edits, final_by_idx, changed = {}, {}, false
+  local seen_lines = {}
   for idx, line1, col1, line2, col2 in buffer:get_selections(true) do
     if line1 ~= line2 or col1 ~= col2 then return false end
+    -- Several carets in one indentation cannot each replace that prefix.
+    -- Keep normal typing at every caret instead.
+    if seen_lines[line1] then return false end
+    seen_lines[line1] = true
     local line_text = buffer.lines[line1] or ""
     local before = line_text:sub(1, col1 - 1)
     if not before:match("^[\t ]*$") then return false end

@@ -10,9 +10,10 @@ local TextView = require "core.textview"
 local test = require "core.test"
 local history = dofile("tests/fixtures/edit_history.lua")
 
-local FILES = { "fuzz.lua", "fuzz.txt", "fuzz.md" }
+local FILES = { "fuzz.lua", "fuzz.txt", "fuzz.md", "fuzz.c" }
 local LINES = {
   "", "", "if ok then", "  x = 1", "end", "  -- note", "\tz", "é", "abc def", "| a | b |", "  ",
+  "- [ ] task", "> quote", "- list", "| --- | --- |", "漢字 🙂 é", "\t{ value(); }", "/* x */", "ABC def",
 }
 local COMMANDS = {
   "core:backspace", "core:backspace", "core:backspace", "core:delete", "core:delete",
@@ -23,9 +24,11 @@ local COMMANDS = {
   "editor:delete_lines", "editor:move_lines_up", "editor:move_lines_down",
   "editor:toggle_line_comments", "editor:upper_case", "editor:lower_case",
   "core:cut", "core:copy", "core:paste",
+  "core:paste_as_plain_text", "editor:toggle_block_comments", "editor:auto_indent_lines",
+  "core:select_word", "core:select_lines",
 }
-local TYPED = { "x", "ab", "(", ")", "\"", "{", "}", " ", "é" }
-local CLIPBOARDS = { "y", "two\nlines", "line\n", "\n", "  indented\n  block" }
+local TYPED = { "x", "ab", "(", ")", "\"", "{", "}", " ", "é", "[", "]", "'", "`", "\t", "🙂" }
+local CLIPBOARDS = { "y", "two\nlines", "line\n", "\n", "  indented\n  block", "a\r\nb\r\n", "漢字\t🙂" }
 
 local function set_text(buffer, text)
   buffer.lines = {}
@@ -56,11 +59,11 @@ end
 
 local function before(a, b) return a[1] < b[1] or a[1] == b[1] and a[2] < b[2] end
 
--- Up to five carets or selections in text order. They never overlap, and
+-- Up to 24 carets or selections in text order. They never overlap, and
 -- often touch.
 local function make_carets(rng, buffer)
   local all = positions(buffer)
-  local count = rng:int(1, 5)
+  local count = rng:chance(0.15) and rng:int(17, 24) or rng:int(1, 5)
   local picked = {}
   for i = 1, count * 2 do picked[i] = rng:pick(all) end
   table.sort(picked, before)
@@ -77,12 +80,15 @@ end
 local function make_step(rng, buffer)
   if rng:chance(0.12) then return { undo = true } end
   if rng:chance(0.08) then return { redo = true } end
-  local step = { carets = make_carets(rng, buffer) }
+  -- Keep the previous selections too: selection commands and clipboard
+  -- round trips must affect the next edit.
+  local step = {}
+  if not rng:chance(0.35) then step.carets = make_carets(rng, buffer) end
   if rng:chance(0.25) then
     step.type = rng:pick(TYPED)
   else
     step.command = rng:pick(COMMANDS)
-    if step.command == "core:paste" and rng:chance(0.5) then
+    if (step.command == "core:paste" or step.command == "core:paste_as_plain_text") and rng:chance(0.5) then
       step.clipboard = rng:pick(CLIPBOARDS)
     end
   end
@@ -92,7 +98,15 @@ end
 local function set_carets(buffer, carets)
   local flat = {}
   for _, caret in ipairs(carets) do
-    for i = 1, 4 do flat[#flat + 1] = caret[i] end
+    for i = 1, 4, 2 do
+      -- A shrink can move a saved coordinate into another character.
+      -- Keep test input at character boundaries, as mouse and key input do.
+      local line, col = buffer:sanitize_position(caret[i], caret[i + 1])
+      while col > 1 and buffer.lines[line]:byte(col) >= 128 and buffer.lines[line]:byte(col) < 192 do
+        col = col - 1
+      end
+      flat[#flat + 1], flat[#flat + 2] = line, col
+    end
   end
   buffer:set_selection_list(flat, #carets)
   buffer:merge_cursors()
@@ -100,8 +114,15 @@ end
 
 local function play(scenario, rng)
   local buffer = Buffer()
+  local apply_edits = buffer.apply_edits
+  function buffer:apply_edits(edits, opts)
+    local tx = apply_edits(self, edits, opts)
+    if tx.rejected then error("command rejected edits: " .. tostring(tx.reason) .. "\n" .. history.serialize({ text = text_of(self), carets = self.selections, edits = edits })) end
+    return tx
+  end
   set_text(buffer, scenario.text)
-  buffer:set_filename(scenario.file, scenario.file)
+  -- The name selects syntax. No disk file exists for these buffers.
+  buffer:set_filename(scenario.file)
   local view = TextView(buffer)
   view.size.x, view.size.y = 800, 600
   core.set_active_view(view)
@@ -124,7 +145,7 @@ local function play(scenario, rng)
       view:update()
       err = history.compare("step " .. i .. " redo", model:redo(), text_of(buffer))
     else
-      set_carets(buffer, step.carets)
+      if step.carets then set_carets(buffer, step.carets) end
       view:update()
       -- Moving the carets can empty a whitespace-only line. That cleanup
       -- undoes with the edit before it.
@@ -136,7 +157,13 @@ local function play(scenario, rng)
         system.set_clipboard(step.clipboard)
         core.cursor_clipboard, core.cursor_clipboard_whole_line = {}, {}
       end
-      if step.type then view:on_text_input(step.type) else command.perform(step.command) end
+      if step.type then
+        -- RootPanel binds the View's selections before calling plugin input
+        -- handlers. Direct calls must use the same public binding.
+        view:with_selection_state(function() view:on_text_input(step.type) end)
+      else
+        command.perform(step.command)
+      end
       local command_text = text_of(buffer)
       view:update()
       -- A step that leaves the text as it was must leave no undo step.
@@ -150,18 +177,28 @@ local function play(scenario, rng)
       end
     end
     if err then return err end
+    if step.expected then
+      err = history.compare("step " .. i .. " text", step.expected, text_of(buffer))
+      if err then return err end
+    end
+    err = history.validate(buffer)
+    if err then return "step " .. i .. ": " .. err end
   end
   return history.walk(model,
     function() command.perform("core:undo"); view:update() end,
     function() command.perform("core:redo"); view:update() end,
-    function() return text_of(buffer) end)
+    function() return text_of(buffer) end, function() return history.validate(buffer) end)
 end
 
 local function run(scenario, rng)
   local previous = core.active_view
+  local log_error, errors = core.error, {}
+  core.error = function(fmt, ...) errors[#errors + 1] = string.format(fmt, ...) end
   local ok, result = pcall(play, scenario, rng)
+  core.error = log_error
   if previous then core.set_active_view(previous) end
   if not ok then return "error: " .. tostring(result) end
+  if #errors > 0 then return table.concat(errors, "\n") end
   return result
 end
 
@@ -173,6 +210,55 @@ end
 
 -- Scenarios that failed once. Each one stays as a fixed case.
 local regressions = {
+  -- A line-end caret and a selected line break can land on the same copy.
+  { file = "fuzz.txt", text = "abc\n", steps = {
+    { carets = { { 1, 4, 1, 4 }, { 2, 1, 1, 4 } }, command = "editor:duplicate_lines" },
+    { type = "x", expected = "abc\nabcx\n\n" },
+  } },
+  -- Two closers in one indentation use normal input, not overlapping dedents.
+  { file = "fuzz.c", text = "  ", steps = {
+    { carets = { { 1, 2, 1, 2 }, { 1, 3, 1, 3 } }, type = ")", expected = " ) )\n" },
+  } },
+  -- Delete's line-end path must also merge overlapping character removals.
+  { file = "fuzz.txt", text = "abc\n", steps = {
+    { carets = { { 1, 1, 1, 1 }, { 1, 3, 1, 1 }, { 2, 1, 2, 1 } }, command = "core:delete", expected = "c\n\n" },
+  } },
+  -- The last empty line and the line above insert their copies at one point.
+  { file = "fuzz.txt", text = "abc\n", steps = {
+    { carets = { { 1, 1, 1, 1 }, { 2, 1, 2, 1 } }, command = "editor:duplicate_lines", expected = "abc\nabc\n\n\n" },
+  } },
+  -- Expanded selections on the same line must not reject the next paste.
+  { file = "fuzz.lua", text = "abc", steps = {
+    { carets = { { 1, 1, 1, 1 }, { 1, 3, 1, 3 } }, command = "core:select_lines" },
+    { command = "core:paste_as_plain_text", clipboard = "x", expected = "x\n" },
+  } },
+  { file = "fuzz.lua", text = "abc", steps = {
+    { carets = { { 1, 1, 1, 1 }, { 1, 3, 1, 3 } }, command = "core:select_word" },
+    { type = "x", expected = "x\n" },
+  } },
+  -- Unindent can move two carets to one place. The next input types once.
+  { file = "fuzz.c", text = "abc", steps = {
+    { carets = { { 1, 2, 1, 2 }, { 1, 3, 1, 3 } }, command = "core:unindent" },
+    { type = "x", expected = "xabc\n" },
+  } },
+  -- A line action inserts one line even with several carets on that line.
+  { file = "fuzz.txt", text = "abc", steps = {
+    { carets = { { 1, 1, 1, 1 }, { 1, 3, 1, 3 } }, command = "core:newline_above", expected = "\nabc\n" },
+    { carets = { { 2, 1, 2, 1 }, { 2, 3, 2, 3 } }, command = "core:newline_below", expected = "\nabc\n\n" },
+  } },
+  -- Deletion ranges can overlap even when their carets do not.
+  { file = "fuzz.txt", text = "abc def", steps = {
+    { carets = { { 1, 3, 1, 3 }, { 1, 5, 1, 5 } }, command = "core:delete_to_start_of_line", expected = "def\n" },
+  } },
+  -- Whole-line block comments must not toggle twice for two carets.
+  { file = "fuzz.c", text = "abc", steps = {
+    { carets = { { 1, 1, 1, 1 } }, type = "x" },
+    { carets = { { 1, 1, 1, 1 }, { 1, 3, 1, 3 } }, command = "editor:toggle_block_comments", expected = "/* xabc */\n" },
+  } },
+  -- Separate block comments from one command undo together.
+  { file = "fuzz.c", text = "abc def", steps = {
+    { carets = { { 1, 1, 1, 4 }, { 1, 5, 1, 8 } }, command = "editor:toggle_block_comments", expected = "/* abc */ /* def */\n" },
+  } },
   -- Backspace with carets at the pipes of a table: the second Backspace joins rows.
   {
     file = "fuzz.md",
@@ -219,6 +305,8 @@ local regressions = {
 test.describe("Editing command history", function()
   test.before_each(function(context)
     context.merge = config.undo_merge_timeout
+    context.autosave = config.plugins.autosave_fast.enabled
+    config.plugins.autosave_fast.enabled = false
     context.clipboard = system.get_clipboard()
     context.cursor_clipboard = core.cursor_clipboard
     context.whole_line = core.cursor_clipboard_whole_line
@@ -227,6 +315,7 @@ test.describe("Editing command history", function()
 
   test.after_each(function(context)
     config.undo_merge_timeout = context.merge
+    config.plugins.autosave_fast.enabled = context.autosave
     system.set_clipboard(context.clipboard or "")
     core.cursor_clipboard = context.cursor_clipboard
     core.cursor_clipboard_whole_line = context.whole_line

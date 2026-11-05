@@ -2017,16 +2017,22 @@ local commands = {
     if not can_edit(dv, "newline") then return end
     local edits = {}
     local entries = {}
+    local seen = {}
     for idx, line in dv.buffer:get_selections(false) do
-      local indent = dv.buffer.lines[line]:match("^[\t ]*")
-      edits[#edits + 1] = { line1 = line, col1 = math.huge, line2 = line, col2 = math.huge, text = "\n" .. indent, idx = idx }
-      entries[#entries + 1] = { idx = idx, line = line, col = #indent + 1 }
+      if not seen[line] then
+        local indent = dv.buffer.lines[line]:match("^[\t ]*")
+        edits[#edits + 1] = { line1 = line, col1 = math.huge, line2 = line, col2 = math.huge, text = "\n" .. indent, idx = idx }
+        seen[line] = { idx = idx, line = line, col = #indent + 1 }
+        entries[#entries + 1] = seen[line]
+      end
+      if idx == dv.buffer.last_selection then seen[line].active = true end
     end
     table.sort(entries, function(a, b)
       if a.line == b.line then return a.idx < b.idx end
       return a.line < b.line
     end)
     local selections = {}
+    local last_selection
     local cumulative_line_delta = 0
     for _, entry in ipairs(entries) do
       local line = entry.line + cumulative_line_delta + 1
@@ -2035,11 +2041,12 @@ local commands = {
       selections[#selections + 1] = line
       selections[#selections + 1] = entry.col
       cumulative_line_delta = cumulative_line_delta + 1
+      if entry.active then last_selection = #selections / 4 end
     end
     dv.buffer:apply_edits(edits, {
       type = "insert",
       selections = selections,
-      last_selection = dv.buffer.last_selection,
+      last_selection = last_selection,
       merge_cursors = false,
     })
   end,
@@ -2048,16 +2055,22 @@ local commands = {
     if not can_edit(dv, "newline") then return end
     local edits = {}
     local entries = {}
+    local seen = {}
     for idx, line in dv.buffer:get_selections(false) do
-      local indent = dv.buffer.lines[line]:match("^[\t ]*")
-      edits[#edits + 1] = { line1 = line, col1 = 1, line2 = line, col2 = 1, text = indent .. "\n", idx = idx }
-      entries[#entries + 1] = { idx = idx, line = line, col = #indent + 1 }
+      if not seen[line] then
+        local indent = dv.buffer.lines[line]:match("^[\t ]*")
+        edits[#edits + 1] = { line1 = line, col1 = 1, line2 = line, col2 = 1, text = indent .. "\n", idx = idx }
+        seen[line] = { idx = idx, line = line, col = #indent + 1 }
+        entries[#entries + 1] = seen[line]
+      end
+      if idx == dv.buffer.last_selection then seen[line].active = true end
     end
     table.sort(entries, function(a, b)
       if a.line == b.line then return a.idx < b.idx end
       return a.line < b.line
     end)
     local selections = {}
+    local last_selection
     local cumulative_line_delta = 0
     for _, entry in ipairs(entries) do
       local line = entry.line + cumulative_line_delta
@@ -2066,11 +2079,12 @@ local commands = {
       selections[#selections + 1] = line
       selections[#selections + 1] = entry.col
       cumulative_line_delta = cumulative_line_delta + 1
+      if entry.active then last_selection = #selections / 4 end
     end
     dv.buffer:apply_edits(edits, {
       type = "insert",
       selections = selections,
-      last_selection = dv.buffer.last_selection,
+      last_selection = last_selection,
       merge_cursors = false,
     })
   end,
@@ -2165,26 +2179,12 @@ local commands = {
       end
     end
     if fallback then
-      local edits, final_by_idx = {}, {}
-      for idx, line1, col1, line2, col2 in dv.buffer:get_selections(true, true) do
-        local start_line, start_col, end_line, end_col = line1, col1, line2, col2
-        if line1 == line2 and col1 == col2 then
-          if dv.buffer.lines[line1]:find("^%s*$", col1) and line1 < #dv.buffer.lines then
-            end_line, end_col = line1 + 1, 1
-          else
-            local l2, c2 = dv.buffer:position_offset(line1, col1, translate.next_char)
-            start_line, start_col, end_line, end_col = sort_positions(line1, col1, l2, c2)
-          end
+      dv.buffer:delete_to(function(buffer, line, col)
+        if buffer.lines[line]:find("^%s*$", col) and line < #buffer.lines then
+          return line + 1, 1
         end
-        edits[#edits + 1] = { line1 = start_line, col1 = start_col, line2 = end_line, col2 = end_col, text = "", idx = idx }
-        final_by_idx[idx] = "start"
-      end
-      dv.buffer:apply_edits(edits, {
-        type = "remove",
-        selections = dv.buffer:selections_after_edits(edits, final_by_idx),
-        last_selection = dv.buffer.last_selection,
-        merge_cursors = true,
-      })
+        return translate.next_char(buffer, line, col)
+      end)
     else
       dv.buffer:delete_to(translate.next_char)
     end
@@ -2352,6 +2352,7 @@ local commands = {
       if not append_line_if_last_line(line2) then return end
       dv.buffer:set_selections(idx, line2 + 1, 1, line1, 1)
     end
+    dv.buffer:merge_cursors()
     set_primary_selection(dv.buffer)
   end,
 
@@ -2361,6 +2362,7 @@ local commands = {
       local line2, col2 = translate.end_of_word(dv.buffer, line1, col1)
       dv.buffer:set_selections(idx, line2, col2, line1, col1)
     end
+    dv.buffer:merge_cursors()
     set_primary_selection(dv.buffer)
   end,
 
@@ -2567,6 +2569,7 @@ local commands = {
       end
     end
     dv.buffer:join_undo_since(undo_idx)
+    dv.buffer:merge_cursors()
   end,
 
   ["editor:duplicate_lines"] = command.palette(function(dv)
@@ -2602,6 +2605,12 @@ local commands = {
           text = "\n" .. block.text,
         }
       end
+      -- The final empty line shares its insert point with the copy above.
+      local current, previous = edits[#edits], edits[#edits - 1]
+      if previous and current.line1 == previous.line1 and current.col1 == previous.col1 then
+        previous.text = previous.text .. current.text
+        edits[#edits] = nil
+      end
     end
 
     local selections = { table.unpack(dv.buffer.selections) }
@@ -2619,7 +2628,7 @@ local commands = {
       end
     end
     if #edits > 0 then
-      dv.buffer:apply_edits(edits, { type = "insert", selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = false })
+      dv.buffer:apply_edits(edits, { type = "insert", selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = true })
     end
   end),
 
@@ -2850,7 +2859,37 @@ local commands = {
 
   ["editor:toggle_block_comments"] = command.palette(function(dv)
     if not can_edit(dv, "toggle comments") then return end
+    -- Expand empty carets before editing. Whole-line ranges can overlap
+    -- other selections, and must toggle only once.
+    local ranges = {}
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
+      if line1 == line2 and col1 == col2 then
+        col1, col2 = 1, #dv.buffer.lines[line2]
+      end
+      ranges[#ranges + 1] = { idx = idx, line1 = line1, col1 = col1, line2 = line2, col2 = col2, count = 1 }
+    end
+    table.sort(ranges, function(a, b)
+      return a.line1 < b.line1 or a.line1 == b.line1 and a.col1 < b.col1
+    end)
+    local groups = {}
+    for _, range in ipairs(ranges) do
+      local group = groups[#groups]
+      if group and (range.line1 < group.line2
+          or range.line1 == group.line2 and range.col1 < group.col2
+          or range.line1 == group.line1 and range.col1 == group.col1) then
+        if range.line2 > group.line2 or range.line2 == group.line2 and range.col2 > group.col2 then
+          group.line2, group.col2 = range.line2, range.col2
+        end
+        group.count = group.count + 1
+      else
+        groups[#groups + 1] = range
+      end
+    end
+    local undo_idx = dv.buffer.undo_stack.idx
+    -- Later edits cannot move the ranges that remain to be edited.
+    for i = #groups, 1, -1 do
+      local group = groups[i]
+      local idx, line1, col1, line2, col2 = group.idx, group.line1, group.col1, group.line2, group.col2
       local current_syntax = dv.buffer.syntax
       if line1 > 1 then
         -- Use the previous line state, as it will be the state
@@ -2872,15 +2911,12 @@ local commands = {
         if dv.buffer.syntax.comment then
           command.perform "editor:toggle_line_comments"
         end
-        return
+        break
       end
-      -- if nothing is selected, toggle the whole line
-      if line1 == line2 and col1 == col2 then
-        col1 = 1
-        col2 = #dv.buffer.lines[line2]
-      end
-      dv.buffer:set_selections(idx, block_comment(comment, line1, col1, line2, col2))
+      local l1, c1, l2, c2 = block_comment(comment, line1, col1, line2, col2)
+      if group.count == 1 then dv.buffer:set_selections(idx, l1, c1, l2, c2) end
     end
+    dv.buffer:join_undo_since(undo_idx)
   end),
 
   ["editor:toggle_line_comments"] = command.palette(function(dv)

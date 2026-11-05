@@ -3159,7 +3159,6 @@ end
 
 function Buffer:delete_to_cursor(idx, ...)
   local edits = {}
-  local final_by_idx = {}
   local final_positions = {}
   for sidx, line1, col1, line2, col2 in self:get_selections(true, idx) do
     local start_line, start_col, end_line, end_col = line1, col1, line2, col2
@@ -3171,7 +3170,6 @@ function Buffer:delete_to_cursor(idx, ...)
       line1 = start_line, col1 = start_col, line2 = end_line, col2 = end_col,
       text = "", idx = sidx,
     }
-    final_by_idx[sidx] = "start"
     final_positions[sidx] = { start_line, start_col }
   end
   if #edits == 0 then return end
@@ -3180,8 +3178,18 @@ function Buffer:delete_to_cursor(idx, ...)
   local changed_final_by_idx = {}
   for _, edit in ipairs(normalized) do
     if edit.start_offset ~= edit.end_offset then
-      changed_edits[#changed_edits + 1] = edit
-      changed_final_by_idx[edit.idx] = "start"
+      -- Distinct carets can delete the same text, for example to a line's
+      -- start. Delete the union once. Other carets map into that removal.
+      local previous = changed_edits[#changed_edits]
+      if previous and edit.start_offset <= previous.end_offset then
+        if edit.end_offset > previous.end_offset then
+          previous.end_offset = edit.end_offset
+          previous.line2, previous.col2 = edit.line2, edit.col2
+        end
+      else
+        changed_edits[#changed_edits + 1] = edit
+        changed_final_by_idx[edit.idx] = "start"
+      end
     end
   end
   local new_selections
@@ -3194,7 +3202,7 @@ function Buffer:delete_to_cursor(idx, ...)
       new_selections[i], new_selections[i + 1], new_selections[i + 2], new_selections[i + 3] = pos[1], pos[2], pos[1], pos[2]
     end
   end
-  local tx = self:apply_edits(edits, {
+  local tx = self:apply_edits(changed_edits, {
     type = "remove",
     selections = new_selections,
     last_selection = self.last_selection,
