@@ -311,6 +311,31 @@ end, {
   end,
 })
 
+-- Backspace and Delete do not remove the line break that keeps a table apart
+-- from the text beside it. They move the caret over it.
+local function stops_beside_table(direction)
+  return function()
+    local view = live_table_view()
+    return view ~= nil and not view.buffer.read_only
+      and markdown_tables.join_stop(view, direction) ~= nil, view
+  end
+end
+
+local function stop_beside_table(view, direction)
+  local line, col = markdown_tables.join_stop(view, direction)
+  view.buffer:set_selection(line, col)
+  core.log_quiet("Markdown kept a table apart from the text beside it in %s:%d",
+    view.buffer:get_name(), line)
+end
+
+command.add(stops_beside_table(-1), {
+  ["markdown:backspace_beside_table"] = function(view) stop_beside_table(view, -1) end,
+})
+
+command.add(stops_beside_table(1), {
+  ["markdown:delete_beside_table"] = function(view) stop_beside_table(view, 1) end,
+})
+
 command.add(function()
   local view = live_table_view()
   return view ~= nil and markdown_tables.interactive_context(view) ~= nil, view

@@ -2051,6 +2051,67 @@ function tables.copy_cells(view, cut)
   return true
 end
 
+-- Line breaks beside a table ------------------------------------------------
+-- Markdown ends a table only at a blank line. Text joined below a table
+-- becomes its row, and text joined above its header stops it being a table.
+
+local function blank_line(buffer, line)
+  return line < 1 or line > #buffer.lines or line_text(buffer, line):match("^%s*$") ~= nil
+end
+
+local function table_rows_at(buffer, line)
+  if line < 1 or line > #buffer.lines then return nil end
+  local line1, line2 = source_table_bounds_with_delimiter(buffer, line)
+  if line1 and not source_line_in_fence_or_frontmatter(buffer, line) then
+    return line1, line2
+  end
+end
+
+-- Whether removing the line break after `line` joins a table to the text
+-- beside it.
+local function join_breaks_table(buffer, line)
+  local next_line = line + 1
+  if next_line > #buffer.lines then return false end
+  local _, last = table_rows_at(buffer, line)
+  if last == line then return not (blank_line(buffer, next_line) and blank_line(buffer, line + 2)) end
+  local first = table_rows_at(buffer, next_line)
+  if first == next_line then return not (blank_line(buffer, line) and blank_line(buffer, line - 1)) end
+  if blank_line(buffer, line) and not blank_line(buffer, next_line) then
+    _, last = table_rows_at(buffer, line - 1)
+    if last == line - 1 then return true end
+  end
+  if blank_line(buffer, next_line) and not blank_line(buffer, line) then
+    first = table_rows_at(buffer, line + 2)
+    if first == line + 2 then return true end
+  end
+  return false
+end
+
+---Where Backspace (`direction` -1) or Delete (1) moves the caret instead of
+---removing a line break that keeps a table apart from the text beside it.
+---Returns a line and column, or nil when the key removes the break as usual.
+---In a table row the caret goes to the nearest cell.
+function tables.join_stop(view, direction)
+  local buffer = view and view.buffer
+  if not buffer or #buffer.selections ~= 4 or buffer:has_any_selection() then return nil end
+  local line, col = buffer:get_selection()
+  local joined
+  if direction < 0 and col == 1 then
+    joined = line - 1
+  elseif direction > 0 and col == #line_text(buffer, line) + 1 then
+    joined = line
+  end
+  if not joined or joined < 1 or not join_breaks_table(buffer, joined) then return nil end
+  local target = direction < 0 and joined or joined + 1
+  local first = table_rows_at(buffer, target)
+  if first and target ~= first + 1 then
+    local row = source_row_at(buffer, target)
+    local cell = row.cells[direction < 0 and #row.cells or 1]
+    return target, direction < 0 and cell.content_col2 or cell.content_col1
+  end
+  return target, direction < 0 and #line_text(buffer, target) + 1 or 1
+end
+
 -- Table source --------------------------------------------------------------
 -- Edit Table Source shows one table of a View as Markdown source until the
 -- caret leaves it. The shown lines move with edits, so a row that is not
