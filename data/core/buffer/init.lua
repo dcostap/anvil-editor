@@ -2062,6 +2062,16 @@ local function pop_undo(self, undo_stack, redo_stack, modified)
       owner_id = cmd.selection_owner_id,
       restore_observer_state = cmd.observer_state,
     })
+    if tx.rejected then
+      -- Keep the step. Older steps only fit the text from before it.
+      undo_stack.idx = undo_stack.idx + 1
+      core.error("Could not %s the last edit in %s: %s", is_redo and "redo" or "undo", self:get_name(), tx.reason)
+      if modified then
+        if fs.machine then machine_record_due(self) end
+        self:on_text_change("undo")
+      end
+      return
+    end
     if tx and tx.applied and tx.changed then
       local before_selections, before_last_selection, after_selections, after_last_selection
       if is_redo then
@@ -2493,14 +2503,24 @@ function Buffer:apply_edits(edits, opts)
   local position, map_position = edit_position_map(old_lines, normalized, old_index)
 
   local delta = 0
-  for _, edit in ipairs(normalized) do
+  local inverse_edits = transaction.inverse_edits
+  for i, edit in ipairs(normalized) do
     local new_start = edit.start_offset + delta
     local new_end = new_start + #edit.text
     local il1, ic1 = position(new_start)
     local il2, ic2 = position(new_end)
-    transaction.inverse_edits[#transaction.inverse_edits + 1] = {
-      line1 = il1, col1 = ic1, line2 = il2, col2 = ic2, text = edit.old_text,
-    }
+    -- Adjacent edits undo as one edit. Two deletions that touch, such as
+    -- the last character of a line and its line break, would otherwise
+    -- undo as two inserts at one position, which apply_edits refuses.
+    local previous = inverse_edits[#inverse_edits]
+    if i > 1 and normalized[i - 1].end_offset == edit.start_offset then
+      previous.line2, previous.col2 = il2, ic2
+      previous.text = previous.text .. edit.old_text
+    else
+      inverse_edits[#inverse_edits + 1] = {
+        line1 = il1, col1 = ic1, line2 = il2, col2 = ic2, text = edit.old_text,
+      }
+    end
     transaction.changed_ranges[#transaction.changed_ranges + 1] = {
       old_line1 = edit.line1,
       old_line2 = edit.line2,
