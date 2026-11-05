@@ -9411,6 +9411,12 @@ table_cell_selection_lookup = function(view)
   return require("core.markdown.tables").cell_selection_map(view)
 end
 
+---Whether the user sees the caret. A Table Cell Selection shows its cells
+---instead, so decorations of the caret and its text selection do not show.
+function TextView:shows_caret()
+  return next(table_cell_selection_lookup(self).by_index) == nil
+end
+
 ---Whether a Table Cell Selection selects the cell of `row`.
 local function row_has_table_cell_selection(lookup, line, row)
   local cells = lookup.cells[line]

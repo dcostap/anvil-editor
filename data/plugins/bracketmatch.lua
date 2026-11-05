@@ -314,7 +314,7 @@ function TextView:draw_line_text(line, x, y)
   local lh = draw_line_text(self, line, x, y)
   local scope = perf_scope_begin("bracket_match")
   local width = 1
-  if self.buffer == state.buffer and state.line2 then
+  if self.buffer == state.buffer and state.line2 and self:shows_caret() then
     if line == state.line and bracketmatch.highlight_both then
       local offset = 0
       if state.line == state.line2 and math.abs(state.col + select_adj - 1 - state.col2) == 1 then

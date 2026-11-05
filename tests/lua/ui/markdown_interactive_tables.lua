@@ -13,6 +13,9 @@ local style = require "core.style"
 local test = require "core.test"
 local worker_pool = require "core.worker_pool"
 
+require "plugins.bracketmatch"
+require "plugins.selectionhighlight"
+
 local function make_view(text, filename)
   local buffer = Buffer(nil, nil, true)
   buffer:set_filename(filename or "interactive-table.md", filename)
@@ -771,6 +774,49 @@ test.describe("Markdown Interactive Table Editing", function()
     return #(rects[SELECTION_FILL] or {}), #(rects[SELECTION_OUTLINE] or {})
   end
 
+  local function bracket_frames(view, line)
+    local frames = 0
+    local old_draw_rect, old_draw_text = renderer.draw_rect, renderer.draw_text
+    renderer.draw_rect = function(_, _, _, _, color)
+      if color == style.bracketmatch_frame_color then frames = frames + 1 end
+    end
+    renderer.draw_text = function(font, text, x) return x + font:get_width(text) end
+    local x, y = view:get_line_screen_position(line)
+    local ok, err = pcall(view.draw_line_text, view, line, x, y)
+    renderer.draw_rect, renderer.draw_text = old_draw_rect, old_draw_text
+    if not ok then error(err, 0) end
+    return frames
+  end
+
+  test.it("draws no caret decorations for a Table Cell Selection", function()
+    local view, buffer = make_view(
+      "| A | B |\n| --- | --- |\n| one | [x] |\n| one | [x] |\n\nplain"
+    )
+    local frame, highlight = style.bracketmatch_frame_color, style.selectionhighlight
+    local FRAME, HIGHLIGHT = { 7, 8, 9, 255 }, { 10, 11, 12, 255 }
+    style.bracketmatch_frame_color, style.selectionhighlight = FRAME, HIGHLIGHT
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      -- A caret after a bracket frames the bracket pair.
+      buffer:set_selection(3, 12)
+      refresh(view)
+      view:update()
+      test.ok(bracket_frames(view, 3) > 0, "the bracket match was not drawn")
+
+      -- The cell selection puts its hidden caret at the same place.
+      test.ok(markdown_tables.select_rectangle(view, 3, 3, 3, 12))
+      test.same({ buffer:get_selection() }, { 3, 12, 3, 3 })
+      view:update()
+      test.equal(bracket_frames(view, 3), 0, "a bracket match showed for the hidden caret")
+      test.equal(#(paint_rects(view, { 4 })[HIGHLIGHT] or {}), 0,
+        "the cells' text was highlighted elsewhere")
+    end)
+    core.active_view = old_active
+    style.bracketmatch_frame_color, style.selectionhighlight = frame, highlight
+    if not ok then error(err, 0) end
+  end)
+
   test.it("keeps cell selection while dragging across the header separator", function()
     local view, buffer = make_view(
       "| A | B |\n| --- | --- |\n| one | two |\n| four | five |\n\nplain"
@@ -935,44 +981,6 @@ test.describe("Markdown Interactive Table Editing", function()
       test.equal(opened, "https://example.com")
     end)
     common.open_in_system = old_open
-    if not ok then error(err, 0) end
-  end)
-
-  test.it("does not frame a link's hidden bracket in a selected cell", function()
-    local view, buffer = make_view(
-      "| A | B |\n| --- | --- |\n| one | see [notes](https://example.com) |\n| two | four |\n\nplain"
-    )
-    buffer:set_selection(6, 1)
-    refresh(view)
-    local old_active = core.active_view
-    core.active_view = view
-    local old_draw_rect = renderer.draw_rect
-    local old_draw_text = renderer.draw_text
-    local ok, err = pcall(function()
-      test.equal(markdown_tables.select_rectangle(
-        view, 4, buffer.lines[4]:find("four"), 3, buffer.lines[3]:find("see") + 1
-      ), true)
-      -- The primary caret ends the link cell, right after its hidden ")".
-      local line, col = buffer:get_selection()
-      test.same({ line, buffer.lines[3]:sub(col - 1, col - 1) }, { 3, ")" })
-      test.equal(table_cells(view, 3)[2].text_lines[1].text, "see notes")
-      view:update()
-      local bracket_frames = 0
-      renderer.draw_rect = function(_, _, _, _, color)
-        if color == style.bracketmatch_frame_color then
-          bracket_frames = bracket_frames + 1
-        end
-      end
-      renderer.draw_text = function(font, text, x)
-        return x + font:get_width(text)
-      end
-      local x, y = view:get_line_screen_position(3)
-      view:draw_line_text(3, x, y)
-      test.equal(bracket_frames, 0)
-    end)
-    renderer.draw_rect = old_draw_rect
-    renderer.draw_text = old_draw_text
-    core.active_view = old_active
     if not ok then error(err, 0) end
   end)
 
