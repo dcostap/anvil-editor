@@ -14,13 +14,14 @@ local function latest_run_text(text, command)
 end
 
 function worker.run(payload, context)
-  local text = latest_run_text(payload.text, payload.command)
+  local text = payload.command and latest_run_text(payload.text, payload.command) or payload.text
   if context.cancelled() then return end
-  local candidates = locations.extract_candidates(text)
+  local candidates = locations.extract_candidates(text, payload.command and math.huge or 32768,
+    { plain_paths = not payload.command })
   if context.cancelled() then return end
   local count = 0
   for _, candidate in ipairs(candidates) do
-    if candidate.line > 1 then
+    if not payload.command or candidate.line > 1 then
       count = count + 1
       candidates[count] = candidate
     end

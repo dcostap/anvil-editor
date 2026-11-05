@@ -57,6 +57,8 @@ The resize test has a known PSReadLine 2.4.5 failure. See [known test failures](
 
 Middle-click scrolling uses Terminal history when the active screen has history. With no history, it sends wheel input through the normal wheel route. Reaching a history boundary does not send application input. Wheel input uses the original click position and keeps fractional movement between frames. Each frame sends a bounded number of events and discards excess whole ticks. Run `ui/middle_click_autoscroll.lua` and `ui/terminal_mouse_wheel.lua` after changes. Use the `terminal-autoscroll-history` scenario to measure history scrolling.
 
+Use Remote Point of Interest Source on a Terminal opens a frozen Terminal Text Capture as the Project's source. The command also accepts an existing Terminal Text Capture. Remote POI Navigation opens its file locations in the current Pane, without focusing the capture. A worker finds paths and checks files. Relative paths use the Terminal's directory at capture time. Plain paths open at line 1; diagnostic locations keep their line and column. Paths with spaces need quotes or backticks. New output does not change the capture. Run the source command on the live Terminal again to refresh it. Run `ui/terminal.lua` after changes.
+
 New Terminal Sessions start their host and shell on a background thread.
 They return in the reconnecting state, like restored sessions. Wait for running before sending input or reading the host ID.
 Startup copies the launch options and environment. Closing an unaccepted new session ends its shell, including during editor shutdown.

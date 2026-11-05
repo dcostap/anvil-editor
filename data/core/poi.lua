@@ -412,7 +412,8 @@ command.add(function()
   return view and (view.remote_poi_source == true or view.remote_poi_source_capable == true), view
 end, {
   ["core:use_remote_point_of_interest_source"] = command.palette(function(view)
-    M.set_remote_source(view, { from_start = false })
+    if view.use_remote_poi_source then return view:use_remote_poi_source() end
+    return M.set_remote_source(view, { from_start = false })
   end),
 })
 

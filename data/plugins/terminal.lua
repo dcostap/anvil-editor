@@ -482,6 +482,9 @@ end
 ---@class plugins.terminal.text_capture_view : core.textview
 local TerminalTextCaptureView = text_capture.View:extend()
 
+TerminalView.remote_poi_source_capable = true
+TerminalTextCaptureView.remote_poi_source_capable = true
+
 function TerminalTextCaptureView:__tostring() return "TerminalTextCaptureView" end
 
 local function terminal_capture_font(view, span)
@@ -539,6 +542,7 @@ function TerminalTextCaptureView:new(source, capture)
     background = capture.background,
     styles = capture.styles or {},
     title = terminal_title,
+    root = capture.root or source and source:get_cwd(),
   }
   TerminalTextCaptureView.super.new(self, {
     text = capture.text,
@@ -576,6 +580,53 @@ function TerminalTextCaptureView:new(source, capture)
     "Terminal text capture opened: lines=%d cursor=%d:%d viewport=%d",
     #self.buffer.lines, line, col, viewport_line
   )
+end
+
+function TerminalTextCaptureView:use_remote_poi_source()
+  return require("core.poi").set_remote_source(self)
+end
+
+function TerminalTextCaptureView:prepare_points_of_interest(on_ready)
+  if self.text_capture_data.file_locations then on_ready(true) return end
+  if self.poi_scan then self.poi_scan.on_ready = on_ready return end
+  local request = { on_ready = on_ready, pool = require("core.worker_pool").system() }
+  self.poi_scan = request
+  local function failed(reason)
+    if self.poi_scan ~= request then return end
+    self.poi_scan = nil
+    core.warn("Could not read Terminal file locations: %s", tostring(reason))
+    request.on_ready(false)
+  end
+  local handle, err = request.pool:submit {
+    kind = "core.workers.command_output",
+    priority = "interactive",
+    payload = { text = self.terminal_capture.text, root = self.terminal_capture.root },
+    is_stale = function() return self.textview_closed or self.poi_scan ~= request end,
+    on_result = function(message) request.result = message.payload end,
+    on_complete = function()
+      if self.poi_scan ~= request or self.textview_closed then return end
+      if not request.result then failed("worker returned no output") return end
+      self.poi_scan = nil
+      local locations = require "core.file_location_list"
+      local points = locations.decode(request.result.locations)
+      self:set_file_locations(points)
+      core.log_quiet("Terminal file locations ready: lines=%d locations=%d",
+        #self.buffer.lines, locations.count(points))
+      request.on_ready(true)
+    end,
+    on_error = function(message) failed(message.error) end,
+    on_cancelled = function() if self.poi_scan == request then self.poi_scan = nil end end,
+    on_stale = function() if self.poi_scan == request then self.poi_scan = nil end end,
+  }
+  request.handle = handle
+  if not handle then failed(err) end
+end
+
+function TerminalTextCaptureView:on_close()
+  local request = self.poi_scan
+  self.poi_scan = nil
+  if request and request.handle then request.pool:cancel(request.handle) end
+  TerminalTextCaptureView.super.on_close(self)
 end
 
 function TerminalTextCaptureView:draw_background(color)
@@ -622,6 +673,7 @@ function TerminalTextCaptureView:duplicate()
     background = self.terminal_capture.background,
     styles = self.terminal_capture.styles,
     title = self.terminal_title,
+    root = self.terminal_capture.root,
   }
   local duplicate = TerminalTextCaptureView(nil, capture)
   duplicate.normal_scroll_context = self.normal_scroll_context
@@ -1228,7 +1280,11 @@ function TerminalView:update()
   if self.find.visible then self.find:update() end
 end
 
-function TerminalView:open_text_capture()
+function TerminalView:use_remote_poi_source()
+  return self:open_text_capture({ remote_poi_source = true })
+end
+
+function TerminalView:open_text_capture(opts)
   if not self.session then return false end
   local capture, err = self.session:text_capture()
   if not capture then
@@ -1249,6 +1305,7 @@ function TerminalView:open_text_capture()
     core.error("Could not open terminal text: %s", tostring(place_error or "unknown error"))
     return false
   end
+  if opts and opts.remote_poi_source then return view:use_remote_poi_source() end
   return true
 end
 

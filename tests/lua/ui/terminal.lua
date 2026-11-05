@@ -577,6 +577,64 @@ test.describe("Terminal View", function()
     test.not_ok(session.closed)
   end)
 
+  test.it("navigates frozen terminal file locations from an Editor and refreshes on selection", function(context)
+    local poi = require "core.poi"
+    local root = USERDIR .. PATHSEP .. "terminal-remote-poi"
+    context.link_cwd = system.getcwd()
+    context.link_folder = root
+    test.ok(common.mkdirp(root))
+    for _, name in ipairs({ "first.txt", "second.txt", "with space.txt" }) do
+      local file = assert(io.open(root .. PATHSEP .. name, "wb"))
+      file:write("one\ntwo\nthree\nfour\n")
+      file:close()
+    end
+    local source = terminal.open { cwd = root }
+    local source_pane = panes.active()
+    local session = context.sessions[1]
+    session.capture = {
+      text = "first.txt:2:3\nsecond.txt:4:2\n./first.txt\n`with space.txt`\nmissing.txt\nhttps://example.com/first.txt",
+      cursor_line = 6,
+    }
+
+    test.ok(command.perform("core:use_remote_point_of_interest_source"))
+    local capture = poi.get_remote_source()
+    test.ok(capture and capture.terminal_text_capture)
+    local destination = panes.create { factory = function() return Editor(Buffer()) end }
+    session.capture = { text = "second.txt:3:1" }
+
+    local function navigate(name, filename, line, col)
+      test.ok(command.perform(name))
+      local deadline = system.get_time() + 15
+      while system.get_time() < deadline do
+        local view = destination.current_view
+        if view.buffer and view.buffer.abs_filename == common.normalize_path(root .. PATHSEP .. filename) then
+          local actual_line, actual_col = view.buffer:get_selection()
+          if actual_line == line and actual_col == col then return end
+        end
+        coroutine.yield(0.01)
+      end
+      test.fail("remote navigation did not open " .. filename .. ":" .. line .. ":" .. col)
+    end
+    navigate("core:next_remote_point_of_interest", "first.txt", 2, 3)
+    test.equal(core.active_view, destination.current_view)
+    test.equal(source_pane.current_view, capture)
+    navigate("core:next_remote_point_of_interest", "second.txt", 4, 2)
+    navigate("core:next_remote_point_of_interest", "first.txt", 1, 1)
+    navigate("core:next_remote_point_of_interest", "with space.txt", 1, 1)
+    test.equal(#capture:get_points_of_interest(), 4)
+    navigate("core:previous_remote_point_of_interest", "first.txt", 1, 1)
+    navigate("core:previous_remote_point_of_interest", "second.txt", 4, 2)
+    navigate("core:previous_remote_point_of_interest", "first.txt", 2, 3)
+    test.not_ok(session.closed)
+
+    test.equal(panes.back(source_pane), source)
+    panes.focus(source_pane)
+    test.ok(command.perform("core:use_remote_point_of_interest_source"))
+    test.not_equal(poi.get_remote_source(), capture)
+    panes.focus(destination)
+    navigate("core:next_remote_point_of_interest", "second.txt", 3, 1)
+  end)
+
   test.it("returns directly to the terminal after navigating and searching captured text", function(context)
     local source = terminal.open()
     local pane = panes.active()

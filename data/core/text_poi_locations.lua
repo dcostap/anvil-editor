@@ -300,6 +300,34 @@ local function sort(candidates)
   return candidates
 end
 
+-- Plain paths have no line suffix. Keep quoted paths together, and do not
+-- add a second target inside a diagnostic or a quoted path.
+local function add_plain_paths(list, seen, limit, line, line_no, first_candidate)
+  local ranges = {}
+  for index = first_candidate, #list do
+    local candidate = list[index]
+    ranges[#ranges + 1] = { col = candidate.col, col2 = candidate.col2 }
+  end
+  for first, quote, path, last in line:gmatch("()([\"'`])(.-)%2()") do
+    ranges[#ranges + 1] = { col = first, col2 = last }
+    if not may_have_location(path) then
+      add_candidate(list, seen, limit, line_no, first + 1, last - 1, path, 1, 1)
+    end
+    if #list >= limit then return end
+  end
+  table.sort(ranges, function(a, b) return a.col < b.col end)
+  local index = 1
+  for first, path, last in line:gmatch("()([^%s\"'`<>|]+)()") do
+    while ranges[index] and ranges[index].col2 <= first do index = index + 1 end
+    local range = ranges[index]
+    if not range or range.col >= last then
+      path = path:gsub("^[%(%[]+", ""):gsub("[%]%),;]+$", "")
+      add_candidate(list, seen, limit, line_no, first, last, path, 1, 1)
+    end
+    if #list >= limit then return end
+  end
+end
+
 function locations.extract_line_candidates(text, line_no, limit)
   text = tostring(text or "")
   -- File scans call this for every line. Skip the copy without its line break.
@@ -315,12 +343,17 @@ function locations.extract_line_candidates(text, line_no, limit)
   return sort(candidates)
 end
 
-function locations.extract_candidates(text, limit)
+function locations.extract_candidates(text, limit, opts)
   limit = math.max(0, math.floor(tonumber(limit) or math.huge))
   local candidates, seen, line_no = {}, {}, 1
   for line in (tostring(text or "") .. "\n"):gmatch("(.-)\n") do
     if #candidates >= limit then break end
-    add_line_matches(candidates, seen, limit, line:gsub("\r$", ""), line_no)
+    line = line:gsub("\r$", "")
+    local first = #candidates + 1
+    add_line_matches(candidates, seen, limit, line, line_no)
+    if opts and opts.plain_paths and #candidates < limit then
+      add_plain_paths(candidates, seen, limit, line, line_no, first)
+    end
     line_no = line_no + 1
   end
   return sort(candidates)
