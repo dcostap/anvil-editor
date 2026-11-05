@@ -132,7 +132,16 @@ function text_edits.between(old_lines, new_lines)
   for _, range in ipairs(ranges) do
     local line1, col1 = position(range.start)
     local line2, col2 = position(range.stop)
-    edits[#edits + 1] = { line1 = line1, col1 = col1, line2 = line2, col2 = col2, text = range.text }
+    local previous = edits[#edits]
+    if range.start == range.stop and previous
+      and previous.line1 == line1 and previous.col1 == col1
+      and previous.line2 == line2 and previous.col2 == col2 then
+      -- Inserts around the final empty line share one caret position.
+      -- Keep their order, but submit one insert to the Buffer.
+      previous.text = previous.text .. range.text
+    else
+      edits[#edits + 1] = { line1 = line1, col1 = col1, line2 = line2, col2 = col2, text = range.text }
+    end
   end
   return edits
 end
