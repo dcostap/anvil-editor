@@ -348,6 +348,13 @@ keymap.add_direct {
   ["ctrl+alt+z"] = "editor:revert_file_change",
   ["ctrl+shift+r"] = "core:restart",
   ["alt+y"] = "core:focus_project_sidebar",
+  ["alt+shift+y"] = "core:toggle_project_sidebar",
+  ["alt+a"] = "pane:history_back",
+  ["alt+s"] = "pane:history_forward",
+  ["alt+shift+a"] = "pane:history_oldest",
+  ["alt+shift+s"] = "pane:history_newest",
+  ["alt+g"] = "pane:new_group",
+  ["alt+shift+g"] = "core:reopen_last_closed_pane",
   ["f4"] = "core:repeat_last_command",
 
   ["ctrl+w"] = "pane:close",

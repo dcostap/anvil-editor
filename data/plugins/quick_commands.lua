@@ -14,10 +14,10 @@ local terminal = require "plugins.terminal"
 local M = {}
 
 local SLOTS = {
-  { key = "a", label = "A" },
-  { key = "s", label = "S" },
-  { key = "d", label = "D" },
-  { key = "f", label = "F" },
+  { key = "z", label = "Z" },
+  { key = "x", label = "X" },
+  { key = "c", label = "C" },
+  { key = "v", label = "V" },
 }
 local STORAGE_MODULE = "quick-commands"
 local READY_TIMEOUT = 5

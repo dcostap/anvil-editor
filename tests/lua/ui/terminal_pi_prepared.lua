@@ -1,3 +1,4 @@
+local core = require "core"
 local test = require "core.test"
 local terminal = require "plugins.terminal"
 local config = require "core.config"
@@ -24,23 +25,40 @@ local function service(view)
   return view.state == "running" and view.agent_app == "pi" and text(view):find("PREPARED_PI_READY", 1, true)
 end
 
-local dir, shell_command, views, previous_log, previous_prepare, previous_pi
-local function open_pi(cwd)
-  local view = terminal.open { cwd = cwd or dir, shell = shell_command, placement = "new" }
+local dir, shell_command, views, previous_log, previous_config, previous_root
+local function track(view)
   views[#views + 1] = view
+  return view
+end
+
+local function open_pi(cwd)
+  return track(terminal.open { cwd = cwd or dir, pi = true, placement = "new" })
+end
+
+local function open_shell()
+  local view = track(terminal.open { cwd = dir, placement = "new" })
   test.ok(wait_for(function()
     view:service_session(true)
     return view.state == "running" and text(view):find("PREPARED_PI_SHELL_READY", 1, true)
   end), "The private test shell did not start")
-  test.ok(view:write_input("pi\r"))
-  test.ok(wait_for(function() return service(view) end), "Pi did not start: " .. text(view))
   return view
 end
 
 local function copy(source)
-  local view = panes.place(function() return source:duplicate() end, { placement = "new" })
-  views[#views + 1] = view
-  return view
+  return track(panes.place(function() return source:duplicate() end, { placement = "new" }))
+end
+
+-- Records the prepared session of each native launch.
+local function watch_preparation()
+  local slot = {}
+  terminal._set_native_for_tests {
+    new = function(options)
+      local session, err, code = native.new(options)
+      if options.prepared then slot.session = session end
+      return session, err, code
+    end,
+  }
+  return slot
 end
 
 local function launches()
@@ -56,7 +74,7 @@ local function launches()
   return result
 end
 
-test.describe("Pi Terminal copies", function()
+test.describe("Prepared Pi", function()
   test.before_each(function()
     dir = nil
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
@@ -74,8 +92,12 @@ test.describe("Pi Terminal copies", function()
     shell_command = 'cmd.exe /D /Q /K ""' .. (dir .. "/shell.cmd"):gsub("/", "\\") .. '""'
     previous_log = os.getenv("ANVIL_TEST_PI_LOG")
     system.setenv("ANVIL_TEST_PI_LOG", dir)
-    previous_prepare, previous_pi = config.plugins.terminal.prepare_session, config.plugins.terminal.prepare_pi
-    config.plugins.terminal.prepare_session, config.plugins.terminal.prepare_pi = false, true
+    local terminal_config = config.plugins.terminal
+    previous_config = {terminal_config.prepare_session, terminal_config.prepare_pi, terminal_config.shell}
+    terminal_config.prepare_session, terminal_config.prepare_pi, terminal_config.shell = false, true, shell_command
+    -- A new Pi starts at the Project's folder.
+    previous_root = core.root_project
+    core.root_project = function() return {path = dir} end
     views = {}
     terminal._set_native_for_tests(nil)
   end)
@@ -85,131 +107,89 @@ test.describe("Pi Terminal copies", function()
     for _, view in ipairs(views or {}) do view:on_close() end
     terminal._set_native_for_tests(nil)
     native.finish_close_commands()
-    config.plugins.terminal.prepare_session, config.plugins.terminal.prepare_pi = previous_prepare, previous_pi
+    local terminal_config = config.plugins.terminal
+    terminal_config.prepare_session, terminal_config.prepare_pi, terminal_config.shell = table.unpack(previous_config)
+    core.root_project = previous_root
     system.setenv("ANVIL_TEST_PI_LOG", previous_log or "")
     if dir then test.ok(test.remove_tree(dir)) end
   end)
 
-  test.it("copies a running Pi into a fresh conversation in the same directory", function()
+  test.it("copies a Pi Terminal as a plain Terminal", function()
     config.plugins.terminal.prepare_pi = false
     local source = open_pi()
-    local original = text(source):match("PREPARED_PI_READY ([%w]+)")
+    test.ok(wait_for(function() return service(source) end), "Pi did not start: " .. text(source))
     local duplicate = copy(source)
-    test.ok(wait_for(function() return service(duplicate) end), "Copy View opened only a shell: " .. text(duplicate))
-    test.not_equal(duplicate.session_id, source.session_id)
-    test.not_equal(text(duplicate):match("PREPARED_PI_READY ([%w]+)"), original)
-    local started = launches()
-    test.equal(#started, 2)
-    for _, launch in ipairs(started) do
-      test.ok(common.path_equals(launch.cwd, dir), "Pi started in another directory")
-      test.equal(#launch.args, 0, "Copy View reused arguments or a conversation")
-    end
-    test.ok(source:write_input("still here\r"))
-    test.ok(wait_for(function() source:service_session(true); return text(source):find("PI_INPUT " .. original .. ":still here", 1, true) end))
-    test.ok(source:write_input("exit\r"))
-    test.ok(wait_for(function() source:service_session(true); return source.agent_app == nil end))
-    local shell = copy(source)
-    test.ok(wait_for(function() shell:service_session(true); return shell.state == "running" end))
-    test.is_nil(shell.agent_app, "a shell without Pi copied as Pi")
+    test.ok(wait_for(function()
+      duplicate:service_session(true)
+      return duplicate.state == "running" and text(duplicate):find("PREPARED_PI_SHELL_READY", 1, true)
+    end), "Copy View did not start a shell")
+    -- The shell runs this command only when no Pi reads the input.
+    test.ok(duplicate:write_input("echo COPY_%OS%\r"))
+    test.ok(wait_for(function() duplicate:service_session(true); return text(duplicate):find("COPY_Windows_NT", 1, true) end),
+      "Copy View started Pi: " .. text(duplicate))
+    test.is_nil(duplicate.agent_app)
+    test.equal(#launches(), 1, "Copy View started Pi")
   end)
 
-  test.it("uses a private prepared Pi without giving it to a normal Terminal", function()
-    test.not_ok(terminal.prepare_pi_session(), "prepared Pi without a Pi Pane")
-    local source = open_pi()
-    local prepared
-    terminal._set_native_for_tests {
-      new = function(options)
-        local session, err, code = native.new(options)
-        if options.prepared then prepared = session end
-        return session, err, code
-      end,
-    }
+  test.it("gives a new Pi the prepared Pi and never gives it to a normal Terminal", function()
+    local prepared = watch_preparation()
     test.ok(wait_for(function() return terminal.prepare_pi_session() end), "Pi preparation did not finish")
-    local id = prepared:stats().session_id
+    local id = prepared.session:stats().session_id
     test.is_nil(native.read_session_record(id), "unused Pi appeared in the Sidebar's session records")
-    local shell = terminal.open { cwd = dir, shell = shell_command, placement = "new" }
-    views[#views + 1] = shell
-    test.not_equal(shell.session, prepared, "normal Terminal received the prepared Pi")
+    local shell = open_shell()
+    test.not_equal(shell.session_id, id, "normal Terminal received the prepared Pi")
     local started = system.get_time()
-    local duplicate = copy(source)
-    print(string.format("Prepared Pi copy: %.1fms", (system.get_time() - started) * 1000))
-    test.equal(duplicate.session_id, id, "Copy View did not use the prepared Pi")
-    test.ok(text(duplicate):find("PREPARED_PI_READY", 1, true), "prepared Pi screen was lost")
-    test.ok(wait_for(function() return service(duplicate) and native.read_session_record(id) ~= nil end))
+    local pi = open_pi()
+    print(string.format("Prepared Pi open: %.1fms", (system.get_time() - started) * 1000))
+    test.equal(pi.session_id, id, "New Pi did not use the prepared Pi")
+    test.ok(text(pi):find("PREPARED_PI_READY", 1, true), "prepared Pi screen was lost")
+    test.ok(wait_for(function() return service(pi) and native.read_session_record(id) ~= nil end))
     test.ok(wait_for(function() return terminal.prepare_pi_session() end), "replacement Pi did not become ready")
-    test.not_equal(prepared:stats().session_id, id, "preparation reused an accepted Pi")
-    source:on_close()
-    duplicate:on_close()
-    test.not_ok(terminal.prepare_pi_session(), "kept preparation after the last Pi Pane closed")
-    local _, status = prepared:update()
-    test.equal(status.kind, "closed", "unused Pi stayed alive without a Pi Pane")
+    test.not_equal(prepared.session:stats().session_id, id, "preparation reused an accepted Pi")
   end)
 
   test.it("does not use a prepared Pi from another directory", function()
-    local source = open_pi()
     test.ok(wait_for(function() return terminal.prepare_pi_session() end))
     local other_dir = dir .. "/other"
     test.ok(system.mkdir(other_dir))
-    local other = open_pi(other_dir)
-    local duplicate = copy(other)
-    test.ok(wait_for(function() return service(duplicate) end))
-    local id = text(duplicate):match("PREPARED_PI_READY ([%w]+)")
+    local pi = open_pi(other_dir)
+    test.ok(wait_for(function() return service(pi) end))
+    local id = text(pi):match("PREPARED_PI_READY ([%w]+)")
     local found
     for _, launch in ipairs(launches()) do
       if launch.id == id then found = launch.cwd end
     end
-    test.ok(found and common.path_equals(found, other_dir), "Copy View used Pi from another directory")
-    source:on_close()
+    test.ok(found and common.path_equals(found, other_dir), "New Pi used Pi from another directory")
   end)
 
-  for _, action in ipairs { "exit", "disable", "discard" } do
+  for _, action in ipairs { "disable", "discard" } do
     test.it("closes the unused Pi on " .. action, function()
-      local source = open_pi()
-      local prepared
-      terminal._set_native_for_tests {
-        new = function(options)
-          local session, err, code = native.new(options)
-          if options.prepared then prepared = session end
-          return session, err, code
-        end,
-      }
+      local prepared = watch_preparation()
       test.ok(wait_for(function() return terminal.prepare_pi_session() end))
-      local id = prepared:stats().session_id
-      if action == "exit" then
-        test.ok(source:write_input("exit\r"))
-        test.ok(wait_for(function() source:service_session(true); return source.agent_app == nil end))
-        test.not_ok(terminal.prepare_pi_session())
-      elseif action == "disable" then
+      local id = prepared.session:stats().session_id
+      if action == "disable" then
         config.plugins.terminal.prepare_pi = false
         test.not_ok(terminal.prepare_pi_session())
       else
         terminal.discard_prepared_session()
       end
-      local _, status = prepared:update()
+      local _, status = prepared.session:update()
       test.equal(status.kind, "closed")
       test.is_nil(native.read_session_record(id), "unused Pi left a saved Terminal")
     end)
   end
 
   test.it("starts normally if the prepared Pi has exited", function()
-    local source = open_pi()
-    local prepared
-    terminal._set_native_for_tests {
-      new = function(options)
-        local session, err, code = native.new(options)
-        if options.prepared then prepared = session end
-        return session, err, code
-      end,
-    }
+    local prepared = watch_preparation()
     test.ok(wait_for(function() return terminal.prepare_pi_session() end))
-    local id = prepared:stats().session_id
-    test.ok(prepared:write("exit\r"))
+    local id = prepared.session:stats().session_id
+    test.ok(prepared.session:write("exit\r"))
     test.ok(wait_for(function()
-      local _, status = prepared:update()
+      local _, status = prepared.session:update()
       return status.agent_app == nil and status.busy == false
     end), "prepared host kept Pi's old status after Pi exited")
-    local duplicate = copy(source)
-    test.ok(wait_for(function() return service(duplicate) end), "failed preparation blocked Copy View")
-    test.not_equal(duplicate.session_id, id, "Copy View received the shell of a Pi that exited")
+    local pi = open_pi()
+    test.ok(wait_for(function() return service(pi) end), "failed preparation blocked a new Pi")
+    test.not_equal(pi.session_id, id, "New Pi received the shell of a Pi that exited")
   end)
 end)

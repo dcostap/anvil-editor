@@ -91,10 +91,10 @@ test.describe("Quick Commands", function()
   end)
 
   for _, suffix in ipairs { "", "_without_moving_focus" } do
-    local run = "quick_command:run_a" .. suffix
+    local run = "quick_command:run_z" .. suffix
     test.it("saves focused and hidden file edits before terminal input via " .. run, function(context)
       local shell = open_terminal("current")
-      set_quick_command(shell, "a", "make build")
+      set_quick_command(shell, "z", "make build")
       local buffer, path = file_buffer(context, "focused.txt")
       local hidden, hidden_path = file_buffer(context, "hidden.txt")
       local editor = panes.place(function() return Editor(buffer) end, { placement = "new", focus = true })
@@ -113,7 +113,7 @@ test.describe("Quick Commands", function()
 
     test.it("cancels on a disk conflict without selecting the terminal via " .. run, function(context)
       local shell = open_terminal("current")
-      set_quick_command(shell, "a", "make build")
+      set_quick_command(shell, "z", "make build")
       local buffer, path = file_buffer(context, "conflict.txt")
       local editor = panes.place(function() return Editor(buffer) end, { placement = "new", focus = true })
       local pane, group = panes.active(), panes.visible_group()
@@ -144,7 +144,7 @@ test.describe("Quick Commands", function()
 
     test.it("cancels on a save error without selecting the terminal via " .. run, function(context)
       local shell = open_terminal("current")
-      set_quick_command(shell, "a", "make build")
+      set_quick_command(shell, "z", "make build")
       local buffer, path = file_buffer(context, "save-error.txt")
       local editor = panes.place(function() return Editor(buffer) end, { placement = "new", focus = true })
       buffer:insert(1, 1, "edited ")
@@ -163,7 +163,7 @@ test.describe("Quick Commands", function()
     test.it("cancels on a conflict during terminal startup via " .. run, function(context)
       context.connecting = true
       local shell = open_terminal("current")
-      set_quick_command(shell, "a", "make build")
+      set_quick_command(shell, "z", "make build")
       local buffer, path = file_buffer(context, "startup-conflict.txt")
       local editor = panes.place(function() return Editor(buffer) end, { placement = "new", focus = true })
       local pane, group = panes.active(), panes.visible_group()
@@ -190,7 +190,7 @@ test.describe("Quick Commands", function()
 
   test.it("saves the latest text when an older background save is pending", function(context)
     local shell = open_terminal("current")
-    set_quick_command(shell, "a", "make build")
+    set_quick_command(shell, "z", "make build")
     local buffer, path = file_buffer(context, "pending.txt")
     open_editor("new")
     buffer:insert(1, 1, "earlier ")
@@ -199,7 +199,7 @@ test.describe("Quick Commands", function()
     local captured
     context.on_write = function() captured = read_file(path) end
 
-    test.ok(command.perform("quick_command:run_a_without_moving_focus"))
+    test.ok(command.perform("quick_command:run_z_without_moving_focus"))
 
     test.equal(captured, "latest earlier original\n")
     test.not_ok(buffer:is_dirty())
@@ -208,11 +208,11 @@ test.describe("Quick Commands", function()
 
   test.it("focuses its terminal in another Pane Group and enters the command", function(context)
     local shell = open_terminal("current")
-    set_quick_command(shell, "a", "make build")
+    set_quick_command(shell, "z", "make build")
     open_editor("new")
     test.ok(panes.visible_group() ~= panes.pane_for_view(shell).group)
 
-    test.ok(command.perform("quick_command:run_a"))
+    test.ok(command.perform("quick_command:run_z"))
 
     test.equal(core.active_view, shell)
     test.equal(panes.visible_group(), panes.pane_for_view(shell).group)
@@ -221,19 +221,19 @@ test.describe("Quick Commands", function()
 
   test.it("warns and enters nothing while its terminal is busy", function(context)
     local shell = open_terminal("current")
-    set_quick_command(shell, "s", "make test")
+    set_quick_command(shell, "x", "make test")
     open_editor("new")
     context.sessions[1].busy = true
     shell:service_session(true)
 
-    command.perform("quick_command:run_s")
+    command.perform("quick_command:run_x")
 
     test.equal(core.active_view, shell)
     test.same(context.sessions[1].writes, {})
     test.equal(#context.warnings, 1)
   end)
 
-  for _, slot in ipairs { "a", "s", "d", "f" } do
+  for _, slot in ipairs { "z", "x", "c", "v" } do
     test.it("runs Quick Command " .. slot:upper() .. " without changing focus or Pane Group", function(context)
       local shell = open_terminal("current")
       set_quick_command(shell, slot, "make build")
@@ -252,13 +252,13 @@ test.describe("Quick Commands", function()
 
   test.it("keeps the editor focused when its terminal is visible in another Pane", function(context)
     local shell = open_terminal("current")
-    set_quick_command(shell, "a", "make build")
+    set_quick_command(shell, "z", "make build")
     local editor = open_editor("split")
     local pane = panes.active()
     local group = panes.visible_group()
     test.equal(panes.pane_for_view(shell).group, group)
 
-    test.ok(command.perform("quick_command:run_a_without_moving_focus"))
+    test.ok(command.perform("quick_command:run_z_without_moving_focus"))
 
     test.equal(core.active_view, editor)
     test.equal(panes.active(), pane)
@@ -269,7 +269,7 @@ test.describe("Quick Commands", function()
 
   test.it("reattaches an unseen Terminal Session without replacing the editor or moving focus", function(context)
     local shell = open_terminal("current")
-    set_quick_command(shell, "a", "make build")
+    set_quick_command(shell, "z", "make build")
     local id = shell.session_id
     local editor = open_editor("new")
     panes.close(panes.pane_for_view(shell), { force = true })
@@ -279,7 +279,7 @@ test.describe("Quick Commands", function()
       pipe_name = %q, project_path = %q, cwd = %q, shell = "", status = "running",
     }]], id, "\\\\.\\pipe\\anvil-terminal-" .. id, USERDIR, USERDIR)
 
-    test.ok(command.perform("quick_command:run_a_without_moving_focus"))
+    test.ok(command.perform("quick_command:run_z_without_moving_focus"))
     local attached = terminal.open_views()[1]
     test.ok(attached)
     test.equal(attached.session_id, id)
@@ -296,13 +296,13 @@ test.describe("Quick Commands", function()
 
   test.it("keeps focus and warns when a keep-focus command targets a busy terminal", function(context)
     local shell = open_terminal("current")
-    set_quick_command(shell, "s", "make test")
+    set_quick_command(shell, "x", "make test")
     local editor = open_editor("new")
     local pane, group = panes.active(), panes.visible_group()
     context.sessions[1].busy = true
     shell:service_session(true)
 
-    test.ok(command.perform("quick_command:run_s_without_moving_focus"))
+    test.ok(command.perform("quick_command:run_x_without_moving_focus"))
 
     test.equal(core.active_view, editor)
     test.equal(panes.active(), pane)
@@ -313,18 +313,18 @@ test.describe("Quick Commands", function()
 
   test.it("warns when the slot has no command", function(context)
     open_terminal("current")
-    command.perform("quick_command:run_d")
+    command.perform("quick_command:run_c")
     test.same(context.sessions[1].writes, {})
     test.equal(#context.warnings, 1)
   end)
 
   test.it("does not start a new terminal after its terminal closed", function(context)
     local shell = open_terminal("current")
-    set_quick_command(shell, "f", "make run")
+    set_quick_command(shell, "v", "make run")
     local editor = open_editor("new")
     panes.close(panes.pane_for_view(shell), { force = true })
 
-    command.perform("quick_command:run_f")
+    command.perform("quick_command:run_v")
 
     test.equal(#context.sessions, 1)
     test.equal(#terminal.open_views(), 0)
@@ -342,9 +342,9 @@ test.describe("Quick Commands", function()
       file:close()
     end
     local shell = open_terminal("current")
-    set_quick_command(shell, "a", "make build")
+    set_quick_command(shell, "z", "make build")
     local editor = open_editor("new")
-    test.ok(command.perform("quick_command:run_a_without_moving_focus"))
+    test.ok(command.perform("quick_command:run_z_without_moving_focus"))
     test.equal(core.active_view, editor)
     context.sessions[1].capture = table.concat({
       "PS> make build",
@@ -367,9 +367,9 @@ test.describe("Quick Commands", function()
   test.it("does not take focus after the user leaves a pending output navigation", function(context)
     local _, path = file_buffer(context, "pending-result.txt")
     local shell = open_terminal("current")
-    set_quick_command(shell, "a", "build")
+    set_quick_command(shell, "z", "build")
     open_editor("new")
-    test.ok(command.perform("quick_command:run_a_without_moving_focus"))
+    test.ok(command.perform("quick_command:run_z_without_moving_focus"))
     context.sessions[1].capture = "PS> build\n" .. path .. ":1:1\n"
     test.ok(command.perform("core:next_remote_point_of_interest"))
     local other = open_editor("new")
@@ -385,9 +385,9 @@ test.describe("Quick Commands", function()
     buffer:insert(1, 1, "one\ntwo\nthree\n")
     buffer:save()
     local shell = open_terminal("current")
-    set_quick_command(shell, "a", "build")
+    set_quick_command(shell, "z", "build")
     local editor = open_editor("new")
-    test.ok(command.perform("quick_command:run_a_without_moving_focus"))
+    test.ok(command.perform("quick_command:run_z_without_moving_focus"))
     local output = "PS> build\n" .. path .. ":1:1\n" .. path .. ":3:1\n"
     context.sessions[1].capture = output
     test.ok(command.perform("core:next_remote_point_of_interest"))
@@ -408,9 +408,9 @@ test.describe("Quick Commands", function()
     buffer:insert(1, 1, "one\ntwo\nthree\n")
     buffer:save()
     local shell = open_terminal("current")
-    set_quick_command(shell, "a", "build")
+    set_quick_command(shell, "z", "build")
     local editor = open_editor("new")
-    test.ok(command.perform("quick_command:run_a_without_moving_focus"))
+    test.ok(command.perform("quick_command:run_z_without_moving_focus"))
     context.sessions[1].capture = "PS> build\n" .. path .. ":1:1\n" .. path .. ":3:1\n"
     test.ok(command.perform("core:next_remote_point_of_interest"))
     test.ok(command.perform("core:next_remote_point_of_interest"))
@@ -426,9 +426,9 @@ test.describe("Quick Commands", function()
     buffer:save()
     local shell = terminal.open { placement = "current", focus = true, cwd = context.temp_root }
     shell:service_session(true)
-    set_quick_command(shell, "a", "build")
+    set_quick_command(shell, "z", "build")
     local editor = open_editor("new")
-    test.ok(command.perform("quick_command:run_a_without_moving_focus"))
+    test.ok(command.perform("quick_command:run_z_without_moving_focus"))
     local reference = "many-output.txt:2:1 "
     context.sessions[1].capture = "PS> build\n" .. string.rep(reference, 22000)
     test.ok(command.perform("core:next_remote_point_of_interest"))
@@ -447,9 +447,9 @@ test.describe("Quick Commands", function()
     buffer:insert(1, 1, "one\ntwo\nthree\n")
     buffer:save()
     local shell = open_terminal("current")
-    set_quick_command(shell, "a", "build")
+    set_quick_command(shell, "z", "build")
     local editor = open_editor("new")
-    test.ok(command.perform("quick_command:run_a_without_moving_focus"))
+    test.ok(command.perform("quick_command:run_z_without_moving_focus"))
     context.sessions[1].capture = "PS> build\n" .. path .. ":2:1\n" .. path .. ":3:1"
     test.ok(command.perform("core:next_remote_point_of_interest"))
     local deadline = system.get_time() + 30
@@ -471,14 +471,14 @@ test.describe("Quick Commands", function()
     local _, old_path = file_buffer(context, "replaced-result.txt")
     local _, new_path = file_buffer(context, "current-result.txt")
     local shell = open_terminal("current")
-    set_quick_command(shell, "a", "first-build")
+    set_quick_command(shell, "z", "first-build")
     local editor = open_editor("new")
-    test.ok(command.perform("quick_command:run_a_without_moving_focus"))
+    test.ok(command.perform("quick_command:run_z_without_moving_focus"))
     context.sessions[1].capture = "PS> first-build\n" .. old_path .. ":1:1\n"
     test.ok(command.perform("core:next_remote_point_of_interest"))
-    set_quick_command(shell, "a", "second-build")
+    set_quick_command(shell, "z", "second-build")
     core.set_active_view(editor)
-    test.ok(command.perform("quick_command:run_a_without_moving_focus"))
+    test.ok(command.perform("quick_command:run_z_without_moving_focus"))
     context.sessions[1].capture = "PS> second-build\n" .. new_path .. ":1:1\n"
     test.ok(command.perform("core:next_remote_point_of_interest"))
     local deadline = system.get_time() + 30

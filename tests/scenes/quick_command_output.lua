@@ -13,7 +13,7 @@ function scene.setup(context)
   local shell = terminal.open { cwd = context.root, placement = "current", focus = true }
   context.shell = shell
   shell:service_session(true)
-  assert(command.perform("quick_command:set_a"))
+  assert(command.perform("quick_command:set_z"))
   core.global_prompt_bar:set_text("build")
   core.global_prompt_bar:submit()
   if not quick_commands.run(1, { focus = false }) then

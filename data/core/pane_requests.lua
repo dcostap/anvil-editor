@@ -89,7 +89,7 @@ end
 
 local schemas = {
   key = {pane = true, stroke = true, keep_sidebar = true}, perform = {pane = true, command = true},
-  focus = {pane = true, feedback = true}, close = {pane = true}, move = {pane = true, target = true},
+  focus = {pane = true, feedback = true, history = true}, close = {pane = true}, move = {pane = true, target = true},
   snooze = {pane = true}, unsnooze = {pane = true},
   open = {files = true, text = true, target = true},
   launch = {files = true},
@@ -120,6 +120,7 @@ local function validate(request)
     return nil, "invalid Pane ID"
   end
   if request.feedback ~= nil and request.feedback ~= "numbered" then return nil, "invalid focus feedback" end
+  if request.history ~= nil and type(request.history) ~= "number" then return nil, "invalid history entry" end
   if schema.target then
     local ok, err = position(request.target)
     if not ok then return nil, err end
@@ -251,7 +252,12 @@ local function execute(request, x, y)
     end
     return true
   end
-  if action == "focus" then panes.focus(pane, request.feedback); return true end
+  if action == "focus" then
+    -- A Pane History move from another Project.
+    if request.history then require("core.pane_history").arrive(pane.id, request.history) end
+    panes.focus(pane, request.feedback)
+    return true
+  end
   if action == "close" then panes.close(pane); return true end
   if action == "snooze" then return require("core.snoozed_panes").snooze(pane) end
   if action == "unsnooze" then return require("core.snoozed_panes").wake(pane) end

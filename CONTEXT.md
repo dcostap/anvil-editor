@@ -401,6 +401,10 @@ _Avoid_: mouse-friendly UI, basic mouse support
 A work area that shows one Current View and owns one Navigation History. Each Pane belongs to one Pane Group.
 _Avoid_: Left Pane, Right Pane, panel, split
 
+**Pane History**:
+The order of the Panes that the user visited, in any Project or Anvil Window. Back and Forward move through it and add no visit. A Pane that had focus only for a moment, without typing, does not count.
+_Avoid_: global Navigation History, Pane navigation history
+
 **Recent Pane**:
 One of the Panes that had focus most recently before the current Pane, in any Project or Anvil Window. Recent Panes fill unused numbers after Pending Panes, newest first. A Pane gets only one number. The current Pane gets no Recent Pane number. A Pane that had focus only for a moment, without typing, does not count.
 _Avoid_: Pane number, Tab number
@@ -456,7 +460,6 @@ _Avoid_: Selected View, Active View, Open View
 
 **Copy View**:
 An action that duplicates the Current View in another Pane without copying Navigation History. The source View and Pane stay unchanged. A View that cannot provide an independent duplicate cannot be copied.
-Copying a Terminal View running Pi starts a fresh Agent Session in the same directory. It does not copy the conversation.
 _Avoid_: copy Pane, copy Navigation History
 
 **Move View**:
@@ -671,7 +674,7 @@ A Text Capture containing stable text from a Terminal View while that terminal c
 _Avoid_: terminal buffer, copy mode
 
 **Quick Command**:
-A shell command assigned to one of the Project's key slots A, S, D, and F and to one Terminal Session. It saves modified file-backed Buffers first. A disk conflict or save failure cancels the run. It can run with or without moving focus to that Terminal View. A busy Terminal Session does not receive it. The file locations in its latest output are the Project's remote Points of Interest.
+A shell command assigned to one of the Project's key slots Z, X, C, and V and to one Terminal Session. It saves modified file-backed Buffers first. A disk conflict or save failure cancels the run. It can run with or without moving focus to that Terminal View. A busy Terminal Session does not receive it. The file locations in its latest output are the Project's remote Points of Interest.
 _Avoid_: Command Slot, command preset, command macro, run configuration
 
 **Text View Prompt Bar**:

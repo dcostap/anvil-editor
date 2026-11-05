@@ -4,6 +4,7 @@
 -- for every process on the computer, so stamps from different Projects compare.
 local core = require "core"
 local common = require "core.common"
+local pane_history = require "core.pane_history"
 
 local recent_panes = {}
 
@@ -27,12 +28,14 @@ function recent_panes.observe(active)
   if visit and now - visit.since >= recent_panes.VISIT then visit = nil end
   if visit and not (has_focus and active and active.id == visit.id) then
     focused_at[visit.id] = visit.previous
+    pane_history.passed(visit.id, visit.since)
     core.log_quiet("Recent Pane: %s lost focus after %.2fs; not a visit", tostring(visit.id), now - visit.since)
     visit = nil
   end
   if has_focus and active and (active ~= last_active or not had_focus) then
     visit = {id = active.id, since = now, previous = focused_at[active.id]}
     focused_at[active.id] = now
+    pane_history.visited(active.id, now)
   end
   if has_focus and not had_focus then core.request_project_sidebar() end
   last_active, had_focus = active, has_focus
@@ -137,6 +140,7 @@ end
 
 function recent_panes.reset_for_tests()
   focused_at, last_active, had_focus, visit = {}, nil, false, nil
+  pane_history.reset_for_tests()
 end
 
 return recent_panes

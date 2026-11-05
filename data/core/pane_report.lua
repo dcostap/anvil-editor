@@ -6,6 +6,7 @@ local fs = require "core.fs"
 local panes = require "core.panes"
 local tab = require "core.tab"
 local recent_panes = require "core.recent_panes"
+local pane_history = require "core.pane_history"
 
 local pane_report = {}
 
@@ -19,7 +20,8 @@ local sent, built_at
 
 -- The report: one Tab item per Pane in Pane order, each with its Pane Group's one-based index and the time it last
 -- took focus, and `snoozed` for a Snoozed Pane. `active` is the active Pane's position and `visible` the visible Pane
--- Group's index. `held` lists the Terminal Sessions that Panes keep in their history but do not show.
+-- Group's index. `held` lists the Terminal Sessions that Panes keep in their history but do not show. `history` holds
+-- the Project's Pane History entries.
 -- A Project on a Machine also sends `terminals`, the Machine's Terminal Sessions of the Project. The shell's scan
 -- reads only this PC's session records.
 function pane_report.build()
@@ -42,6 +44,8 @@ function pane_report.build()
     end
   end
   if #held > 0 then report.held = held end
+  local history = pane_history.entries()
+  if #history > 0 then report.history = {table.unpack(history)} end
   if fs.machine then report.terminals = require("core.machine_terminal").sessions(fs.machine, fs.roots[1]) end
   return report
 end
@@ -55,11 +59,17 @@ function pane_report.publish(suspended, force)
   built_at = now
   local report = pane_report.build()
   local text = common.serialize(report, {sort = true})
-  -- The oldest Terminal Sessions of a Machine go first, so the Tabs still fit.
+  -- The oldest Terminal Sessions of a Machine and the oldest Pane History entries go first, so the Tabs still fit.
   local terminals = report.terminals
   while #text > TEXT_LIMIT and terminals and #terminals > 0 do
     terminals = {table.unpack(terminals, 1, math.floor(#terminals / 2))}
     report.terminals = terminals
+    text = common.serialize(report, {sort = true})
+  end
+  local history = report.history
+  while #text > TEXT_LIMIT and history and #history > 0 do
+    history = {table.unpack(history, math.floor(#history / 2) + 1)}
+    report.history = history
     text = common.serialize(report, {sort = true})
   end
   if text == sent and not force then return end

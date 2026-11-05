@@ -53,7 +53,7 @@ terminal_config.config_spec = {
   },
   {
     label = "Prepare Pi",
-    description = "Keep one unused Pi ready while the visible Project has a Pi Pane. Runs Pi startup early.",
+    description = "Keep one unused Pi ready at the visible Project. Uses extra memory and runs Pi startup early.",
     path = "prepare_pi",
     type = "toggle",
     default = terminal_config.prepare_pi,
@@ -347,7 +347,7 @@ function TerminalView:new(options)
   TerminalView.super.new(self)
   self.terminal_capture_owner = {}
   options = options or {}
-  -- An attached session can contain work. A Pi copy must stay until its command starts.
+  -- An attached session can contain work. A new Pi must stay until its command starts.
   self.input_used = options.session_id ~= nil or options.pi == true
   self.start_pi = options.pi == true and not options.session_id
   self.context = "workspace"
@@ -743,7 +743,6 @@ function TerminalView:duplicate()
   return TerminalView {
     cwd = self:get_cwd(),
     shell = self.launch_options.shell,
-    pi = self.state == "running" and self.agent_app == "pi",
   }
 end
 
@@ -2652,7 +2651,6 @@ end
 
 local prepared_shell = { name = "Terminal" }
 local prepared_pi = { name = "Pi", pi = true }
-local pi_source
 
 local function same_launch(a, b)
   return (a.shell or "") == (b.shell or "")
@@ -2672,7 +2670,6 @@ end
 function M.discard_prepared_session()
   discard_prepared(prepared_shell)
   discard_prepared(prepared_pi)
-  pi_source = nil
 end
 
 local function prepared_ready(slot, status)
@@ -2733,29 +2730,16 @@ function M.prepare_session()
   })
 end
 
-local function running_pi(view)
-  return view and view.terminal_view and view.session and view.state == "running" and view.agent_app == "pi"
-end
-
+-- The prepared Pi matches the launch of terminal:open_pi.
 function M.prepare_pi_session()
   if system.is_session_ending() then return false end
   if not terminal_config.prepare_pi or PLATFORM ~= "Windows" or fs.machine then
     discard_prepared(prepared_pi)
-    pi_source = nil
     return false
   end
-  -- Prefer the focused Pi. Keep its directory while the user visits another kind of View.
-  if running_pi(core.active_view) then pi_source = core.active_view end
-  if not running_pi(pi_source) then
-    pi_source = nil
-    for _, view in ipairs(M.open_views()) do
-      if running_pi(view) then pi_source = view; break end
-    end
-  end
-  if not pi_source then discard_prepared(prepared_pi); return false end
   return prepare(prepared_pi, {
-    shell = pi_source.launch_options.shell,
-    cwd = pi_source:get_cwd(),
+    shell = terminal_config.shell,
+    cwd = start_directory("project"),
     project_path = project_path("project"),
     scrollback_lines = terminal_config.scrollback_lines,
   })
@@ -2928,6 +2912,19 @@ command.add(nil, {
     supports_placement = true,
     opens_view = true,
   }),
+  -- Open in a new Pane to the right of the current Pane.
+  ["terminal:open_at_project_root_in_split"] = command.palette(function()
+    return command.perform_with_context("terminal:open_at_project_root", {placement = "split", direction = "right"})
+  end, {
+    keywords = { "shell", "command", "view", "right" },
+    opens_view = true,
+  }),
+  ["terminal:open_pi_in_split"] = command.palette(function()
+    return command.perform_with_context("terminal:open_pi", {placement = "split", direction = "right"})
+  end, {
+    keywords = { "agent", "shell", "view", "right" },
+    opens_view = true,
+  }),
   ["terminal:open_at_choose_path"] = command.palette(function()
     local context = command.get_invocation_context() or {}
     local pane = panes.find(context.source_pane or panes.active())
@@ -3045,6 +3042,10 @@ keymap.add({
   ["up"] = "terminal:find_field_previous",
   ["ctrl+i"] = "terminal:find_toggle_case",
   ["ctrl+shift+k"] = "terminal:clear",
+  ["alt+d"] = "terminal:open_at_project_root",
+  ["alt+shift+d"] = "terminal:open_at_project_root_in_split",
+  ["alt+f"] = "terminal:open_pi",
+  ["alt+shift+f"] = "terminal:open_pi_in_split",
 })
 
 -- Quit chooses the lifetime of every live session, even an idle shell or Pi.

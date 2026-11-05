@@ -76,12 +76,18 @@ Preparation uses extra memory and runs the shell profile early.
 Run `runtime/terminal_prepared.lua` and `ui/terminal_prepared.lua` after changes.
 New shells get their PATH from the Windows registry (system PATH, then user PATH), not from the Anvil process. A PATH change then reaches new Terminal Sessions without a restart. A prepared shell with an older PATH is not used. Running shells keep their PATH. Run `runtime/terminal_path_environment.lua` after changes.
 
-Copy View on a running Pi Terminal starts `pi` in a new Terminal with the same directory and shell. It starts a fresh conversation with Pi's normal defaults, not the source conversation or its command arguments.
-The visible Selected Project also prepares one Pi while at least one of its Panes runs Pi. The focused Pi supplies the directory and shell. Other Views keep the last Pi's choice while that Pi runs.
-A copy uses the prepared Pi only when its directory, shell, Project, scrollback limit and launch environment match. Other copies start normally. Normal Terminals never take a prepared Pi.
-The prepared Pi has no Terminal record or saved screen until a Pane takes it. It closes when its Project becomes hidden, its last Pi ends, or preparation is disabled. Startup must report Pi idle within 30 seconds. A failed preparation does not retry until its launch settings change or the Project becomes visible again.
-`config.plugins.terminal.prepare_pi` defaults to true and has a separate Terminal setting. It runs Pi startup, including extensions, early. It does not copy live model or thinking changes from the source Pi.
+Copy View on a Pi Terminal opens a plain Terminal with the same directory and shell. It does not start Pi.
+`terminal:open_pi` starts `pi` in a new Terminal at the Project's folder, with a fresh conversation and Pi's normal defaults.
+The visible Selected Project also prepares one Pi with the same launch: the Project's folder and the configured shell.
+A new Pi uses the prepared Pi only when its directory, shell, Project, scrollback limit and launch environment match. Other new Pis start normally. Normal Terminals never take a prepared Pi.
+The prepared Pi has no Terminal record or saved screen until a Pane takes it. It closes when its Project becomes hidden or preparation is disabled. Startup must report Pi idle within 30 seconds. A failed preparation does not retry until its launch settings change or the Project becomes visible again.
+`config.plugins.terminal.prepare_pi` defaults to true and has a separate Terminal setting. It uses extra memory and runs Pi startup, including extensions, early.
 Run `ui/terminal_pi_prepared.lua`, `ui/terminal_prepared.lua` and `runtime/terminal_prepared.lua` after changes.
+
+Pane History is the order of the Panes that the user visited, across Projects and Windows. `pane:history_back` and `pane:history_forward` move through it; `pane:history_oldest` and `pane:history_newest` go to its ends.
+Recent Panes decide what a visit is, so a Pane that the user only passes does not count. A history move adds no visit. When the user leaves a Pane that a move showed, that Pane goes again at the end, so no visit is lost.
+Each Project keeps its last 40 visits (`core.pane_history`) and sends them as `history` in its Pane report. Each entry has the Pane ID and the time in milliseconds. A move entry also names the entry that it showed (`to`). A move to another Project sends that name in its `focus` Pane request.
+Moves skip closed, Snoozed and Dormant Panes. Visits are not saved across restarts. Run `ui/global_pane_history.lua`, `ui/recent_panes.lua` and `ui/pane_requests.lua` after changes.
 
 A Terminal Session is busy while its shell has a child process.
 A new shell is idle until its host reports busy state, so closing it during startup asks nothing.

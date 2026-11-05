@@ -306,6 +306,15 @@ for number = 1, require("core.numbered_panes").COUNT do
 end
 command.add(nil, number_commands)
 
+-- Pane History crosses Projects, so these commands need no active Pane.
+local history_commands = {}
+for _, direction in ipairs { "back", "forward", "oldest", "newest" } do
+  history_commands["pane:history_" .. direction] = command.palette(function()
+    return require("core.pane_history").move(direction)
+  end, { keywords = { "previous", "next", "visited", "global", "recent" } })
+end
+command.add(nil, history_commands)
+
 command.add(nil, {
   ["editor:open"] = command.palette(function()
     local context = command.get_invocation_context() or {}
