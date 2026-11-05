@@ -3594,11 +3594,14 @@ typedef struct {
   HWND parent;
   HANDLE process;
   Uint32 connection, serial, event_type;
+  wchar_t *instruction, *content;
   bool force;
 } ForceCloseDialog;
 
 static void free_force_dialog(ForceCloseDialog *dialog) {
   CloseHandle(dialog->process);
+  SDL_free(dialog->instruction);
+  SDL_free(dialog->content);
   release_project(dialog->project);
   free(dialog);
 }
@@ -3606,7 +3609,6 @@ static void free_force_dialog(ForceCloseDialog *dialog) {
 static int SDLCALL force_close_dialog(void *userdata) {
   ForceCloseDialog *dialog = userdata;
   ShellProject *project = dialog->project;
-  const wchar_t *warning = L"Unsaved changes can be lost.";
   int answer = IDNO;
   HMODULE controls = LoadLibraryW(L"comctl32.dll");
   typedef HRESULT(WINAPI * TaskDialogFn)(const TASKDIALOGCONFIG *, int *, int *, BOOL *);
@@ -3618,16 +3620,23 @@ static int SDLCALL force_close_dialog(void *userdata) {
   config.hwndParent = dialog->parent;
   config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
   config.pszWindowTitle = L"Anvil - Project not responding";
-  config.pszMainInstruction = L"Force close this Project?";
-  config.pszContent = warning;
+  config.pszMainInstruction = dialog->instruction;
+  config.pszContent = dialog->content;
   config.pszMainIcon = TD_WARNING_ICON;
   config.cButtons = SDL_arraysize(buttons);
   config.pButtons = buttons;
   config.nDefaultButton = IDNO;
   if (!task_dialog || FAILED(task_dialog(&config, &answer, NULL, NULL))) {
-    answer = MessageBoxW(dialog->parent,
-                         L"Force close this Project?\n\nUnsaved changes can be lost.\n\nYes: Force close\nNo: Wait",
-                         config.pszWindowTitle, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+    size_t size = wcslen(dialog->instruction) + wcslen(dialog->content) +
+                  SDL_arraysize(L"\n\n\n\nYes: Force close\nNo: Wait");
+    wchar_t *message = SDL_malloc(size * sizeof(*message));
+    if (message) {
+      swprintf(message, size, L"%ls\n\n%ls\n\nYes: Force close\nNo: Wait",
+               dialog->instruction, dialog->content);
+      answer = MessageBoxW(dialog->parent, message, config.pszWindowTitle,
+                           MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+      SDL_free(message);
+    }
   }
   if (controls)
     FreeLibrary(controls);
@@ -3665,6 +3674,25 @@ static void offer_force_close(ShellProject *project) {
   dialog->connection = project->connection;
   dialog->serial = project->close_serial;
   dialog->event_type = shell.event_type;
+  /* Copy the identity before the dialog thread starts. Selection can change while it is open. */
+  wchar_t *name = project_name(project), *path = ui_wide(project->project_path);
+  if (name && path) {
+    size_t instruction_size = wcslen(name) + SDL_arraysize(L"Force close Project \"\"?");
+    size_t content_size = wcslen(path) + SDL_arraysize(L"\n\nUnsaved changes can be lost.");
+    dialog->instruction = SDL_malloc(instruction_size * sizeof(*dialog->instruction));
+    dialog->content = SDL_malloc(content_size * sizeof(*dialog->content));
+    if (dialog->instruction && dialog->content) {
+      swprintf(dialog->instruction, instruction_size, L"Force close Project \"%ls\"?", name);
+      swprintf(dialog->content, content_size, L"%ls\n\nUnsaved changes can be lost.", path);
+    }
+  }
+  SDL_free(name);
+  SDL_free(path);
+  if (!dialog->instruction || !dialog->content) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Unable to allocate Project close warning text");
+    free_force_dialog(dialog);
+    return;
+  }
   SDL_Thread *thread = SDL_CreateThread(force_close_dialog, "AnvilCloseWarning", dialog);
   if (!thread) {
     free_force_dialog(dialog);
