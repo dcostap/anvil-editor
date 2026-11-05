@@ -221,7 +221,8 @@ test.describe("core.buffer batch edit primitive", function()
     test.equal(text(buffer), "aX\nYef\ngé\nZ\n\nij\n")
     test.same(buffer.selections, { 6, 2, 1, 2 })
     test.same(tx.inverse_edits, {
-      { line1 = 1, col1 = 2, line2 = 2, col2 = 2, text = "b\ncd\n" },
+      { line1 = 1, col1 = 2, line2 = 2, col2 = 2, text = "b\nc" },
+      { line1 = 2, col1 = 2, line2 = 2, col2 = 2, text = "d\n" },
       { line1 = 3, col1 = 2, line2 = 5, col2 = 1, text = "h" },
     })
     buffer:undo()

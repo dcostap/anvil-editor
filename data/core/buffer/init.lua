@@ -2509,12 +2509,14 @@ function Buffer:apply_edits(edits, opts)
     local new_end = new_start + #edit.text
     local il1, ic1 = position(new_start)
     local il2, ic2 = position(new_end)
-    -- Adjacent edits undo as one edit. Two deletions that touch, such as
-    -- the last character of a line and its line break, would otherwise
-    -- undo as two inserts at one position, which apply_edits refuses.
-    local previous = inverse_edits[#inverse_edits]
-    if i > 1 and normalized[i - 1].end_offset == edit.start_offset then
-      previous.line2, previous.col2 = il2, ic2
+    -- Two deletions that touch, such as the last character of a line and
+    -- its line break, undo as one insert. Two inserts at one position are
+    -- an overlap for apply_edits. Other edits keep their own undo edit, so
+    -- each undo edit changes the text.
+    local previous_edit = normalized[i - 1]
+    if previous_edit and previous_edit.end_offset == edit.start_offset
+    and previous_edit.text == "" and edit.text == "" then
+      local previous = inverse_edits[#inverse_edits]
       previous.text = previous.text .. edit.old_text
     else
       inverse_edits[#inverse_edits + 1] = {
