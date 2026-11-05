@@ -474,5 +474,5 @@ command.add(text_capture_target, {
 })
 
 keymap.add {
-  ["f2"] = "core:open_text_capture",
+  ["f2"] = { "markdown:table_edit_cells_as_text", "core:open_text_capture" },
 }

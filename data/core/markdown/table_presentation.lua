@@ -1529,17 +1529,24 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
   if band > 0 then extras.first_row_content_y_offset = band end
   local row_presentations, row_wrapped = {}, {}
   local selections = selection_state and selection_state.selections or {}
-  -- An empty cell's caret is part of a Table Cell Selection when other
-  -- selections accompany it, as the selection paint decides.
-  local grouped = selection_state and selection_state.table_cell_selection or #selections > 4
+  -- A Table Cell Selection keeps its cells rendered.
+  local selects_cells = {}
+  for index = 1, #selections, 4 do
+    selects_cells[index] = markdown_tables.selection_rectangle(
+      view.buffer, layout.line1, layout.line2,
+      selections[index], selections[index + 1], selections[index + 2], selections[index + 3],
+      selection_state.table_cell_selection
+    ) ~= nil
+  end
   local function cell_active(cell)
     for index = 1, #selections, 4 do
       local line1, col1 = selections[index], selections[index + 1]
       local line2, col2 = selections[index + 2], selections[index + 3]
-      -- A Table Cell Selection covers the whole cell and keeps it rendered;
-      -- only a caret or a partial selection edits the cell's source.
+      if selects_cells[index] then goto continue_selection end
+      -- A selection of a cell's whole text also keeps it rendered. Only a
+      -- caret or a partial selection edits the cell's source.
       if line1 == line and line2 == line
-      and (cell.content_col1 < cell.content_col2 or grouped)
+      and cell.content_col1 < cell.content_col2
       and math.min(col1, col2) == cell.content_col1
       and math.max(col1, col2) == cell.content_col2
       then

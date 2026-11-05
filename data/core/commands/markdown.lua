@@ -311,6 +311,37 @@ end, {
   end,
 })
 
+command.add(function()
+  local view = live_table_view()
+  return view ~= nil and markdown_tables.cell_selection(view) ~= nil, view
+end, {
+  ["markdown:table_edit_cells_as_text"] = function(view)
+    markdown_tables.cells_to_text(view)
+  end,
+  ["markdown:table_extend_cells_left"] = function(view)
+    markdown_tables.extend_cell_selection(view, 0, -1)
+  end,
+  ["markdown:table_extend_cells_right"] = function(view)
+    markdown_tables.extend_cell_selection(view, 0, 1)
+  end,
+  ["markdown:table_extend_cells_to_row_start"] = function(view)
+    markdown_tables.extend_cell_selection(view, 0, -math.huge)
+  end,
+  ["markdown:table_extend_cells_to_row_end"] = function(view)
+    markdown_tables.extend_cell_selection(view, 0, math.huge)
+  end,
+})
+
+command.add(function()
+  local view = live_table_view()
+  return view ~= nil and not view.buffer.read_only
+    and markdown_tables.cell_selection(view) ~= nil, view
+end, {
+  ["markdown:table_delete_cells"] = function(view)
+    markdown_tables.delete_cells(view)
+  end,
+})
+
 -- Backspace and Delete do not remove the line break that keeps a table apart
 -- from the text beside it. They move the caret over it.
 local function stops_beside_table(direction)

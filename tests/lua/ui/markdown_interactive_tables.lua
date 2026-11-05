@@ -84,6 +84,17 @@ local function caret_cell(buffer)
   end
 end
 
+-- The cells of the view's Table Cell Selection, as "line:column".
+local function selected_cells(view)
+  local selection = markdown_tables.cell_selection(view)
+  local cells = {}
+  for _, cell in ipairs(selection and selection.cells or {}) do
+    cells[#cells + 1] = cell.line .. ":" .. cell.column
+  end
+  table.sort(cells)
+  return cells
+end
+
 test.describe("Markdown Interactive Table Editing", function()
   test.before_each(function(context)
     context.live = config.markdown_live_editor
@@ -610,7 +621,7 @@ test.describe("Markdown Interactive Table Editing", function()
     end)
   end)
 
-  test.it("drag-selects a rectangle as full-content cell selections", function()
+  test.it("drag-selects a rectangle of cells and types into the last cell", function()
     local view, buffer = make_view(
       "| A | B |\n| --- | --- |\n| one | two |\n| four | five |\n\nplain"
     )
@@ -627,17 +638,13 @@ test.describe("Markdown Interactive Table Editing", function()
       test.equal(command.perform("core:set_cursor", start_x, start_y), true)
       view:on_mouse_moved(finish_x, finish_y, finish_x - start_x, finish_y - start_y)
       view:on_mouse_released("left", finish_x, finish_y)
-      test.same(view:get_selection_state().selections, {
-        3, 6, 3, 3,
-        3, 12, 3, 9,
-        4, 7, 4, 3,
-        4, 14, 4, 10,
-      })
-      test.equal(view:get_selection_state().last_selection, 4)
+      test.same(selected_cells(view), { "3:1", "3:2", "4:1", "4:2" })
+      test.equal(#buffer.selections, 4)
 
       test.equal(view:on_text_input("x"), true)
-      test.equal(buffer.lines[3], "| x | x |\n")
-      test.equal(buffer.lines[4], "| x | x |\n")
+      test.equal(buffer.lines[3], "| one | two |\n")
+      test.equal(buffer.lines[4], "| four | x |\n")
+      test.same({ buffer:get_selection() }, { 4, 11, 4, 11 })
       test.equal(#table_cells(view, 3), 2)
       test.equal(#table_cells(view, 4), 2)
     end)
@@ -778,8 +785,8 @@ test.describe("Markdown Interactive Table Editing", function()
     local ok, err = pcall(function()
       test.equal(command.perform("core:set_cursor", start_x, start_y), true)
       view:on_mouse_moved(x, y, x - start_x, y - start_y)
-      local body_selection = view:get_selection_state().selections
-      test.equal(#body_selection, 16)
+      local body_selection = common.merge(view:get_selection_state().selections)
+      test.same(selected_cells(view), { "3:1", "3:2", "4:1", "4:2" })
 
       local _, separator_y = view:get_line_screen_position(2)
       local separator_height = view:get_position_visual_row_height(2, 1)
@@ -794,11 +801,7 @@ test.describe("Markdown Interactive Table Editing", function()
 
       x, y = cell_center(view, 1, 1)
       view:on_mouse_moved(x, y, 0, 0)
-      test.same(view:get_selection_state().selections, {
-        1, 4, 1, 3, 1, 8, 1, 7,
-        3, 6, 3, 3, 3, 12, 3, 9,
-        4, 7, 4, 3, 4, 14, 4, 10,
-      })
+      test.same(selected_cells(view), { "1:1", "1:2", "3:1", "3:2", "4:1", "4:2" })
       view:on_mouse_released("left", x, y)
     end)
     core.active_view = old_active
@@ -1524,13 +1527,16 @@ test.describe("Markdown Interactive Table Editing", function()
     test.equal(markdown_tables.has_interactive_context(view), false)
   end)
 
-  test.it("rejects a selection spanning table structure", function()
+  test.it("selects cells when a selection runs from one cell into another", function()
     local view, buffer = make_view(
-      "| A | B |\n| --- | --- |\n| one | two |\n"
+      "| A | B |\n| --- | --- |\n| one | two |\n\nplain"
     )
-    buffer:set_selection(3, 4, 1, 3)
+    buffer:set_selection(3, 10, 1, 3)
     refresh(view)
-    test.equal(markdown_tables.has_interactive_context(view), false)
+    test.same(selected_cells(view), { "1:1", "1:2", "3:1", "3:2" })
+    -- A selection from outside the table stays text.
+    buffer:set_selection(3, 10, 5, 3)
+    test.same(selected_cells(view), {})
   end)
 
   test.it("preserves matching per-cursor clipboard payloads", function()
@@ -1705,7 +1711,7 @@ test.describe("Markdown Interactive Table Editing", function()
       test.ok(markers[1]:match("^%-+:$"), "first selected column is not right-aligned")
       test.ok(markers[2]:match("^%-+:$"), "second selected column is not right-aligned")
       test.ok(markers[3]:match("^%-+$"), "unselected column changed alignment")
-      test.equal(#view.buffer.selections / 4, 2)
+      test.same(selected_cells(view), { "3:1", "3:2" })
 
       markdown_model.get(buffer):submit("interactive-table-align")
       refresh(view)
@@ -1965,28 +1971,6 @@ test.describe("Markdown Interactive Table Editing", function()
 
   local function overlaps(x1, y1, w1, h1, x2, y2, w2, h2)
     return x1 < x2 + w2 and x2 < x1 + w1 and y1 < y2 + h2 and y2 < y1 + h1
-  end
-
-  local function selected_cells(view)
-    local cells = {}
-    local selections = view.buffer.selections
-    for index = 1, #selections, 4 do
-      local line, col = selections[index], selections[index + 1]
-      local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
-      local row = test.not_nil(markdown_tables.source_row(text))
-      for column, cell in ipairs(row.cells) do
-        if col >= cell.col1 and col <= cell.col2 then
-          local other = selections[index + 3]
-          test.equal(math.min(col, other), cell.content_col1,
-            "selection did not cover the whole cell")
-          test.equal(math.max(col, other), cell.content_col2,
-            "selection did not cover the whole cell")
-          cells[#cells + 1] = line .. ":" .. column
-        end
-      end
-    end
-    table.sort(cells)
-    return cells
   end
 
   local function click_at(view, x, y)
@@ -2404,9 +2388,72 @@ test.describe("Markdown Interactive Table Editing", function()
       buffer:set_selection(4, 3)
       refresh(view)
       test.equal(command.perform("markdown:table_select_down"), true)
-      test.same(selected_cells(view), { "4:1" })
+      test.same(selected_cells(view), {})
+      test.same({ buffer:get_selection() }, { 4, 7, 4, 3 })
       test.equal(command.perform("markdown:table_select_up"), true)
       test.same(selected_cells(view), { "3:1", "4:1" })
+    end)
+  end)
+
+  test.it("keeps a Table Cell Selection when other commands move its caret", function()
+    local view, buffer = make_view(GRID)
+    with_active(view, function()
+      buffer:set_selection(6, 1)
+      refresh(view)
+      test.ok(markdown_tables.select_rectangle(view, 3, 9, 4, 17))
+      test.same(selected_cells(view), { "3:2", "3:3", "4:2", "4:3" })
+      test.equal(command.perform("markdown:table_extend_cells_to_row_start"), true)
+      test.same(selected_cells(view), { "3:1", "3:2", "4:1", "4:2" })
+      test.equal(command.perform("markdown:table_extend_cells_right"), true)
+      test.same(selected_cells(view), { "3:2", "4:2" })
+      -- Text commands move only the caret, so the cells follow it.
+      test.equal(command.perform("core:select_to_end_of_line"), true)
+      test.same(selected_cells(view), { "3:2", "3:3", "4:2", "4:3" })
+      test.equal(#buffer.selections, 4)
+    end)
+  end)
+
+  test.it("leaves a Table Cell Selection with one caret from its last cell", function()
+    local view, buffer = make_view(GRID)
+    with_active(view, function()
+      buffer:set_selection(6, 1)
+      refresh(view)
+      test.ok(markdown_tables.select_rectangle(view, 3, 9, 4, 17))
+      test.equal(command.perform("markdown:table_previous_char"), true)
+      test.same({ buffer:get_selection() }, { 4, 14, 4, 14 })
+
+      test.ok(markdown_tables.select_rectangle(view, 3, 9, 4, 17))
+      test.equal(command.perform("markdown:table_cell_down"), true)
+      test.equal(#buffer.selections, 4)
+      test.equal(buffer:get_selection(), 5)
+    end)
+  end)
+
+  test.it("empties selected cells and keeps them selected", function()
+    local view, buffer = make_view(GRID)
+    with_active(view, function()
+      buffer:set_selection(6, 1)
+      refresh(view)
+      test.ok(markdown_tables.select_rectangle(view, 3, 9, 4, 17))
+      test.equal(command.perform("markdown:table_delete_cells"), true)
+      test.same(row_cells(buffer, 3), { "one", "", "" })
+      test.same(row_cells(buffer, 4), { "four", "", "" })
+      test.same(selected_cells(view), { "3:2", "3:3", "4:2", "4:3" })
+    end)
+  end)
+
+  test.it("turns selected cells into one text selection for each cell", function()
+    local view, buffer = make_view(GRID)
+    with_active(view, function()
+      buffer:set_selection(6, 1)
+      refresh(view)
+      test.ok(markdown_tables.select_rectangle(view, 3, 3, 4, 10))
+      test.equal(command.perform("markdown:table_edit_cells_as_text"), true)
+      test.same(selected_cells(view), {})
+      test.equal(#buffer.selections, 16)
+      test.equal(view:on_text_input("x"), true)
+      test.same(row_cells(buffer, 3), { "x", "x", "three" })
+      test.same(row_cells(buffer, 4), { "x", "x", "six" })
     end)
   end)
 

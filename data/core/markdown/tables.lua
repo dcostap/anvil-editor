@@ -1,10 +1,12 @@
 local core = require "core"
 local common = require "core.common"
+local config = require "core.config"
 local translate = require "core.buffer.translate"
 local model = require "core.markdown.model"
 
 local tables = {}
 local collect_interactive_contexts
+local collapse_to_focus, select_focus_text
 local source_indexes = setmetatable({}, { __mode = "k" })
 local context_rows = setmetatable({}, { __mode = "k" })
 
@@ -461,8 +463,7 @@ end
 
 function tables.has_interactive_context(view)
   if not (view and view.buffer) then return false end
-  local contexts = collect_interactive_contexts(view)
-  return contexts ~= nil
+  return collect_interactive_contexts(view) ~= nil or tables.cell_selection(view) ~= nil
 end
 
 function tables.has_command_context(view)
@@ -726,6 +727,8 @@ local function append_body_row(context)
 end
 
 function tables.navigate(view, direction)
+  local selection = tables.cell_selection(view)
+  if selection then collapse_to_focus(view, selection, true) end
   local contexts, first = collect_interactive_contexts(view)
   if not contexts then return false end
   local append = false
@@ -777,6 +780,8 @@ function tables.navigate(view, direction)
 end
 
 function tables.insert_cell_break(view)
+  local selection = tables.cell_selection(view)
+  if selection then collapse_to_focus(view, selection, true) end
   local contexts = collect_interactive_contexts(view)
   if not contexts then return false end
   return view:on_text_input("<br>")
@@ -862,10 +867,14 @@ local function text_input_by_selection(view, text_for_context)
 end
 
 function tables.text_input(view, text)
+  local selection = tables.cell_selection(view)
+  if selection then select_focus_text(view, selection) end
   return text_input_by_selection(view, function() return text end)
 end
 
 function tables.ime_text_editing(view, text, start, length)
+  local selection = tables.cell_selection(view)
+  if selection then select_focus_text(view, selection) end
   local contexts, first = collect_interactive_contexts(view)
   if not contexts then return false end
   local by_index = {}
@@ -949,117 +958,338 @@ local function adjacent_break(text, cell, col, direction)
   end
 end
 
--- Select the cells between an anchor and a focus cell, given as grid rows and
--- columns. The focus cell is the primary selection: keyboard extension moves
--- that corner and keeps the opposite one.
-local function select_grid_rectangle(view, context, anchor_row, anchor_col, focus_row, focus_col)
-  local row1, row2 = math.min(anchor_row, focus_row), math.max(anchor_row, focus_row)
-  local col1, col2 = math.min(anchor_col, focus_col), math.max(anchor_col, focus_col)
-  local selections, primary = {}, 1
-  for row_index = row1, row2 do
-    local row = context.editable_rows[row_index]
-    for column = col1, col2 do
-      local selection = selection_for_cell(row, column)
-      if selection then
-        if row_index == focus_row and column == focus_col then
-          primary = #selections / 4 + 1
-        end
-        for _, value in ipairs(selection) do selections[#selections + 1] = value end
-      end
-    end
-  end
-  if #selections == 0 then return false end
-  view.buffer:set_selection_list(selections, primary, { merge_cursors = false })
-  return true
+-- Table Cell Selection ------------------------------------------------------
+-- A selection whose ends are in different cells of one table selects the
+-- rectangle of cells between them, not the text. The cell at the caret is
+-- its focus. The Buffer's `table_cell_selection` mark makes a selection in
+-- one cell select that whole cell.
+
+local function cells_shown(view)
+  local owner = view.__markdown_live_owner
+  return config.markdown_live_interactive_tables == true
+    and view.__markdown_live_attached == true
+    and not (owner and owner.source_mode == true)
 end
 
--- A Table Cell Selection group as a rectangle: its focus is the primary
--- selection's cell and its anchor the opposite corner of the cells' bounds.
--- Nil unless selections cover whole cells in cell-selection mode.
-local function cell_group(view, contexts)
-  if #contexts < 2 and not view.buffer.table_cell_selection then return nil end
-  local selections = view.buffer.selections
-  local row1, row2, col1, col2, focus
-  for _, context in ipairs(contexts) do
-    local offset = (context.selection_index - 1) * 4
-    local a, b = selections[offset + 2], selections[offset + 4]
-    if math.min(a, b) ~= context.cell.content_col1
-    or math.max(a, b) ~= context.cell.content_col2
-    then
-      return nil
-    end
-    row1 = math.min(row1 or context.grid_row, context.grid_row)
-    row2 = math.max(row2 or context.grid_row, context.grid_row)
-    col1 = math.min(col1 or context.column, context.column)
-    col2 = math.max(col2 or context.column, context.column)
-    if context.selection_index == view.buffer.last_selection then focus = context end
+-- The grid row and column at a source position in the table between `line1`
+-- and `line2`, or nil outside its cell rows.
+local function grid_position(buffer, line1, line2, line, col)
+  if line < line1 or line > line2 or line == line1 + 1 then return nil end
+  local row = context_row_at(buffer, line)
+  if not row then return nil end
+  local column = #row.cells
+  for index, cell in ipairs(row.cells) do
+    if col <= cell.col2 then column = index break end
   end
-  focus = focus or contexts[#contexts]
+  return line == line1 and 1 or line - line1, column
+end
+
+---The rectangle of cells that a selection selects in the table between
+---`line1` and `line2`, or nil when the selection is text. `whole_cells` is
+---the Buffer's `table_cell_selection` mark.
+function tables.selection_rectangle(
+  buffer, line1, line2, caret_line, caret_col, anchor_line, anchor_col, whole_cells
+)
+  local focus_row, focus_col = grid_position(buffer, line1, line2, caret_line, caret_col)
+  if not focus_row then return nil end
+  local anchor_row, anchor_column = grid_position(buffer, line1, line2, anchor_line, anchor_col)
+  if not anchor_row then return nil end
+  if focus_row == anchor_row and focus_col == anchor_column and not whole_cells then
+    return nil
+  end
   return {
-    context = focus,
-    focus_row = focus.grid_row, focus_col = focus.column,
-    anchor_row = focus.grid_row == row1 and row2 or row1,
-    anchor_col = focus.column == col1 and col2 or col1,
+    line1 = line1, line2 = line2,
+    focus_row = focus_row, focus_col = focus_col,
+    anchor_row = anchor_row, anchor_col = anchor_column,
+    row1 = math.min(focus_row, anchor_row), row2 = math.max(focus_row, anchor_row),
+    col1 = math.min(focus_col, anchor_column), col2 = math.max(focus_col, anchor_column),
   }
 end
 
--- Extend a Table Cell Selection with the keyboard by moving its focus cell.
--- A lone caret or text selection becomes one when it leaves its cell. Returns
--- nil when the selection should extend as text instead.
-local function extend_cells(view, contexts, row_step, col_step)
-  local group = cell_group(view, contexts)
-  if not group then
-    if #contexts ~= 1 then return nil end
-    local context = contexts[1]
-    local cell = context.cell
-    if col_step < 0 and context.col > cell.content_col1
-    or col_step > 0 and context.col < cell.content_col2
-    then
-      return nil
+-- The rectangle of each selection that selects cells, by selection index, and
+-- the content range of each selected cell by line. Drawing asks for it in
+-- each frame, so it is kept until the selections or the text change.
+local function cell_rectangles(view)
+  local buffer = view.buffer
+  local selections = buffer.selections
+  local source = view.markdown_table_source
+  local shown = cells_shown(view)
+  local cached = view.__markdown_cell_rectangles
+  if cached and cached.text_revision == buffer.text_revision
+  and cached.whole_cells == buffer.table_cell_selection
+  and cached.shown == shown
+  and cached.source_line1 == (source and source.line1)
+  and cached.source_line2 == (source and source.line2)
+  and #cached.selections == #selections
+  then
+    local same = true
+    for index = 1, #selections do
+      if cached.selections[index] ~= selections[index] then same = false break end
     end
-    group = {
-      context = context,
-      focus_row = context.grid_row, focus_col = context.column,
-      anchor_row = context.grid_row, anchor_col = context.column,
-    }
+    if same then return cached end
   end
-  local context = group.context
-  local row = common.clamp(group.focus_row + row_step, 1, #context.editable_rows)
-  local column = common.clamp(group.focus_col + col_step, 1, context.columns)
-  if row == group.focus_row and column == group.focus_col then
-    -- At the table's edge a lone selection still reaches its cell's edge.
-    if not cell_group(view, contexts) then
-      local cell, offset = context.cell, (context.selection_index - 1) * 4
-      local anchor = view.buffer.selections[offset + 4]
-      local edge = (row_step < 0 or col_step < 0) and cell.content_col1 or cell.content_col2
-      view.buffer:set_selection(context.line, edge, context.line, anchor)
-    end
-    return true
-  end
-  if row == group.anchor_row and column == group.anchor_col then
-    -- One cell left: select its contents with the caret on the side the
-    -- selection travels toward, so the next step leaves the cell again.
-    local selection = selection_for_cell(
-      context.editable_rows[row], column, row_step < 0 or col_step < 0
+  local result = {
+    text_revision = buffer.text_revision, whole_cells = buffer.table_cell_selection,
+    shown = shown, source_line1 = source and source.line1,
+    source_line2 = source and source.line2,
+    selections = {}, by_index = {}, cells = {}, count = 0,
+  }
+  for index = 1, #selections do result.selections[index] = selections[index] end
+  local by_line = shown and source_index(buffer).by_line or {}
+  for offset = 1, #selections, 4 do
+    local line, col = selections[offset], selections[offset + 1]
+    local anchor_line, anchor_col = selections[offset + 2], selections[offset + 3]
+    local context = by_line[line] and by_line[anchor_line]
+      and context_at(view, line, col, false)
+    local rect = context and tables.selection_rectangle(
+      buffer, context.line1, context.line2, line, col, anchor_line, anchor_col,
+      buffer.table_cell_selection
     )
-    view.buffer:set_selection(table.unpack(selection))
-    return true
+    if rect then
+      rect.index = (offset + 3) / 4
+      result.by_index[rect.index] = rect
+      result.count = result.count + 1
+      for row = rect.row1, rect.row2 do
+        local row_line = grid_row_line(rect.line1, row)
+        local cells = result.cells[row_line] or {}
+        result.cells[row_line] = cells
+        local source_row = context_row_at(buffer, row_line)
+        for column = rect.col1, rect.col2 do
+          local cell = source_row and source_row.cells[column]
+          if cell then cells[cell.content_col1] = cell.content_col2 end
+        end
+      end
+    end
   end
+  view.__markdown_cell_rectangles = result
+  return result
+end
+
+---The cells that the view's selections select, for drawing: `cells[line]`
+---maps the first content column of each selected cell to its last, and
+---`by_index` holds the selections that select cells.
+function tables.cell_selection_map(view)
+  return cell_rectangles(view)
+end
+
+---The view's Table Cell Selection when every selection selects cells of one
+---table: `rects` in selection order, the `primary` rectangle, the `context`
+---of its focus cell, and each selected `cells` entry (grid row, column and
+---line) in reading order. Nil otherwise.
+function tables.cell_selection(view)
+  if not (view and view.buffer) then return nil end
+  local map = cell_rectangles(view)
+  local count = #view.buffer.selections / 4
+  if map.count ~= count then return nil end
+  local rects = {}
+  for index = 1, count do
+    local rect = map.by_index[index]
+    if rects[1] and rect.line1 ~= rects[1].line1 then return nil end
+    rects[index] = rect
+  end
+  local primary = rects[view.buffer.last_selection] or rects[count]
+  local line = grid_row_line(primary.line1, primary.focus_row)
+  local row = context_row_at(view.buffer, line)
+  local cell = row and row.cells[primary.focus_col]
+  local context = cell and context_at(view, line, cell.content_col1, false)
+  if not context then return nil end
+  local cells, seen = {}, {}
+  for _, rect in ipairs(rects) do
+    for grid_row = rect.row1, rect.row2 do
+      for column = rect.col1, rect.col2 do
+        local key = grid_row * (tables.MAX_PRESENTATION_COLUMNS + 1) + column
+        if not seen[key] then
+          seen[key] = true
+          cells[#cells + 1] = {
+            row = grid_row, column = column, line = grid_row_line(rect.line1, grid_row),
+          }
+        end
+      end
+    end
+  end
+  table.sort(cells, function(a, b)
+    return a.row < b.row or a.row == b.row and a.column < b.column
+  end)
+  return { rects = rects, primary = primary, context = context, cells = cells }
+end
+
+-- Select rectangles of cells in the table of `context`. Each names its anchor
+-- and focus cells by grid row and column. The caret goes to the end of the
+-- focus cell's text, and the anchor to the start of the anchor cell's text.
+local function select_cells(view, context, rects, primary)
+  local selections = {}
+  for _, rect in ipairs(rects) do
+    local focus = selection_for_cell(context.editable_rows[rect.focus_row], rect.focus_col)
+    local anchor = selection_for_cell(context.editable_rows[rect.anchor_row], rect.anchor_col)
+    if not (focus and anchor) then return false end
+    selections[#selections + 1] = focus[1]
+    selections[#selections + 1] = focus[2]
+    selections[#selections + 1] = anchor[3]
+    selections[#selections + 1] = anchor[4]
+  end
+  if #selections == 0 then return false end
+  view.buffer:set_selection_list(selections, primary or #rects, {
+    merge_cursors = false, table_cell_selection = true,
+  })
+  return true
+end
+
+-- Extend a Table Cell Selection with the keyboard: its primary rectangle's
+-- focus cell moves and its anchor cell stays. Other rectangles go.
+local function extend_cells(view, selection, row_step, col_step)
+  local rect, context = selection.primary, selection.context
+  local row = common.clamp(rect.focus_row + row_step, 1, #context.editable_rows)
+  local column = common.clamp(rect.focus_col + col_step, 1, context.columns)
   core.log_quiet(
     "Markdown table keyboard cell selection %d:%d to %d:%d in %s",
-    group.anchor_row, group.anchor_col, row, column, view.buffer:get_name()
+    rect.anchor_row, rect.anchor_col, row, column, view.buffer:get_name()
   )
-  return select_grid_rectangle(
-    view, context, group.anchor_row, group.anchor_col, row, column
+  return select_cells(view, context, { {
+    anchor_row = rect.anchor_row, anchor_col = rect.anchor_col,
+    focus_row = row, focus_col = column,
+  } })
+end
+
+---Move the focus cell of the view's Table Cell Selection by grid rows and
+---columns, up to the table's edge. Its anchor cell stays.
+function tables.extend_cell_selection(view, row_step, col_step)
+  local selection = tables.cell_selection(view)
+  return selection ~= nil and extend_cells(view, selection, row_step, col_step)
+end
+
+-- A lone caret or text selection at its cell's edge starts a Table Cell
+-- Selection when the keyboard extends it out of the cell. At the table's
+-- edge it reaches its cell's edge and stays text.
+local function start_cells(view, context, row_step, col_step)
+  local row, column = context.grid_row + row_step, context.column + col_step
+  if not context.editable_rows[row] or column < 1 or column > context.columns then
+    local anchor = view.buffer.selections[(context.selection_index - 1) * 4 + 4]
+    local cell = context.cell
+    local edge = (row_step < 0 or col_step < 0) and cell.content_col1 or cell.content_col2
+    view.buffer:set_selection(context.line, edge, context.line, anchor)
+    return true
+  end
+  return select_cells(view, context, { {
+    anchor_row = context.grid_row, anchor_col = context.column,
+    focus_row = row, focus_col = column,
+  } })
+end
+
+-- Left and Right end a Table Cell Selection in the cell beside its focus
+-- cell, or at the focus cell's edge beside the table's edge.
+local function leave_cells_sideways(view, selection, direction)
+  local context = selection.context
+  local row = context.editable_rows[selection.primary.focus_row]
+  local column = selection.primary.focus_col + direction
+  local cell = row.cells[column]
+  local col
+  if cell then
+    col = direction < 0 and cell.content_col2 or cell.content_col1
+  else
+    column, cell = context.column, context.cell
+    col = direction < 0 and cell.content_col1 or cell.content_col2
+  end
+  local image = image_cell_selection(view, row.line, column)
+  if image then
+    view.buffer:set_selection(table.unpack(image))
+  else
+    view.buffer:set_selection(row.line, col)
+  end
+  return true
+end
+
+-- Collapse a Table Cell Selection to a caret in its focus cell, at the start
+-- of the cell's text or at its end with `at_end`. Return the caret's context.
+collapse_to_focus = function(view, selection, at_end)
+  local context = selection.context
+  local col = at_end and context.cell.content_col2 or context.cell.content_col1
+  view.buffer:set_selection(context.line, col)
+  return context_at(view, context.line, col, false)
+end
+
+-- Select the focus cell's text, so typed text replaces it.
+select_focus_text = function(view, selection)
+  local context = selection.context
+  view.buffer:set_selection(context.line, context.cell.content_col2, context.line, context.cell.content_col1)
+end
+
+local function refresh_rows(view, lines)
+  local refreshers = {}
+  for _, line in ipairs(lines) do
+    local render = view:get_line_render(line)
+    if render and render.on_table_source_changed then
+      refreshers[render.on_table_source_changed] = true
+    end
+  end
+  return function()
+    for refresh in pairs(refreshers) do refresh(view) end
+  end
+end
+
+-- Empty the selected cells. They stay selected.
+local function clear_cells(view, selection)
+  local context = selection.context
+  local edits, lines = {}, {}
+  for _, cell in ipairs(selection.cells) do
+    local source = context.editable_rows[cell.row].cells[cell.column]
+    if source and source.content_col2 > source.content_col1 then
+      edits[#edits + 1] = {
+        line1 = cell.line, col1 = source.content_col1,
+        line2 = cell.line, col2 = source.content_col2, text = "",
+      }
+      lines[#lines + 1] = cell.line
+    end
+  end
+  if #edits > 0 then
+    local refresh = refresh_rows(view, lines)
+    view.buffer:apply_edits(edits, { type = "delete", reason = "markdown-table-cells" })
+    refresh()
+  end
+  local cleared = context_at(view, context.line1, 1, false)
+  if cleared then select_cells(view, cleared, selection.rects, view.buffer.last_selection) end
+  core.log_quiet(
+    "Markdown table emptied %d cells in %s", #selection.cells, view.buffer:get_name()
   )
+  return true
+end
+
+---Turn a Table Cell Selection into one text selection of each selected
+---cell's text, so typing edits every cell at once.
+function tables.cells_to_text(view)
+  local selection = tables.cell_selection(view)
+  if not selection then return false end
+  local context, focus = selection.context, selection.primary
+  local selections, primary = {}, 1
+  for _, cell in ipairs(selection.cells) do
+    if cell.row == focus.focus_row and cell.column == focus.focus_col then
+      primary = #selections / 4 + 1
+    end
+    local range = selection_for_cell(context.editable_rows[cell.row], cell.column)
+    for _, value in ipairs(range or {}) do selections[#selections + 1] = value end
+  end
+  view.buffer:set_selection_list(selections, primary, { merge_cursors = false })
+  core.log_quiet(
+    "Markdown table cells became %d text selections in %s", #selection.cells,
+    view.buffer:get_name()
+  )
+  return true
 end
 
 function tables.move_char(view, direction, selecting)
+  local selection = tables.cell_selection(view)
+  if selection then
+    if selecting then return extend_cells(view, selection, 0, direction) end
+    return leave_cells_sideways(view, selection, direction)
+  end
   local contexts = collect_interactive_contexts(view)
   if not contexts then return false end
-  if selecting then
-    local handled = extend_cells(view, contexts, 0, direction)
-    if handled ~= nil then return handled end
+  if selecting and #contexts == 1 then
+    local context = contexts[1]
+    if direction < 0 and context.col <= context.cell.content_col1
+    or direction > 0 and context.col >= context.cell.content_col2
+    then
+      return start_cells(view, context, 0, direction)
+    end
   end
   local selections = {}
   for _, context in ipairs(contexts) do
@@ -1101,12 +1331,19 @@ function tables.move_char(view, direction, selecting)
   return true
 end
 
+---Empty the cells of a Table Cell Selection, or delete the whole rows or
+---columns that it selects.
+function tables.delete_cells(view)
+  local selection = tables.cell_selection(view)
+  if not selection then return false end
+  if tables.delete_selected_lines(view) then return true end
+  return clear_cells(view, selection)
+end
+
 function tables.delete_char(view, direction)
+  if tables.delete_cells(view) then return true end
   local contexts = collect_interactive_contexts(view)
   if not contexts then return false end
-  -- Whole selected rows or columns go, even when their cells are empty and
-  -- their selections are carets.
-  if tables.delete_selected_lines(view) then return true end
   if view.buffer:has_any_selection() then return view:on_text_input("") end
   local edits, seen = {}, {}
   local refreshers = {}
@@ -1149,13 +1386,16 @@ function tables.delete_char(view, direction)
 end
 
 function tables.move_vertical(view, direction, selecting)
+  local selection = tables.cell_selection(view)
+  if selection then
+    if selecting then return extend_cells(view, selection, direction, 0) end
+    -- Up leaves the focus cell from its first line and Down from its last.
+    collapse_to_focus(view, selection, direction > 0)
+  end
   local contexts = collect_interactive_contexts(view)
   if not contexts then return false end
   if view.clear_pending_line_render_position_row_affinity then
     view:clear_pending_line_render_position_row_affinity()
-  end
-  if selecting and cell_group(view, contexts) then
-    return extend_cells(view, contexts, direction, 0)
   end
   local selections = {}
   for _, context in ipairs(contexts) do
@@ -1168,7 +1408,7 @@ function tables.move_vertical(view, direction, selecting)
     )
     if not line and selecting and #contexts == 1 then
       -- Leaving the cell's first or last visual line selects whole cells.
-      return extend_cells(view, contexts, direction, 0)
+      return start_cells(view, context, direction, 0)
     end
     if not line then
       local target_grid_row = context.grid_row + direction
@@ -1218,9 +1458,10 @@ function tables.select_rectangle(view, anchor_line, anchor_col, line, col)
     -- Table Cell Selection.
     return false
   end
-  return select_grid_rectangle(
-    view, anchor, anchor.grid_row, anchor.column, target.grid_row, target.column
-  )
+  return select_cells(view, anchor, { {
+    anchor_row = anchor.grid_row, anchor_col = anchor.column,
+    focus_row = target.grid_row, focus_col = target.column,
+  } })
 end
 
 function tables.insert_row(view, side)
@@ -1303,39 +1544,20 @@ function tables.move_column(view, direction)
   })
 end
 
----The whole rows and whole columns of the table at `line` that the selection
----covers, as sorted lists of grid rows and columns, or nil when the selection
----is anything else. Only a group of several selections that each cover one
----complete cell counts; a lone cell's contents are a text selection.
+---The whole rows and whole columns of the table at `line` that the Table
+---Cell Selection covers, as sorted lists of grid rows and columns, or nil
+---when the selection is anything else.
 function tables.whole_lines_selected(view, line)
-  local selections = view.buffer.selections
-  if #selections < 8 then return nil end
+  local selection = tables.cell_selection(view)
+  if not selection then return nil end
   local context = context_at(view, line, 1, false)
-  if not context then return nil end
-  local grid_rows = {}
-  for index, row in ipairs(context.editable_rows) do grid_rows[row.line] = index end
-  local seen, count, row_counts, column_counts = {}, 0, {}, {}
-  for index = 1, #selections, 4 do
-    local line1, col1, line2, col2 = table.unpack(selections, index, index + 3)
-    local grid_row = line1 == line2 and grid_rows[line1]
-    if not grid_row then return nil end
-    local low, high = math.min(col1, col2), math.max(col1, col2)
-    local column
-    for cell_index, cell in ipairs(context.editable_rows[grid_row].cells) do
-      if cell.content_col1 == low and cell.content_col2 == high then
-        column = cell_index
-        break
-      end
-    end
-    if not column then return nil end
-    local key = grid_row .. ":" .. column
-    if not seen[key] then
-      seen[key] = true
-      count = count + 1
-      row_counts[grid_row] = (row_counts[grid_row] or 0) + 1
-      column_counts[column] = (column_counts[column] or 0) + 1
-    end
+  if not context or not same_table(context, selection.context) then return nil end
+  local row_counts, column_counts = {}, {}
+  for _, cell in ipairs(selection.cells) do
+    row_counts[cell.row] = (row_counts[cell.row] or 0) + 1
+    column_counts[cell.column] = (column_counts[cell.column] or 0) + 1
   end
+  local count = #selection.cells
   local function complete(counts, limit, size)
     local list = {}
     for index = 1, limit do
@@ -1350,28 +1572,32 @@ function tables.whole_lines_selected(view, line)
 end
 
 -- Select whole rows or columns of a table, given as a set of grid rows or
--- columns. The cell of `focus` nearest the handle that selected it is the
--- primary selection; the handle is on screen, so the view stays still.
+-- columns. Each run of neighboring lines is one rectangle. Its focus cell is
+-- in line `focus`, or else in its first line, nearest the handle side, so the
+-- view stays still.
 local function select_lines(view, context, kind, chosen, focus, far_side)
   local count = kind == "row" and #context.editable_rows or context.columns
   local across = kind == "row" and context.columns or #context.editable_rows
-  local near = far_side and across or 1
-  local selections, primary = {}, 1
-  for index = 1, count do
+  local near, far = far_side and across or 1, far_side and 1 or across
+  local rects, primary = {}, nil
+  local index = 1
+  while index <= count do
     if chosen[index] then
-      for position = 1, across do
-        local row = context.editable_rows[kind == "row" and index or position]
-        local selection = selection_for_cell(row, kind == "row" and position or index)
-        if selection then
-          if index == focus and position == near then primary = #selections / 4 + 1 end
-          for _, value in ipairs(selection) do selections[#selections + 1] = value end
-        end
-      end
+      local last = index
+      while chosen[last + 1] do last = last + 1 end
+      local lead = focus and focus >= index and focus <= last and focus or index
+      local other = lead == index and last or index
+      if lead == focus then primary = #rects + 1 end
+      rects[#rects + 1] = kind == "row"
+        and { focus_row = lead, focus_col = near, anchor_row = other, anchor_col = far }
+        or { focus_row = near, focus_col = lead, anchor_row = far, anchor_col = other }
+      index = last + 1
+    else
+      index = index + 1
     end
   end
-  if #selections == 0 then return false end
-  view.buffer:set_selection_list(selections, primary, { merge_cursors = false })
-  return true
+  if #rects == 0 then return false end
+  return select_cells(view, context, rects, primary or #rects)
 end
 
 ---Select the whole row at `line` (`kind` "row") or column `column` (`kind`
@@ -1540,6 +1766,16 @@ end
 ---Columns holding a selection, or the caret's column.
 local function selected_columns(view, context)
   local columns, seen = {}, {}
+  local selection = tables.cell_selection(view)
+  if selection and same_table(selection.context, context) then
+    for _, cell in ipairs(selection.cells) do
+      if not seen[cell.column] then
+        seen[cell.column] = true
+        columns[#columns + 1] = cell.column
+      end
+    end
+    return columns
+  end
   for _, selection_context in ipairs(collect_interactive_contexts(view) or { context }) do
     if same_table(selection_context, context) and not seen[selection_context.column] then
       seen[selection_context.column] = true
@@ -1558,32 +1794,15 @@ function tables.set_alignment(view, alignment)
   for _, column in ipairs(selected_columns(view, context)) do
     model.alignments[column] = alignment
   end
-  -- Re-padding moves cell text, so a Table Cell Selection group is restored
-  -- by grid position rather than by source columns.
-  local selected_cells = {}
-  local contexts = collect_interactive_contexts(view)
-  if contexts and #contexts > 1 then
-    for _, selection_context in ipairs(contexts) do
-      selected_cells[#selected_cells + 1] = {
-        selection_context.grid_row, selection_context.column,
-      }
-    end
-  end
-  local ok, line2 = apply_model(context, model, "align-" .. tostring(alignment or "none"), {
+  -- Re-padding moves cell text, so a Table Cell Selection is restored by
+  -- grid position rather than by source columns.
+  local selection = tables.cell_selection(view)
+  local primary = view.buffer.last_selection
+  local ok = apply_model(context, model, "align-" .. tostring(alignment or "none"), {
     row = context.grid_row, column = context.column, offset = caret_offset(context),
   })
-  if #selected_cells > 0 then
-    local rows = editable_rows_between(context.buffer, context.line1, line2) or {}
-    local selections = {}
-    for _, cell in ipairs(selected_cells) do
-      for _, value in ipairs(selection_for_cell(rows[cell[1]], cell[2]) or {}) do
-        selections[#selections + 1] = value
-      end
-    end
-    if #selections > 0 then
-      view.buffer:set_selection_list(selections, #selections / 4, { merge_cursors = false })
-    end
-  end
+  local aligned = selection and context_at(view, context.line1, 1, false)
+  if aligned then select_cells(view, aligned, selection.rects, primary) end
   return ok
 end
 
@@ -1912,6 +2131,21 @@ end
 
 function tables.paste(view)
   local clipboard = system.get_clipboard() or ""
+  local selection = tables.cell_selection(view)
+  if selection then
+    -- Cells paste from the top-left selected cell. Other text replaces the
+    -- focus cell's text.
+    local grid = paste_grid_for(clipboard)
+    if grid then
+      local first = selection.cells[1]
+      local cell = selection.context.editable_rows[first.row].cells[first.column]
+      view.buffer:set_selection(first.line, cell.content_col1)
+      local context = tables.context(view)
+      if context and paste_grid(view, context, grid) then return true end
+    end
+    select_focus_text(view, selection)
+    return tables.text_input(view, clipboard)
+  end
   local selection_count = #view.buffer.selections / 4
   if core.cursor_clipboard
   and core.cursor_clipboard.full == clipboard
@@ -1988,23 +2222,19 @@ end
 ---selection is not whole cells of one table in a grid of rows and columns.
 ---Body rows keep an empty header row, because a Markdown table needs one.
 local function selected_cells_model(view)
-  local contexts, first = collect_interactive_contexts(view)
-  if not contexts or #contexts < 2 or not cell_group(view, contexts) then return nil end
-  local row_set, column_set, cell_set, count = {}, {}, {}, 0
-  for _, context in ipairs(contexts) do
-    local key = context.grid_row .. ":" .. context.column
-    if not cell_set[key] then
-      cell_set[key], count = true, count + 1
-      row_set[context.grid_row], column_set[context.column] = true, true
-    end
+  local selection = tables.cell_selection(view)
+  if not selection then return nil end
+  local row_set, column_set = {}, {}
+  for _, cell in ipairs(selection.cells) do
+    row_set[cell.row], column_set[cell.column] = true, true
   end
   local rows, columns = {}, {}
   for row in pairs(row_set) do rows[#rows + 1] = row end
   for column in pairs(column_set) do columns[#columns + 1] = column end
-  if #rows * #columns ~= count then return nil end
+  if #rows * #columns ~= #selection.cells then return nil end
   table.sort(rows)
   table.sort(columns)
-  local source = model_from_context(first)
+  local source = model_from_context(selection.context)
   local model = { columns = #columns, alignments = {}, rows = {} }
   for index, column in ipairs(columns) do model.alignments[index] = source.alignments[column] end
   if rows[1] ~= 1 then model.rows[1] = empty_cells(#columns) end
@@ -2013,39 +2243,35 @@ local function selected_cells_model(view)
     for index, column in ipairs(columns) do cells[index] = source.rows[row][column] end
     model.rows[#model.rows + 1] = cells
   end
-  return model
+  return model, selection
 end
 
+-- One selected cell copies as its text, like other text.
 function tables.can_copy_cells(view)
-  return selected_cells_model(view) ~= nil
+  local selection = tables.cell_selection(view)
+  return selection ~= nil and #selection.cells > 1 and selected_cells_model(view) ~= nil
 end
 
 ---Copy a Table Cell Selection as a Markdown table. A cut then empties the
 ---selected cells.
 function tables.copy_cells(view, cut)
-  local model = selected_cells_model(view)
-  if not model then return false end
+  if not tables.can_copy_cells(view) then return false end
+  local model, selection = selected_cells_model(view)
   local text = table.concat(tables.serialize_model(model), "\n") .. "\n"
   core.cursor_clipboard = { full = text }
   core.cursor_clipboard_whole_line = {}
   system.set_clipboard(text)
-  local buffer = view.buffer
-  local ranges, edits = {}, {}
-  for idx, line1, col1, line2, col2 in buffer:get_selections(true, true) do
-    ranges[#ranges + 1] = { line1, col1, line2, col2 }
-    if line1 ~= line2 or col1 ~= col2 then
-      edits[#edits + 1] = { line1 = line1, col1 = col1, line2 = line2, col2 = col2, text = "", idx = idx }
-    end
-  end
   core.log_quiet(
     "Markdown table %s %d rows, %d columns in %s", cut and "cut" or "copied",
-    #model.rows, model.columns, buffer:get_name()
+    #model.rows, model.columns, view.buffer:get_name()
   )
-  if cut then
-    if #edits > 0 then
-      buffer:apply_edits(edits, { type = "remove", last_selection = buffer.last_selection })
+  if cut then return clear_cells(view, selection) end
+  if view.show_copy_feedback then
+    local ranges = {}
+    for _, cell in ipairs(selection.cells) do
+      local source = selection.context.editable_rows[cell.row].cells[cell.column]
+      ranges[#ranges + 1] = { cell.line, source.content_col1, cell.line, source.content_col2 }
     end
-  elseif view.show_copy_feedback then
     view:show_copy_feedback(ranges)
   end
   return true

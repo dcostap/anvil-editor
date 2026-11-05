@@ -7868,10 +7868,18 @@ local function invalidate_selection_lines(view, new_state, old_state)
               and endpoint_col >= (fragment.source_col1 or 1)
               and endpoint_col <= (fragment.source_col2 or fragment.source_col1 or 1)
               then
+                -- The cells at the ends of a Table Cell Selection show no
+                -- source, so a change between text and cells redraws them.
                 local node = render.markdown_table_node
+                local source = node and node.source
+                local selects_cells = source and markdown_tables.selection_rectangle(
+                  view.buffer, source.line1,
+                  source.col2 == 1 and source.line2 > source.line1 and source.line2 - 1 or source.line2,
+                  line1, col1, line2, col2, state.table_cell_selection
+                ) ~= nil
                 table_cells_by_state[state_index][table.concat({
-                  node and node.source and node.source.line1 or endpoint_line,
-                  endpoint_line, fragment.table_column,
+                  source and source.line1 or endpoint_line,
+                  endpoint_line, fragment.table_column, tostring(selects_cells),
                 }, ":")] = endpoint_line
                 break
               end
