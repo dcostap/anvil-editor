@@ -282,6 +282,100 @@ end, {
   end,
 })
 
+local function live_table_view()
+  local view = core.active_view
+  if config.markdown_live_interactive_tables == true
+  and view and view:extends(Editor)
+  and markdown_live.is_markdown_buffer(view.buffer)
+  and markdown_live.is_live_mode(view)
+  then
+    return view
+  end
+end
+
+command.add(function()
+  local view = live_table_view()
+  return view ~= nil and markdown_tables.can_copy_cells(view), view
+end, {
+  ["markdown:table_copy"] = function(view)
+    markdown_tables.copy_cells(view, false)
+  end,
+})
+
+command.add(function()
+  local view = live_table_view()
+  return view ~= nil and not view.buffer.read_only and markdown_tables.can_copy_cells(view), view
+end, {
+  ["markdown:table_cut"] = function(view)
+    markdown_tables.copy_cells(view, true)
+  end,
+})
+
+command.add(function()
+  local view = live_table_view()
+  return view ~= nil and markdown_tables.cell_selection(view) ~= nil, view
+end, {
+  ["markdown:table_edit_cells_as_text"] = function(view)
+    markdown_tables.cells_to_text(view)
+  end,
+  ["markdown:table_extend_cells_left"] = function(view)
+    markdown_tables.extend_cell_selection(view, 0, -1)
+  end,
+  ["markdown:table_extend_cells_right"] = function(view)
+    markdown_tables.extend_cell_selection(view, 0, 1)
+  end,
+  ["markdown:table_extend_cells_to_row_start"] = function(view)
+    markdown_tables.extend_cell_selection(view, 0, -math.huge)
+  end,
+  ["markdown:table_extend_cells_to_row_end"] = function(view)
+    markdown_tables.extend_cell_selection(view, 0, math.huge)
+  end,
+})
+
+command.add(function()
+  local view = live_table_view()
+  return view ~= nil and not view.buffer.read_only
+    and markdown_tables.cell_selection(view) ~= nil, view
+end, {
+  ["markdown:table_delete_cells"] = function(view)
+    markdown_tables.delete_cells(view)
+  end,
+})
+
+-- Backspace and Delete do not remove the line break that keeps a table apart
+-- from the text beside it. They move the caret over it.
+local function stops_beside_table(direction)
+  return function()
+    local view = live_table_view()
+    return view ~= nil and not view.buffer.read_only
+      and markdown_tables.join_stop(view, direction) ~= nil, view
+  end
+end
+
+local function stop_beside_table(view, direction)
+  local line, col = markdown_tables.join_stop(view, direction)
+  view.buffer:set_selection(line, col)
+  core.log_quiet("Markdown kept a table apart from the text beside it in %s:%d",
+    view.buffer:get_name(), line)
+end
+
+command.add(stops_beside_table(-1), {
+  ["markdown:backspace_beside_table"] = function(view) stop_beside_table(view, -1) end,
+})
+
+command.add(stops_beside_table(1), {
+  ["markdown:delete_beside_table"] = function(view) stop_beside_table(view, 1) end,
+})
+
+command.add(function()
+  local view = live_table_view()
+  return view ~= nil and markdown_tables.interactive_context(view) ~= nil, view
+end, {
+  ["markdown:table_edit_source"] = command.palette(function(view)
+    markdown_live.show_table_source(view)
+  end),
+})
+
 command.add(function(x, y)
   local view = core.active_view
   if config.markdown_live_interactive_tables == true

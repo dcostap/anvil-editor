@@ -428,7 +428,7 @@ test.describe("Markdown semantic selection", function()
     perform("editor:extend_selection_smart")
     perform("markdown:table_select_next_char")
     test.equal(cell_fill_count(view, 3), 2)
-    test.same(buffer.selections, { 3, 6, 3, 3, 3, 12, 3, 9 })
+    test.same(buffer.selections, { 3, 12, 3, 3 })
   end)
 
   test.it("clears a selected cell without leaving its empty cell selected", function(context)

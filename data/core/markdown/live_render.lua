@@ -6070,6 +6070,7 @@ function provider:line_generation(view, line)
   return "font:" .. self:generation(view)
     .. fence_generation
     .. semantic_state
+    .. (markdown_tables.shows_source(view, line) and ":table-source" or "")
     .. (pending and not pending.kept and ":pending:" .. tostring(pending.revision) or "")
 end
 
@@ -6694,7 +6695,7 @@ local function remeasure_projected_line(view, line, entry)
 end
 
 local function build_render_line(view, line, _context)
-  if view_in_source_mode(view) then
+  if view_in_source_mode(view) or markdown_tables.shows_source(view, line) then
     return { raw_passthrough = true }
   end
   local generation_context = view.__markdown_live_line_generation_context
@@ -7095,6 +7096,11 @@ local function ensure_owner(view)
     owner.buffer:add_text_change_listener(owner.text_listener_id, {
       before_change = function(_, change)
         if view.__markdown_live_owner == owner and view.__markdown_live_attached then
+          if change.kind == "load" then
+            markdown_tables.hide_source(view)
+          else
+            markdown_tables.move_source(view, change.transaction and change.transaction.edits)
+          end
           capture_pre_edit_renders(view, change)
         end
       end,
@@ -7775,6 +7781,23 @@ refresh_projected_reveal = function(view, line, state, projected_entry)
 end
 
 local function invalidate_selection_lines(view, new_state, old_state)
+  -- A table that shows its source shows as a table again when the caret
+  -- leaves it. Each selection is line, column, line, column.
+  local source_line1, source_line2 = markdown_tables.source_lines(view)
+  if source_line1 then
+    local inside = false
+    for index = 1, #(new_state and new_state.selections or {}), 2 do
+      local line = new_state.selections[index]
+      inside = inside or line >= source_line1 and line <= source_line2
+    end
+    if not inside then
+      markdown_tables.hide_source(view)
+      view:invalidate_line_render(PROVIDER_ID, source_line1, source_line2)
+      view:invalidate_visual_metrics(PROVIDER_ID, source_line1, source_line2)
+      core.log_quiet("Markdown table at %s:%d shows as a table again",
+        view.buffer:get_name(), source_line1)
+    end
+  end
   local lines = {}
   local states = { old_state, new_state }
   local table_cells_by_state = { {}, {} }
@@ -7845,10 +7868,18 @@ local function invalidate_selection_lines(view, new_state, old_state)
               and endpoint_col >= (fragment.source_col1 or 1)
               and endpoint_col <= (fragment.source_col2 or fragment.source_col1 or 1)
               then
+                -- The cells at the ends of a Table Cell Selection show no
+                -- source, so a change between text and cells redraws them.
                 local node = render.markdown_table_node
+                local source = node and node.source
+                local selects_cells = source and markdown_tables.selection_rectangle(
+                  view.buffer, source.line1,
+                  source.col2 == 1 and source.line2 > source.line1 and source.line2 - 1 or source.line2,
+                  line1, col1, line2, col2, state.table_cell_selection
+                ) ~= nil
                 table_cells_by_state[state_index][table.concat({
-                  node and node.source and node.source.line1 or endpoint_line,
-                  endpoint_line, fragment.table_column,
+                  source and source.line1 or endpoint_line,
+                  endpoint_line, fragment.table_column, tostring(selects_cells),
                 }, ":")] = endpoint_line
                 break
               end
@@ -8098,10 +8129,22 @@ function live.detach(view)
   view:remove_file_drop_provider(PROVIDER_ID)
   view:remove_poi_provider(PROVIDER_ID)
   view:remove_selection_listener(PROVIDER_ID)
+  markdown_tables.hide_source(view)
   view.__markdown_task_source_affinity = nil
   view.__markdown_live_attached = nil
   view.view_icon = nil
   core.log_quiet("Markdown Live Preview detached from %s", view.buffer and view.buffer:get_name() or tostring(view))
+  return true
+end
+
+---Show the caret's table as Markdown source until the caret leaves it.
+function live.show_table_source(view)
+  local line1, line2 = markdown_tables.show_source(view)
+  if not line1 then return false end
+  view:invalidate_line_render(PROVIDER_ID, line1, line2)
+  view:invalidate_visual_metrics(PROVIDER_ID, line1, line2)
+  core.log_quiet("Markdown table at %s:%d shows its source", view.buffer:get_name(), line1)
+  core.redraw = true
   return true
 end
 

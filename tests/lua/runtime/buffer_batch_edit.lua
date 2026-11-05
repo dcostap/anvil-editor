@@ -232,4 +232,19 @@ test.describe("core.buffer batch edit primitive", function()
     test.equal(text(buffer), "aX\nYef\ngé\nZ\n\nij\n")
     test.same(buffer.selections, { 6, 2, 1, 2 })
   end)
+
+  test.it("undoes deletions that touch, such as a line's last character and its line break", function()
+    local buffer = Buffer()
+    set_text(buffer, "| a |\n| b |")
+    -- Backspace with one caret at the end of line 1 and one at the start of line 2.
+    buffer:apply_edits({
+      { line1 = 1, col1 = 5, line2 = 1, col2 = 6, text = "" },
+      { line1 = 1, col1 = 6, line2 = 2, col2 = 1, text = "" },
+    })
+    test.equal(text(buffer), "| a | b |\n")
+    buffer:undo()
+    test.equal(text(buffer), "| a |\n| b |\n")
+    buffer:redo()
+    test.equal(text(buffer), "| a | b |\n")
+  end)
 end)

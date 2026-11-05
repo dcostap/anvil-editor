@@ -19,6 +19,11 @@ local delimiters = {
   ["`"] = { close = "`" },
 }
 
+local markdown_delimiters = {
+  ["*"] = { close = "*" },
+  ["_"] = { close = "_" },
+}
+
 local function line_body(text)
   return tostring(text or ""):gsub("\n$", "")
 end
@@ -256,6 +261,11 @@ TextView.__selection_surround_original_on_text_input = original_on_text_input
 
 function TextView:on_text_input(text)
   local delimiter = delimiters[text]
+  if markdown_delimiters[text] and self.buffer
+    and markdown_live.is_markdown_buffer(self.buffer)
+  then
+    delimiter = markdown_delimiters[text]
+  end
   if not delimiter or not self.buffer or not self.buffer:has_any_selection() then
     return original_on_text_input(self, text)
   end

@@ -22,6 +22,7 @@
 #include "../win32_frame.h"
 #include "../resize_diagnostics.h"
 #include "../shutdown_diagnostics.h"
+#include "../session_end.h"
 #include "../win32_single_instance.h"
 #include "../hosted_surface.h"
 #include "../d3d11_backend.h"
@@ -36,6 +37,7 @@
   #include <fileapi.h>
   #include <psapi.h>
   #include "../utfconv.h"
+  #include "../shared_file.h"
   #define fileno _fileno
   #define ftruncate _chsize
 #else
@@ -1622,7 +1624,8 @@ static int f_replace_file(lua_State *L) {
   LPWSTR wtarget = utfconv_utf8towc(target);
   BOOL replaced = FALSE;
   DWORD error = ERROR_NO_UNICODE_TRANSLATION;
-  if (wsource && wtarget) {
+  HANDLE replacement_lock = NULL;
+  if (wsource && wtarget && (replacement_lock = anvil_file_replace_begin(wtarget, &error))) {
     size_t name_bytes = wcslen(wtarget) * sizeof(WCHAR);
     size_t info_bytes = offsetof(FILE_RENAME_INFO, FileName) + name_bytes + sizeof(WCHAR);
     FILE_RENAME_INFO *info = SDL_calloc(1, info_bytes);
@@ -1660,6 +1663,9 @@ static int f_replace_file(lua_State *L) {
       SDL_free(info);
     }
   }
+  if (replacement_lock) replaced = anvil_file_replace_end(replacement_lock, wtarget, replaced, &error);
+  if (replaced && error == ERROR_RETRY)
+    SDL_Log("File replace: target visibility still delayed after successful rename: %s", target);
   SDL_free(wsource);
   SDL_free(wtarget);
   if (!replaced) {
@@ -1709,11 +1715,8 @@ static int f_load_file(lua_State *L) {
   DWORD error = ERROR_NO_UNICODE_TRANSLATION;
   if (wide) {
     for (size_t attempt = 0;; attempt++) {
-      handle = CreateFileW(wide, GENERIC_READ,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+      handle = anvil_shared_file_open(wide, &error);
       if (handle != INVALID_HANDLE_VALUE) break;
-      error = GetLastError();
       if (!replace_error_is_transient(error) || attempt == SDL_arraysize(replace_retry_delays_ms)) break;
       SDL_Delay(replace_retry_delays_ms[attempt]);
     }
@@ -1956,6 +1959,19 @@ static int f_set_native_single_instance_enabled(lua_State *L) {
 
 static int f_is_hosted_surface(lua_State *L) {
   lua_pushboolean(L, anvil_hosted_surface_active());
+  return 1;
+}
+
+static int f_is_session_ending(lua_State *L) {
+  /* CLI commands need no notification window. A Project starts it when Terminal handling needs it. */
+  anvil_session_end_init(false);
+  lua_pushboolean(L, anvil_session_end_pending());
+  return 1;
+}
+
+static int f_session_end_generation(lua_State *L) {
+  anvil_session_end_init(false);
+  lua_pushinteger(L, anvil_session_end_generation());
   return 1;
 }
 
@@ -2410,6 +2426,13 @@ static int f_move_project(lua_State *L) {
   luaL_argcheck(L, project > 0 && project <= UINT32_MAX, 1, "invalid Project ID");
   luaL_argcheck(L, target >= 0 && target <= UINT32_MAX, 2, "invalid target Window ID");
   lua_pushboolean(L, anvil_hosted_surface_move_project((uint32_t)project, (uint32_t)target));
+  return 1;
+}
+static int f_reorder_project(lua_State *L) {
+  lua_Integer row = luaL_checkinteger(L, 1), anchor = luaL_checkinteger(L, 2);
+  luaL_argcheck(L, row > 0 && row <= UINT32_MAX, 1, "invalid row ID");
+  luaL_argcheck(L, anchor > 0 && anchor <= UINT32_MAX, 2, "invalid anchor row ID");
+  lua_pushboolean(L, anvil_hosted_surface_reorder_project((uint32_t)row, (uint32_t)anchor, lua_toboolean(L, 3)));
   return 1;
 }
 static int f_open_project_window(lua_State *L) {
@@ -3154,6 +3177,8 @@ static const luaL_Reg lib[] = {
   { "timing_capture",        f_timing_capture        },
   { "set_native_single_instance_enabled", f_set_native_single_instance_enabled },
   { "is_hosted_surface",     f_is_hosted_surface     },
+  { "is_session_ending",     f_is_session_ending     },
+  { "session_end_generation", f_session_end_generation },
   { "await_shell_adoption",  f_await_shell_adoption  },
   { "select_project",        f_select_project        },
   { "set_project_panes",     f_set_project_panes     },
@@ -3174,6 +3199,7 @@ static const luaL_Reg lib[] = {
   { "sidebar_surfaces", f_sidebar_surfaces },
   { "activate_sidebar_surface", f_activate_sidebar_surface },
   { "move_project", f_move_project },
+  { "reorder_project", f_reorder_project },
   { "open_project_window",  f_open_project_window  },
   { "open_project_picker",  f_open_project_picker  },
   { "unload_project",        f_unload_project        },

@@ -32,6 +32,50 @@ static void order(void) {
           "New Projects are not first in source order");
   anvil_sidebar_destroy(&model);
 }
+static void check_order(const AnvilSidebarModel *model, const char *const *expected, size_t count,
+                        const char *message) {
+  CHECK(model->count == count, message);
+  for (size_t i = 0; i < count; i++) CHECK(!strcmp(anvil_sidebar_at(model, i)->path, expected[i]), message);
+}
+/* A restart lists recent Projects first, then restores the order that the Sidebar showed. */
+static void saved_order(void) {
+  AnvilSidebarModel model = {0};
+  const char *recents[] = {"C:/New", "C:/A", "C:/C", "C:/B"};
+  CHECK(anvil_sidebar_merge_recents(&model, recents, 4), "Recent source failed");
+  const char *saved[] = {"C:/B", "C:/Gone", "c:\\a", "C:/C"};
+  uint32_t revision = model.revision;
+  anvil_sidebar_apply_order(&model, saved, 4);
+  const char *expected[] = {"C:/New", "C:/B", "C:/A", "C:/C"};
+  check_order(&model, expected, 4, "The saved Sidebar order did not apply after the new Project");
+  CHECK(model.revision != revision, "A changed order did not publish");
+  revision = model.revision;
+  anvil_sidebar_apply_order(&model, saved, 4);
+  CHECK(model.revision == revision, "An unchanged order published again");
+  anvil_sidebar_destroy(&model);
+}
+/* A Sidebar drag places a Project before or after another Project. */
+static void move(void) {
+  AnvilSidebarModel model = {0};
+  const char *paths[] = {"C:/A", "C:/B", "C:/C", "C:/D"};
+  CHECK(anvil_sidebar_merge_recents(&model, paths, 4), "Recent source failed");
+  AnvilSidebarProject *a = anvil_sidebar_find(&model, "C:/A");
+  AnvilSidebarProject *c = anvil_sidebar_find(&model, "C:/C");
+  AnvilSidebarProject *d = anvil_sidebar_find(&model, "C:/D");
+  CHECK(anvil_sidebar_move(&model, a, c, false), "Move before a later Project failed");
+  const char *before[] = {"C:/B", "C:/A", "C:/C", "C:/D"};
+  check_order(&model, before, 4, "Move before a Project placed it elsewhere");
+  CHECK(anvil_sidebar_move(&model, d, a, false), "Move before an earlier Project failed");
+  const char *earlier[] = {"C:/B", "C:/D", "C:/A", "C:/C"};
+  check_order(&model, earlier, 4, "Move up placed the Project elsewhere");
+  CHECK(anvil_sidebar_move(&model, d, c, true), "Move after the last Project failed");
+  const char *after[] = {"C:/B", "C:/A", "C:/C", "C:/D"};
+  check_order(&model, after, 4, "Move after a Project placed it elsewhere");
+  uint32_t revision = model.revision;
+  CHECK(!anvil_sidebar_move(&model, a, c, false) && !anvil_sidebar_move(&model, c, c, true) &&
+            model.revision == revision,
+        "A move to the same place changed the model");
+  anvil_sidebar_destroy(&model);
+}
 static void lifecycle(void) {
   AnvilSidebarModel model = {0};
   const char *paths[] = {"C:/B", "C:/A", "C:/Older"};
@@ -273,6 +317,8 @@ int main(void) {
   panes();
   agent_status();
   order();
+  saved_order();
+  move();
   capacity();
   lifecycle();
   terminals();

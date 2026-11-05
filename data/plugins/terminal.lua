@@ -309,10 +309,14 @@ local function agent_resume_command(record)
   local pid = record.interrupted_pid
   if type(pid) ~= "number" or pid <= 0 or type(record.interrupted_command) ~= "string"
       or record.interrupted_command == "" then return nil end
-  local file = io.open(USERDIR .. PATHSEP .. "terminal-sessions" .. PATHSEP .. record.session_id .. ".agent", "rb")
-  if not file then return nil end
-  local text = file:read(65536) or ""
-  file:close()
+  local text = record.recovery_agent
+  if text == nil then
+    local file = io.open(USERDIR .. PATHSEP .. "terminal-sessions" .. PATHSEP .. record.session_id .. ".agent", "rb")
+    if not file then return nil end
+    text = file:read(65536) or ""
+    file:close()
+  end
+  if type(text) ~= "string" then return nil end
   local report = {}
   for key, value in text:gmatch("([%w_]+)=([^\r\n]*)") do report[key] = value end
   if tonumber(report.pid) ~= pid and tonumber(report.ppid) ~= pid then
@@ -420,7 +424,8 @@ function TerminalView:new(options)
   elseif not session then
     session, start_error, transport_error = native.new(native_options)
   end
-  if record and not session and transport_error ~= 231 and transport_error ~= 5 then
+  -- Only a proven exit or invalid record permits replacement. Other failures prove nothing about the host.
+  if record and not session and (transport_error == 1067 or transport_error == 13) then
     core.log_quiet("Terminal Session %s attach rejected: %s", record.session_id, tostring(start_error))
     native_options.session_id, native_options.host_pid = nil, nil
     native_options.host_creation_time, native_options.pipe_name = nil, nil
@@ -712,9 +717,10 @@ function TerminalView:mark_input_used()
   core.log_quiet("Terminal session %d retained after input", self.log_id)
 end
 
-function TerminalView:write_input(text)
+function TerminalView:write_input(text, resume_agent)
   if not self.session or not text or text == "" then return false end
-  local sent = self.session:write(text)
+  local sent
+  if resume_agent then sent = self.session:resume_agent(text) else sent = self.session:write(text) end
   if sent then self:mark_input_used() end
   return sent
 end
@@ -867,7 +873,7 @@ function TerminalView:adopt_session(session)
 end
 
 -- Runs a process command line, such as an agent resume command, in the shell.
-function TerminalView:run_command_line(text)
+function TerminalView:run_command_line(text, resume_agent)
   if self.state ~= "running" or not self.session or type(text) ~= "string" or
       text == "" or #text > 16384 or text:find("[%z\r\n]") then return false end
   local shell = (self.launch_options.shell or ""):lower()
@@ -881,11 +887,11 @@ function TerminalView:run_command_line(text)
     text = "Start-Process -FilePath " .. quote(exe)
       .. (args ~= "" and " -ArgumentList " .. quote(args) or "") .. " -NoNewWindow -Wait"
   end
-  return self:write_input(text .. "\r")
+  return self:write_input(text .. "\r", resume_agent)
 end
 
 function TerminalView:restore_interrupted_command(record)
-  self.interrupted_input = record.interrupted_input
+  self.interrupted_input = record.interrupted_input or ""
   self.agent_resume_command = agent_resume_command(record)
 end
 
@@ -894,10 +900,12 @@ end
 function TerminalView:return_interrupted_command()
   local resume, text = self.agent_resume_command, self.interrupted_input
   self.agent_resume_command, self.interrupted_input = nil, nil
-  if resume and self:run_command_line(resume) then
+  if resume then
+    if not self:run_command_line(resume, true) then return end
     core.log_quiet("Terminal Session %s resumed its Pi session", tostring(self.session_id))
     return
   end
+  if not self.session:resume_agent() then return end
   -- A control character, such as a line break or Tab, would act as a key at the prompt.
   if type(text) ~= "string" or text == "" or text:find("%c") then return end
   local ok = self:write_input(text)
@@ -906,10 +914,11 @@ function TerminalView:return_interrupted_command()
 end
 
 function TerminalView:revive_lost_host()
-  if self.revival_attempted then return false end
+  local generation = system.session_end_generation()
+  if self.revival_attempted == generation then return false end
   local record = session_record(self.session_id)
   if not record or not system.get_file_info(record.snapshot_path) then return false end
-  self.revival_attempted = true
+  self.revival_attempted = generation
   local native = terminal_native()
   if not native then return false end
   local options = session_colors()
@@ -1100,7 +1109,8 @@ function TerminalView:service_session(include_rows)
   local record_perf = include_rows and perf_is_recording()
   local update_started = record_perf and system.get_time()
   local changed, status = self.session:update()
-  if status.kind == "failed" and status.host_gone and self:revive_lost_host() then return true end
+  if status.kind == "failed" and status.host_gone and not system.is_session_ending()
+      and self:revive_lost_host() then return true end
   if (status.attach_count or 0) > 0 and status.attach_count ~= self.attach_count then self:log_session_attach() end
   if record_perf then
     perf_detail("terminal_native_update_ms", (system.get_time() - update_started) * 1000)
@@ -1110,14 +1120,15 @@ function TerminalView:service_session(include_rows)
     self:end_remote_session(status)
     return true
   end
-  if self.start_pi and status.kind == "running" and not status.replaying then
+  if self.start_pi and status.kind == "running" and not status.replaying and not system.is_session_ending() then
     self.start_pi = nil
     -- Use the shell's Pi command, including its normal PATH and profile setup.
     local sent = self:write_input("pi\r")
     core.log_quiet("Terminal Session %s fresh Pi launch: %s", tostring(self.session_id), sent and "sent" or "failed")
     if not sent then core.error("Could not start Pi in the new Terminal.") end
   end
-  if status.revived and status.kind == "running" and not status.replaying then self:return_interrupted_command() end
+  if status.revived and (self.agent_resume_command or self.interrupted_input) and status.kind == "running"
+      and not status.replaying and not system.is_session_ending() then self:return_interrupted_command() end
   -- The native session may hold a screen update briefly (cursor repaint,
   -- synchronized output). Keep stepping so the held update is published even
   -- when no more output arrives.
@@ -1147,7 +1158,7 @@ function TerminalView:service_session(include_rows)
     end
     if include_rows then core.redraw = true end
   end
-  if self.state == "exited" then
+  if self.state == "exited" and not system.is_session_ending() then
     local pane = panes.pane_for_view(self)
     if pane then
       core.log_quiet("Terminal session %d exited: removing View from %s (exit %s)",
@@ -2469,6 +2480,7 @@ end
 -- The session status for a close or quit decision. An existing host can run a command before its first busy report.
 -- A new shell runs none until its host reports, so it counts as starting.
 function TerminalView:close_status()
+  if not self.session then return { kind = self.state, error = self.launch_error } end
   local _, status = self.session:update()
   if not self.existing_host and status.busy == nil
       and (status.kind == "reconnecting" or status.kind == "running") then
@@ -2477,18 +2489,20 @@ function TerminalView:close_status()
   return status
 end
 
-function TerminalView:can_close(approve)
+function TerminalView:can_close(approve, caller)
   if not self.session then approve(); return end
   local status = self:close_status()
   local idle_pi = status.agent_app == "pi"
     and (status.agent_state == "idle" or status.agent_state == "done")
   -- Another device shows the session, so the close only detaches this View. The shell keeps running.
   local shared = (status.clients or 0) > 1
+  -- The control server supplies this identity, not the tool's arguments. Approve only this session's busy check.
+  local self_close = caller ~= nil and caller ~= "local" and caller == self.session_id
   local busy = status.kind == "reconnecting"
-    or (status.kind == "running" and status.busy ~= false and not idle_pi and not shared)
+    or (status.kind == "running" and status.busy ~= false and not idle_pi and not shared and not self_close)
   if not busy then
-    core.log_quiet("Terminal session %d closed without confirmation: busy=%s app=%s agent=%s",
-      self.log_id, tostring(status.busy), tostring(status.agent_app), tostring(status.agent_state))
+    core.log_quiet("Terminal session %d closed without confirmation: busy=%s app=%s agent=%s self_close=%s",
+      self.log_id, tostring(status.busy), tostring(status.agent_app), tostring(status.agent_state), tostring(self_close))
     approve()
     return
   end
@@ -2706,6 +2720,7 @@ end
 
 -- The idle scheduler calls these only for the selected, visible Project.
 function M.prepare_session()
+  if system.is_session_ending() then return false end
   if not terminal_config.prepare_session or PLATFORM ~= "Windows" or fs.machine then
     discard_prepared(prepared_shell)
     return false
@@ -2723,6 +2738,7 @@ local function running_pi(view)
 end
 
 function M.prepare_pi_session()
+  if system.is_session_ending() then return false end
   if not terminal_config.prepare_pi or PLATFORM ~= "Windows" or fs.machine then
     discard_prepared(prepared_pi)
     pi_source = nil

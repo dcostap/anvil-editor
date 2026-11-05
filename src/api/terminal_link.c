@@ -169,7 +169,7 @@ static DWORD WINAPI link_reader(void *userdata) {
       HANDLE process = NULL; DWORD host_pid = 0; uint64_t replay_bytes = 0;
       ok = anvil_terminal_host_launch(&pipe, &process, &host_pid, &shell_pid, &replay_bytes, id,
         link->launch->userdir, link->launch->project, link->launch->shell, link->launch->cwd, link->launch->datadir,
-        NULL, link->launch->environment, false, &size, &link->launch->scrollback_lines, &link->info, &error);
+        NULL, link->launch->environment, false, &size, &link->launch->scrollback_lines, &link->info, NULL, &error);
       if (!ok && process) {
         TerminateProcess(process, 1);
         /* A new host can write its record before it answers. Nothing can revive its shell. */

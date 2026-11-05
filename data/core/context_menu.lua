@@ -129,6 +129,16 @@ end
 -- Rows that the keyboard and pointer can select: not separators and not the query field.
 local function selectable(row) return not (row.separator or row.field) end
 
+-- The next selectable row after `from` in the direction of `delta`, wrapping around. Without `from`, the first or last.
+local function step(level, from, delta)
+  local count = #level.rows
+  local index = from or (delta > 0 and 0 or count + 1)
+  for _ = 1, count do
+    index = (index + delta - 1) % count + 1
+    if selectable(level.rows[index]) then return index end
+  end
+end
+
 local PATH_SEPARATOR = " \u{203A} "
 
 -- The query field, then the command rows of all levels that match the query, best match first.
@@ -256,7 +266,8 @@ end
 ---@param y number
 ---@param items table[]
 ---@param opts? { button: string?, host: table? } `button` is the mouse button that opened the menu, so its release
----does not choose an item. `host` is the panel that the menu opens over, the Root Panel by default.
+---does not choose an item. A menu without `button` opened from the keyboard, so its first item is selected.
+---`host` is the panel that the menu opens over, the Root Panel by default.
 function context_menu.open(x, y, items, opts)
   context_menu.close()
   local rows = resolve(items)
@@ -276,6 +287,7 @@ function context_menu.open(x, y, items, opts)
     input = LineInput(),
   }
   state.levels = { layout_level(rows, x + 1, y + 1, x - 1) }
+  if not opts.button then state.levels[1].selected = step(state.levels[1], nil, 1) end
   host:push_modal_input(context_menu, { label = "context-menu", handlers = modal_handlers })
   core.log_quiet("Context Menu opened: %d row(s) at %d,%d", #rows, x, y)
   core.redraw = true
@@ -326,15 +338,6 @@ function context_menu.choose(label)
     end
   end
   return false
-end
-
-local function step(level, from, delta)
-  local count = #level.rows
-  local index = from or (delta > 0 and 0 or count + 1)
-  for _ = 1, count do
-    index = (index + delta - 1) % count + 1
-    if selectable(level.rows[index]) then return index end
-  end
 end
 
 -- Lays out the menu's first level again: its own rows without a query, or else the rows that match the query.

@@ -77,6 +77,11 @@ typedef struct {
 /* Source order initializes the list. Later sources add new Projects first.
  * Selecting, loading, and unloading existing Projects never change order. */
 bool anvil_sidebar_merge_recents(AnvilSidebarModel *model, const char *const *paths, size_t count);
+/* Puts the Projects that `paths` names in that order, after the Projects that it does not name. */
+void anvil_sidebar_apply_order(AnvilSidebarModel *model, const char *const *paths, size_t count);
+/* Moves `project` just before or after `anchor`. Returns false when it is already there. */
+bool anvil_sidebar_move(AnvilSidebarModel *model, AnvilSidebarProject *project, AnvilSidebarProject *anchor,
+                        bool after);
 AnvilSidebarProject *anvil_sidebar_find(const AnvilSidebarModel *model, const char *path);
 const AnvilSidebarProject *anvil_sidebar_at(const AnvilSidebarModel *model, size_t index);
 void anvil_sidebar_set_runtime(AnvilSidebarModel *model, AnvilSidebarProject *project, uint32_t id,

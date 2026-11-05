@@ -95,24 +95,40 @@ end
 -- The time at which each Terminal Session needs the user again, in Unix seconds, so a Snooze survives restarts,
 -- sleep and a new Sidebar process.
 local snoozes = {}
+local snoozes_loaded = false
 local function load_snoozes()
-  local ok, saved = pcall(storage.load, "sidebar", "snoozes")
-  if ok and type(saved) == "table" then
-    for session, time in pairs(saved) do
-      if type(session) == "string" and type(time) == "number" then snoozes[session] = time end
-    end
+  local ok, saved, err = pcall(storage.load, "sidebar", "snoozes")
+  if not ok or err or saved ~= nil and type(saved) ~= "table" then
+    core.log_quiet("Sidebar Snoozes not read: %s", tostring(err or saved))
+    return false
   end
+  if type(saved) == "table" then
+    for session, time in pairs(saved) do
+      if type(session) ~= "string" or type(time) ~= "number" then
+        core.log_quiet("Sidebar Snoozes not read: invalid saved time")
+        return false
+      end
+    end
+    for session, time in pairs(saved) do snoozes[session] = time end
+  end
+  snoozes_loaded = true
   core.log_quiet("Sidebar Snoozes: %s", ok and saved and "loaded" or "none")
+  return true
 end
 -- A Snooze whose time has not come stays, even when the model does not list its Terminal Session yet.
-local function save_snoozes()
+local function save_snoozes(session)
+  if not snoozes_loaded then
+    local requested = snoozes[session]
+    if not load_snoozes() then return false, "Saved Snoozes could not be read" end
+    snoozes[session] = requested
+  end
   local live, now, pruned = live_sessions(), os.time(), 0
   for session, time in pairs(snoozes) do
     if not live[session] and time <= now then snoozes[session], pruned = nil, pruned + 1 end
   end
-  local ok, err = pcall(storage.save, "sidebar", "snoozes", snoozes)
-  if not ok then core.log_quiet("Sidebar Snoozes not saved: %s", tostring(err)) end
-  return pruned
+  local ok, saved, err = pcall(storage.save, "sidebar", "snoozes", snoozes)
+  if not ok or not saved then return false, tostring(ok and err or saved) end
+  return true, pruned
 end
 
 -- The shell lists recent Projects from a source that a Project publishes. Windows can all be empty after a
@@ -263,7 +279,9 @@ local function add_surface(id, window)
       if action == "seen" then
         core.log_quiet("Sidebar result read: Window=%d session=%s pruned=%d", id, row_id, save_seen())
       else
-        core.log_quiet("Sidebar Snooze saved: Window=%d session=%s pruned=%d", id, row_id, save_snoozes())
+        local ok, result = save_snoozes(row_id)
+        if not ok then return false, result end
+        core.log_quiet("Sidebar Snooze saved: Window=%d session=%s pruned=%d", id, row_id, result)
       end
       -- Other surfaces show the same result. It is read there too.
       for _, other in pairs(surfaces) do
@@ -305,6 +323,13 @@ local function add_surface(id, window)
         table.concat(context_menu.labels(), "|"), tostring(opened))
       if core.session_log then core.session_log:flush() end
       return
+    end
+    if action == "reorder" then
+      local after = ...
+      local sent = system.reorder_project(row_id, target, after)
+      core.log_quiet("Sidebar reorder: Window=%d row=%d anchor=%d after=%s sent=%s", id, row_id, target,
+        tostring(after), tostring(sent))
+      return sent
     end
     if action == "focus" then
       local sent = system.focus_project_sidebar(true)

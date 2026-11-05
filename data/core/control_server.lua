@@ -90,7 +90,7 @@ function M:dispatch(client, body)
   if request.method == "initialize" then
     return result { protocolVersion = protocol_versions[params.protocolVersion] and params.protocolVersion or "2025-06-18",
       capabilities = {tools = {listChanged = false}}, serverInfo = {name = "anvil", version = "1"},
-      instructions = "Control Anvil through stable Pane and Terminal Session IDs. Preserve focus unless asked. Use request_id for safe retries. A timeout does not cancel work. Close operations keep normal confirmations." }
+      instructions = "Control Anvil through stable Pane and Terminal Session IDs. Preserve focus unless asked. Use request_id for safe retries. A timeout does not cancel work. Close approves only the calling agent's own running Terminal; other Views keep normal confirmation. Self-close can stop the agent before the reply arrives." }
   elseif request.method == "ping" then return result({})
   elseif request.method == "tools/list" then return result {tools = Control.tools}
   elseif request.method == "tools/call" then

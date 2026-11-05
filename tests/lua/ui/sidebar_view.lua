@@ -14,6 +14,12 @@ local function row_y(view, kind, nth, predicate)
   error("no " .. kind .. " row " .. tostring(nth or 1))
 end
 
+-- A left press and its release at the same point.
+local function click(view, x, y, height)
+  view:on_mouse_pressed("left", x, y, height)
+  view:on_mouse_released("left", x, y)
+end
+
 local function count(view, kind)
   local n = 0
   for _, row in ipairs(view.rows) do if row.kind == kind then n = n + 1 end end
@@ -370,9 +376,9 @@ test.describe("Sidebar list actions", function()
     local view = SidebarView(action, {["group:week"]=false})
     view:set_model({{row_id=7,path="C:/B",state="dormant",exists=true,activity=os.time(),terminals={}},
                     {row_id=9,path="C:/A",state="dormant",exists=true,activity=os.time(),terminals={}}})
-    view:on_mouse_pressed("left", 20, row_y(view, "project", 2), 240)
+    click(view, 20, row_y(view, "project", 2), 240)
     view:on_mouse_moved(230, row_y(view, "project", 1), 240)
-    view:on_mouse_pressed("left", 230, row_y(view, "project", 1), 240)
+    click(view, 230, row_y(view, "project", 1), 240)
     test.same(actions, {{"select", 9}, {"select", 7}})
   end)
 
@@ -388,11 +394,11 @@ test.describe("Sidebar list actions", function()
     }
     view:set_model(model, 5)
     for _, x in ipairs {20, 230} do
-      view:on_mouse_pressed("left", x, row_y(view, "project", 2))
+      click(view, x, row_y(view, "project", 2))
       test.equal(count(view, "tab"), 1, "The clicked Project stays expanded")
       view:set_model(model, 5)
       test.equal(count(view, "tab"), 1, "A model refresh expands the clicked Project")
-      view:on_mouse_pressed("left", x, row_y(view, "project", 2))
+      click(view, x, row_y(view, "project", 2))
       test.equal(count(view, "tab"), 2, "The clicked Project stays collapsed")
     end
     test.same(actions, {
@@ -407,7 +413,7 @@ test.describe("Sidebar list actions", function()
     local actions, action = recorder()
     local view = SidebarView(action)
     view:set_model({{row_id=7,path="C:/A",state="ready",panes={},terminals={}}})
-    view:on_mouse_pressed("left", 60, row_y(view, "project"))
+    click(view, 60, row_y(view, "project"))
     test.same(actions, {{"request", "select", "C:/A", {action="open_project"}}})
   end)
 
@@ -418,11 +424,11 @@ test.describe("Sidebar list actions", function()
       panes={active=1,{id="pane",name="A.lua"}}}, windows={{id=5,selected_project=31}}}
     view:set_model(model, 5)
     test.equal(count(view, "tab"), 1)
-    view:on_mouse_pressed("left", 60, row_y(view, "project"))
+    click(view, 60, row_y(view, "project"))
     test.equal(count(view, "tab"), 0, "Clicking the Selected Project does not collapse its children")
     view:set_model(model, 5)
     test.equal(count(view, "tab"), 0, "A model refresh expands the collapsed Project")
-    view:on_mouse_pressed("left", 60, row_y(view, "project"))
+    click(view, 60, row_y(view, "project"))
     test.equal(count(view, "tab"), 1, "Clicking the collapsed Project does not expand its children")
     test.same(actions, {{"collapsed", "project:C:/A", true}, {"collapsed", "project:C:/A", false}})
   end)
@@ -433,7 +439,7 @@ test.describe("Sidebar list actions", function()
     view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,terminals={},
       panes={active=1,{id="pane",name="A.lua"}}},
       windows={{id=5,selected_project=31},{id=8,selected_project=0}}}, 8)
-    view:on_mouse_pressed("left", 60, row_y(view, "project"))
+    click(view, 60, row_y(view, "project"))
     test.same(actions, {{"select", 7}})
   end)
 
@@ -781,7 +787,7 @@ test.describe("Sidebar age groups", function()
     local remote_index = row_index(view, function(row) return row.project == remote end)
     local group_index = row_index(view, function(row) return row.kind == "group" end)
     test.ok(view:row_y(remote_index) + view.rows[remote_index].h <= view:row_y(group_index))
-    view:on_mouse_pressed("left", 20, view:row_y(remote_index) + 2, 400)
+    click(view, 20, view:row_y(remote_index) + 2, 400)
     test.same(actions[#actions], {"select", 2})
     remote.window_id = 7
     view:set_model(model, 7)
@@ -910,7 +916,7 @@ test.describe("Sidebar age groups", function()
       return table.concat(names, ",")
     end
     local function toggle_first()
-      view:on_mouse_pressed("left", 235, row_y(view, "project", 1))
+      click(view, 235, row_y(view, "project", 1))
     end
     view:set_model(model(1), 1)
     test.equal(shown_tabs(), "A.lua", "The Selected Project does not expand")
@@ -1350,6 +1356,24 @@ test.describe("Sidebar Snoozes", function()
     end)
   end)
 
+  test.it("keeps the previous Snooze and sends no Pane change when saving fails", function()
+    with_clock(function()
+      local snoozes, requests = {}, {}
+      local view = SidebarView(function(action, ...)
+        if action == "snooze" then return false, "Access denied" end
+        if action == "request" then requests[#requests + 1] = {...} end
+      end, {}, {}, false, snoozes)
+      view:set_model(model(), 1)
+      local target = {session = "done", pane = "done", path = "C:/P"}
+      test.equal(view:set_snooze_until(target, start + 3600), false)
+      test.is_nil(snoozes.done, "a failed save changed the Snooze")
+      snoozes.done = start + 600
+      test.equal(view:set_snooze_until(target, nil), false)
+      test.equal(snoozes.done, start + 600, "a failed save removed the Snooze")
+      test.same(requests, {}, "a failed save changed the Pane")
+    end)
+  end)
+
   test.it("marks a Terminal's result read, and duplicates or closes a Tab's Pane in its Project", function()
     with_clock(function()
       local actions, action = recorder()
@@ -1421,7 +1445,7 @@ test.describe("Sidebar Snoozes", function()
       test.same(project.pending, {count = 2, kind = "blocked"})
       test.ok(find_text(drawn_texts(view), "2"), "The collapsed Project does not show its count")
       -- Clicking the Project expands it.
-      view:on_mouse_pressed("left", view.width - 16 * SCALE, row_y(view, "project", 1, is_p))
+      click(view, view.width - 16 * SCALE, row_y(view, "project", 1, is_p))
       test.not_ok(find_row(view, "project", is_p).collapsed)
       test.is_nil(find_text(drawn_texts(view), "2"), "The expanded Project still shows its count")
     end)
@@ -1806,7 +1830,7 @@ test.describe("Sidebar motion", function()
       view:set_model({alpha, project(2, "Beta")})
       drawn_texts(view)
       local header = text_y(view, "Alpha")
-      view:on_mouse_pressed("left", 20, view:row_y(1) + 2, 400)
+      click(view, 20, view:row_y(1) + 2, 400)
       for _ = 1, 30 do
         advance(1 / 120)
         local texts = drawn_texts(view)
@@ -1902,6 +1926,86 @@ test.describe("Sidebar motion", function()
       test.ok(moving > first and moving < last, ("The highlight did not glide: %s to %s, at %s"):format(first, last, moving))
       test.equal(last - first, view:row_y(2) - view:row_y(1))
     end)
+  end)
+end)
+
+test.describe("Sidebar Project reorder", function()
+  local function sidebar()
+    local actions, action = recorder()
+    local view = SidebarView(action)
+    view:set_size(300, 800)
+    local function loaded(row_id, name)
+      return {row_id=row_id,id=row_id*11,path="C:/" .. name,state="ready",window_id=5,terminals={},
+        panes={active=1,{id=name,name=name .. ".lua"}}}
+    end
+    local model = {{row_id=9,path="C:/User/scratch",scratch=true,state="dormant",terminals={}},
+      loaded(1, "A"), loaded(2, "B"), loaded(3, "C"), windows={{id=5,selected_project=11}}}
+    view:set_model(model, 5)
+    return view, actions, model
+  end
+
+  local function order(view)
+    local paths = {}
+    for _, row in ipairs(view.rows) do
+      if row.kind == "project" and row.area == "main" then paths[#paths + 1] = row.project.path end
+    end
+    return table.concat(paths, ",")
+  end
+
+  local function project_y(view, path)
+    for index, row in ipairs(view.rows) do
+      if row.kind == "project" and row.project.path == path then return view:row_y(index) + row.h / 2 end
+    end
+    error("no Project " .. path)
+  end
+
+  -- Presses on a Project and moves the pointer by `distance`, through the drag threshold first.
+  local function drag(view, path, distance)
+    local start = project_y(view, path)
+    view:on_mouse_pressed("left", 60, start)
+    view:on_mouse_moved(60, start + (distance < 0 and -10 or 10))
+    view:on_mouse_moved(60, start + distance)
+    return start + distance
+  end
+
+  test.it("acts on a Project click at its release", function()
+    local view, actions = sidebar()
+    local y = project_y(view, "C:/B")
+    view:on_mouse_pressed("left", 60, y)
+    test.same(actions, {}, "The press acted before its release")
+    view:on_mouse_released("left", 60, y)
+    test.same(actions, {{"collapsed", "project:C:/B", true}})
+    view:on_mouse_pressed("left", 60, project_y(view, "C:/C"))
+    view:on_mouse_released("left", 60, project_y(view, "C:/A"))
+    test.equal(#actions, 1, "A release on another row acted")
+  end)
+
+  test.it("moves the other Projects out of the way during a drag and asks the shell for the new place", function()
+    local view, actions, model = sidebar()
+    local step = project_y(view, "C:/B") - project_y(view, "C:/A")
+    local y = drag(view, "C:/A", 2 * step)
+    test.equal(order(view), "C:/User/scratch,C:/B,C:/C,C:/A", "The other Projects did not make room")
+    view:on_mouse_released("left", 60, y)
+    test.same(actions, {{"reorder", 1, 3, true}})
+    -- The list keeps the new order until the shell reports it.
+    view:set_model(model, 5)
+    test.equal(order(view), "C:/User/scratch,C:/B,C:/C,C:/A")
+    model[2], model[3], model[4] = model[3], model[4], model[2]
+    view:set_model(model, 5)
+    y = drag(view, "C:/A", -2 * step)
+    test.equal(order(view), "C:/User/scratch,C:/A,C:/B,C:/C")
+    view:on_mouse_released("left", 60, y)
+    test.same(actions[2], {"reorder", 1, 2, false})
+  end)
+
+  test.it("sends nothing for a drag that ends at its own place or leaves the Window", function()
+    local view, actions = sidebar()
+    local step = project_y(view, "C:/B") - project_y(view, "C:/A")
+    view:on_mouse_released("left", 60, drag(view, "C:/B", step / 4))
+    drag(view, "C:/A", 2 * step)
+    view:on_mouse_left()
+    test.equal(order(view), "C:/User/scratch,C:/A,C:/B,C:/C")
+    test.same(actions, {})
   end)
 end)
 

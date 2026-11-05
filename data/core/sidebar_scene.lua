@@ -88,7 +88,7 @@ function Scene.model()
   }
 end
 
--- mode is nil, "search" or "drag". The second Project is collapsed, so it shows only its agent's question and its
+-- mode is nil, "search", "drag", "reorder" or "unload". The second Project is collapsed, so it shows only its agent's question and its
 -- count. docs-site is collapsed in the main list, and its agent asks a question. The first Project's "npm run dev" Pane is snoozed. A Dormant Project in the collapsed "Last week" group
 -- has an Unread Result.
 function Scene:new(mode)
@@ -119,6 +119,7 @@ function Scene:new(mode)
   end
   self.unload = mode == "unload"
   self.drag = mode == "drag"
+  self.reorder = mode == "reorder"
   self.hover_arrow = mode == nil
 end
 
@@ -139,12 +140,33 @@ function Scene:start_drag(width, height)
   for _ = 1, 90 do sidebar:step(1 / 30) end
 end
 
+local function project_y(sidebar, id)
+  for index, row in ipairs(sidebar.rows) do
+    if row.kind == "project" and row.project.id == id then return sidebar:row_y(index) + row.h / 2 end
+  end
+end
+
+-- Holds docs-site part of the way over api-server, after api-server moved down out of its way.
+function Scene:start_reorder(width, height)
+  local sidebar = self.sidebar
+  sidebar:set_size(width, height)
+  local x, start = 110 * SCALE, project_y(sidebar, 8)
+  sidebar:on_mouse_pressed("left", x, start)
+  sidebar:on_mouse_moved(x, start - 10 * SCALE)
+  sidebar:on_mouse_moved(x, project_y(sidebar, 7) + 8 * SCALE)
+  for _ = 1, 90 do sidebar:step(1 / 30) end
+end
+
 function Scene:draw()
   renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, style.background)
   local width, height = math.floor(280 * SCALE), math.floor(self.position.y + self.size.y)
   if self.drag then
     self.drag = false
     self:start_drag(width, height)
+  end
+  if self.reorder then
+    self.reorder = false
+    self:start_reorder(width, height)
   end
   if self.hover_arrow then
     self.hover_arrow = false

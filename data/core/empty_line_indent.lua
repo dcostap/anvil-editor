@@ -1,7 +1,7 @@
 -- Shown Indentation: an empty line holds no indentation, but a caret on it
 -- shows where Enter at the end of the line above would put the caret.
--- Tab, Shift+Tab, End and Backspace change the level of that caret without an
--- edit, until the caret leaves the line. Typing and paste write the
+-- Tab, Shift+Tab, End, Backspace and typed spaces or tabs change the level of
+-- that caret without an edit, until the caret leaves the line. Typing and paste write the
 -- indentation first. A line that the user's edits leave holding only
 -- whitespace becomes empty when no caret is on it, or at once when it holds
 -- the Shown Indentation and the caret is at its end.
@@ -190,6 +190,25 @@ function empty_line_indent.shift_level(buffer, outdent)
   return true
 end
 
+---Spaces or tabs typed when each caret is on an empty line: move each caret
+---by that whitespace without an edit, as the cleanup would leave it.
+---Returns true when it applied.
+---@param buffer core.buffer
+---@param text string
+---@return boolean
+function empty_line_indent.type_whitespace(buffer, text)
+  if config.keep_newline_whitespace or not text:find("^[\t ]+$") then return false end
+  local lines = {}
+  for _, line1, col1, line2, col2 in buffer:get_selections(true) do
+    if line1 ~= line2 or col1 ~= 1 or col2 ~= 1 or buffer.lines[line1] ~= "\n" then return false end
+    lines[#lines + 1] = line1
+  end
+  for _, line in ipairs(lines) do
+    set_level(buffer, line, empty_line_indent.get(buffer, line) .. text)
+  end
+  return true
+end
+
 ---End on an empty line moves its caret to `block_indent` without an edit.
 ---Returns true when the caret is on an empty line.
 ---@param buffer core.buffer
@@ -239,10 +258,11 @@ function empty_line_indent.caret_offset(view, line, col)
   if not found then return 0 end
   local indent, reference = empty_line_indent.get(view.buffer, line), found.reference
   if indent == "" then return 0 end
-  local lead = view.buffer.lines[reference]:match("^[\t ]*")
+  -- A level that the user chose can show without a line above.
+  local lead = reference and view.buffer.lines[reference]:match("^[\t ]*")
   -- Measure on the line above, so the caret lines up with its text in any
   -- layout, such as Markdown Live Preview.
-  if indent:sub(1, #lead) == lead then
+  if lead and indent:sub(1, #lead) == lead then
     return view:get_col_x_offset(reference, #lead + 1)
       + indent_width(view, indent:sub(#lead + 1))
       - view:get_col_x_offset(line, 1)

@@ -1,9 +1,10 @@
 -- mod-version:3
 -- Seam: owned hosted Windows on a private desktop. A right-click on a Project's Sidebar row opens its Context
 -- Menu, which the shell shows above the Project. Keys choose an item, and its command acts on that Project.
+-- project-reorder drags one loaded Project's row past the other. The shell keeps the new order and saves it.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
-if action ~= "project-menu" and action ~= "project-menu-background" then return end
-local background = action == "project-menu-background"
+if action ~= "project-menu" and action ~= "project-menu-background" and action ~= "project-reorder" then return end
+local background = action == "project-menu-background" or action == "project-reorder"
 local core, common = require "core", require "core.common"
 local ffi = require "ffi"
 ffi.cdef [[
@@ -93,6 +94,48 @@ if path:match("/driver$") then
      end
     end
    end, 30, "The Project is not ready in the Sidebar")
+   if action == "project-reorder" then
+    local function order()
+     local paths = {}
+     for _, item in ipairs(model().items) do
+      if item.kind == "project" and item.window_id == 1 then paths[#paths + 1] = item.path:gsub("\\", "/") end
+     end
+     return table.concat(paths, ",")
+    end
+    local before = order()
+    local first_path = before:match("^[^,]+")
+    local second_path = before:match(",([^,]+)$")
+    local rows = {}
+    for _, item in ipairs(model().items) do
+     if item.kind == "project" then rows[item.path:gsub("\\", "/")] = item.row_id end
+    end
+    local from = find_row(window, rows[first_path], "The first Project has no Sidebar row")
+    local to = find_row(window, rows[second_path], "The second Project has no Sidebar row")
+    -- Press on the first row, move down past the second row in steps, then release there.
+    local x, y = from % 65536, math.floor(from / 65536)
+    local target = math.floor(to / 65536) + math.floor(150 * scale)
+    user32.PostMessageW(window, 0x804a, 1, from)
+    for step = 1, 10 do
+     coroutine.yield(.03)
+     user32.PostMessageW(window, 0x804a, 0, x + math.floor(y + (target - y) * step / 10) * 65536)
+    end
+    coroutine.yield(.3)
+    user32.PostMessageW(window, 0x804a, 2, x + target * 65536)
+    local after = second_path .. "," .. first_path
+    wait(function() return order() == after end, 10, "The drag did not reorder the Projects: " .. order())
+    -- Window Close ends the shell, which saves the Sidebar order.
+    user32.PostMessageW(window, 0x10, 0, 0)
+    wait(function() return not shell:running() end, 20, "Window Close did not end the shell")
+    local state = assert(io.open(root .. "/user/shell-windows.state", "rb"))
+    local saved = {}
+    for line in state:read("*a"):gmatch("project %d+ %d+ ([^\r\n]+)") do
+     line = line:gsub("\\", "/")
+     if line == first_path or line == second_path then saved[#saved + 1] = line end
+    end
+    state:close()
+    assert(table.concat(saved, ",") == after, "The state file lost the dragged order: " .. table.concat(saved, ","))
+    return
+   end
    local point = find_row(window, original.row_id, "The Project has no Sidebar row")
    -- Right-clicks the Project's row with the shell's routing probe message: posted Win32 input is ignored on an
    -- inactive desktop. Checks the menu's items and chooses `choice`, or nothing for "".

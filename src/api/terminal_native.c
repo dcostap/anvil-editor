@@ -22,6 +22,7 @@
 #include "../terminal_contrast.h"
 #include "../terminal_model.h"
 #include "../terminal_host.h"
+#include "../session_end.h"
 #include "../terminal_link.h"
 
 #define TERMINAL_READ_BUDGET (128u * 1024u)
@@ -57,6 +58,7 @@ typedef struct {
   AnvilIPCPipe pipe;
   HANDLE process;
   DWORD host_pid, shell_pid;
+  uint32_t client_id;
   uint64_t attached_at, replay_bytes;
   uint64_t attach_count;
   char id[ANVIL_TERMINAL_ID_LENGTH + 1];
@@ -356,6 +358,13 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
       continue;
     }
     if (header.type == ANVIL_TERMINAL_EXITED && !replaying && header.size == sizeof(AnvilTerminalExited)) {
+      /* An older host can report the shell's shutdown as an ordinary exit. Keep its View and
+         recover after cancellation or restart, rather than saving an empty Pane. */
+      if (anvil_session_end_pending()) {
+        session->read_error = ERROR_PROCESS_ABORTED;
+        InterlockedExchange(&session->read_failed, 1);
+        break;
+      }
       AnvilTerminalExited exited; memcpy(&exited, buffer, sizeof(exited));
       session->exit_code = exited.exit_code;
       session->exit_code_known = true;
@@ -880,6 +889,7 @@ typedef struct {
   HANDLE process;
   uint16_t type;
   DWORD host_pid;
+  uint32_t client_id;
   char id[ANVIL_TERMINAL_ID_LENGTH + 1];
 } FinalCommand;
 
@@ -898,7 +908,7 @@ void anvil_terminal_wait_for_close(void) {
 static DWORD WINAPI final_command_main(void *userdata) {
   FinalCommand *command = userdata;
   DWORD error;
-  anvil_terminal_host_control(command->process, command->host_pid, command->id, command->type, &error);
+  anvil_terminal_host_control(command->process, command->host_pid, command->id, command->type, command->client_id, &error);
   if (ends_host(command->type)) InterlockedDecrement(&pending_close_commands);
   if (command->process) CloseHandle(command->process);
   free(command);
@@ -916,7 +926,7 @@ static void send_final_command(TerminalSession *session, HANDLE process, uint16_
   if (!process || !session->attach_count) { if (process) CloseHandle(process); return; }
   FinalCommand *command = malloc(sizeof(*command));
   if (!command) { CloseHandle(process); return; }
-  *command = (FinalCommand){ .process = process, .type = type, .host_pid = session->host_pid };
+  *command = (FinalCommand){ .process = process, .type = type, .host_pid = session->host_pid, .client_id = session->client_id };
   memcpy(command->id, session->id, sizeof(command->id));
   if (ends_host(type)) InterlockedIncrement(&pending_close_commands);
   HANDLE thread = CreateThread(NULL, 0, final_command_main, command, 0, NULL);
@@ -935,6 +945,7 @@ struct ReconnectJob {
   AnvilIPCPipe pipe;
   HANDLE process;
   DWORD host_pid, shell_pid, error;
+  uint32_t client_id;
   AnvilTerminalSize size;
   char id[ANVIL_TERMINAL_ID_LENGTH + 1];
   bool connected, prepared, wait_for_exit;
@@ -968,9 +979,9 @@ static DWORD WINAPI reconnect_main(void *userdata) {
     ? anvil_terminal_host_launch(&job->pipe, &job->process, &job->host_pid, &job->shell_pid,
         &replay_bytes, job->id, job->userdir, job->project, job->shell, job->cwd, job->datadir,
         job->revive_from, job->environment, job->prepared, &job->size,
-        job->has_scrollback_lines ? &job->scrollback_lines : NULL, NULL, &job->error)
+        job->has_scrollback_lines ? &job->scrollback_lines : NULL, NULL, &job->client_id, &job->error)
     : anvil_terminal_host_connect(&job->pipe, job->process, job->host_pid,
-        &job->shell_pid, job->id, &job->size, &job->error);
+        &job->shell_pid, job->id, &job->size, &job->client_id, &job->error);
   if (!connected && job->userdir && job->process) {
     TerminateProcess(job->process, 1);
     /* A new host can write its record before it answers. Nothing can revive its shell. */
@@ -987,7 +998,7 @@ static DWORD WINAPI reconnect_main(void *userdata) {
     anvil_ipc_pipe_write(&job->pipe, final_type, NULL, 0, NULL, 0);
   } else if (final_type) {
     anvil_ipc_pipe_close(&job->pipe);
-    anvil_terminal_host_control(job->process, job->host_pid, job->id, final_type, &job->error);
+    anvil_terminal_host_control(job->process, job->host_pid, job->id, final_type, job->client_id, &job->error);
   }
   /* Reconnecting views request updates while this job runs. Do not access SDL:
      a cancelled job can outlive the editor's window and Lua state. */
@@ -1108,6 +1119,7 @@ static bool cancel_reconnect(TerminalSession *session, uint16_t type) {
     session->attach_count = session->attach_count ? session->attach_count : 1;
     if (job->userdir) {
       session->host_pid = job->host_pid;
+      session->client_id = job->client_id;
       memcpy(session->id, job->id, sizeof(session->id));
       send_final_command(session, retain_handle(job->process), type);
       owns_command = true;
@@ -1532,20 +1544,21 @@ static int f_terminal_new(lua_State *L) {
     char expected[128]; snprintf(expected, sizeof(expected), "\\\\.\\pipe\\anvil-terminal-%s", id);
     if (anvil_terminal_id_valid(id) && pid > 0 && (uint64_t)pid <= UINT32_MAX &&
         name && strcmp(name, expected) == 0) {
-      session->process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
-        FALSE, (DWORD)pid);
-      if (anvil_terminal_host_identity(session->process, (DWORD)pid, created)) {
+      session->process = anvil_terminal_host_open((DWORD)pid, created, &error);
+      if (session->process) {
+        /* Keep the verified handle while requesting optional termination rights. */
+        HANDLE full = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+          FALSE, (DWORD)pid);
+        if (full) {
+          if (anvil_terminal_host_identity(full, (DWORD)pid, created)) {
+            close_handle(&session->process); session->process = full;
+          } else CloseHandle(full);
+        }
         session->host_pid = (DWORD)pid;
         memcpy(session->id, id, sizeof(session->id));
         session->initial_restore = true;
         session->preserve_grid = !has_size;
         started = true; /* The worker authenticates the pipe and waits for WELCOME. */
-      } else {
-        DWORD open_error = GetLastError();
-        bool dead = session->process && WaitForSingleObject(session->process, 0) == WAIT_OBJECT_0;
-        error = dead || (!session->process && open_error == ERROR_INVALID_PARAMETER)
-          ? ERROR_PROCESS_ABORTED : open_error == ERROR_ACCESS_DENIED ? ERROR_ACCESS_DENIED : ERROR_INVALID_DATA;
-        close_handle(&session->process);
       }
     } else error = ERROR_INVALID_DATA;
   } else {
@@ -1562,7 +1575,7 @@ static int f_terminal_new(lua_State *L) {
     close_session(session);
     lua_pop(L, 1);
     lua_pushnil(L);
-    push_windows_error(L, "Could not start Terminal Session process", error);
+    push_windows_error(L, id ? "Could not attach to Terminal Session" : "Could not start Terminal Session process", error);
     lua_pushinteger(L, error);
     return 3;
   }
@@ -1779,6 +1792,7 @@ static bool service_transport(TerminalSession *session) {
       }
       handle = job->pipe.handle; job->pipe.handle = NULL;
       session->shell_pid = job->shell_pid;
+      session->client_id = job->client_id;
       session->cols = job->size.cols; session->rows = job->size.rows;
       session->cell_width = job->size.cell_width; session->cell_height = job->size.cell_height;
     }
@@ -2015,6 +2029,15 @@ static int f_terminal_write(lua_State *L) {
   }
   lua_pushstring(L, terminal_state_name(session->state));
   return 2;
+}
+
+static int f_terminal_resume_agent(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  size_t length = 0;
+  const char *text = luaL_optlstring(L, 2, "", &length);
+  lua_pushboolean(L, session->revived && !session->viewer &&
+    enqueue_record(session, ANVIL_TERMINAL_RESUME_AGENT, (const uint8_t *)text, length));
+  return 1;
 }
 
 static int f_terminal_trace(lua_State *L) {
@@ -4259,6 +4282,7 @@ static int f_terminal_gc(lua_State *L) {
 static const luaL_Reg terminal_methods[] = {
   { "update", f_terminal_update },
   { "write", f_terminal_write },
+  { "resume_agent", f_terminal_resume_agent },
   { "trace", f_terminal_trace },
   { "paste", f_terminal_paste },
   { "resize", f_terminal_resize },

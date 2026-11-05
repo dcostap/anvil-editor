@@ -45,21 +45,31 @@ test.describe("storage", function()
 
   test.it("loads a complete value while another worker saves the same key", function(context)
     local key = "shared"
-    storage.save(MODULE, key, { value = 0 })
+    test.ok(storage.save(MODULE, key, { value = 0 }))
     local errors = {}
     context.core_error = core.error
     core.error = function(...) errors[#errors + 1] = string.format(...) end
-    context.pool = require("core.worker_pool").new { worker_count = 1 }
-    local result
+    context.pool = require("core.worker_pool").new { worker_count = 3 }
+    local result, readers = nil, {}
     context.pool:submit {
       kind = "worker_pool_test",
       payload = { op = "storage_save_loop", userdir = USERDIR, module = MODULE, key = key, count = 1000 },
       on_result = function(message) if message.type == "final" then result = message.payload end end,
       on_error = function(message) result = { failures = { tostring(message.error) } } end,
     }
+    for _ = 1, 2 do
+      context.pool:submit {
+        kind = "worker_pool_test",
+        payload = { op = "storage_load_loop", userdir = USERDIR, module = MODULE, key = key, count = 1000 },
+        on_result = function(message)
+          if message.type == "final" then readers[#readers + 1] = message.payload end
+        end,
+        on_error = function(message) readers[#readers + 1] = { error = tostring(message.error) } end,
+      }
+    end
     local loads, missing = 0, 0
     local deadline = system.get_time() + 120
-    while not result do
+    while not result or #readers ~= 2 do
       for _ = 1, 20 do
         local value = storage.load(MODULE, key)
         loads = loads + 1
@@ -73,6 +83,10 @@ test.describe("storage", function()
     test.equal(missing, 0, "loads without a value: " .. table.concat(errors, "\n"))
     test.equal(table.concat(errors, "\n"), "")
     test.equal(table.concat(result.failures, "\n"), "")
+    for _, reader in ipairs(readers) do
+      test.is_nil(reader.error)
+      test.equal(reader.missing, 0, "a worker read a missing value during replacement")
+    end
     test.equal(storage.load(MODULE, key).value, 1000)
   end)
 

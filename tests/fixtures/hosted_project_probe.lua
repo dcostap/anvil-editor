@@ -150,6 +150,26 @@ local function owned_visible_window(pid)
   callback:free()
   return found
 end
+local function dialog_text(window)
+  local process = require "core.process"
+  local script = ([=[
+    Add-Type -AssemblyName UIAutomationClient
+    $dialog = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]%d)
+    $dialog.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name }
+  ]=]):format(tonumber(ffi.cast("intptr_t", window)))
+  local proc = assert(process.start({"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script}))
+  local parts = {}
+  local done = wait_for(function()
+    parts[#parts + 1] = proc:read_stdout(4096) or ""
+    return not proc:running()
+  end, 15)
+  if not done then proc:terminate() end
+  assert(done, "close warning accessibility read timed out")
+  parts[#parts + 1] = proc:read_stdout(4096) or ""
+  assert(proc:returncode() == 0, "close warning accessibility read failed")
+  return table.concat(parts)
+end
 local project = core.root_project().path:gsub("\\", "/")
 if project:find("/driver$", 1) then
   core.add_background_thread(function()
@@ -534,6 +554,9 @@ if project:find("/driver$", 1) then
         local dialog
         assert(wait_for(function() dialog = owned_dialog(state, "Anvil - Project not responding"); return dialog end, 7), "close timeout did not offer Wait or Force close")
         assert(user32.GetWindow(dialog, 4) == window, "close warning did not use the shell parent")
+        local warning_text = dialog_text(dialog):gsub("\\", "/")
+        assert(warning_text:find(root .. "/Project", 1, true),
+          "close warning did not identify the Project path: " .. warning_text)
         local choice = action == "force-close" and 6 or 7
         user32.PostMessageW(dialog, 0x466, choice, 0) -- TaskDialog button action
         user32.PostMessageW(dialog, 0x111, choice, 0) -- MessageBox fallback

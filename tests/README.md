@@ -86,6 +86,31 @@ meson test -C build-windows-x86_64 anvil:lua-ui --test-args tests/lua/markdown_s
 
 This audit is outside the default `runtime/` and `ui/` test folders. It checks 137 selected CommonMark 0.31.2 examples, not the complete specification. [Markdown fixtures](fixtures/markdown/README.md) describes the scope, source license, importer, and reviewed differences. Do not change an Anvil rule solely to make the standards audit pass.
 
+## Edit history
+
+Two files play random edits, then check that Undo goes back through each earlier text in order and that Redo goes forward again:
+
+- `runtime/buffer_edit_history.lua` applies batch edits, reloads and saved-state checkpoints to a Buffer. A second generator checks timed edit groups with the normal undo merge timeout.
+- `ui/edit_history_commands.lua` runs editing commands, typing and paste in a Text View and Markdown Live Preview. It checks table source editing with 17 carets, table cells, lists, tasks, quotes, Selection Surrounding and the per-caret clipboard.
+
+A scenario is plain data: a start text and a list of steps. A step sets carets, then runs a command or types text. A step can also be an undo or a redo. A seed makes the same scenarios on each run. `tests/fixtures/edit_history.lua` holds the history model and the shrinker.
+
+Steps can keep the previous selections, so one command's carets reach the next command. Generators use up to 24 carets or edits, Unicode, tabs and CRLF paste. Command tests reject logged errors and rejected transactions. They check final newlines and caret bounds after each step and each undo or redo. Shrinking keeps input carets at UTF-8 boundaries.
+
+The runtime test checks saved history positions, including a new edit after Undo. Saved Buffers use history positions for dirty state, not byte equality. Restoring the same text with a separate edit can still leave a Buffer dirty.
+
+A failure prints the seed and the smallest scenario that still fails. Copy that scenario into the file's `regressions` list, then fix the bug. These variables change a run:
+
+- `ANVIL_EDIT_HISTORY_RUNS`: the number of seeds for each generator in the file. The defaults take a few seconds. Large Live Preview runs take longer because each edit waits for its Markdown parse.
+- `ANVIL_EDIT_HISTORY_SEED`: the first seed.
+- `ANVIL_EDIT_HISTORY_ALL=1`: report all failing seeds, not only the first.
+
+```sh
+ANVIL_EDIT_HISTORY_RUNS=5000 meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/edit_history_commands.lua --print-errorlogs
+```
+
+Meson prints only the last 100 lines of a failure. Read `build-windows-x86_64/meson-logs/testlog.txt` for a long report.
+
 ## Known failures
 
 ### Terminal input after a width change: PSReadLine 2.4.5

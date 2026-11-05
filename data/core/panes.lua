@@ -1603,7 +1603,7 @@ function M.close_view(target, opts)
     after_mutation("closed View in " .. pane.id)
     committed = true
   end
-  if opts.force or not view.can_close then approved() else view:can_close(approved) end
+  if opts.force or not view.can_close then approved() else view:can_close(approved, opts.close_caller) end
   return committed, failure
 end
 
@@ -1639,7 +1639,7 @@ end
 
 -- Snoozes `target`: it leaves its Pane Group for its own Snoozed one. If it had focus, the nearest Pane that
 -- navigation reaches takes focus. Without one, the Snoozed Pane stays shown.
-function M.snooze(target)
+function M.snooze(target, keep_focus)
   local pane = M.find(target)
   if not pane then return nil, "invalid Pane" end
   if pane.group.snoozed then return pane end
@@ -1653,7 +1653,9 @@ function M.snooze(target)
     create_group(pane, group_index(old_group) + 1)
   end
   pane.group.snoozed = true
-  if M.active_pane == pane or M.visible_group_value == pane.group then
+  if keep_focus and M.active_pane == pane then
+    M.visible_group_value = pane.group
+  elseif not keep_focus and (M.active_pane == pane or M.visible_group_value == pane.group) then
     local survivors = old_group ~= pane.group and layout.leaves(old_group.root) or {}
     local next_pane = nearest_after_removal(survivors, member_index)
       or nearest_after_removal(M.navigable(), old_index)
@@ -1832,14 +1834,14 @@ local function close_candidates(pane)
   return result
 end
 
-local function authorize_close(pane, force, done)
+local function authorize_close(pane, force, done, caller)
   local views = close_candidates(pane)
   local index = 1
   local function next_view()
     local view = views[index]
     if not view then done(); return end
     index = index + 1
-    if force or not view.can_close then next_view() else view:can_close(next_view) end
+    if force or not view.can_close then next_view() else view:can_close(next_view, caller) end
   end
   next_view()
 end
@@ -1860,7 +1862,7 @@ function M.close(target, opts)
     end
     commit_close(pane)
   end
-  authorize_close(pane, opts.force or opts.discard, close)
+  authorize_close(pane, opts.force or opts.discard, close, opts.close_caller)
   return committed
 end
 

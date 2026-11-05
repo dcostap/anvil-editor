@@ -136,6 +136,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_REOPEN_CLOSED_WINDOW = 112,
   /* Load a Project in this Window without selecting it. Payload: NUL-terminated path. */
   ANVIL_SURFACE_MSG_LOAD_PROJECT = 113,
+  /* The Sidebar places a Project before or after another Project. Payload: AnvilSurfaceReorderProject. */
+  ANVIL_SURFACE_MSG_REORDER_PROJECT = 114,
 } AnvilSurfaceMessageType;
 
 typedef enum {
@@ -158,6 +160,8 @@ typedef struct {
   uint32_t type;
 } AnvilSidebarSurfacePacket;
 typedef struct { uint32_t project_id, target_window_id; } AnvilSurfaceMoveProject;
+/* Project Sidebar row ids. `after` is 1 to place the Project after its anchor, or 0 to place it before. */
+typedef struct { uint32_t row_id, anchor_row_id, after; } AnvilSurfaceReorderProject;
 /* The Zoom as ratios over the base scale. The message carries it, so receivers never read a file that a
  * Project replaces during a fast Zoom. */
 typedef struct { double interface_zoom, code_zoom; } AnvilSurfaceZoom;

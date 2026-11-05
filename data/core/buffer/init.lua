@@ -2062,6 +2062,16 @@ local function pop_undo(self, undo_stack, redo_stack, modified)
       owner_id = cmd.selection_owner_id,
       restore_observer_state = cmd.observer_state,
     })
+    if tx.rejected then
+      -- Keep the step. Older steps only fit the text from before it.
+      undo_stack.idx = undo_stack.idx + 1
+      core.error("Could not %s the last edit in %s: %s", is_redo and "redo" or "undo", self:get_name(), tx.reason)
+      if modified then
+        if fs.machine then machine_record_due(self) end
+        self:on_text_change("undo")
+      end
+      return
+    end
     if tx and tx.applied and tx.changed then
       local before_selections, before_last_selection, after_selections, after_last_selection
       if is_redo then
@@ -2493,14 +2503,26 @@ function Buffer:apply_edits(edits, opts)
   local position, map_position = edit_position_map(old_lines, normalized, old_index)
 
   local delta = 0
-  for _, edit in ipairs(normalized) do
+  local inverse_edits = transaction.inverse_edits
+  for i, edit in ipairs(normalized) do
     local new_start = edit.start_offset + delta
     local new_end = new_start + #edit.text
     local il1, ic1 = position(new_start)
     local il2, ic2 = position(new_end)
-    transaction.inverse_edits[#transaction.inverse_edits + 1] = {
-      line1 = il1, col1 = ic1, line2 = il2, col2 = ic2, text = edit.old_text,
-    }
+    -- Two deletions that touch, such as the last character of a line and
+    -- its line break, undo as one insert. Two inserts at one position are
+    -- an overlap for apply_edits. Other edits keep their own undo edit, so
+    -- each undo edit changes the text.
+    local previous_edit = normalized[i - 1]
+    if previous_edit and previous_edit.end_offset == edit.start_offset
+    and previous_edit.text == "" and edit.text == "" then
+      local previous = inverse_edits[#inverse_edits]
+      previous.text = previous.text .. edit.old_text
+    else
+      inverse_edits[#inverse_edits + 1] = {
+        line1 = il1, col1 = ic1, line2 = il2, col2 = ic2, text = edit.old_text,
+      }
+    end
     transaction.changed_ranges[#transaction.changed_ranges + 1] = {
       old_line1 = edit.line1,
       old_line2 = edit.line2,
@@ -2634,6 +2656,7 @@ function Buffer:raw_insert(line, col, text, undo_stack, time, restore_observer_s
   local observer_transaction = { observer_state = observer_state, restore_observer_state = restore_observer_state }
   observer_transaction.edits = { { line1 = line, col1 = col, line2 = line, col2 = col, text = text } }
   self:notify_text_change_listeners("before", { type = "raw_insert", kind = "raw_insert", line = line, col = col, text = text, transaction = observer_transaction })
+  push_selection_undo(self, undo_stack, time)
   local start_offset = position_to_offset(line_offsets_for(self.lines), line, col)
   -- split text into lines and merge with line at insertion point
   local lines = split_lines(text)
@@ -2662,7 +2685,6 @@ function Buffer:raw_insert(line, col, text, undo_stack, time, restore_observer_s
 
   -- push undo
   local line2, col2 = self:position_offset(line, col, #text)
-  push_selection_undo(self, undo_stack, time)
   push_undo(undo_stack, time, "remove", line, col, line2, col2).observer_state = observer_state
 
   -- update highlighter and assure selection is in bounds
@@ -3128,7 +3150,7 @@ function Buffer:replace(fn)
       type = "replace",
       selections = selections,
       last_selection = last_selection,
-      merge_cursors = false,
+      merge_cursors = true,
     })
   end
   return results
@@ -3137,7 +3159,6 @@ end
 
 function Buffer:delete_to_cursor(idx, ...)
   local edits = {}
-  local final_by_idx = {}
   local final_positions = {}
   for sidx, line1, col1, line2, col2 in self:get_selections(true, idx) do
     local start_line, start_col, end_line, end_col = line1, col1, line2, col2
@@ -3149,7 +3170,6 @@ function Buffer:delete_to_cursor(idx, ...)
       line1 = start_line, col1 = start_col, line2 = end_line, col2 = end_col,
       text = "", idx = sidx,
     }
-    final_by_idx[sidx] = "start"
     final_positions[sidx] = { start_line, start_col }
   end
   if #edits == 0 then return end
@@ -3158,8 +3178,18 @@ function Buffer:delete_to_cursor(idx, ...)
   local changed_final_by_idx = {}
   for _, edit in ipairs(normalized) do
     if edit.start_offset ~= edit.end_offset then
-      changed_edits[#changed_edits + 1] = edit
-      changed_final_by_idx[edit.idx] = "start"
+      -- Distinct carets can delete the same text, for example to a line's
+      -- start. Delete the union once. Other carets map into that removal.
+      local previous = changed_edits[#changed_edits]
+      if previous and edit.start_offset <= previous.end_offset then
+        if edit.end_offset > previous.end_offset then
+          previous.end_offset = edit.end_offset
+          previous.line2, previous.col2 = edit.line2, edit.col2
+        end
+      else
+        changed_edits[#changed_edits + 1] = edit
+        changed_final_by_idx[edit.idx] = "start"
+      end
     end
   end
   local new_selections
@@ -3172,7 +3202,7 @@ function Buffer:delete_to_cursor(idx, ...)
       new_selections[i], new_selections[i + 1], new_selections[i + 2], new_selections[i + 3] = pos[1], pos[2], pos[1], pos[2]
     end
   end
-  local tx = self:apply_edits(edits, {
+  local tx = self:apply_edits(changed_edits, {
     type = "remove",
     selections = new_selections,
     last_selection = self.last_selection,

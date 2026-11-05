@@ -1,5 +1,5 @@
 -- Snoozed Panes. The Project Sidebar saves each Snooze time by Terminal Session, then asks this Project to snooze
--- or wake the Terminal's Pane. This Project wakes its Snoozed Panes when their time comes, also after a restart.
+-- or wake the Terminal's Pane. Saved times also repair a Workspace whose Snooze flags were not saved yet.
 -- A Snoozed Pane without a saved time wakes too, so a lost time cannot hide a Pane.
 local core = require "core"
 local panes = require "core.panes"
@@ -44,13 +44,33 @@ end
 -- Wakes the Snoozed Panes whose time has come, oldest Snooze first, so the ones that come due together share
 -- Pane Groups. An unreadable times file wakes nothing.
 function snoozed_panes.check()
-  local ok, times = pcall(storage.load, "sidebar", "snoozes")
-  if not ok then
-    core.log_quiet("Snoozed Panes: times not read: %s", tostring(times))
+  local ok, times, err = pcall(storage.load, "sidebar", "snoozes")
+  if not ok or err or times ~= nil and type(times) ~= "table" then
+    core.log_quiet("Snoozed Panes: times not read: %s", tostring(err or times))
     return 0
   end
   times = type(times) == "table" and times or {}
+  for session, time in pairs(times) do
+    if type(session) ~= "string" or type(time) ~= "number" then
+      core.log_quiet("Snoozed Panes: invalid saved time")
+      return 0
+    end
+  end
   local now, due = os.time(), {}
+  -- Snapshot the list: snoozing a Pane changes its group and the group order.
+  local recovered = 0
+  for _, pane in ipairs(panes.ordered()) do
+    local view = pane.current_view
+    local time = view and view.terminal_view and times[view.session_id]
+    if type(time) == "number" and time > now and not pane.group.snoozed then
+      panes.snooze(pane, true)
+      recovered = recovered + 1
+    end
+  end
+  if recovered > 0 then
+    core.log_quiet("Snoozed Panes: restored %d saved Snooze(s)", recovered)
+    changed()
+  end
   for _, group in ipairs(panes.groups) do
     if group.snoozed then
       local pane = layout.leaves(group.root)[1]

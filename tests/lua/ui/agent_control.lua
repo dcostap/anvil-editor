@@ -3,6 +3,7 @@ local panes = require "core.panes"
 local RootPanel = require "core.rootpanel"
 local View = require "core.view"
 local test = require "core.test"
+local ready = dofile("tests/fixtures/terminal_ready.lua")
 
 -- Seam: editor control operations, shared by MCP and other local clients.
 test.describe("Agent editor control", function()
@@ -51,6 +52,104 @@ test.describe("Agent editor control", function()
     approve()
     test.is_nil(panes.find(pane.id))
   end)
+
+  test.it("lists other Panes when a restored Terminal cannot open its session", function()
+    local terminal = require "plugins.terminal"
+    local id = "0123456789abcdef0123456789abcdef"
+    local other = panes.create { factory = function() return View() end }
+    -- The native record reader is the external boundary. Access failure leaves no native session.
+    terminal._set_native_for_tests { read_session_record = function() return nil, 5 end }
+    local view
+    local ok, err = pcall(function()
+      view = terminal.open { session_id = id, placement = "new" }
+      local pane = panes.pane_for_view(view)
+      local state = control:call("workspace_state", {}, id)
+      test.ok(state.panes[other.id], "the failed Terminal hid another Pane")
+      test.equal(state.panes[pane.id].terminal_state, "failed")
+      test.equal(state.terminals[id].state, "failed")
+      test.equal(state.caller_pane, pane.id)
+    end)
+    if view then view:on_close() end
+    terminal._set_native_for_tests(nil)
+    test.ok(ok, err)
+  end)
+
+  for _, case in ipairs {
+    {tool = "pane"}, {tool = "terminal"},
+    {tool = "pane", history = true}, {tool = "terminal", history = true},
+  } do
+    local tool = case.tool
+    local name = case.history and " close preserves unsaved Views beside the caller's Terminal"
+      or " close accepts the caller's own busy Terminal but asks for another caller"
+    test.it(tool .. name, function()
+      test.skip_if(PLATFORM ~= "Windows", "Windows Terminal test")
+      local terminal = require "plugins.terminal"
+      local command = require "core.command"
+      local folder = USERDIR .. "/control-close-" .. tool
+      require("core.common").mkdirp(folder)
+      terminal._set_native_for_tests(nil)
+      local view, pane, editor
+      local ok, err = pcall(function()
+        view = ready(terminal.open {cwd = folder, shell = "powershell.exe -NoLogo -NoProfile", placement = "new"})
+        pane = panes.pane_for_view(view)
+        if case.history then
+          local Editor = require "core.editor"
+          view:mark_input_used()
+          editor = panes.place(function() return Editor(core.open_buffer()) end, {pane = pane, placement = "current"})
+          editor.buffer:insert(1, 1, "keep this text")
+          test.ok(panes.pane_for_view(view) == pane and pane.current_view == editor)
+        end
+        test.ok(view:write_input("Start-Sleep 60\r"))
+        local deadline = system.get_time() + 30
+        repeat
+          view:service_session(true)
+          if view:close_status().busy == true then break end
+          coroutine.yield(0.01)
+        until system.get_time() >= deadline
+        test.equal(view:close_status().busy, true, "the shell did not report its running command")
+        local args = {action = "close", request_id = "close-other"}
+        args[tool] = tool == "pane" and pane.id or view.session_id
+        local result
+        if not case.history then
+          result = control:call(tool, args, "another-terminal")
+          test.equal(result.status, "confirmation_required")
+          test.ok(core.nag_view.visible)
+          test.ok(command.perform "core:select_dialog_no")
+          test.ok(panes.contains(pane))
+        end
+        args.request_id = "close-self"
+        result = control:call(tool, args, view.session_id)
+        if case.history and tool == "pane" then
+          test.equal(result.status, "confirmation_required")
+          test.equal(core.active_view, core.global_prompt_bar)
+          test.equal(view.state, "running")
+          test.ok(command.perform "core:close_prompt")
+          test.equal(editor.buffer:get_text(1, 1, 1, math.huge), "keep this text")
+          test.ok(editor.buffer:is_dirty())
+          -- Remove only the unsaved View. The next request must approve its Terminal again.
+          test.ok(panes.close_view(pane, {view = editor, force = true}))
+          args.request_id = "close-self-after-cancel"
+          result = control:call(tool, args, view.session_id)
+        end
+        test.equal(result.status, "closed")
+        test.equal(view.state, "closed")
+        test.not_ok(core.nag_view.visible)
+        if case.history and tool == "terminal" then
+          test.equal(pane.current_view, editor)
+          test.equal(editor.buffer:get_text(1, 1, 1, math.huge), "keep this text")
+          test.ok(editor.buffer:is_dirty())
+        else
+          test.not_ok(panes.contains(pane))
+        end
+      end)
+      if core.nag_view.visible then command.perform "core:select_dialog_no" end
+      if core.active_view == core.global_prompt_bar then command.perform "core:close_prompt" end
+      if pane and panes.contains(pane) then panes.close(pane, {force = true})
+      elseif view then view:on_close() end
+      test.ok(test.remove_tree(folder))
+      assert(ok, err)
+    end)
+  end
 
   test.it("sets and removes the caller's Snooze through the Sidebar without taking another Pane's focus", function()
     local storage = require "core.storage"
@@ -224,13 +323,17 @@ test.describe("Agent editor control", function()
     file:write("first\nsecond\n"); file:close()
     local source = panes.create {factory = function() return View() end}
     local terminal
+    local terminal_config = require("core.config").plugins.terminal
+    local shell = terminal_config.shell
+    -- The default shell is unset.
+    terminal_config.shell = nil
     local ok, err = pcall(function()
       local opened = control:call("open_file", {path = folder .. "/note.txt", line = 2,
         pane = source.id, placement = "split", direction = "right", request_id = "open-note"}, "test-client")
       test.equal(panes.find(opened.pane).current_view.buffer.abs_filename:gsub("\\", "/"), folder .. "/note.txt")
       test.equal(panes.active(), source)
-      terminal = control:call("terminal_start", {cwd = folder, pane = source.id, placement = "split",
-        direction = "down", request_id = "open-terminal"}, "test-client")
+      terminal = control:call("terminal_start", {cwd = folder, executable = "hostname.exe", pane = source.id,
+        placement = "split", direction = "down", request_id = "open-terminal"}, "test-client")
       test.equal(panes.active(), source)
       local deadline = system.get_time() + 30
       local result
@@ -244,6 +347,7 @@ test.describe("Agent editor control", function()
       test.ok(result.terminal)
       test.equal(panes.active(), source)
     end)
+    terminal_config.shell = shell
     if terminal and panes.find(terminal.pane) then panes.close(terminal.pane, {force = true}) end
     test.ok(test.remove_tree(folder))
     assert(ok, err)

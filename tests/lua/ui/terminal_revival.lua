@@ -353,6 +353,13 @@ test.describe("Terminal revival", function()
       test.ok(wait_for(view, function()
         return screen_text(view):gsub("\\", "/"):lower():find(cwd:gsub("\\", "/"):lower(), 1, true)
       end), "new shell did not start in the saved directory")
+      -- A second host failure without another shutdown must not start a shell/profile loop.
+      local second = kernel.OpenProcess(0x100001, 0, view.session:stats().host_pid)
+      local killed = kernel.TerminateProcess(second, 99)
+      local stopped = kernel.WaitForSingleObject(second, 5000)
+      kernel.CloseHandle(second)
+      test.ok(killed ~= 0 and stopped == 0)
+      test.ok(wait_for(view, function() return view.state == "failed" end), "host failures caused repeated automatic revival")
     end)
     view:on_close()
     if kernel.WaitForSingleObject(handle, 0) == 258 then kernel.TerminateProcess(handle, 99) end

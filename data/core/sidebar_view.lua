@@ -14,7 +14,8 @@ local icons = require("core.context_menu").icons
 -- A right-click on a Project or a Terminal Tab, or the Context Menu key on the cursor's row, opens that row's
 -- Context Menu. The menu can extend over the Project, because the Sidebar's surface covers the whole Window.
 -- A click on a loaded Project in this Window toggles its children. An empty Project opens its initial Pane.
--- Dormant Projects and Projects in other Windows open on click.
+-- Dormant Projects and Projects in other Windows open on click. Project clicks act at the release, because a press
+-- on a loaded Project can start a drag that reorders the loaded Projects. See "Project reorder".
 -- Left on a collapsed loaded Project asks to unload it. A second Left unloads it; any other input cancels.
 -- Layout: a search field below the window caption, then the main list: the Scratch Project's section in every Window,
 -- then loaded Projects with their Tabs, one for each Pane, and the Terminal Sessions that no Pane shows.
@@ -24,6 +25,7 @@ local icons = require("core.context_menu").icons
 -- Each area that overflows shows a scrollbar; its thumb drags and its track pages.
 -- Inside a Project, older Terminal Sessions fold into collapsible groups the same way.
 -- Rows keep the shell's order. Age only chooses a row's group, so rows never swap places under the pointer.
+-- The shell saves that order, so it stays after a restart.
 -- Rows, highlights, chevrons and scrolling animate toward the layout. Hit testing uses the layout itself, so a
 -- click acts on the row that moves to the pointer.
 -- Drag and drop: a dragged Tab or a drop from another application lands on a line between Tabs, which places a new
@@ -363,11 +365,18 @@ end
 
 function SidebarView:set_snooze_until(target, time)
   local session = target.session
+  local previous = self.snoozes[session]
   self.snoozes[session] = time
+  local saved, err = self.action("snooze", session)
+  if saved == false then
+    self.snoozes[session] = previous
+    core.error("Could not save Snooze: %s", tostring(err))
+    return false
+  end
   core.log_quiet("Sidebar Snooze: session=%s Pane=%s until=%s", session, tostring(target.pane), tostring(time))
-  self.action("snooze", session)
   self.action("request", "direct", target.path, {action = time and "snooze" or "unsnooze", pane = target.pane})
   self:rebuild_rows()
+  return true
 end
 
 -- Agent control requests use absolute times, so delivery does not extend the requested Snooze.
@@ -382,8 +391,7 @@ function SidebarView:on_snooze_request(text)
     core.log_quiet("Sidebar Snooze request rejected")
     return false
   end
-  self:set_snooze_until(request, request.until_time)
-  return true
+  return self:set_snooze_until(request, request.until_time)
 end
 
 -- Closes the hours field. With `accept`, a whole number of hours above zero sets the Snooze; other text keeps
@@ -638,6 +646,10 @@ function SidebarView:look(item, session, now)
 end
 
 function SidebarView:rebuild_rows()
+  local pending = self.reorder_pending
+  if pending and (system.get_time() >= pending.deadline or self:has_order(pending.order)) then
+    self.reorder_pending = nil
+  end
   local cursor_row = self:get_cursor()
   local cursor_key = row_key(cursor_row)
   local searching = self.query ~= ""
@@ -810,7 +822,7 @@ function SidebarView:rebuild_rows()
     if project.scratch then add_loaded(project) end
   end
   local grouped = {}
-  for _, project in ipairs(projects) do
+  for _, project in ipairs(self:ordered_projects(projects)) do
     if project.scratch then
       -- It is listed first.
     elseif in_other_window(project, window_id) then
@@ -871,7 +883,9 @@ function SidebarView:rebuild_rows()
     if #rows == 0 then rows = {{kind="empty",label="No matches",area="main",h=m.project,id_key="empty"}} end
   end
   local main_y, bottom_y = 0, 0
+  local lift = self.lift
   for _, row in ipairs(rows) do
+    row.lifted = lift and row.area == "main" and row.project and row.project.path == lift.path or nil
     if row.area == "main" then
       row.gap = row.kind == "project" and main_y > 0 or nil
       if row.gap then main_y = main_y + m.project_gap end
@@ -934,6 +948,7 @@ function SidebarView:rebuild_rows()
   self:clamp_scroll()
   if self.focused then self:reveal_cursor() end
   if self.drag then self:update_drag() end
+  if self.reorder and not self.reordering then self:update_reorder() end
   if self.hover_y then self:update_hover() end
 end
 
@@ -1098,14 +1113,21 @@ function SidebarView:on_mouse_pressed(button, x, y)
     return
   end
   if row.kind ~= "project" then return end
-  if button == "left" and row.project.state ~= "dormant" and row.key
-    and not in_other_window(row.project, self.window_id) then
-    self:toggle(row.key, row.collapsed)
-    return
-  end
-  if button == "middle" then
+  if button == "left" then
+    -- A click acts at its release. A loaded Project's press becomes a reorder drag when the pointer moves far enough.
+    self.press = {key = row.id_key, x = x, y = y, click = true}
+  elseif button == "middle" then
     -- A middle-click unloads at its release, so a press that moves to another row does nothing.
     if not row.project.scratch then self.click_row = {button = button, row_id = row.project.row_id} end
+  end
+end
+
+-- A click on a Project row: a loaded Project in this Window toggles its children, other Projects open.
+function SidebarView:click_project(key, x, y)
+  local row = x >= 0 and x < self.width and self:row_at(y)
+  if not row or row.id_key ~= key then return end
+  if row.project.state ~= "dormant" and row.key and not in_other_window(row.project, self.window_id) then
+    self:toggle(row.key, row.collapsed)
   else
     self:activate_row(row)
   end
@@ -1113,8 +1135,17 @@ end
 
 function SidebarView:on_mouse_released(button, x, y)
   if button == "left" then
+    local press = self.press
     self.scroll_drag, self.press, self.selecting = nil, nil, nil
-    if self.drag then self:finish_drag(x, y) end
+    if self.reorder then
+      self.reorder.y = y
+      self:update_reorder()
+      if self.reorder then self:end_reorder(true) end
+    elseif self.drag then
+      self:finish_drag(x, y)
+    elseif press and press.click then
+      self:click_project(press.key, x, y)
+    end
     return
   end
   local pressed = self.click_row
@@ -1133,7 +1164,7 @@ end
 
 function SidebarView:update_hover()
   local inside = self.hover_x and self.hover_x >= 0 and self.hover_x < self.width
-  local row = inside and not self.drag and self:row_at(self.hover_y)
+  local row = inside and not self.drag and not self.reorder and self:row_at(self.hover_y)
   local hover = row and row.kind ~= "empty" and row or nil
   local scrollbar = self.hover_x and self:scrollbar_at(self.hover_x, self.hover_y)
   if scrollbar then hover = nil end
@@ -1150,7 +1181,7 @@ end
 
 -- Show the original Terminal title only when the Tab hides part of it.
 function SidebarView:get_tooltip()
-  if self.scroll_drag or self.drag then return nil end
+  if self.scroll_drag or self.drag or self.reorder then return nil end
   local row = self.hover
   local item = row and row.tab
   if not item or not item.terminal then return nil end
@@ -1174,12 +1205,24 @@ function SidebarView:on_mouse_moved(x, y)
   end
   local press = self.press
   if press and math.max(math.abs(x - press.x), math.abs(y - press.y)) >= DRAG_THRESHOLD * SCALE then
-    self.press = nil
     local row, index = self:row_by_key(press.key)
-    if row then
-      self.drag = {key = press.key, row = row}
-      self.card = {row = row, from = self:card_slot(row, self:row_y(index)), lift = 0, alpha = 1}
+    if not press.click then
+      self.press = nil
+      if row then
+        self.drag = {key = press.key, row = row}
+        self.card = {row = row, from = self:card_slot(row, self:row_y(index)), lift = 0, alpha = 1}
+      end
+    elseif row and self:can_reorder(row) then
+      -- Other Project rows stay a click while the pointer stays on them.
+      self.press = nil
+      self:begin_reorder(row, press.y)
     end
+  end
+  if self.reorder then
+    self.reorder.y = y
+    self:update_reorder()
+    self:update_hover()
+    return true
   end
   if self.drag then
     self.drag.x, self.drag.y = x, y
@@ -1198,12 +1241,13 @@ function SidebarView:on_mouse_left()
   self.hover_x, self.hover_y = nil, nil
   self.scroll_drag, self.click_row, self.press, self.selecting = nil, nil, nil, nil
   if self.drag then self:end_drag(nil) end
+  if self.reorder then self:end_reorder(false) end
   return self:update_hover()
 end
 
 -- The pointer's cursor: a hand over rows that act on a click.
 function SidebarView:pointer_cursor()
-  if self.drag or self.scroll_drag or not self.hover_x then return "arrow" end
+  if self.drag or self.reorder or self.scroll_drag or not self.hover_x then return "arrow" end
   if self.selecting or self:in_search(self.hover_x, self.hover_y) then return "ibeam" end
   if self.press then return "hand" end
   if self:scrollbar_at(self.hover_x, self.hover_y) then return "arrow" end
@@ -1445,6 +1489,159 @@ function SidebarView:on_drop_complete()
   return true
 end
 
+------------------------------------------------------------------------------------------------------------------
+-- Project reorder
+--
+-- A loaded Project in the main list drags with its children. The other Projects slide out of its way while it moves.
+-- The drop asks the shell to place it beside a neighbour. All Windows share the shell's order, and the shell saves it.
+
+-- The main list's loaded Projects, each with its children, in layout order. A block starts at the gap above its
+-- Project row. The Scratch Project stays first and does not move.
+function SidebarView:reorder_blocks()
+  local m = self:metrics()
+  local blocks, current = {}, nil
+  for _, row in ipairs(self.rows) do
+    if row.area == "main" then
+      if row.kind == "project" then
+        current = nil
+        if not row.project.scratch then
+          current = {project = row.project, top = row.y - (row.gap and m.project_gap or 0), bottom = row.y + row.h}
+          blocks[#blocks + 1] = current
+        end
+      elseif current then
+        current.bottom = row.y + row.h
+      end
+    end
+  end
+  return blocks
+end
+
+function SidebarView:can_reorder(row)
+  return row.kind == "project" and row.area == "main" and not row.project.scratch and self.query == ""
+    and #self:reorder_blocks() > 1
+end
+
+function SidebarView:begin_reorder(row, y)
+  local path = row.project.path
+  local grab
+  for _, block in ipairs(self:reorder_blocks()) do
+    if block.project.path == path then grab = y - self:area_origin("main") - block.top end
+  end
+  self.reorder = {path = path, row_id = row.project.row_id, grab = grab, y = y}
+  self.lift = {path = path, amount = 0}
+  self.reorder.start = self:reorder_paths()
+  self.reorder.order = self.reorder.start
+  core.log_quiet("Sidebar reorder started: Window=%s Project=%s", tostring(self.window_id), path)
+  self:rebuild_rows()
+end
+
+function SidebarView:reorder_paths()
+  local paths = {}
+  for _, block in ipairs(self:reorder_blocks()) do paths[#paths + 1] = block.project.path end
+  return paths
+end
+
+-- The dragged block passes a neighbour when its edge crosses that neighbour's middle. Moving back needs the same
+-- crossing, so the order does not flicker at one point.
+function SidebarView:update_reorder()
+  local drag = self.reorder
+  for _ = 1, 64 do
+    local blocks = self:reorder_blocks()
+    local index
+    for i, block in ipairs(blocks) do
+      if block.project.path == drag.path then index = i end
+    end
+    -- The Project unloaded or left this Window during the drag.
+    if not index then self:end_reorder(false); return end
+    drag.order = self:reorder_paths()
+    local own, previous, next = blocks[index], blocks[index - 1], blocks[index + 1]
+    local h = own.bottom - own.top
+    drag.min, drag.max = blocks[1].top, blocks[#blocks].bottom - h
+    local top = drag.y - drag.grab - self:area_origin("main")
+    local to
+    if previous and top < (previous.top + previous.bottom) / 2 then to = index - 1
+    elseif next and top + h > (next.top + next.bottom) / 2 then to = index + 1 end
+    if not to then return end
+    table.remove(drag.order, index)
+    table.insert(drag.order, to, drag.path)
+    self.reordering = true
+    self:rebuild_rows()
+    self.reordering = nil
+  end
+end
+
+-- Ends the drag. With `commit`, a changed order goes to the shell. The list keeps the new order until the shell
+-- reports it. The block settles into its place.
+function SidebarView:end_reorder(commit)
+  local drag = self.reorder
+  self.reorder = nil
+  local order, present = drag.order, {}
+  for _, path in ipairs(order) do present[path] = true end
+  local start = {}
+  for _, path in ipairs(drag.start) do
+    if present[path] then start[#start + 1] = path end
+  end
+  local index
+  for i, path in ipairs(order) do
+    if path == drag.path then index = i end
+  end
+  local changed = index and #start == #order and table.concat(start, "\0") ~= table.concat(order, "\0")
+  if commit and changed then
+    local anchor_path, after = order[index + 1], false
+    if not anchor_path then anchor_path, after = order[index - 1], true end
+    local anchor
+    for _, project in ipairs(self.projects or {}) do
+      if project.path == anchor_path then anchor = project.row_id end
+    end
+    self.reorder_pending = {order = order, deadline = system.get_time() + PENDING_MOVE}
+    core.log_quiet("Sidebar reorder dropped: Project=%s anchor=%s after=%s", drag.path, tostring(anchor_path),
+      tostring(after))
+    self.action("reorder", drag.row_id, anchor, after)
+  else
+    core.log_quiet("Sidebar reorder ended without a change: Project=%s commit=%s", drag.path, tostring(commit))
+  end
+  self:rebuild_rows()
+end
+
+-- `projects` with the loaded Projects that a drag or its pending result names put in that order. The other
+-- Projects keep their places.
+function SidebarView:ordered_projects(projects)
+  local order = self.reorder and self.reorder.order or self.reorder_pending and self.reorder_pending.order
+  if not order then return projects end
+  local by_path, slots, listed = {}, {}, {}
+  for index, project in ipairs(projects) do
+    by_path[project.path] = project
+    listed[index] = project
+  end
+  local named = {}
+  for _, path in ipairs(order) do named[path] = by_path[path] ~= nil end
+  for index, project in ipairs(projects) do
+    if named[project.path] then slots[#slots + 1] = index end
+  end
+  local next = 0
+  for _, path in ipairs(order) do
+    if named[path] then
+      next = next + 1
+      listed[slots[next]] = by_path[path]
+    end
+  end
+  return listed
+end
+
+-- Whether the shell's order already has the loaded Projects that `order` names in that order.
+function SidebarView:has_order(order)
+  local named, index = {}, 0
+  for _, path in ipairs(order) do named[path] = true end
+  for _, project in ipairs(self.projects or {}) do
+    if named[project.path] then
+      index = index + 1
+      while order[index] and order[index] ~= project.path do index = index + 1 end
+      if not order[index] then return false end
+    end
+  end
+  return true
+end
+
 -- Scrolls the area under the pointer.
 function SidebarView:on_mouse_wheel(amount, height, y)
   if height then self.view_h = height end
@@ -1456,6 +1653,7 @@ function SidebarView:on_mouse_wheel(amount, height, y)
   end
   self:clamp_scroll()
   if self.drag then self:update_drag() end
+  if self.reorder then self:update_reorder() end
   if self.hover_y then self:update_hover() end
 end
 
@@ -1478,6 +1676,7 @@ function SidebarView:step(dt)
     self.chosen = nil
     self:rebuild_rows()
   end
+  if self.reorder_pending and system.get_time() >= self.reorder_pending.deadline then self:rebuild_rows() end
   local ask = self.unload_ask
   if ask and (system.get_time() >= ask.deadline or not self:row_by_key(ask.key)) then
     ask, self.unload_ask = nil, nil
@@ -1518,6 +1717,30 @@ function SidebarView:step(dt)
       moving = true
     end
   end
+  -- A dragged Project scrolls only the main list, where it can move.
+  local reorder = self.reorder
+  if reorder and dt > 0 then
+    local field, speed = self:autoscroll_speed(reorder.y)
+    local before = field == "scroll" and self.scroll
+    if before then
+      self.scroll = before + speed * dt
+      self:clamp_scroll()
+    end
+    if before and self.scroll ~= before then
+      shown.scroll = self.scroll
+      self:update_reorder()
+      moving = true
+    end
+  end
+  -- The dragged Project lifts above the list, and lands again after the drop.
+  local lift = self.lift
+  if lift then
+    lift.amount = ease(lift.amount, self.reorder and 1 or 0, FADE_RATE, 0.01)
+    if lift.amount <= 0 then
+      self.lift = nil
+      for _, row in ipairs(self.rows) do row.lifted = nil end
+    end
+  end
   local card = self.card
   if card and self.drag then
     card.lift = ease(card.lift, 1, FADE_RATE, 0.01)
@@ -1548,11 +1771,24 @@ function SidebarView:step(dt)
   -- A row that leaves fades where it was.
   local old, visuals = self.visuals, {}
   local previous
+  -- The dragged Project's rows follow the pointer at once, inside the main list's loaded Projects.
+  local lifted_top, lifted_base
+  if reorder then
+    local m = self:metrics()
+    for _, row in ipairs(self.rows) do
+      if row.lifted and row.kind == "project" then lifted_base = row.y - (row.gap and m.project_gap or 0) end
+    end
+    lifted_top = common.clamp(reorder.y - reorder.grab - self:shown_origin("main"), reorder.min or -math.huge,
+      reorder.max or math.huge)
+  end
   for _, row in ipairs(self.rows) do
     local key, before = row.id_key, old[row.id_key]
     local visual
     local dim = self:dim_target(row)
-    if before and before.area == row.area and not before.entering then
+    if lifted_base and row.lifted then
+      visual = {area = row.area, y = lifted_top + row.y - lifted_base, alpha = 1, dim = dim}
+      moving = true
+    elseif before and before.area == row.area and not before.entering then
       visual = {area = row.area, y = ease(before.y, row.y + (nudge[key] or 0), MOVE_RATE * ROW_SPEED),
         alpha = ease(before.alpha, 1, FADE_RATE * ROW_SPEED, 0.01), dim = ease(before.dim, dim, FADE_RATE * 1.5, 0.01)}
     elseif animate then
@@ -1623,7 +1859,7 @@ function SidebarView:step(dt)
         key = row.id_key}
       return
     end
-    if jump and current.key ~= row.id_key then
+    if jump and current.key ~= row.id_key or row.lifted then
       current.x, current.y, current.h = x, row.shown.y, row.h
     else
       current.x = ease(current.x, x, move)
@@ -1881,9 +2117,11 @@ function SidebarView:draw_project(row, y, width, now)
   local project = row.project
   local dormant = project.state == "dormant"
   -- A line in the middle of the gap above the Project separates it from the rows above. It takes no input.
-  if row.gap then
+  -- A lifted Project leaves its line behind until it lands.
+  local line = row.lifted and self.lift and 1 - self.lift.amount or 1
+  if row.gap and line > 0.01 then
     renderer.draw_rect(left, math.floor(y - m.project_gap / 2), right - left, math.max(1, math.floor(SCALE)),
-      style.divider)
+      fade(style.divider, line))
   end
   local asked = self.unload_shown
   local asking = asked and asked.key == row.id_key and asked.amount
@@ -2039,14 +2277,14 @@ end
 
 -- Pane Groups with several Panes: a rail beside their Tabs, in the accent colour for the visible group. A drop line
 -- inside a group tints its Tabs: the new Pane joins that group.
-function SidebarView:draw_containers(area, width)
+function SidebarView:draw_containers(area, width, lifted)
   local m = self:metrics()
   local origin = self:shown_origin(area)
   local drop, mark = self:drop_target(), self.marks.drop
   local join = drop and drop.kind == "line" and drop.inset and mark and drop.row.id_key
   local first, joined
   for _, row in ipairs(self.rows) do
-    if row.area == area and row.bracket and row.shown then
+    if row.area == area and row.bracket and row.shown and (row.lifted or false) == lifted then
       if row.bracket.first or not first then first, joined = row, false end
       joined = joined or row.id_key == join
       if row.bracket.last then
@@ -2069,13 +2307,14 @@ function SidebarView:draw_containers(area, width)
   end
 end
 
-function SidebarView:draw_mark(name, area, width, color)
+function SidebarView:draw_mark(name, area, width, color, lifted)
   local mark = self.marks[name]
   if not mark or mark.area ~= area or mark.alpha <= 0.01 then return end
+  local visual = self.visuals[mark.key]
+  if (visual and visual.row and visual.row.lifted or false) ~= lifted then return end
   local m = self:metrics()
   local y = self:shown_origin(area) + mark.y
   local h = mark.h - 2
-  local visual = self.visuals[mark.key]
   if visual and visual.clip_bottom then h = math.min(h, self:shown_origin(area) + visual.clip_bottom - y - 1) end
   if h > 0 then
     renderer.draw_rounded_rect(mark.x, y + 1, width - m.pad - mark.x, h, m.radius, fade(color, mark.alpha))
@@ -2105,6 +2344,37 @@ function SidebarView:draw_drop(area, above)
   if mark.box < 0.99 then
     local radius = 3 * SCALE
     dot(x + radius, y + h / 2, radius, fade(style.drop_target_accent, mark.alpha * (1 - mark.box)))
+  end
+end
+
+-- The dragged Project and its children, above the other rows on a card with a shadow that deepens as it lifts.
+function SidebarView:draw_lifted(width, active_color, now)
+  local lift = self.lift
+  if not lift then return end
+  local top, bottom
+  for _, row in ipairs(self.rows) do
+    if row.lifted then
+      top = math.min(top or math.huge, row.shown.y)
+      bottom = math.max(bottom or -math.huge, row.shown.y + row.h)
+    end
+  end
+  if not top then return end
+  local m = self:metrics()
+  local origin = self:shown_origin("main")
+  local x, w = m.pad - 2 * SCALE, width - 2 * m.pad + 4 * SCALE
+  local y, h = math.floor(origin + top + 0.5), math.floor(bottom - top + 0.5)
+  local amount = lift.amount
+  for i = 3, 1, -1 do
+    local spread = i * SCALE
+    renderer.draw_rounded_rect(x - spread, y - spread + 2 * SCALE * amount, w + 2 * spread, h + 2 * spread,
+      m.radius + spread, fade(style.sidebar_shadow, amount * (4 - i) / 6))
+  end
+  renderer.draw_rounded_rect(x, y, w, h, m.radius, fade(style.sidebar_card, amount))
+  self:draw_containers("main", width, true)
+  self:draw_mark("active", "main", width, active_color, true)
+  self:draw_mark("cursor", "main", width, style.row_selection, true)
+  for _, row in ipairs(self.rows) do
+    if row.lifted then self:draw_shown(row, origin + row.shown.y, row.shown.alpha * row.shown.dim, width, now) end
   end
 end
 
@@ -2242,17 +2512,17 @@ function SidebarView:draw(width, height)
   for _, area in ipairs({{"main", top, main_bottom}, {"bottom", bottom_top, height}}) do
     local name, area_top, area_bottom = area[1], area[2], area[3]
     renderer.set_clip_rect(0, area_top, width, math.max(0, area_bottom - area_top))
-    self:draw_containers(name, width)
-    self:draw_mark("hover", name, width, style.sidebar_hover)
-    self:draw_mark("active", name, width, active_color)
-    self:draw_mark("cursor", name, width, style.row_selection)
+    self:draw_containers(name, width, false)
+    self:draw_mark("hover", name, width, style.sidebar_hover, false)
+    self:draw_mark("active", name, width, active_color, false)
+    self:draw_mark("cursor", name, width, style.row_selection, false)
     self:draw_drop(name, false)
     local origin = self:shown_origin(name)
     for _, item in ipairs(self.leaving) do
       if item.area == name then self:draw_shown(item.row, origin + item.y, item.alpha, width, now) end
     end
     for _, row in ipairs(self.rows) do
-      if row.area == name then
+      if row.area == name and not row.lifted then
         local y = origin + row.shown.y
         if y + row.h > area_top and y < area_bottom then
           local clip_bottom = row.shown.clip_bottom and math.min(area_bottom, origin + row.shown.clip_bottom)
@@ -2263,6 +2533,7 @@ function SidebarView:draw(width, height)
       end
     end
     self:draw_drop(name, true)
+    if name == "main" then self:draw_lifted(width, active_color, now) end
   end
   renderer.set_clip_rect(0, 0, width, height)
   local bar_w = math.max(2, math.floor(4 * SCALE))

@@ -247,6 +247,34 @@ if path:match("/driver$") then
     assert(selected.dormant == "dormant" and #ready("c", second:pid()) == 0, "restore loaded a Dormant Project")
     return close_shell(second, "restored")
    end
+   if action == "restore-order" then
+    -- The Sidebar showed an order that differs from the recent Projects. Other has no activity.
+    local state = assert(io.open(root .. "/user/appstate.lua", "wb"))
+    state:write("return ", common.serialize{recents={root .. "/Other", root .. "/Project", root .. "/Replacement"}})
+    state:close()
+    local function folder(name) return (root .. "/" .. name):gsub("/", "\\") end
+    local lines = {"anvil-shell-windows 9\n", string.format("window 1 100 100 800 600 0 0 %d %s\n",
+     #folder("Replacement"), folder("Replacement"))}
+    for _, item in ipairs({{"Project", 1750000000}, {"Other", 0}, {"Replacement", 1760000000}}) do
+     lines[#lines + 1] = string.format("project %d %d %s\n", item[2], #folder(item[1]), folder(item[1]))
+    end
+    local file = assert(io.open(root .. "/user/shell-windows.state", "wb"))
+    file:write(table.concat(lines)); file:close()
+    local first = launch()
+    wait(function() return ready("b", first:pid())[1] end, 30, "Selected Project did not return")
+    local order = wait(function() return load("order-" .. first:pid()) end, 30, "the Sidebar order was not reported")
+    assert(order == "a,c,b", "restart lost the Sidebar order: " .. order)
+    close_shell(first, "first")
+    -- The state file keeps the Sidebar order, not the activity order.
+    file = assert(io.open(root .. "/user/shell-windows.state", "rb"))
+    local saved = {}
+    for line in file:read("*a"):gmatch("project %d+ %d+ ([^\r\n]+)") do
+     saved[#saved + 1] = names[(line:gsub("\\", "/"))]
+    end
+    file:close()
+    assert(table.concat(saved, ",") == "a,c,b", "the saved Sidebar order changed: " .. table.concat(saved, ","))
+    return
+   end
    if action == "restore-select-late" then
     -- A Project restored in the background draws nothing. Its first-frame deadline starts when it is shown,
     -- so a selection just before the launch deadline does not fail it.
@@ -584,6 +612,19 @@ elseif names[path] then
     wait(function() return load("select-a") end, 60)
     assert(core.open_project_in_same_window(root .. "/Project"))
    end
+  end
+  if action == "restore-order" and name == "b" then
+   -- The first status scan adds the recent Projects that no Window restored.
+   local order = wait(function()
+    local previous = core.project_sidebar
+    if not core.request_project_sidebar(true) then coroutine.yield(.2); return end
+    local model = wait(function() return core.project_sidebar ~= previous and core.project_sidebar end, 15)
+    local listed = {}
+    for _, project in ipairs(model) do listed[#listed + 1] = names[(project.path:gsub("\\", "/"))] end
+    if #listed == 3 then return table.concat(listed, ",") end
+    coroutine.yield(.2)
+   end, 25, "the Sidebar did not list the recent Projects")
+   save("order-" .. system.get_window_process_id(), order)
   end
   if action == "restore-loaded" and name == "a" and #ready("a") > 1 then
    wait(function() return ready("b", system.get_window_process_id())[1] end, 30)

@@ -60,6 +60,17 @@ static void project_activity(void) {
           "Project activity changed");
   anvil_shell_state_free(&decoded);
   free(data);
+  /* The lines keep the Sidebar order, also for a Project without activity. */
+  AnvilShellProjectActivity ordered[] = {{"C:\\Older", 1750000000}, {"C:\\Unused", 0}, {"C:\\Newer", 1760000000}};
+  state = (AnvilShellState){sample, 3, ordered, 3};
+  data = anvil_shell_state_encode(&state, &size);
+  CHECK(data && anvil_shell_state_decode(data, size, &decoded) && decoded.project_count == 3,
+        "A Project without activity lost its place");
+  for (size_t i = 0; i < 3 && i < decoded.project_count; i++)
+    CHECK(!strcmp(decoded.projects[i].path, ordered[i].path) && decoded.projects[i].activity == ordered[i].activity,
+          "The saved Sidebar order changed");
+  anvil_shell_state_free(&decoded);
+  free(data);
   /* A file from before Project activity still restores its Windows. */
   const char *old = "anvil-shell-windows 2\nwindow 1 0 0 10 10 0 3 abc\n";
   CHECK(anvil_shell_state_decode(old, strlen(old), &decoded) && decoded.count == 1 && decoded.project_count == 0,

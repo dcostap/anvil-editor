@@ -7020,7 +7020,7 @@ function TextView:on_mouse_moved(x, y, ...)
     local special_handled = false
     local anchor_render = self:get_line_render(l2)
     if anchor_render and anchor_render.on_mouse_selection then
-      local ok, handled = pcall(
+      local ok, handled, anchor_col = pcall(
         anchor_render.on_mouse_selection, self, l2, c2, l1, c1
       )
       if not ok then
@@ -7030,6 +7030,8 @@ function TextView:on_mouse_moved(x, y, ...)
         )
       end
       special_handled = ok and handled == true
+      -- A rendered selection can return to text selection at a whole-cell edge.
+      if ok and anchor_col then c2 = anchor_col end
     end
     if special_handled then
       -- The rendered interaction owns Selection State for this drag.
@@ -7334,7 +7336,9 @@ function TextView:on_text_input(text)
       return true
     end
   end
-  require("core.empty_line_indent").write_then(self, function()
+  local empty_line_indent = require("core.empty_line_indent")
+  if empty_line_indent.type_whitespace(self.buffer, text) then return true end
+  empty_line_indent.write_then(self, function()
     if not self:dedent_typed_closer(text) then self.buffer:text_input(text) end
   end)
   return true
@@ -7352,8 +7356,13 @@ function TextView:dedent_typed_closer(text)
   local buffer = self.buffer
   if not typed_closers[text] or buffer.overwrite then return false end
   local edits, final_by_idx, changed = {}, {}, false
+  local seen_lines = {}
   for idx, line1, col1, line2, col2 in buffer:get_selections(true) do
     if line1 ~= line2 or col1 ~= col2 then return false end
+    -- Several carets in one indentation cannot each replace that prefix.
+    -- Keep normal typing at every caret instead.
+    if seen_lines[line1] then return false end
+    seen_lines[line1] = true
     local line_text = buffer.lines[line1] or ""
     local before = line_text:sub(1, col1 - 1)
     if not before:match("^[\t ]*$") then return false end
@@ -8951,6 +8960,7 @@ end
 
 -- Defined with the Table Cell Selection drawing below.
 local fragment_in_table_cell_selection
+local table_cell_selection_lookup
 
 local function draw_render_line_under_selection_backgrounds(view, render_line, x, y, line)
   if not (render_line and render_line.under_selection_backgrounds) then return end
@@ -9085,6 +9095,7 @@ function TextView:prepare_line_body_draw_cache(minline, maxline)
   if stats then stats.prepare_highlight_ms = stats.prepare_highlight_ms + (system.get_time() - phase_start) * 1000 end
 
   phase_start = stats and system.get_time()
+  local cell_selections = table_cell_selection_lookup(self).by_index
   local selections = self.buffer.selections
   for i = 1, #selections, 4 do
     if stats then stats.prepare_caret_scan_count = stats.prepare_caret_scan_count + 1 end
@@ -9093,7 +9104,9 @@ function TextView:prepare_line_body_draw_cache(minline, maxline)
     local top_line = math.min(raw_line1, raw_line2)
     if top_line > maxline then break end
     if raw_line1 >= minline and raw_line1 <= maxline then
-      visible_caret_cache[#visible_caret_cache + 1] = { raw_line1, raw_col1, raw_line2, raw_col2 }
+      visible_caret_cache[#visible_caret_cache + 1] = {
+        raw_line1, raw_col1, raw_line2, raw_col2, (i + 3) / 4,
+      }
     end
   end
   if stats then
@@ -9102,10 +9115,10 @@ function TextView:prepare_line_body_draw_cache(minline, maxline)
   end
 
   phase_start = stats and system.get_time()
-  for _, line1, col1, line2, col2 in self.buffer:get_selections(true) do
+  for idx, line1, col1, line2, col2 in self.buffer:get_selections(true) do
     if stats then stats.prepare_selection_iters = stats.prepare_selection_iters + 1 end
     if line1 > maxline then break end
-    if line2 >= minline then
+    if line2 >= minline and not cell_selections[idx] then
       if stats then stats.visible_selection_ranges = stats.visible_selection_ranges + 1 end
       local from_line = math.max(line1, minline)
       local to_line = math.min(line2, maxline)
@@ -9172,8 +9185,6 @@ function TextView:prepare_line_body_draw_cache(minline, maxline)
 
   self.__line_body_highlight_cache = highlight_cache
   self.__line_body_selection_cache = selection_cache
-  -- Rebuilt lazily for this draw by the Table Cell Selection painters.
-  self.__table_cell_selection_cache = nil
   self.__line_body_search_match_cache = search_match_cache
   self.__line_body_selection_newline_cache = selection_newline_cache
   self.__line_gutter_selection_cache = gutter_selection_cache
@@ -9400,42 +9411,26 @@ local function draw_line_render_full_cell(view, row, x, y, color)
   return true
 end
 
----Single-line selections by line, each mapping its first column to its last.
----Built once per draw; the draw clears it when it finishes.
-local function table_cell_selection_lookup(view)
-  local buffer = view.buffer
-  local cached = view.__table_cell_selection_cache
-  if cached and cached.selections == buffer.selections
-  and cached.count == #buffer.selections
-  and cached.revision == buffer.selection_revision
-  and cached.change_id == buffer:get_change_id()
-  and cached.table_cell_selection == buffer.table_cell_selection
-  then
-    return cached
-  end
-  local lookup = {
-    grouped = buffer.table_cell_selection or #buffer.selections > 4,
-    table_cell_selection = buffer.table_cell_selection,
-    selections = buffer.selections, count = #buffer.selections,
-    revision = buffer.selection_revision, change_id = buffer:get_change_id(),
-  }
-  for _, line1, col1, line2, col2 in buffer:get_selections(true) do
-    if line1 == line2 then
-      lookup[line1] = lookup[line1] or {}
-      lookup[line1][col1] = col2
-    end
-  end
-  view.__table_cell_selection_cache = lookup
-  return lookup
+local NO_TABLE_CELLS = { cells = {}, by_index = {} }
+
+---The cells that Table Cell Selections select, by line, and the selections
+---that select cells. Only Markdown Live Preview draws tables as cells.
+table_cell_selection_lookup = function(view)
+  if not view.__markdown_live_attached then return NO_TABLE_CELLS end
+  return require("core.markdown.tables").cell_selection_map(view)
 end
 
----Whether a selection covers exactly the cell of `row` in cell-selection mode.
----Without that mode, a lone cell's contents remain ordinary text selection.
+---Whether the user sees the caret. A Table Cell Selection shows its cells
+---instead, so decorations of the caret and its text selection do not show.
+function TextView:shows_caret()
+  return next(table_cell_selection_lookup(self).by_index) == nil
+end
+
+---Whether a Table Cell Selection selects the cell of `row`.
 local function row_has_table_cell_selection(lookup, line, row)
-  if not lookup.grouped then return false end
-  local col1, col2 = row.cell_source_col1, row.cell_source_col2
-  local selected = col1 and lookup[line] and lookup[line][col1]
-  return selected ~= nil and selected == col2
+  local cells = lookup.cells[line]
+  local col1 = row.cell_source_col1
+  return cells ~= nil and col1 ~= nil and cells[col1] == row.cell_source_col2
 end
 
 fragment_in_table_cell_selection = function(view, line, fragment)
@@ -9477,12 +9472,12 @@ local function draw_table_cell_selection_outlines(view, line, render_line, x, y)
   local rows = render_line and render_line.position_rows
   if type(rows) ~= "table" or #rows == 0 then return end
   local lookup = table_cell_selection_lookup(view)
-  if not lookup[line] then return end
+  if not lookup.cells[line] then return end
   local function selected(neighbor_line, column)
     if not neighbor_line then return false end
     local neighbor_rows = rows
     if neighbor_line ~= line then
-      if not lookup[neighbor_line] then return false end
+      if not lookup.cells[neighbor_line] then return false end
       local neighbor_render = view:get_line_render(neighbor_line)
       neighbor_rows = neighbor_render and neighbor_render.position_rows
     end
@@ -9527,39 +9522,13 @@ local function draw_table_cell_selection_outlines(view, line, render_line, x, y)
   end
 end
 
----Whether a caret belongs to a Table Cell Selection, which shows no caret.
-local function is_table_cell_selection(view, line1, col1, line2, col2)
-  if line1 ~= line2 then return false end
-  local render_line = view:get_line_render(line1)
-  local rows = render_line and render_line.position_rows
-  if type(rows) ~= "table" then return false end
-  local first = math.min(col1, col2)
-  for _, row in ipairs(rows) do
-    if row.selection_full_cell and row.selection_fill and row.cell_source_col1 == first then
-      return row_has_table_cell_selection(
-        table_cell_selection_lookup(view), line1, row
-      )
-    end
-  end
-  return false
-end
-
----How a selection from `col1` to `col2` paints the cell of `row`: "cell"
----for a Table Cell Selection, "covered" for a range that runs past the cell,
----or nil for text selection.
-local function table_cell_selection_paint(view, row, col1, col2)
+---Whether a text selection from `col1` to `col2` covers the cell of `row`
+---and runs past it. Such a cell paints whole.
+local function selection_covers_cell(row, col1, col2)
   local cell_col1, cell_col2 = row.cell_source_col1, row.cell_source_col2
-  if not row.table_cell or not cell_col1
-  or col1 > cell_col1 or col2 < cell_col2
-  then
-    return nil
-  end
-  if col1 < cell_col1 or col2 > cell_col2 then return "covered" end
-  if row.selection_fill and row.selection_frame_x1
-  and table_cell_selection_lookup(view).grouped
-  then
-    return "cell"
-  end
+  return row.table_cell ~= nil and cell_col1 ~= nil
+    and col1 <= cell_col1 and col2 >= cell_col2
+    and (col1 < cell_col1 or col2 > cell_col2)
 end
 
 local function draw_line_render_position_row_range(
@@ -9569,16 +9538,11 @@ local function draw_line_render_position_row_range(
   if type(rows) ~= "table" or #rows == 0 then return false end
   local drawn = false
   for _, row in ipairs(rows) do
-    local cell_paint = table_cell_selection_paint(view, row, col1, col2)
-    if cell_paint then
+    if selection_covers_cell(row, col1, col2) then
       -- The cell's first line paints the whole cell; its wrapped lines add
       -- nothing.
       if row.selection_full_cell then
-        if cell_paint == "cell" then
-          drawn = draw_table_cell_selection_fill(row, x, y) or drawn
-        else
-          drawn = draw_line_render_full_cell(view, row, x, y, color) or drawn
-        end
+        drawn = draw_line_render_full_cell(view, row, x, y, color) or drawn
       end
       goto continue_position_row_selection
     end
@@ -9622,25 +9586,16 @@ local function draw_line_render_source_range(
   return drawn
 end
 
-local function draw_line_render_empty_cell_selections(
+local function draw_line_render_cell_selections(
   view, line, render_line, x, y, color
 )
   local rows = render_line and render_line.position_rows
   if type(rows) ~= "table" then return false end
-  -- A lone empty cell needs an explicit whole-cell selection, not just a caret.
-  if not table_cell_selection_lookup(view).grouped then return false end
-  local carets = {}
-  for _, caret_line, caret_col, anchor_line, anchor_col in
-    view.buffer:get_selections(false)
-  do
-    if caret_line == line and anchor_line == line and caret_col == anchor_col then
-      carets[caret_col] = true
-    end
-  end
-  if not next(carets) then return false end
+  local lookup = table_cell_selection_lookup(view)
+  if not lookup.cells[line] then return false end
   local drawn = false
   for _, row in ipairs(rows) do
-    if row.selection_empty_cell and carets[row.cell_source_col1] then
+    if row.selection_full_cell and row_has_table_cell_selection(lookup, line, row) then
       if row.selection_fill and row.selection_frame_x1 then
         drawn = draw_table_cell_selection_fill(row, x, y) or drawn
       else
@@ -9794,14 +9749,15 @@ function TextView:draw_line_body(line, x, y)
     draw_decoration_inline_ranges(self, line, x, y)
     local render_line = self:get_line_render(line)
     if selection_color then
-      draw_line_render_empty_cell_selections(self, line, render_line, x, y, selection_color)
+      draw_line_render_cell_selections(self, line, render_line, x, y, selection_color)
       local newline_color = selected_newline_color(self, line, selection_color)
       if newline_color then
         draw_line_selected_newline(self, line, x, y, newline_color)
       end
     end
-    for _, line1, col1, line2, col2 in self.buffer:get_selections(true) do
-      if line >= line1 and line <= line2 then
+    local cell_selections = table_cell_selection_lookup(self).by_index
+    for idx, line1, col1, line2, col2 in self.buffer:get_selections(true) do
+      if line >= line1 and line <= line2 and not cell_selections[idx] then
         if line1 ~= line then col1 = 1 end
         if line2 ~= line then col2 = #self.buffer.lines[line] + 1 end
         if col1 ~= col2 and selection_color then
@@ -9905,7 +9861,7 @@ function TextView:draw_line_body(line, x, y)
   local selection_cache = self.__line_body_selection_cache
   local render_line = self:get_line_render(line)
   if selection_color then
-    draw_line_render_empty_cell_selections(self, line, render_line, x, y, selection_color)
+    draw_line_render_cell_selections(self, line, render_line, x, y, selection_color)
     local newline_color = selected_newline_color(self, line, selection_color)
     if newline_color then
       draw_line_selected_newline(self, line, x, y, newline_color)
@@ -9933,9 +9889,10 @@ function TextView:draw_line_body(line, x, y)
       end
     end
   elseif selection_color and not selection_cache then
+    local cell_selections = table_cell_selection_lookup(self).by_index
     for lidx, line1, col1, line2, col2 in self.buffer:get_selections(true) do
       if line1 > line then break end
-      if line >= line1 and line <= line2 then
+      if line >= line1 and line <= line2 and not cell_selections[lidx] then
         local text = self.buffer.lines[line]
         if line1 ~= line then col1 = 1 end
         if line2 ~= line then col2 = #text + 1 end
@@ -10150,28 +10107,26 @@ function TextView:draw_overlay()
     or (core.blink_timer - core.blink_start) % T < T / 2
   local caret_color = is_active and style.caret or style.dim
   local visible_carets = self.__visible_caret_cache
+  -- A Table Cell Selection shows no caret.
+  local cell_selections = table_cell_selection_lookup(self).by_index
   if visible_carets then
     for caret_idx, caret in ipairs(visible_carets) do
       local line1, col1, line2, col2 = caret[1], caret[2], caret[3], caret[4]
       if is_active and ime.editing then
         self:draw_ime_decoration(line1, col1, line2, col2)
-      elseif blink_visible
-      and not is_table_cell_selection(self, line1, col1, line2, col2)
-      then
+      elseif blink_visible and not cell_selections[caret[5]] then
         local x, y = self:get_caret_screen_position(line1, col1)
         self:draw_caret(x, y, line1, col1, caret_idx, caret_color)
       end
     end
   else
     local caret_idx = 0
-    for _, line1, col1, line2, col2 in self.buffer:get_selections() do
+    for idx, line1, col1, line2, col2 in self.buffer:get_selections() do
       caret_idx = caret_idx + 1
       if line1 >= minline and line1 <= maxline then
         if is_active and ime.editing then
           self:draw_ime_decoration(line1, col1, line2, col2)
-        elseif blink_visible
-        and not is_table_cell_selection(self, line1, col1, line2, col2)
-        then
+        elseif blink_visible and not cell_selections[idx] then
           local x, y = self:get_caret_screen_position(line1, col1)
           self:draw_caret(x, y, line1, col1, caret_idx, caret_color)
         end
@@ -10249,7 +10204,6 @@ function TextView:draw_folded()
 
   self.__line_body_highlight_cache = nil
   self.__line_body_selection_cache = nil
-  self.__table_cell_selection_cache = nil
   self.__line_body_search_match_cache = nil
   self.__line_gutter_selection_cache = nil
   self.__visible_caret_cache = nil
@@ -10445,7 +10399,6 @@ function TextView:draw_wrapped()
 
   self.__line_body_highlight_cache = nil
   self.__line_body_selection_cache = nil
-  self.__table_cell_selection_cache = nil
   self.__line_body_search_match_cache = nil
   self.__line_gutter_selection_cache = nil
   self.__visible_caret_cache = nil
@@ -10553,7 +10506,6 @@ local function draw_textview(self)
   core.pop_clip_rect()
   self.__line_body_highlight_cache = nil
   self.__line_body_selection_cache = nil
-  self.__table_cell_selection_cache = nil
   self.__line_gutter_selection_cache = nil
 
   perf_scope_end(phase_scope)
