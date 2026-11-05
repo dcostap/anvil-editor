@@ -1878,9 +1878,24 @@ function tables.paste(view)
   return tables.text_input(view, clipboard)
 end
 
+local function grid_is_list(grid)
+  for _, cells in ipairs(grid.rows) do
+    local column = 1
+    while column < grid.columns and cells[column] == "" do column = column + 1 end
+    local marker = cells[column]
+    if column == grid.columns
+    or not (marker:match("^[-+*o]$") or marker:match("^%d+[.)]$")
+      or marker == "•" or marker == "◦" or marker == "▪")
+    then
+      return false
+    end
+  end
+  return true
+end
+
 ---Return whether the clipboard should paste as a new table at the caret:
 ---spreadsheet rows outside any table, with no selection to replace. Ragged
----rows are text with tabs in it, such as indented notes or code.
+---rows and list markers are text with tabs, such as copied lists or code.
 function tables.can_paste_table(view)
   if not (view and view.buffer) or view.buffer:has_any_selection() then return false end
   if #view.buffer.selections ~= 4 then return false end
@@ -1888,6 +1903,7 @@ function tables.can_paste_table(view)
   -- checks scan the Buffer.
   local grid = tables.spreadsheet_grid(system.get_clipboard())
   return grid ~= nil and not grid.ragged and #grid.rows >= 2 and grid.columns >= 2
+    and not grid_is_list(grid)
     and tables.can_insert_table(view)
 end
 

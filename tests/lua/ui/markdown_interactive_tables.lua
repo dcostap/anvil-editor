@@ -1780,11 +1780,14 @@ test.describe("Markdown Interactive Table Editing", function()
   local function with_clipboard(text, fn)
     local old_get = system.get_clipboard
     local old_clipboard = core.cursor_clipboard
+    local old_whole_line = core.cursor_clipboard_whole_line
     system.get_clipboard = function() return text end
-    core.cursor_clipboard = nil
+    core.cursor_clipboard = {}
+    core.cursor_clipboard_whole_line = {}
     local ok, err = pcall(fn)
     system.get_clipboard = old_get
     core.cursor_clipboard = old_clipboard
+    core.cursor_clipboard_whole_line = old_whole_line
     if not ok then error(err, 0) end
   end
 
@@ -1866,6 +1869,27 @@ test.describe("Markdown Interactive Table Editing", function()
       end)
       test.equal(buffer:get_text(1, 1, math.huge, math.huge), "intro")
     end)
+  end)
+
+  test.it("pastes copied list markers and their text without creating a table", function()
+    local lines = {
+      "-\tEn APPi Insucar (R y P) si eliminan una R con imputaciones.",
+      "o\tNo se permite la eliminación de la R si tiene horas imputadas.",
+      "o\tSi tiene materiales imputados en el mes en curso, se eliminan, retroceden los movstock y se elimina la R",
+      "o\tSi tiene materiales imputados en meses anteriores, no se permite la eliminación de la R.",
+    }
+    for _, indent in ipairs({ "", "\t" }) do
+      local notes = indent .. table.concat(lines, "\r\n" .. indent)
+      local view, buffer = make_view("")
+      with_active(view, function()
+        refresh(view)
+        with_clipboard(notes, function()
+          test.equal(command.perform("markdown:paste_table"), false)
+          test.equal(command.perform("core:paste"), true)
+        end)
+        test.equal(buffer:get_text(1, 1, math.huge, math.huge), (notes:gsub("\r", "")))
+      end)
+    end
   end)
 
   local function fragment_rect(view, line, fragment)
