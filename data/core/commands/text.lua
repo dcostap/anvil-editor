@@ -2513,16 +2513,25 @@ local commands = {
       end
     end
 
+    local undo_idx = dv.buffer.undo_stack.idx
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
-      local l1, c1, l2, c2 = dv.buffer:indent_text(false, line1, col1, line2, col2)
+      -- A selection of one whole empty line holds no line to indent.
+      local selected_empty_line = dv.buffer.lines[line1] == "\n"
+        and dv.buffer.selections[idx * 4 - 1] ~= line2
+      local l1, c1, l2, c2
+      if not selected_empty_line then
+        l1, c1, l2, c2 = dv.buffer:indent_text(false, line1, col1, line2, col2)
+      end
       if l1 then
         dv.buffer:set_selections(idx, l1, c1, l2, c2)
       end
     end
+    dv.buffer:join_undo_since(undo_idx)
   end,
 
   ["core:unindent"] = function(dv)
     if not can_edit(dv, "unindent") then return end
+    local undo_idx = dv.buffer.undo_stack.idx
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
       local line_text = dv.buffer.lines[line1] or ""
       local content_start = markdown_list_content_start(
@@ -2557,6 +2566,7 @@ local commands = {
         dv.buffer:set_selections(idx, l1, c1, l2, c2)
       end
     end
+    dv.buffer:join_undo_since(undo_idx)
   end,
 
   ["editor:duplicate_lines"] = command.palette(function(dv)
@@ -2875,7 +2885,21 @@ local commands = {
 
   ["editor:toggle_line_comments"] = command.palette(function(dv)
     if not can_edit(dv, "toggle comments") then return end
+    -- Selections that share lines toggle those lines once. Comments add or
+    -- remove no lines, so the line numbers stay valid.
+    local groups = {}
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
+      local group = groups[#groups]
+      if group and line1 <= group.line2 then
+        group.line2 = math.max(group.line2, line2)
+        group.count = group.count + 1
+      else
+        groups[#groups + 1] = { idx = idx, line1 = line1, col1 = col1, line2 = line2, col2 = col2, count = 1 }
+      end
+    end
+    local undo_idx = dv.buffer.undo_stack.idx
+    for _, group in ipairs(groups) do
+      local idx, line1, col1, line2, col2 = group.idx, group.line1, group.col1, group.line2, group.col2
       local current_syntax = dv.buffer.syntax
       if line1 > 1 then
         -- Use the previous line state, as it will be the state
@@ -2894,9 +2918,12 @@ local commands = {
       end
       local comment = current_syntax.comment or current_syntax.block_comment
       if comment then
-        dv.buffer:set_selections(idx, line_comment(comment, line1, col1, line2, col2))
+        local l1, c1, l2, c2 = line_comment(comment, line1, col1, line2, col2)
+        -- The edits move the carets of a larger group.
+        if group.count == 1 then dv.buffer:set_selections(idx, l1, c1, l2, c2) end
       end
     end
+    dv.buffer:join_undo_since(undo_idx)
   end),
 
   ["editor:upper_case"] = command.palette(function(dv)

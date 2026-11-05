@@ -86,6 +86,27 @@ meson test -C build-windows-x86_64 anvil:lua-ui --test-args tests/lua/markdown_s
 
 This audit is outside the default `runtime/` and `ui/` test folders. It checks 137 selected CommonMark 0.31.2 examples, not the complete specification. [Markdown fixtures](fixtures/markdown/README.md) describes the scope, source license, importer, and reviewed differences. Do not change an Anvil rule solely to make the standards audit pass.
 
+## Edit history
+
+Two files play random edits, then check that Undo goes back through each earlier text in order and that Redo goes forward again:
+
+- `runtime/buffer_edit_history.lua` applies batch edits to a Buffer.
+- `ui/edit_history_commands.lua` sets carets and runs editing commands, typing and paste in a Text View.
+
+A scenario is plain data: a start text and a list of steps. A step sets carets, then runs a command or types text. A step can also be an undo or a redo. A seed makes the same scenarios on each run. `tests/fixtures/edit_history.lua` holds the history model and the shrinker.
+
+A failure prints the seed and the smallest scenario that still fails. Copy that scenario into the file's `regressions` list, then fix the bug. These variables change a run:
+
+- `ANVIL_EDIT_HISTORY_RUNS`: the number of seeds. The defaults take a few seconds.
+- `ANVIL_EDIT_HISTORY_SEED`: the first seed.
+- `ANVIL_EDIT_HISTORY_ALL=1`: report all failing seeds, not only the first.
+
+```sh
+ANVIL_EDIT_HISTORY_RUNS=5000 meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/edit_history_commands.lua --print-errorlogs
+```
+
+Meson prints only the last 100 lines of a failure. Read `build-windows-x86_64/meson-logs/testlog.txt` for a long report.
+
 ## Known failures
 
 ### Terminal input after a width change: PSReadLine 2.4.5

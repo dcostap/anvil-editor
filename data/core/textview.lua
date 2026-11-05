@@ -7334,7 +7334,9 @@ function TextView:on_text_input(text)
       return true
     end
   end
-  require("core.empty_line_indent").write_then(self, function()
+  local empty_line_indent = require("core.empty_line_indent")
+  if empty_line_indent.type_whitespace(self.buffer, text) then return true end
+  empty_line_indent.write_then(self, function()
     if not self:dedent_typed_closer(text) then self.buffer:text_input(text) end
   end)
   return true
