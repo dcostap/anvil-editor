@@ -17,7 +17,9 @@ Right-click a running Pi's Tab and choose **Copy Agent Address**. This works in 
 
 The receiving agent calls `workspace_state` for that `project` and finds the copied `terminal`. It uses that Terminal's current `agent_instance` as `instance` for `agent_send`. The address identifies the Terminal, not a fixed Pi conversation. Inspect state again after a Project move.
 
-The default target is the caller's Project. Operations preserve focus unless `focus: true` requests a change. Close operations use normal confirmations. A confirmation can take focus. Snooze hides its Pane through the normal Snooze behavior.
+The default target is the caller's Project. Operations preserve focus unless `focus: true` requests a change. A confirmation can take focus. Snooze hides its Pane through the normal Snooze behavior.
+
+A `pane` or `terminal` close request approves the calling agent's own running Terminal Session, identified by its credential. Other Views keep their normal close checks, including unsaved files and busy Terminals in Navigation History. Reconnecting sessions still require confirmation. No `force` argument is available. Self-close can stop the agent before the tool reply arrives.
 
 “Anvil integration” means these editor operations. A request such as “snooze for 5 hours” means Anvil's Snooze, not a timer or delayed message.
 

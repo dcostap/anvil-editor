@@ -1603,7 +1603,7 @@ function M.close_view(target, opts)
     after_mutation("closed View in " .. pane.id)
     committed = true
   end
-  if opts.force or not view.can_close then approved() else view:can_close(approved) end
+  if opts.force or not view.can_close then approved() else view:can_close(approved, opts.close_caller) end
   return committed, failure
 end
 
@@ -1832,14 +1832,14 @@ local function close_candidates(pane)
   return result
 end
 
-local function authorize_close(pane, force, done)
+local function authorize_close(pane, force, done, caller)
   local views = close_candidates(pane)
   local index = 1
   local function next_view()
     local view = views[index]
     if not view then done(); return end
     index = index + 1
-    if force or not view.can_close then next_view() else view:can_close(next_view) end
+    if force or not view.can_close then next_view() else view:can_close(next_view, caller) end
   end
   next_view()
 end
@@ -1860,7 +1860,7 @@ function M.close(target, opts)
     end
     commit_close(pane)
   end
-  authorize_close(pane, opts.force or opts.discard, close)
+  authorize_close(pane, opts.force or opts.discard, close, opts.close_caller)
   return committed
 end
 

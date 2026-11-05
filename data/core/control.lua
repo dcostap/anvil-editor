@@ -47,7 +47,7 @@ end
 M.tools = {
   { name = "workspace_state", description = "List this Project's Panes and identify the caller. IDs, not Pane numbers, select targets.",
     inputSchema = object({}, nil), annotations = { readOnlyHint = true, destructiveHint = false } },
-  { name = "pane", description = "Create, split, move, focus or close a Pane. Move takes a target and direction, or target_project to move the Pane to another loaded Project as a new Pane Group; that move returns accepted, and its Terminals keep running. Focus stays unchanged unless requested. Close keeps normal confirmation. Reuse request_id only for retries of the same operation.",
+  { name = "pane", description = "Create, split, move, focus or close a Pane. Move takes a target and direction, or target_project to move the Pane to another loaded Project as a new Pane Group; that move returns accepted, and its Terminals keep running. Focus stays unchanged unless requested. Close approves only the calling agent's own running Terminal; other Views keep normal confirmation. Self-close can stop the agent before the reply arrives. Reuse request_id only for retries of the same operation.",
     inputSchema = object({ action = choice("create", "split", "move", "focus", "close"),
       pane = string_schema(), target = string_schema(), direction = choice("left", "right", "up", "down"),
       target_project = string_schema(32768), focus = {type = "boolean"}, request_id = string_schema(128) },
@@ -98,7 +98,7 @@ tool("pi_start", "Start an independent interactive Pi in a new Terminal Pane. Sp
   {"cwd", "provider", "model", "thinking", "request_id"}, false)
 tool("operation_read", "Read startup progress or failure. A ready Pi result includes its conversation instance and initial task ID.",
   {operation = id}, {"operation"}, true)
-tool("terminal", "Read bounded terminal text, send literal terminal input, or end a Terminal through its normal Pane Close confirmation. Use agent_send for Pi tasks.",
+tool("terminal", "Read bounded terminal text, send literal terminal input, or close a Terminal View. Close approves the calling agent's own running Terminal; other sessions keep normal confirmation. Self-close can stop the agent before the reply arrives. Use agent_send for Pi tasks.",
   {action = choice("read", "input", "close"), terminal = id, text = string_schema(32768), request_id = id},
   {"action", "terminal"}, false)
 for _, definition in ipairs(M.tools) do
@@ -294,12 +294,12 @@ local function terminal_view(id)
   error("Terminal Session has no View in this Project", 0)
 end
 
-function M:terminal(args)
+function M:terminal(args, caller)
   local view = terminal_view(args.terminal)
   if args.action == "close" then
     assert(args.request_id, "Close needs a request_id")
     local pane = panes.pane_for_view(view)
-    local closed = panes.close_view(pane, {view = view, keep_pane = pane.current_view ~= view})
+    local closed = panes.close_view(pane, {view = view, keep_pane = pane.current_view ~= view, close_caller = caller})
     return {status = closed and "closed" or "confirmation_required"}
   end
   assert(view.session and view.state == "running", "Terminal is not running")
@@ -514,7 +514,7 @@ function M:move_to_project(source, args)
   return {pane = source.id, project = args.target_project, transfer = transfer, status = "accepted"}
 end
 
-function M:pane(args)
+function M:pane(args, caller)
   local source = args.pane and assert(panes.find(args.pane), "Pane not found")
   assert(not args.target_project or args.action == "move", "Only a move takes target_project")
   if args.target_project then return self:move_to_project(source, args) end
@@ -532,7 +532,7 @@ function M:pane(args)
     result = assert(panes.focus(source))
   elseif args.action == "close" then
     assert(source, "Close needs a Pane")
-    return { pane = source.id, status = panes.close(source) and "closed" or "confirmation_required" }
+    return { pane = source.id, status = panes.close(source, {close_caller = caller}) and "closed" or "confirmation_required" }
   end
   if args.action ~= "focus" and not args.focus and previous and panes.contains(previous) then
     panes.focus(previous)

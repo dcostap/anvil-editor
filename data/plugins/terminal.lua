@@ -2420,18 +2420,20 @@ function TerminalView:close_status()
   return status
 end
 
-function TerminalView:can_close(approve)
+function TerminalView:can_close(approve, caller)
   if not self.session then approve(); return end
   local status = self:close_status()
   local idle_pi = status.agent_app == "pi"
     and (status.agent_state == "idle" or status.agent_state == "done")
   -- Another device shows the session, so the close only detaches this View. The shell keeps running.
   local shared = (status.clients or 0) > 1
+  -- The control server supplies this identity, not the tool's arguments. Approve only this session's busy check.
+  local self_close = caller ~= nil and caller ~= "local" and caller == self.session_id
   local busy = status.kind == "reconnecting"
-    or (status.kind == "running" and status.busy ~= false and not idle_pi and not shared)
+    or (status.kind == "running" and status.busy ~= false and not idle_pi and not shared and not self_close)
   if not busy then
-    core.log_quiet("Terminal session %d closed without confirmation: busy=%s app=%s agent=%s",
-      self.log_id, tostring(status.busy), tostring(status.agent_app), tostring(status.agent_state))
+    core.log_quiet("Terminal session %d closed without confirmation: busy=%s app=%s agent=%s self_close=%s",
+      self.log_id, tostring(status.busy), tostring(status.agent_app), tostring(status.agent_state), tostring(self_close))
     approve()
     return
   end
