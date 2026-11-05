@@ -857,7 +857,7 @@ Run `ui/binary_file_open.lua` after changes.
 
 A table cell that holds only an image link draws the image, scaled to its column. A cell with text and an image keeps the link label.
 An image cell never reveals its source in Live Preview. A click, Up or Down selects the whole cell, so Delete and Copy act on the whole image.
-Image cells have no resize controls yet. Edit the source in Source mode.
+Image cells have no resize controls yet. Edit their source with Edit Table Source (`markdown:table_edit_source`). It shows that table as source until the caret leaves it.
 A Wikilink reads `\|` as its alias separator, because a table needs it: `![[image.png\|200]]`.
 Run `ui/markdown_interactive_tables.lua` after changes. Check the `markdown-table-images` render scenario after visual changes.
 

@@ -228,6 +228,7 @@ local MARKDOWN_TABLE_MENU = {
   { label = "Sort Ascending", icon = icons.sort_ascending, command = "markdown:table_sort_ascending" },
   { label = "Sort Descending", icon = icons.sort_descending, command = "markdown:table_sort_descending" },
   { label = "Format Table", icon = icons.tidy, command = "markdown:table_format" },
+  { label = "Edit Table Source", icon = icons.source, command = "markdown:table_edit_source" },
 }
 
 local MARKDOWN_PARAGRAPH_MENU = {
@@ -284,8 +285,8 @@ function Editor:context_menu(x, y)
     add "-"
   end
   if selected then
-    if editable then add { label = "Cut", icon = icons.cut, command = "core:cut" } end
-    add { label = "Copy", icon = icons.copy, command = "core:copy" }
+    if editable then add { label = "Cut", icon = icons.cut, command = { "markdown:table_cut", "core:cut" } } end
+    add { label = "Copy", icon = icons.copy, command = { "markdown:table_copy", "core:copy" } }
   end
   if editable then
     add { label = "Paste", icon = icons.paste, command = { "markdown:table_paste", "markdown:paste_table", "core:paste" } }

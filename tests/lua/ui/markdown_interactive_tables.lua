@@ -2409,4 +2409,135 @@ test.describe("Markdown Interactive Table Editing", function()
       test.same(selected_cells(view), { "3:1", "4:1" })
     end)
   end)
+
+  -- Copy writes the system clipboard, and paste reads it back.
+  local function with_system_clipboard(fn)
+    local old_get, old_set = system.get_clipboard, system.set_clipboard
+    local old_clipboard = core.cursor_clipboard
+    local old_whole_line = core.cursor_clipboard_whole_line
+    local text = ""
+    system.get_clipboard = function() return text end
+    system.set_clipboard = function(value) text = value end
+    local ok, err = pcall(fn, function() return text end)
+    system.get_clipboard, system.set_clipboard = old_get, old_set
+    core.cursor_clipboard = old_clipboard
+    core.cursor_clipboard_whole_line = old_whole_line
+    if not ok then error(err, 0) end
+  end
+
+  test.it("copies a Table Cell Selection as a table that pastes as a table", function()
+    local view, buffer = make_view(GRID)
+    with_active(view, function()
+      with_system_clipboard(function(clipboard)
+        buffer:set_selection(6, 1)
+        refresh(view)
+        test.ok(markdown_tables.select_rectangle(view, 1, 3, 4, 17))
+        test.equal(command.perform("markdown:table_copy"), true)
+        test.equal(clipboard(), table.concat({
+          "| A    | B    | C     |",
+          "| ---- | ---- | ----- |",
+          "| one  | two  | three |",
+          "| four | five | six   |",
+        }, "\n") .. "\n")
+
+        buffer:set_selection(6, 6)
+        refresh(view)
+        test.equal(command.perform("markdown:paste_table"), true)
+        test.same(row_cells(buffer, 8), { "A", "B", "C" })
+        test.same(row_cells(buffer, 10), { "one", "two", "three" })
+        test.same(row_cells(buffer, 11), { "four", "five", "six" })
+      end)
+    end)
+  end)
+
+  test.it("keeps copied body rows as body rows under an empty header", function()
+    local view, buffer = make_view(GRID)
+    with_active(view, function()
+      with_system_clipboard(function(clipboard)
+        buffer:set_selection(6, 1)
+        refresh(view)
+        test.ok(markdown_tables.select_rectangle(view, 3, 9, 4, 17))
+        test.equal(command.perform("markdown:table_copy"), true)
+        test.equal(clipboard(), table.concat({
+          "|      |       |",
+          "| ---- | ----- |",
+          "| two  | three |",
+          "| five | six   |",
+        }, "\n") .. "\n")
+
+        buffer:set_selection(6, 6)
+        refresh(view)
+        test.equal(command.perform("markdown:paste_table"), true)
+        test.same(row_cells(buffer, 8), { "", "" })
+        test.same(row_cells(buffer, 10), { "two", "three" })
+        test.same(row_cells(buffer, 11), { "five", "six" })
+
+        -- Inside a table, the rows fill cells from the caret's cell.
+        buffer:set_selection(3, 3)
+        refresh(view)
+        test.equal(command.perform("markdown:table_paste"), true)
+        test.same(row_cells(buffer, 1), { "A", "B", "C" })
+        test.same(row_cells(buffer, 3), { "two", "three", "three" })
+        test.same(row_cells(buffer, 4), { "five", "six", "six" })
+      end)
+    end)
+  end)
+
+  test.it("cuts a Table Cell Selection as a table and empties its cells", function()
+    local view, buffer = make_view(GRID)
+    with_active(view, function()
+      with_system_clipboard(function(clipboard)
+        buffer:set_selection(6, 1)
+        refresh(view)
+        test.ok(markdown_tables.select_row(view, 3))
+        test.equal(command.perform("markdown:table_cut"), true)
+        test.equal(clipboard(), table.concat({
+          "|     |     |       |",
+          "| --- | --- | ----- |",
+          "| one | two | three |",
+        }, "\n") .. "\n")
+        test.same(row_cells(buffer, 3), { "", "", "" })
+        test.same(row_cells(buffer, 4), { "four", "five", "six" })
+      end)
+    end)
+  end)
+
+  test.it("shows one table as Markdown source until the caret leaves it", function()
+    local view, buffer = make_view(GRID)
+    with_active(view, function()
+      buffer:set_selection(3, 4)
+      refresh(view)
+      test.equal(command.perform("markdown:table_edit_source"), true)
+      refresh(view)
+      test.equal(view:get_line_render(1), nil)
+      test.equal(view:get_line_render(3), nil)
+      -- Table keys edit the source text.
+      test.equal(command.perform("markdown:table_next_cell"), false)
+
+      -- A row that is not valid table source while the user types stays source.
+      buffer:set_selection(1, 5)
+      test.ok(command.perform("core:delete"))
+      refresh(view)
+      test.equal(buffer.lines[1], "| A  B | C |\n")
+      test.equal(view:get_line_render(3), nil)
+      test.equal(view:on_text_input("|"), true)
+      refresh(view)
+      test.equal(view:get_line_render(1), nil)
+
+      -- A new row stays source too.
+      buffer:set_selection(4, #"| four | five | six |" + 1)
+      test.ok(command.perform("core:newline"))
+      test.equal(view:on_text_input("| x | y |"), true)
+      refresh(view)
+      test.equal(command.perform("markdown:table_from_header_row"), false)
+      test.equal(view:on_text_input(" z |"), true)
+      refresh(view)
+      test.equal(view:get_line_render(5), nil)
+
+      buffer:set_selection(7, 1)
+      refresh(view)
+      test.ok(test.not_nil(view:get_line_render(1)).table_row)
+      test.ok(test.not_nil(view:get_line_render(5)).table_row)
+    end)
+  end)
 end)

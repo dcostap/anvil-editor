@@ -423,6 +423,11 @@ local function context_at(view, line, col, require_canonical)
     end
     rows[#rows + 1] = row
   end
+  -- A table that shows its source has no cells to edit. Table commands still
+  -- rewrite it.
+  if not require_canonical and tables.shows_source(view, line) then
+    return nil, "table shows its source"
+  end
   local current = rows[line - line1 + 1]
   if not current or line == line1 + 1 then return nil, "caret row is unavailable" end
   local column = columns
@@ -1682,7 +1687,8 @@ end
 function tables.can_insert_table(view)
   if not (view and view.buffer) then return false end
   local line = view.buffer:get_selection()
-  return source_table_bounds_with_delimiter(view.buffer, line) == nil
+  return not tables.shows_source(view, line)
+    and source_table_bounds_with_delimiter(view.buffer, line) == nil
     and context_at(view, line, nil, false) == nil
     and not source_line_in_fence_or_frontmatter(view.buffer, line)
 end
@@ -1709,6 +1715,7 @@ function tables.header_row_at_caret(view)
   local buffer = view.buffer
   local line, col, anchor_line, anchor_col = buffer:get_selection()
   if line ~= anchor_line or col ~= anchor_col then return nil end
+  if tables.shows_source(view, line) then return nil end
   local text = line_text(buffer, line)
   local trimmed = text:gsub("%s+$", "")
   if col <= #trimmed then return nil end
@@ -1859,6 +1866,50 @@ local function paste_grid(view, context, grid)
   return true
 end
 
+---Return a Markdown table in clipboard text as a grid of cell sources, or
+---nil when the text is anything else. `empty_header` is true when the header
+---row holds no text, as in a copy of body rows only.
+function tables.markdown_grid(text)
+  text = tostring(text or "")
+  if #text > MAX_GRID_PASTE_BYTES or not text:find("|", 1, true) then return nil end
+  text = text:gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("\n+$", "")
+  local rows, alignments, columns, count = {}, {}, nil, 0
+  for line in (text .. "\n"):gmatch("(.-)\n") do
+    count = count + 1
+    local row = source_row(line)
+    if not row or columns and row.columns ~= columns then return nil end
+    columns = row.columns
+    if count == 2 then
+      if not delimiter_row(row) then return nil end
+      for column, cell in ipairs(row.cells) do
+        alignments[column] = marker_alignment(line:sub(cell.content_col1, cell.content_col2 - 1))
+      end
+    else
+      local cells = {}
+      for column, cell in ipairs(row.cells) do
+        cells[column] = line:sub(cell.content_col1, cell.content_col2 - 1)
+      end
+      rows[#rows + 1] = cells
+    end
+  end
+  if count < 2 or columns > tables.MAX_PRESENTATION_COLUMNS
+  or #rows > tables.MAX_PRESENTATION_ROWS
+  then
+    return nil
+  end
+  local empty_header = table.concat(rows[1]) == ""
+  return { rows = rows, columns = columns, alignments = alignments, empty_header = empty_header }
+end
+
+-- The grid that a paste into a table writes: a copied Markdown table, without
+-- an empty header row, or else spreadsheet cells.
+local function paste_grid_for(clipboard)
+  local grid = tables.markdown_grid(clipboard)
+  if grid and grid.empty_header then table.remove(grid.rows, 1) end
+  if grid and #grid.rows > 0 then return grid end
+  return tables.spreadsheet_grid(clipboard)
+end
+
 function tables.paste(view)
   local clipboard = system.get_clipboard() or ""
   local selection_count = #view.buffer.selections / 4
@@ -1871,7 +1922,7 @@ function tables.paste(view)
     end)
   end
   if selection_count == 1 then
-    local grid = tables.spreadsheet_grid(clipboard)
+    local grid = paste_grid_for(clipboard)
     local context = grid and tables.context(view)
     if context and paste_grid(view, context, grid) then return true end
   end
@@ -1893,30 +1944,163 @@ local function grid_is_list(grid)
   return true
 end
 
+-- The table that clipboard text makes outside a table: a Markdown table with
+-- its header, or spreadsheet rows whose first row is the header. Ragged rows
+-- and list markers are text with tabs, such as copied lists or code.
+local function new_table_model(clipboard)
+  local grid = tables.markdown_grid(clipboard)
+  if grid then
+    return { columns = grid.columns, alignments = grid.alignments, rows = grid.rows }
+  end
+  grid = tables.spreadsheet_grid(clipboard)
+  if grid and not grid.ragged and #grid.rows >= 2 and grid.columns >= 2
+  and not grid_is_list(grid)
+  then
+    return { columns = grid.columns, alignments = {}, rows = grid.rows }
+  end
+end
+
 ---Return whether the clipboard should paste as a new table at the caret:
----spreadsheet rows outside any table, with no selection to replace. Ragged
----rows and list markers are text with tabs, such as copied lists or code.
+---a table outside any table, with no selection to replace.
 function tables.can_paste_table(view)
   if not (view and view.buffer) or view.buffer:has_any_selection() then return false end
   if #view.buffer.selections ~= 4 then return false end
   -- The clipboard check is cheap and usually fails; the table and fence
   -- checks scan the Buffer.
-  local grid = tables.spreadsheet_grid(system.get_clipboard())
-  return grid ~= nil and not grid.ragged and #grid.rows >= 2 and grid.columns >= 2
-    and not grid_is_list(grid)
+  return new_table_model(system.get_clipboard()) ~= nil
     and tables.can_insert_table(view)
 end
 
----Paste spreadsheet rows as a new table whose first row is the header.
+---Paste the clipboard's table as a new table.
 function tables.paste_table(view)
   if not tables.can_paste_table(view) then return false end
-  local grid = tables.spreadsheet_grid(system.get_clipboard())
-  local model = { columns = grid.columns, alignments = {}, rows = grid.rows }
+  local model = new_table_model(system.get_clipboard())
   local table_line = insert_model_at_caret(view, model, "paste-table")
   place_caret_in_cell(
-    view.buffer, grid_row_line(table_line, #grid.rows), grid.columns, true
+    view.buffer, grid_row_line(table_line, #model.rows), model.columns, true
   )
   return true
+end
+
+-- Table copy ----------------------------------------------------------------
+
+---The cells of a Table Cell Selection as a table model, or nil when the
+---selection is not whole cells of one table in a grid of rows and columns.
+---Body rows keep an empty header row, because a Markdown table needs one.
+local function selected_cells_model(view)
+  local contexts, first = collect_interactive_contexts(view)
+  if not contexts or #contexts < 2 or not cell_group(view, contexts) then return nil end
+  local row_set, column_set, cell_set, count = {}, {}, {}, 0
+  for _, context in ipairs(contexts) do
+    local key = context.grid_row .. ":" .. context.column
+    if not cell_set[key] then
+      cell_set[key], count = true, count + 1
+      row_set[context.grid_row], column_set[context.column] = true, true
+    end
+  end
+  local rows, columns = {}, {}
+  for row in pairs(row_set) do rows[#rows + 1] = row end
+  for column in pairs(column_set) do columns[#columns + 1] = column end
+  if #rows * #columns ~= count then return nil end
+  table.sort(rows)
+  table.sort(columns)
+  local source = model_from_context(first)
+  local model = { columns = #columns, alignments = {}, rows = {} }
+  for index, column in ipairs(columns) do model.alignments[index] = source.alignments[column] end
+  if rows[1] ~= 1 then model.rows[1] = empty_cells(#columns) end
+  for _, row in ipairs(rows) do
+    local cells = {}
+    for index, column in ipairs(columns) do cells[index] = source.rows[row][column] end
+    model.rows[#model.rows + 1] = cells
+  end
+  return model
+end
+
+function tables.can_copy_cells(view)
+  return selected_cells_model(view) ~= nil
+end
+
+---Copy a Table Cell Selection as a Markdown table. A cut then empties the
+---selected cells.
+function tables.copy_cells(view, cut)
+  local model = selected_cells_model(view)
+  if not model then return false end
+  local text = table.concat(tables.serialize_model(model), "\n") .. "\n"
+  core.cursor_clipboard = { full = text }
+  core.cursor_clipboard_whole_line = {}
+  system.set_clipboard(text)
+  local buffer = view.buffer
+  local ranges, edits = {}, {}
+  for idx, line1, col1, line2, col2 in buffer:get_selections(true, true) do
+    ranges[#ranges + 1] = { line1, col1, line2, col2 }
+    if line1 ~= line2 or col1 ~= col2 then
+      edits[#edits + 1] = { line1 = line1, col1 = col1, line2 = line2, col2 = col2, text = "", idx = idx }
+    end
+  end
+  core.log_quiet(
+    "Markdown table %s %d rows, %d columns in %s", cut and "cut" or "copied",
+    #model.rows, model.columns, buffer:get_name()
+  )
+  if cut then
+    if #edits > 0 then
+      buffer:apply_edits(edits, { type = "remove", last_selection = buffer.last_selection })
+    end
+  elseif view.show_copy_feedback then
+    view:show_copy_feedback(ranges)
+  end
+  return true
+end
+
+-- Table source --------------------------------------------------------------
+-- Edit Table Source shows one table of a View as Markdown source until the
+-- caret leaves it. The shown lines move with edits, so a row that is not
+-- valid table source while the user types stays source.
+
+function tables.source_lines(view)
+  local shown = view and view.markdown_table_source
+  if shown then return shown.line1, shown.line2 end
+end
+
+function tables.shows_source(view, line)
+  local shown = view and view.markdown_table_source
+  return shown ~= nil and line >= shown.line1 and line <= shown.line2
+end
+
+---Show the caret's table as source. Returns its lines, or nil.
+function tables.show_source(view)
+  local context = context_at(view, nil, nil, false)
+  if not context then return nil end
+  view.markdown_table_source = { line1 = context.line1, line2 = context.line2 }
+  return context.line1, context.line2
+end
+
+---Show the table as a table again. Returns the lines that showed source.
+function tables.hide_source(view)
+  local line1, line2 = tables.source_lines(view)
+  view.markdown_table_source = nil
+  return line1, line2
+end
+
+---Move the shown source lines through Buffer edits, given in positions of
+---the old text. An edit that ends before the first line moves the lines. An
+---edit inside them, also at the end of the last line, changes their count.
+function tables.move_source(view, edits)
+  local shown = view and view.markdown_table_source
+  if not shown then return end
+  local line1, line2 = shown.line1, shown.line2
+  for _, edit in ipairs(edits or {}) do
+    local _, breaks = tostring(edit.text or ""):gsub("\n", "")
+    local delta = breaks - (edit.line2 - edit.line1)
+    if edit.line2 < shown.line1 or edit.line2 == shown.line1 and edit.col2 == 1 then
+      line1, line2 = line1 + delta, line2 + delta
+    elseif edit.line1 <= shown.line2 then
+      if edit.line1 < shown.line1 then
+        line1 = line1 + edit.line1 - shown.line1
+      end
+      line2 = line2 + delta
+    end
+  end
+  shown.line1, shown.line2 = line1, math.max(line1, line2)
 end
 
 return tables

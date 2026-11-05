@@ -282,6 +282,44 @@ end, {
   end,
 })
 
+local function live_table_view()
+  local view = core.active_view
+  if config.markdown_live_interactive_tables == true
+  and view and view:extends(Editor)
+  and markdown_live.is_markdown_buffer(view.buffer)
+  and markdown_live.is_live_mode(view)
+  then
+    return view
+  end
+end
+
+command.add(function()
+  local view = live_table_view()
+  return view ~= nil and markdown_tables.can_copy_cells(view), view
+end, {
+  ["markdown:table_copy"] = function(view)
+    markdown_tables.copy_cells(view, false)
+  end,
+})
+
+command.add(function()
+  local view = live_table_view()
+  return view ~= nil and not view.buffer.read_only and markdown_tables.can_copy_cells(view), view
+end, {
+  ["markdown:table_cut"] = function(view)
+    markdown_tables.copy_cells(view, true)
+  end,
+})
+
+command.add(function()
+  local view = live_table_view()
+  return view ~= nil and markdown_tables.interactive_context(view) ~= nil, view
+end, {
+  ["markdown:table_edit_source"] = command.palette(function(view)
+    markdown_live.show_table_source(view)
+  end),
+})
+
 command.add(function(x, y)
   local view = core.active_view
   if config.markdown_live_interactive_tables == true
