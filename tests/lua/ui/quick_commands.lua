@@ -233,7 +233,7 @@ test.describe("Quick Commands", function()
     test.equal(#context.warnings, 1)
   end)
 
-  for _, slot in ipairs { "z", "x", "c", "v" } do
+  for _, slot in ipairs { "z", "x", "c" } do
     test.it("runs Quick Command " .. slot:upper() .. " without changing focus or Pane Group", function(context)
       local shell = open_terminal("current")
       set_quick_command(shell, slot, "make build")
@@ -320,11 +320,11 @@ test.describe("Quick Commands", function()
 
   test.it("does not start a new terminal after its terminal closed", function(context)
     local shell = open_terminal("current")
-    set_quick_command(shell, "v", "make run")
+    set_quick_command(shell, "z", "make run")
     local editor = open_editor("new")
     panes.close(panes.pane_for_view(shell), { force = true })
 
-    command.perform("quick_command:run_v")
+    command.perform("quick_command:run_z")
 
     test.equal(#context.sessions, 1)
     test.equal(#terminal.open_views(), 0)

@@ -17,7 +17,6 @@ local SLOTS = {
   { key = "z", label = "Z" },
   { key = "x", label = "X" },
   { key = "c", label = "C" },
-  { key = "v", label = "V" },
 }
 local STORAGE_MODULE = "quick-commands"
 local READY_TIMEOUT = 5
