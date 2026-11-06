@@ -240,6 +240,9 @@ if not core.__untitled_tabs_patched then
     if state and state.intellij_untitled then
       if transfer then assert(type(state.text) == "string", "Untitled transfer has no text") end
       local existing_buffer = open_untitled_buffer_by_id(state.intellij_untitled_id)
+      if transfer and existing_buffer and untitled_recovery.release_recovery_only_buffer(existing_buffer) then
+        existing_buffer = nil
+      end
       if existing_buffer then
         if transfer then
           assert(existing_buffer:get_text(1, 1, math.huge, math.huge) == state.text

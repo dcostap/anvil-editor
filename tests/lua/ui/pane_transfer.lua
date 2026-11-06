@@ -87,7 +87,7 @@ test.describe("Pane transfer", function()
       -- Another process has another Buffer registry and another Project recovery folder.
       core.projects, core.buffers = { Project(path) }, {}
       core.buffer_registry = BufferRegistry(core.buffers)
-      local moved, old
+      local moved, old, old_pane
       local ok, err = pcall(function()
         if destination ~= "missing" then
           old = untitled.tag_buffer(core.open_buffer(), "Untitled-1", buffer.intellij_untitled_id)
@@ -101,7 +101,8 @@ test.describe("Pane transfer", function()
             old:insert(1, 1, "still ")
           end
           test.ok(recovery.flush_buffer(old, "transfer test", true))
-          if destination == "stale" then core.buffer_registry:remove(old, true) end
+          if destination == "stale" then core.buffer_registry:remove(old, true)
+          else old_pane = panes.create { factory = function() return Editor(old) end } end
         end
         if destination == "open" then
           test.not_ok(perform(sent[1].request))
@@ -120,6 +121,7 @@ test.describe("Pane transfer", function()
         test.equal(bytes, text .. "\n")
       end)
       if moved then panes.close(moved, { force = true }) end
+      if old_pane then panes.close(old_pane, { force = true }) end
       core.projects, core.buffers, core.buffer_registry = projects, buffers, registry
       test.ok(test.remove_tree(recovery.project_paths(path).root))
       test.ok(test.remove_tree(path))
@@ -167,6 +169,24 @@ test.describe("Pane transfer", function()
     test.not_ok(perform(sent[2].request))
     test.equal(panes.count(), 1)
     test.equal(pane.current_view.buffer:get_text(1, 1, math.huge, math.huge), "keep this")
+  end)
+
+  test.it("accepts edited text returning after its only source View moved away", function()
+    local untitled = require "plugins.untitled_tabs"
+    local pane = panes.create()
+    local buffer = untitled.tag_buffer(pane.current_view.buffer)
+    buffer:insert(1, 1, "original")
+    test.ok(export(pane))
+    test.ok(perform { action = "transferred", transfer = transfer_id, ok = true, contents_verified = true })
+    test.equal(panes.count(), 0)
+    -- The other process sends the same Untitled identity back with its current text.
+    local returned = sent[1].request
+    returned.transfer = transfer_id .. "-return"
+    returned.snapshot.views[1].state.text = "edited in the other Project"
+    test.ok(perform(returned))
+    test.equal(panes.active().current_view.buffer:get_text(1, 1, math.huge, math.huge),
+      "edited in the other Project")
+    test.ok(panes.active().current_view.buffer:is_dirty())
   end)
 
   test.it("names a Project on a Machine by its key, and moves a Pane only where its files are", function()
@@ -242,6 +262,42 @@ test.describe("Pane transfer", function()
     until system.get_time() >= deadline
     test.fail(message)
   end
+
+  test.it("keeps a running Terminal when a later View fails to restore", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal = require "plugins.terminal"
+    local ready = dofile("tests/fixtures/terminal_ready.lua")
+    local source = ready(open_terminal())
+    source:mark_input_used()
+    wait_until(function() source:service_session(true); return not source.busy end, "shell did not become idle")
+    local pane, id = panes.pane_for_view(source), source.session_id
+    wait_until(function() local record = session_record(id); return record and record.movable end,
+      "the host did not write its record")
+    local host_pid = session_record(id).host_pid
+    local buffer = require("plugins.untitled_tabs").tag_buffer(core.open_buffer())
+    buffer:insert(1, 1, "exported")
+    test.ok(panes.present(Editor(buffer), { pane = pane }))
+    test.equal(#panes.views(pane), 2)
+    -- Control connection timing, not the failure: the real host must finish attaching before rollback.
+    local original_restore = terminal.from_state
+    terminal.from_state = function(state, opts) return ready(original_restore(state, opts)) end
+    local ok, err = pcall(function()
+      test.ok(export(pane))
+      buffer:insert(1, 1, "conflicting ")
+      test.not_ok(perform(sent[1].request))
+      -- Delay the failure reply, as separate processes can. Reattaching at once can hide a destructive Close.
+      coroutine.yield(2)
+      test.ok(session_record(id), "failed import deleted the source Terminal record")
+      test.not_ok(perform(sent[2].request))
+      ready(source)
+      test.equal(source.session_id, id)
+      test.equal(session_record(id).host_pid, host_pid, "the shell must not restart after a failed move")
+      test.equal(panes.count(), 1)
+      test.equal(buffer:get_text(1, 1, math.huge, math.huge), "conflicting exported")
+    end)
+    terminal.from_state = original_restore
+    test.ok(ok, err)
+  end)
 
   test.it("moves a running Terminal Session to the target Project", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")

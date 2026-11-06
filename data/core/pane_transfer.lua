@@ -42,6 +42,13 @@ local function reattach(terminals)
   for _, view in ipairs(terminals) do view:reattach_session() end
 end
 
+local function detach_restored_terminals(views)
+  for _, view in ipairs(live_terminals(views)) do
+    view:detach_session()
+    view:release_session()
+  end
+end
+
 -- A Project process reaches the files of its own Machine only, and only inside its Project. A Pane snapshot has
 -- paths, not their Machine, so a Pane moves only where its paths name the same files.
 local function machine_refusal(views, to)
@@ -120,7 +127,8 @@ local function import(request)
   local pane
   local ok, err = pcall(function()
     local reason
-    pane, reason = panes.restore(request.snapshot, { focus = false, transfer = true })
+    pane, reason = panes.restore(request.snapshot, { focus = false, transfer = true,
+      on_restore_failure = detach_restored_terminals })
     assert(pane, reason)
     local views = panes.views(pane)
     for index, saved in ipairs(request.snapshot.views) do
@@ -138,10 +146,7 @@ local function import(request)
   end)
   if not ok and pane then
     -- The source attaches its Terminals again. Closing them here would end their shells.
-    for _, view in ipairs(live_terminals(panes.views(pane))) do
-      view:detach_session()
-      view:release_session()
-    end
+    detach_restored_terminals(panes.views(pane))
     panes.close(pane, { force = true })
   end
   core.log_quiet("Pane transfer %s import: %s", request.transfer, ok and "restored" or tostring(err))

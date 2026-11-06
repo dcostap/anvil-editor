@@ -1766,6 +1766,8 @@ function M.restore(snapshot, opts)
     return pane
   end)
   if not ok then
+    -- A transfer must release borrowed resources before closing partially restored Views.
+    if opts.on_restore_failure then opts.on_restore_failure(views) end
     for _, view in ipairs(views) do
       if not M.pane_for_view(view) then call_lifecycle(view, "on_close") end
     end

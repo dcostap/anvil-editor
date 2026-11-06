@@ -1057,6 +1057,21 @@ local function quarantine_file(path, id)
   return true, moved_any
 end
 
+-- A returning transfer can replace a Buffer kept only for recovery, but not one that a View or request owns.
+-- Keep its recovery files until the replacement writes its own snapshot.
+function M.release_recovery_only_buffer(buffer)
+  local registry = core.buffer_registry
+  if not is_untitled_buffer(buffer) or not registry or not registry:release(buffer, M) then return false end
+  if registry:reference_count(buffer) > 0 then
+    registry:retain(buffer, M)
+    return false
+  end
+  dirty_buffers[buffer] = nil
+  registry:remove(buffer, true)
+  log_quiet("Untitled recovery: released retained copy for transfer %s", buffer.intellij_untitled_id)
+  return true
+end
+
 function M.handle_save_as_success(buffer, old)
   old = old or {}
   local path = old.backing_path or buffer.intellij_untitled_backing_path
