@@ -1217,7 +1217,7 @@ test.describe("Text View Selection State edit characterization", function()
     test.equal(text(buffer), "bb\n")
   end)
 
-  test.it("join-lines joins each selected line range with spaces", function(context)
+  test.it("join-lines merges carets that reach the same position", function(context)
     local buffer, main = new_shared_views(context, "aa\n  bb\ncc")
     core.set_active_view(main)
     set_view_selections(main, {
@@ -1228,10 +1228,9 @@ test.describe("Text View Selection State edit characterization", function()
     test.ok(command.perform("editor:join_lines"))
 
     test.equal(text(buffer), "aa bb cc\n")
-    test.same(selection(main), {
-      1, 9, 1, 9,
-      1, 9, 1, 9,
-    })
+    test.same(selection(main), { 1, 9, 1, 9 })
+    main:with_selection_state(function() main:on_text_input("x") end)
+    test.equal(text(buffer), "aa bb ccx\n")
   end)
 
   test.it("join-lines coalesces overlapping ranges into one transaction", function(context)
