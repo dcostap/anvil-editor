@@ -341,7 +341,7 @@ An editing action that keeps selected text selected while placing matching delim
 _Avoid_: auto-pairing, wrapper conversion
 
 **Shown Indentation**:
-The indentation at which a caret on an empty line shows: where Enter would put it, or a level the user chose for that caret. The empty line holds no whitespace; the first edit at the caret writes this indentation.
+The indentation at which a caret on an empty line initially shows: where Enter would put it, or a level the user chose. The user can move the caret within that indentation without adding whitespace. Each Text View keeps its own chosen position. The first edit writes only the indentation up to that position.
 _Avoid_: virtual indent, virtual space, phantom indentation, ghost indent
 
 **Current Line Highlight**:

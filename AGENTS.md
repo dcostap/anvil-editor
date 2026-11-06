@@ -912,11 +912,12 @@ Run `ui/buffer_reload.lua` and `runtime/buffer_apply_lines.lua` after changes.
 
 ## Shown Indentation
 
-An empty line holds no whitespace. Its caret shows at the indentation that Enter at the end of the line above writes (`core.empty_line_indent`).
-The Buffer keeps the caret at column 1. Only the drawn caret, the Up/Down goal column and the next edit use the Shown Indentation.
+An empty line holds no whitespace. Its caret initially shows at the indentation that Enter at the end of the line above writes (`core.empty_line_indent`).
+The Buffer keeps the caret at column 1. Each Text View keeps its own chosen position within the Shown Indentation.
+Left and Right move through its spaces and tabs without editing. At either edge, they continue onto the adjacent line. A click chooses the nearest position within the indentation; a click farther right stops at its end. The drawn caret, the Up/Down goal column and the next edit use that chosen position. Markdown Live Preview uses the same indentation width for drawing and pointer placement.
 Tab, Shift+Tab, End and Backspace on an empty line only change the caret's level. The level stays until the caret leaves the line or the text changes. Enter carries it to the new line.
 Move to Start of Line and Move to Start of Indentation clear the Shown Indentation without editing the line.
-Typing and paste first write the Shown Indentation. One undo reverts it with the edit (`Buffer:join_undo_since`).
+Typing and paste first write only the indentation up to the chosen position. One undo reverts it with the edit (`Buffer:join_undo_since`). Text selections cover actual text, not the unwritten indentation. Collapsing a selection onto an empty line keeps its endpoint at column 1.
 The module tracks the lines that user edits leave holding only whitespace. It moves them through later edits with `changed_ranges`.
 A tracked line becomes empty when no selection touches it. With the caret at its end, it becomes empty at once, and its whitespace becomes the caret's level, so the caret does not move.
 The cleanup undoes with the edit before it. It waits while redo is available. Undo, redo, load and reload add no tracked lines.

@@ -4,6 +4,7 @@ local config = require "core.config"
 local linewrapping = require "core.linewrapping"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
+local Editor = require "core.editor"
 local test = require "core.test"
 
 local function set_text(buffer, text)
@@ -20,11 +21,11 @@ local function text(buffer)
   return table.concat(buffer.lines)
 end
 
-local function new_editor(context, content, filename)
+local function new_editor(context, content, filename, view_type)
   local buffer = Buffer()
   set_text(buffer, content)
   buffer:set_filename(filename, filename)
-  local view = TextView(buffer)
+  local view = (view_type or TextView)(buffer)
   view.size.x, view.size.y = 800, 600
   context.buffers[#context.buffers + 1] = buffer
   core.set_active_view(view)
@@ -255,6 +256,13 @@ test.describe("empty line indentation", function()
     test.equal(text(buffer), "if ok then\n\n\nend\n")
     test.same(caret(view), { 3, 1, 3, 1 })
     near(caret_dx(view, 3, 1), view:get_font():get_width("    "))
+
+    command.perform("core:move_to_start_of_line")
+    command.perform("core:newline")
+    view:update()
+    test.same(caret(view), { 4, 1, 4, 1 })
+    near(caret_dx(view, 4, 1), 0)
+    test.equal(text(buffer), "if ok then\n\n\n\nend\n")
   end)
 
   test.it("a line that an edit leaves holding only whitespace becomes empty when the caret leaves it", function(context)
@@ -303,6 +311,11 @@ test.describe("empty line indentation", function()
     command.perform("core:paste")
 
     test.equal(text(buffer), "if ok then\n  a()\n  b()\nend\n")
+    buffer:undo()
+    buffer:set_selection(2, 1, 2, 1)
+    command.perform("core:move_to_previous_char")
+    command.perform("core:paste")
+    test.equal(text(buffer), "if ok then\n a()\n b()\nend\n")
   end)
 
   test.it("End leaves an empty line empty when its caret already shows the block's indentation", function(context)
@@ -358,5 +371,151 @@ test.describe("empty line indentation", function()
         end
       end
     end
+  end)
+
+  test.it("Left and Right move through shown indentation without editing the line", function(context)
+    for _, case in ipairs {
+      { indent = "    ", left_columns = 3, typed = "  x\n" },
+      { indent = "\t\t", left_columns = 2, typed = "x\n" },
+    } do
+      for _, wrapped in ipairs { false, true } do
+        local content = case.indent .. "text\n\nnext"
+        local buffer, view = new_editor(context, content, "arrows-" .. #context.buffers .. ".txt")
+        view:set_wrapping_enabled(wrapped)
+        linewrapping.complete_async_reconstruction(view)
+        buffer:set_selection(2, 1, 2, 1)
+        local space = view:get_font():get_width(" ")
+
+        command.perform("core:move_to_previous_char")
+        near(caret_dx(view, 2, 1), case.left_columns * space)
+        test.same(caret(view), { 2, 1, 2, 1 })
+        test.equal(text(buffer), content .. "\n")
+        command.perform("core:move_to_next_char")
+        near(caret_dx(view, 2, 1), 4 * space)
+        command.perform("core:move_to_previous_char")
+        command.perform("core:move_to_previous_char")
+        test.ok(view:on_text_input("x"))
+        test.equal(buffer.lines[2], case.typed)
+        buffer:undo()
+        test.equal(text(buffer), content .. "\n")
+
+        buffer:set_selection(2, 1, 2, 1)
+        command.perform("core:move_to_start_of_line")
+        command.perform("core:move_to_previous_char")
+        test.same(caret(view), { 1, #buffer.lines[1], 1, #buffer.lines[1] })
+        command.perform("core:move_to_next_char")
+        near(caret_dx(view, 2, 1), 0)
+        for _ = 1, #case.indent do command.perform("core:move_to_next_char") end
+        near(caret_dx(view, 2, 1), 4 * space)
+        command.perform("core:move_to_next_char")
+        test.same(caret(view), { 3, 1, 3, 1 })
+      end
+    end
+  end)
+
+  test.it("a click chooses a position within shown indentation for typing", function(context)
+    local buffer, view = new_editor(context, "    text\n\nnext", "click.txt")
+    local space = view:get_font():get_width(" ")
+    local x, y = view:get_line_screen_position(2, 1)
+
+    test.ok(command.perform("core:set_cursor", x + 2 * space, y + view:get_line_height() / 2))
+    view:on_mouse_released("left", x + 2 * space, y)
+    near(caret_dx(view, 2, 1), 2 * space)
+    test.equal(buffer.lines[2], "\n")
+    test.ok(view:on_text_input("x"))
+    test.equal(text(buffer), "    text\n  x\nnext\n")
+
+    buffer:undo()
+    test.ok(command.perform("core:set_cursor", x + 10 * space, y + view:get_line_height() / 2))
+    near(caret_dx(view, 2, 1), 4 * space)
+    view:on_mouse_moved(x, y + view:get_line_height() / 2, 0, 0)
+    view:on_mouse_released("left", x, y)
+    near(caret_dx(view, 2, 1), 0)
+    test.ok(view:on_text_input("x"))
+    test.equal(buffer.lines[2], "x\n")
+  end)
+
+  test.it("Views keep separate chosen positions on the same empty line", function(context)
+    local buffer, view = new_editor(context, "    text\n\nnext", "views.txt")
+    buffer:set_selection(2, 1, 2, 1)
+    local other = TextView(buffer)
+    other:set_selection_state { selections = { 2, 1, 2, 1 } }
+
+    command.perform("core:move_to_previous_char")
+
+    near(caret_dx(view, 2, 1), 3 * view:get_font():get_width(" "))
+    near(caret_dx(other, 2, 1), 4 * other:get_font():get_width(" "))
+    core.set_active_view(other)
+    command.perform("core:move_to_start_of_line")
+    near(caret_dx(other, 2, 1), 0)
+    near(caret_dx(view, 2, 1), 3 * view:get_font():get_width(" "))
+  end)
+
+  test.it("Markdown clicks and arrows use the same shown positions with or without wrapping", function(context)
+    for _, wrapped in ipairs { false, true } do
+      local buffer, view = new_editor(context, "- item\n    tipoArquillas\n\nnext",
+        "markdown-caret-" .. tostring(wrapped) .. ".md", Editor)
+      view:set_wrapping_enabled(wrapped)
+      linewrapping.complete_async_reconstruction(view)
+      buffer:set_selection(3, 1, 3, 1)
+      local initial = view:get_caret_screen_position(3, 1)
+      command.perform("core:move_to_previous_char")
+      local x, y = view:get_caret_screen_position(3, 1)
+      test.ok(x < initial)
+      command.perform("core:move_to_start_of_line")
+      test.ok(command.perform("core:set_cursor", x, y + view:get_line_height() / 2))
+      view:on_mouse_released("left", x, y)
+      near(view:get_caret_screen_position(3, 1), x)
+      test.equal(buffer.lines[3], "\n")
+      test.ok(view:on_text_input("x"))
+      test.equal(buffer.lines[3], "   x\n")
+    end
+  end)
+
+  test.it("line-start selection clears shown indentation without selecting nonexistent spaces", function(context)
+    local buffer, view = new_editor(context, "    text\n\nnext", "selection.txt")
+    buffer:set_selection(2, 1, 2, 1)
+    command.perform("core:move_to_previous_char")
+
+    command.perform("core:select_to_start_of_line")
+
+    near(caret_dx(view, 2, 1), 0)
+    test.same(caret(view), { 2, 1, 2, 1 })
+    test.equal(text(buffer), "    text\n\nnext\n")
+    command.perform("core:select_to_previous_char")
+    test.equal(buffer:get_selection_text(), "\n")
+    command.perform("core:move_to_next_char")
+    near(caret_dx(view, 2, 1), 0)
+    test.ok(view:on_text_input("x"))
+    test.equal(buffer.lines[2], "x\n")
+  end)
+
+  test.it("vertical movement uses the chosen position after a horizontal move", function(context)
+    for _, wrapped in ipairs { false, true } do
+      local buffer, view = new_editor(context, "    text\n\nabcdefgh", "goal-" .. tostring(wrapped) .. ".txt")
+      view:set_wrapping_enabled(wrapped)
+      linewrapping.complete_async_reconstruction(view)
+      buffer:set_selection(3, 5, 3, 5)
+      command.perform("core:move_to_previous_line")
+      command.perform("core:move_to_previous_char")
+      command.perform("core:move_to_next_line")
+      test.same(caret(view), { 3, 4, 3, 4 })
+    end
+  end)
+
+  test.it("Enter carries separate chosen positions for several empty-line carets", function(context)
+    local buffer, view = new_editor(context, "  a\n\n b\n\nlast", "several-carets.txt")
+    buffer:set_selection_list { 2, 1, 2, 1, 4, 1, 4, 1 }
+    command.perform("core:move_to_previous_char")
+
+    command.perform("core:newline")
+    view:update()
+
+    test.same(caret(view), { 3, 1, 3, 1, 6, 1, 6, 1 })
+    near(caret_dx(view, 3, 1), view:get_font():get_width(" "))
+    near(caret_dx(view, 6, 1), 0)
+    test.equal(text(buffer), "  a\n\n\n b\n\n\nlast\n")
+    buffer:undo()
+    test.equal(text(buffer), "  a\n\n b\n\nlast\n")
   end)
 end)

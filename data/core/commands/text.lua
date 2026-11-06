@@ -378,6 +378,7 @@ local function set_cursor(dv, x, y, snap_type)
   -- may change a caret's horizontal presentation when it enters a blank line.
   local line, col = dv:resolve_screen_position(x, y)
   dv.buffer:set_selection(line, col, line, col)
+  if snap_type == "set" then empty_line_indent.place(dv, line, col, x) end
   if snap_type == "word" or snap_type == "lines" then
     command.perform("core:select_" .. snap_type)
   end
@@ -1553,14 +1554,15 @@ end
 
 -- End on a blank line moves to the block's indentation. On an empty line only
 -- the caret moves; the line stays empty.
-local function smart_end_on_blank_line(buffer)
+local function smart_end_on_blank_line(view)
+  local buffer = view.buffer
   local line = single_caret(buffer)
   if not line then return false end
   local leading = (buffer.lines[line] or ""):gsub("\n$", "")
   if not leading:match("^[\t ]*$") then return false end
   local expected = block_indent(buffer, line)
   if not expected then return false end
-  if leading == "" and empty_line_indent.end_at(buffer, expected) then return true end
+  if leading == "" and empty_line_indent.end_at(view, expected) then return true end
   if expected == leading then return false end
   buffer:apply_edits({
     { line1 = line, col1 = 1, line2 = line, col2 = #leading + 1, text = expected },
@@ -2291,7 +2293,7 @@ local commands = {
     local caret_line, caret_col = single_caret(dv.buffer)
     if caret_col == 1 and dv.buffer.lines[caret_line] == "\n" then
       local expected = block_indent(dv.buffer, caret_line)
-      if expected and empty_line_indent.backspace(dv.buffer, expected) then return end
+      if expected and empty_line_indent.backspace(dv, expected) then return end
     end
     if smart_indent_backspace(dv.buffer) then return end
     local _, indent_size = dv.buffer:get_indent_info()
@@ -3313,6 +3315,7 @@ end, selection_commands({
     end
     dv.mouse_selecting = { line, col, snap_type, added_to = base, removed = removed }
     dv:set_added_mouse_selection(dv:mouse_selection(dv.buffer, snap_type, line, col, line, col))
+    if snap_type == "set" and not removed then empty_line_indent.place(dv, line, col, x) end
     apply_resolved_wrap_affinity(dv)
     core.log_quiet("Added mouse selection: snap=%s removed=%s selections=%d",
       snap_type, tostring(removed), #dv.buffer.selections / 4)
@@ -3420,8 +3423,12 @@ local function move_char_batch(dv, move_fn, collapse_to_end)
       else
         line, col = line1, col1
       end
+      empty_line_indent.arrive(dv, line, col, false)
+    elseif empty_line_indent.move_char(dv, line1, col1, collapse_to_end and 1 or -1) then
+      line, col = line1, col1
     else
       line, col = move_fn(buffer, line1, col1, dv)
+      if line ~= line1 then empty_line_indent.arrive(dv, line, col, not collapse_to_end) end
     end
     selections[#selections + 1] = line
     selections[#selections + 1] = col
@@ -3436,14 +3443,14 @@ end
 local indent_selections = commands["core:indent"]
 commands["core:indent"] = function(dv)
   if not can_edit(dv, "indent") then return end
-  if empty_line_indent.shift_level(dv.buffer, false) then return end
+  if empty_line_indent.shift_level(dv, false) then return end
   return empty_line_indent.write_then(dv, function() return indent_selections(dv) end)
 end
 
 local unindent_selections = commands["core:unindent"]
 commands["core:unindent"] = function(dv)
   if not can_edit(dv, "unindent") then return end
-  if empty_line_indent.shift_level(dv.buffer, true) then return end
+  if empty_line_indent.shift_level(dv, true) then return end
   return unindent_selections(dv)
 end
 
@@ -4126,29 +4133,33 @@ commands["core:move_to_start_of_line"] = function(dv)
     dv, "core:move_to_start_of_line",
     move_to_wrapped_start_of_line, dv
   )
-  empty_line_indent.move_to_start(dv.buffer)
+  empty_line_indent.move_to_start(dv)
 end
 commands["core:select_to_start_of_line"] = function(dv)
-  return wrapped_select_to(dv, "core:select_to_start_of_line", move_to_wrapped_start_of_line, dv)
+  wrapped_select_to(dv, "core:select_to_start_of_line", move_to_wrapped_start_of_line, dv)
+  empty_line_indent.move_to_start(dv)
 end
 commands["core:delete_to_start_of_line"] = function(dv)
-  return wrapped_delete_to(dv, "core:delete_to_start_of_line", move_to_wrapped_start_of_line, dv)
+  wrapped_delete_to(dv, "core:delete_to_start_of_line", move_to_wrapped_start_of_line, dv)
+  empty_line_indent.move_to_start(dv)
 end
 commands["core:move_to_start_of_indentation"] = function(dv)
   wrapped_move_to(
     dv, "core:move_to_start_of_indentation",
     move_to_wrapped_start_of_indentation, dv
   )
-  empty_line_indent.move_to_start(dv.buffer)
+  empty_line_indent.move_to_start(dv)
 end
 commands["core:select_to_start_of_indentation"] = function(dv)
-  return wrapped_select_to(dv, "core:select_to_start_of_indentation", move_to_wrapped_start_of_indentation, dv)
+  wrapped_select_to(dv, "core:select_to_start_of_indentation", move_to_wrapped_start_of_indentation, dv)
+  empty_line_indent.move_to_start(dv)
 end
 commands["core:delete_to_start_of_indentation"] = function(dv)
-  return wrapped_delete_to(dv, "core:delete_to_start_of_indentation", move_to_wrapped_start_of_indentation, dv)
+  wrapped_delete_to(dv, "core:delete_to_start_of_indentation", move_to_wrapped_start_of_indentation, dv)
+  empty_line_indent.move_to_start(dv)
 end
 commands["core:move_to_end_of_line"] = function(dv)
-  if smart_end_on_blank_line(dv.buffer) then return end
+  if smart_end_on_blank_line(dv) then return end
   return wrapped_move_to(dv, "core:move_to_end_of_line", move_to_wrapped_end_of_line, dv)
 end
 commands["core:select_to_end_of_line"] = function(dv)

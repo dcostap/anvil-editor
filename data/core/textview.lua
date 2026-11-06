@@ -7052,6 +7052,9 @@ function TextView:on_mouse_moved(x, y, ...)
       end
       self.buffer:set_selection(l1, c1, l2, c2)
     end
+    if not special_handled and (not snap_type or snap_type == "set") then
+      require("core.empty_line_indent").place(self, l1, c1, x)
+    end
   end
   if selecting then
     apply_resolved_line_end_affinity(self)
@@ -7077,6 +7080,9 @@ function TextView:set_column_carets(x, line1, line2)
     end
   end
   self.buffer:set_selection_list(list, last)
+  for i = 1, #list, 4 do
+    require("core.empty_line_indent").place(self, list[i], list[i + 1], x)
+  end
 end
 
 ---Set the selection that a Ctrl+click adds, beside the selections that
@@ -7337,7 +7343,7 @@ function TextView:on_text_input(text)
     end
   end
   local empty_line_indent = require("core.empty_line_indent")
-  if empty_line_indent.type_whitespace(self.buffer, text) then return true end
+  if empty_line_indent.type_whitespace(self, text) then return true end
   empty_line_indent.write_then(self, function()
     if not self:dedent_typed_closer(text) then self.buffer:text_input(text) end
   end)
