@@ -1,5 +1,5 @@
 -- End-to-end Text Search on a real generated Project. Every action waits for
--- completion, including no-match and rapid query replacement.
+-- completion, including no-match and query replacement before scanner startup.
 local core = require "core"
 local support = require "scenes.support"
 local fuzzy = require "plugins.fuzzy_searcher"
@@ -38,7 +38,7 @@ end
 
 function scene.action_name(_, index)
   local case = cases[(index - 1) % #cases + 1]
-  return case.burst and "replace-query" or case[1]
+  return case.burst and "replace-before-start" or case[1]
 end
 
 function scene.dispatch(context, index)

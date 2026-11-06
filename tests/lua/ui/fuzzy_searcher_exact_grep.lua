@@ -24,6 +24,7 @@ end
 
 local function install_controlled_grep(context, filename, lines, pause_after)
   local released = false
+  local streams = {}
   context.original_stream_start = process_stream.start
   process_stream.start = function(args, options)
     local is_grep = false
@@ -48,10 +49,11 @@ local function install_controlled_grep(context, filename, lines, pause_after)
       next_line = next_line + 1
       return result
     end
-    function stream:cancel() self.done, self.error = true, "cancelled" end
+    function stream:cancel() self.done, self.error, self.cancelled = true, "cancelled", true end
+    streams[#streams + 1] = stream
     return stream
   end
-  return function() released = true end
+  return function() released = true end, streams
 end
 
 test.describe("Fuzzy Searcher exact grep", function()
@@ -209,5 +211,33 @@ test.describe("Fuzzy Searcher exact grep", function()
 
     test.ok(wait_until(function() return heartbeat ~= nil end, 2),
       "expected another UI task to run during exact grep")
+  end)
+
+  test.it("cancels a running search and ignores its queued accent matches", function(context)
+    local path = context.root .. PATHSEP .. "replaced-search.txt"
+    local lines = {}
+    for i = 1, 80 do lines[i] = "café old result " .. i end
+    lines[81], lines[82] = "cafe\204\129 delayed result", "niño final result"
+    local file = assert(io.open(path, "wb"))
+    file:write(table.concat(lines, "\n"), "\n")
+    file:close()
+    local release, streams = install_controlled_grep(context, "replaced-search.txt", lines, 80)
+    fuzzy_searcher.open("#cafe")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function()
+      return result_count_for_path(picker, path) > 0 and picker:search_running()
+    end, 30), "the old scan must publish rows while it is still running")
+    local old = test.not_nil(streams[1])
+    picker.input:set_text("#niño")
+    picker:refresh("#niño")
+    test.ok(wait_until(function() return old.cancelled end, 30), "the old stream was not cancelled")
+    -- Model output already queued by the worker when cancellation arrived.
+    old.done, old.error = false, nil
+    release()
+    test.ok(wait_until(function() return picker.status == "1 exact matches" end, 30), tostring(picker.status))
+    coroutine.yield(0.03)
+    test.equal(result_count_for_path(picker, path), 1)
+    test.equal(picker.results[1].line, 82)
+    test.equal(picker.results[1].text, "niño final result")
   end)
 end)

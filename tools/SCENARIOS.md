@@ -71,7 +71,11 @@ The standard frame-work budgets apply to the uncapped cases. The response case s
 
 ## Focused runtime workloads
 
-`fuzzy-text-accents` runs in the default `smoke` suite and the focused `search` suite. It searches a generated 6,000-file Project with 2,400 accented lines. It checks composed and combining accents, quoted phrases, multiple terms, `ñ`, no matches, and rapid query replacement. Each action waits for completion, not only the first rows. It edits only a fixture-owned file and refuses `--project`.
+`fuzzy-text-accents` runs in the default `smoke` suite and the focused `search` suite. It searches a generated 6,000-file Project with 2,400 accented lines. It checks composed and combining accents, quoted phrases, multiple terms, `ñ`, no matches, and query replacement before scanner startup. Each action waits for completion, not only the first rows. It edits only a fixture-owned file and refuses `--project`.
+
+`ui/fuzzy_searcher_exact_grep.lua` tests replacement after a running scan publishes partial results. A controlled process stream keeps that test independent of machine speed. It checks cancellation and rejects queued results from the old query.
+
+`fuzzy-terminal-history` runs in `smoke`, `search`, and `terminal`. It searches 12,000 lines from a real, private Terminal, with 1,200 accented matches. It measures composed and combining accents, multiple terms, `ñ`, and completed no-match scans. It closes only its own Terminal when the benchmark exits.
 
 Run the scanner comparison separately from frame measurements:
 

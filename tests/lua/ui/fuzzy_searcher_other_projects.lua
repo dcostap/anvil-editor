@@ -475,4 +475,18 @@ test.describe("Project File Search in other Projects", function()
     test.equal(row.col, 4)
     test.same(row.spans, { {4, 8} })
   end)
+
+  test.it("answers Text Search after rejected candidates exceed the scan limit", function(context)
+    local rejected = 12000
+    write_file(context.local_file, string.rep("nin\204\131o ok\n", rejected) .. "nino ok\n")
+    test.ok(pane_requests.perform(serialize {
+      action = "project_search", from = context.other, id = 9, mode = "text", query = "nino",
+      case_sensitive = false, limit = 5,
+    }))
+    test.ok(wait_until(function() return #sent(context, "project_results") > 0 end, 30), "no answer was sent")
+    local rows = sent(context, "project_results")[1].request.rows
+    test.equal(#rows, 1)
+    test.equal(rows[1].line, rejected + 1)
+    test.equal(rows[1].text, "nino ok")
+  end)
 end)

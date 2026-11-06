@@ -1725,7 +1725,8 @@ local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored, case_
     }
     fuzzy_grep_jobs[key] = job
 
-    local pattern = fuzzy_native.literal(seed, { case_sensitive = case_sensitive }):pattern()
+    local literal = fuzzy_native.literal(seed, { case_sensitive = case_sensitive })
+    local pattern = literal:pattern()
 
     job.thread_key = core.add_thread(function()
       core.log_quiet(
@@ -1770,11 +1771,13 @@ local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored, case_
       while not job.cancelled and job.scanned < max_scanned do
         local line = stream:read_line()
         if line then
-          job.scanned = job.scanned + 1
           local r = decorate_grep_result(parse_vimgrep(line), root)
           if r and #(r.text or "") <= max_line_chars
             and not fuzzy_searcher.search.omitted_long_line(r.text)
+            and literal:find(r.text)
           then
+            -- The scanner can overmatch. Only a complete seed match uses the limit.
+            job.scanned = job.scanned + 1
             local key = r.file .. ":" .. tostring(r.line)
             if not job.seen[key] then
               job.seen[key] = true
@@ -5418,9 +5421,13 @@ fuzzy_searcher.other_projects.search.text = function(query, case_sensitive, limi
       while scanned < max_scanned and alive() do
         local line = stream:read_line()
         if line then
-          scanned = scanned + 1
           local source = decorate_grep_result(parse_vimgrep(line), root.path)
-          if source and not fuzzy_searcher.search.omitted_long_line(source.text) then add(source) end
+          if source and not fuzzy_searcher.search.omitted_long_line(source.text)
+            and matcher.seed_literal:find(source.text)
+          then
+            scanned = scanned + 1
+            add(source)
+          end
           slice = yield_if_over_budget(slice)
         elseif stream.done then
           break

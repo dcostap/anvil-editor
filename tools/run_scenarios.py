@@ -108,6 +108,9 @@ SCENARIOS: dict[str, Scenario] = {
     "terminal-autoscroll-history": Scenario(
         "terminal_autoscroll", FolderSpec("terminal-scroll", files=1), actions=80,
         suites=("terminal",)),
+    "fuzzy-terminal-history": Scenario(
+        "terminal_search", FolderSpec("terminal-search", files=1), actions=15,
+        suites=("smoke", "search", "terminal"), action_budget_ms=1000.0),
     # This shutdown-only API waits once for one second across every blocked host.
     "terminal-close-drain": Scenario(
         "terminal_close", FolderSpec("terminal-close-drain", files=1), actions=1,
