@@ -95,6 +95,8 @@ local function export(request)
   end
   local snapshot, err = panes.snapshot(pane)
   if not snapshot then return refuse(err) end
+  -- Older targets ignore extra snapshot fields. Older sources reject extra confirmation fields.
+  snapshot.verify_contents = true
   -- Workspace state can omit text backed by this Project's recovery folder. A move cannot use that folder.
   for index, view in ipairs(views) do
     local buffer, state = view.buffer, snapshot.views[index].state
@@ -150,8 +152,10 @@ local function import(request)
     panes.close(pane, { force = true })
   end
   core.log_quiet("Pane transfer %s import: %s", request.transfer, ok and "restored" or tostring(err))
-  local sent, send_error = send("direct", request.source, { action = "transferred",
-    transfer = request.transfer, ok = ok, contents_verified = ok, error = not ok and tostring(err) or nil })
+  local reply = { action = "transferred", transfer = request.transfer, ok = ok,
+    error = not ok and tostring(err) or nil }
+  if request.snapshot.verify_contents == true then reply.contents_verified = ok end
+  local sent, send_error = send("direct", request.source, reply)
   if not sent then return refuse(send_error) end
   if not ok then return refuse(err) end
   return true

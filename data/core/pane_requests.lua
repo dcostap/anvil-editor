@@ -97,7 +97,7 @@ local schemas = {
   drop = {pane = true, files = true, text = true},
   export = {pane = true, to = true, target = true, transfer = true, focus = true},
   import = {snapshot = true, target = true, source = true, transfer = true},
-  transferred = {transfer = true, ok = true, error = true},
+  transferred = {transfer = true, ok = true, error = true, contents_verified = true},
   drag = {phase = true, source = true, pane = true},
   terminal_find = {session = true, query = true, case_sensitive = true, row = true},
   terminal_focus = {session = true},
@@ -139,6 +139,7 @@ local function validate(request)
     return nil, "invalid focus"
   end
   if request.action == "transferred" and (type(request.ok) ~= "boolean"
+    or (request.contents_verified ~= nil and type(request.contents_verified) ~= "boolean")
     or (request.error ~= nil and type(request.error) ~= "string")) then return nil, "invalid transfer result" end
   if request.action == "terminal_find" and (not identifier(request.session) or not identifier(request.query)
     or type(request.case_sensitive) ~= "boolean" or type(request.row) ~= "number"

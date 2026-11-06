@@ -9,7 +9,7 @@ local sequence = 0
 local transfer_id
 
 local function perform(request)
-  return require("core.pane_transfer").perform(request)
+  return require("core.pane_requests").perform(common.serialize(request, { escape = true }), -1, -1)
 end
 
 local function export(pane, id)
@@ -159,16 +159,44 @@ test.describe("Pane transfer", function()
     test.ok(panes.find(pane.id) == pane)
   end)
 
+  test.it("rejects an invalid verification flag without consuming the pending move", function()
+    local pane = panes.create()
+    pane.current_view.buffer:insert(1, 1, "keep this")
+    test.ok(export(pane))
+    test.ok(perform(sent[1].request))
+    local reply = sent[2].request
+    reply.contents_verified = "true"
+    test.not_ok(perform(reply))
+    test.ok(panes.find(pane.id) == pane)
+    reply.contents_verified = true
+    test.ok(perform(reply))
+    test.not_ok(panes.find(pane.id))
+  end)
+
   test.it("refuses an older transfer that has no Untitled text", function()
     local untitled = require "plugins.untitled_tabs"
     local pane = panes.create()
     untitled.tag_buffer(pane.current_view.buffer):insert(1, 1, "keep this")
     test.ok(export(pane))
+    sent[1].request.snapshot.verify_contents = nil
     sent[1].request.snapshot.views[1].state.text = nil
     test.not_ok(perform(sent[1].request))
+    -- An older source rejects unknown reply fields, including on a failed import.
+    test.equal(sent[2].request.contents_verified, nil)
     test.not_ok(perform(sent[2].request))
     test.equal(panes.count(), 1)
     test.equal(pane.current_view.buffer:get_text(1, 1, math.huge, math.huge), "keep this")
+  end)
+
+  test.it("answers an older source without fields its request handler rejects", function()
+    local pane = panes.create()
+    pane.current_view.buffer:insert(1, 1, "inline text from an older source")
+    test.ok(export(pane))
+    sent[1].request.snapshot.verify_contents = nil
+    test.ok(perform(sent[1].request))
+    test.same(sent[2].request, { action = "transferred", transfer = transfer_id, ok = true })
+    test.equal(panes.active().current_view.buffer:get_text(1, 1, math.huge, math.huge),
+      "inline text from an older source")
   end)
 
   test.it("accepts edited text returning after its only source View moved away", function()
