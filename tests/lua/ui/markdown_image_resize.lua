@@ -1,10 +1,14 @@
+local core = require "core"
 local Buffer = require "core.buffer"
 local command = require "core.command"
+local common = require "core.common"
+local config = require "core.config"
 local Editor = require "core.editor"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
 local image_controls = require "core.markdown.image_controls"
 local image_overlay = require "core.image_overlay"
+local Project = require "core.project"
 local worker_pool = require "core.worker_pool"
 local test = require "core.test"
 
@@ -241,6 +245,37 @@ test.describe("Markdown Live Preview image resize", function()
     test.ok(image_overlay.is_open())
     test.equal(buffer.lines[3], "| ![[photo.png]] | Keep me |\n")
   end)
+
+  for _, case in ipairs({
+    { name = "opens an image link in a mixed-content table cell", cell = "See ![Photo](photo.png)", images = true },
+    { name = "opens a table image link when image rendering is disabled", cell = "![Photo](photo.png)", images = false },
+  }) do
+    test.it(case.name, function()
+      local old_images, old_open = config.markdown_live_render_images, common.open_in_system
+      local old_projects = core.projects
+      local opened
+      config.markdown_live_render_images = case.images
+      common.open_in_system = function(path) opened = path return true end
+      local ok, err = pcall(function()
+        core.projects = { Project(folder) }
+        markdown.vault_index.get_index(folder):rebuild("table-image-links")
+        local buffer = open_note("| Photo | Note |\n| --- | --- |\n| " .. case.cell .. " | Keep me |\n\nnext")
+        buffer:set_selection(5, 1)
+        local x, y = view:get_line_screen_position(3, buffer.lines[3]:find("![", 1, true))
+        x, y = x + 3, y + 3
+        view:on_mouse_moved(x, y, 0, 0)
+        test.equal(view.cursor, "hand")
+        view:on_mouse_pressed("left", x, y, 1)
+        view:on_mouse_released("left", x, y)
+        local deadline = system.get_time() + 30
+        while not opened and system.get_time() < deadline do coroutine.yield(0.01) end
+        test.equal(opened and common.normalize_path(opened), common.normalize_path(folder .. PATHSEP .. "photo.png"))
+      end)
+      config.markdown_live_render_images, common.open_in_system = old_images, old_open
+      core.projects = old_projects
+      if not ok then error(err, 0) end
+    end)
+  end
 
   test.it("resizes table images without changing the other cells", function()
     for _, source in ipairs({ "![[photo.png]]", "![Photo](photo.png)" }) do

@@ -1894,7 +1894,7 @@ end
 ---`reveal` is "none", "all" (formatting syntax visible, links collapsed), or a
 ---selection state whose spans show syntax.
 ---Return nil while the row has no semantic nodes to present.
-table_presentation.inline_pieces = function(view, line_text, line, reveal, base)
+table_presentation.inline_pieces = function(view, line_text, line, reveal, base, cells)
   if not semantic_line(view, line) then return nil end
   local reveal_units
   if reveal == "all" then
@@ -1927,6 +1927,16 @@ table_presentation.inline_pieces = function(view, line_text, line, reveal, base)
     local inserted
     local link = span.link
     local image = link and (link.kind == "image" or link.kind == "embed") and is_image_target(link.path)
+    -- Only a shown image supplies a separate open action below its edit link.
+    local image_cell
+    if image then
+      for _, cell in ipairs(cells) do
+        if cell and cell.image and cell.source_col1 == span.col1 and cell.source_col2 == span.col2 then
+          image_cell = true
+          break
+        end
+      end
+    end
     -- Table layout sizes for "all" so revealed markers never resize a column.
     -- A revealed link destination is usually long, so it wraps inside the cell
     -- while it is edited instead of widening the column permanently.
@@ -1935,7 +1945,7 @@ table_presentation.inline_pieces = function(view, line_text, line, reveal, base)
       and reveal_unit_matches(reveal_units, span.semantic_id, span.col1, span.col2)
     then
       inserted = revealed_link_fragments(view, line_text, line, span, opts)
-    elseif image then
+    elseif image_cell then
       inserted = { live._image_attachment_link(view, line, span, opts) }
     else
       inserted = live._formatted_link_label_fragments(view, line_text, line, span, opts, reveal_units)

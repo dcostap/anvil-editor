@@ -260,10 +260,11 @@ end
 -- Inline Markdown inside cells ---------------------------------------------
 --
 -- Live Preview registers `table_presentation.inline_pieces(view, text, line,
--- reveal, base)`. It returns prose-style fragments that partition one source
+-- reveal, base, cells)`. It returns prose-style fragments that partition one source
 -- row: formatting, links, and hidden syntax markers. A cell renders the pieces
 -- inside its content range as styled runs. `reveal` is "none", "all" (every
--- marker visible, the widest presentation), or a selection state.
+-- marker visible, the widest presentation), or a selection state. `cells`
+-- supplies the presentations whose image widgets are shown below their links.
 
 local function normalize_runs(line_text, pieces)
   local runs = {}
@@ -609,10 +610,10 @@ local function inline_base(view, header)
   return { base_font = live_fonts.body(view), color = style.markdown_live_table_cell }
 end
 
-local function row_inline_runs(view, text, line, reveal, base)
+local function row_inline_runs(view, text, line, reveal, base, cells)
   local provider = table_presentation.inline_pieces
   if not provider then return nil end
-  local ok, pieces = pcall(provider, view, text, line, reveal, base)
+  local ok, pieces = pcall(provider, view, text, line, reveal, base, cells)
   if not ok then
     core.log_quiet("Markdown table inline presentation failed at %s:%d: %s",
       view.buffer:get_name(), line, tostring(pieces))
@@ -794,17 +795,20 @@ function table_presentation.layout(view, table_node, instance)
     if line ~= line1 + 1 then
       local row = rows[line]
       local base = inline_base(view, line == line1)
-      local runs = row_inline_runs(view, row.text, line, "none", base)
+      presentations[line] = {}
+      for column, cell in ipairs(row.cells) do
+        presentations[line][column] = image_cell_presentation(
+          view, row.text, line, cell.content_col1, cell.content_col2, line == line1
+        ) or false
+      end
+      local runs = row_inline_runs(view, row.text, line, "none", base, presentations[line])
       -- Every marker revealed is the widest presentation an active cell can
       -- show, so sizing for it keeps column widths stable while editing.
-      local revealed_runs = runs and row_inline_runs(view, row.text, line, "all", base)
-      presentations[line] = {}
+      local revealed_runs = runs and row_inline_runs(view, row.text, line, "all", base, presentations[line])
       active_presentations[line] = {}
       for column, cell in ipairs(row.cells) do
         local text, source_col1, source_col2 = table_cell_content(row.text, cell)
-        local presentation, code_ticks = image_cell_presentation(
-          view, row.text, line, source_col1, source_col2, line == line1
-        )
+        local presentation, code_ticks = presentations[line][column]
         if not presentation then
           presentation, code_ticks = table_cell_presentation(
             view, text, source_col1, source_col2, line == line1
@@ -1582,7 +1586,7 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
       -- caret, like prose. Elided cells reveal their complete source.
       local text, source_col1, source_col2 = table_cell_content(row.text, cell)
       if active_runs == nil and not presentation.source_elided then
-        active_runs = row_inline_runs(view, row.text, line, selection_state, base) or false
+        active_runs = row_inline_runs(view, row.text, line, selection_state, base, layout.presentations[line]) or false
       end
       local image = presentation.image
       presentation = not presentation.source_elided and rich_presentation(
