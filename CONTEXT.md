@@ -665,7 +665,7 @@ An agent's done or failed Agent Status, or a terminal bell, that came after the 
 _Avoid_: notification, unseen result, badge
 
 **Snooze**:
-A time until which a Terminal's Pane is a Snoozed Pane. Until then, the Terminal Session needs nothing: its Unread Result, its agent's question, and its bell wait. Looking at it earlier does not end the Snooze; the user or an agent acting on request can remove it. At that time, the Pane returns to the work area and needs the user until the user looks at it, even when nothing else happened.
+A time until which a Terminal's Pane is a Snoozed Pane. Until then, the Terminal Session needs nothing: its Unread Result, its agent's question, and its bell wait. Looking at it earlier does not end the Snooze; the user or an agent acting on request can remove it. At that time, the Pane returns to the work area and needs the user until the user looks at it, even when nothing else happened. The Project Sidebar then shows how long the Snooze was and when it ended, until the Terminal Session gets new work.
 _Avoid_: Reminder, timer
 
 **Snoozed Pane**:

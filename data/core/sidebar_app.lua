@@ -115,6 +115,26 @@ local function load_snoozes()
   core.log_quiet("Sidebar Snoozes: %s", ok and saved and "loaded" or "none")
   return true
 end
+
+-- The start and end of each Terminal Session's last Snooze, so its note shows how long it was away. A span stays
+-- after the wake until the Terminal gets new work. Only the Sidebar reads it.
+local snooze_spans = {}
+local spans_loaded = false
+local function load_snooze_spans()
+  local ok, saved, err = pcall(storage.load, "sidebar", "snooze_spans")
+  if not ok or err or saved ~= nil and type(saved) ~= "table" then
+    core.log_quiet("Sidebar Snooze spans not read: %s", tostring(err or saved))
+    return false
+  end
+  for session, span in pairs(saved or {}) do
+    if type(session) == "string" and type(span) == "table" and type(span.from) == "number"
+        and type(span.to) == "number" and snooze_spans[session] == nil then
+      snooze_spans[session] = {from = span.from, to = span.to}
+    end
+  end
+  spans_loaded = true
+  return true
+end
 -- A Snooze whose time has not come stays, even when the model does not list its Terminal Session yet.
 local function save_snoozes(session)
   if not snoozes_loaded then
@@ -128,6 +148,16 @@ local function save_snoozes(session)
   end
   local ok, saved, err = pcall(storage.save, "sidebar", "snoozes", snoozes)
   if not ok or not saved then return false, tostring(ok and err or saved) end
+  -- A span only explains a note, so its save failure does not fail the Snooze.
+  if spans_loaded or load_snooze_spans() then
+    for session, span in pairs(snooze_spans) do
+      if not live[session] and span.to <= now then snooze_spans[session] = nil end
+    end
+    local spans_ok, spans_saved, spans_err = pcall(storage.save, "sidebar", "snooze_spans", snooze_spans)
+    if not spans_ok or not spans_saved then
+      core.log_quiet("Sidebar Snooze spans not saved: %s", tostring(spans_ok and spans_err or spans_saved))
+    end
+  end
   return true, pruned
 end
 
@@ -362,7 +392,7 @@ local function add_surface(id, window)
     end
     core.log_quiet("Sidebar %s dropped: Window=%d row=%s is not in the model (%d rows)", action, id,
       tostring(row_id), #(core.project_sidebar or {}))
-  end, collapsed[id], seen, true, snoozes)
+  end, collapsed[id], seen, true, snoozes, snooze_spans)
   surfaces[id] = surface
   core.log_quiet("Sidebar surface created: Window=%d", id)
 end
@@ -507,6 +537,7 @@ function core.init()
   load_collapsed()
   load_seen()
   load_snoozes()
+  load_snooze_spans()
   load_zoom()
   apply_color_theme()
   SidebarView = require "core.sidebar_view"

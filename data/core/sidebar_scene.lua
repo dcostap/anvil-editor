@@ -89,8 +89,8 @@ function Scene.model()
 end
 
 -- mode is nil, "search", "drag", "reorder" or "unload". The second Project is collapsed, so it shows only its agent's question and its
--- count. docs-site is collapsed in the main list, and its agent asks a question. The first Project's "npm run dev" Pane is snoozed. A Dormant Project in the collapsed "Last week" group
--- has an Unread Result.
+-- count. docs-site is collapsed in the main list, and its agent asks a question. The first Project's "npm run dev" Pane is snoozed, and its DeepSeek
+-- Terminal came back from a Snooze. A Dormant Project in the collapsed "Last week" group has an Unread Result.
 function Scene:new(mode)
   Scene.super.new(self)
   local model = Scene.model()
@@ -102,7 +102,7 @@ function Scene:new(mode)
   self.sidebar = SidebarView(function() end,
     {["project:D:/Work/Israel Mallo Mart\u{00ED}nez - ManualSistemas"] = true, ["project:C:/Projects/docs-site"] = true},
     {}, false,
-    {c = os.time() + 3 * 60 * 60})
+    {c = os.time() + 3 * 60 * 60}, {deepseek = {from = os.time() - 3 * DAY - 25 * MINUTE, to = os.time() - 25 * MINUTE}})
   self.sidebar:set_model(model, 1)
   if mode == "search" then
     self.sidebar:on_focus(true)

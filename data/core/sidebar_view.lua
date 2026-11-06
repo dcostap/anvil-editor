@@ -79,7 +79,9 @@ local GROUPS_ROWS = 16
 ---@param collapsed table<string, boolean>? This Window's saved folding state.
 ---@param restore_folds boolean? Restore saved folds on first selection.
 ---@param snoozes table<string, number>? The Snooze time of each Terminal Session, by its ID.
-function SidebarView:new(action, collapsed, seen, restore_folds, snoozes)
+---@param snooze_spans table<string, {from: number, to: number}>? The start and end of each Terminal Session's last
+---Snooze, by its ID, until the Terminal gets new work after it.
+function SidebarView:new(action, collapsed, seen, restore_folds, snoozes, snooze_spans)
   self.action, self.rows, self.scroll, self.bottom_scroll = action, {}, 0, 0
   self.collapsed = collapsed or {}
   self.restore_folds = restore_folds == true
@@ -87,6 +89,7 @@ function SidebarView:new(action, collapsed, seen, restore_folds, snoozes)
   self.seen = seen or {}
   -- Every surface shares the Snoozes too.
   self.snoozes = snoozes or {}
+  self.snooze_spans = snooze_spans or {}
   -- The Projects selected at the last layout.
   self.was_selected = {}
   self.width, self.view_h = 240, 600
@@ -364,13 +367,16 @@ function SidebarView:set_snooze(target, hours)
   return self:set_snooze_until(target, hours and os.time() + hours * 60 * 60 or nil)
 end
 
+-- A new time for a Snooze that has not ended keeps its start, so the span counts the whole time away.
 function SidebarView:set_snooze_until(target, time)
-  local session = target.session
-  local previous = self.snoozes[session]
+  local session, now = target.session, os.time()
+  local previous, previous_span = self.snoozes[session], self.snooze_spans[session]
   self.snoozes[session] = time
+  local from = previous_span and previous_span.to > now and previous_span.from or now
+  self.snooze_spans[session] = time and {from = from, to = time} or nil
   local saved, err = self.action("snooze", session)
   if saved == false then
-    self.snoozes[session] = previous
+    self.snoozes[session], self.snooze_spans[session] = previous, previous_span
     core.error("Could not save Snooze: %s", tostring(err))
     return false
   end
@@ -568,8 +574,27 @@ function SidebarView:set_size(width, height)
   self:rebuild_rows()
 end
 
+-- Forgets the ended Snoozes of the Terminals that got new work after their wake: a new agent turn or a new shell
+-- command. A turn that ran at the wake and ends later is not new work.
+function SidebarView:forget_resumed_snoozes(projects)
+  local now = os.time()
+  for _, project in ipairs(projects or {}) do
+    for _, record in ipairs(project.terminals or {}) do
+      local span = self.snooze_spans[record.id]
+      local agent = span and span.to <= now and record.state == "running" and tab.agent(record)
+      if agent and (agent.since or 0) > span.to and (agent.command or tab.working(record, agent)) then
+        self.snooze_spans[record.id] = nil
+        core.log_quiet("Sidebar Snooze span ended: session=%s new work=%s", record.id,
+          agent.command and "command" or "turn")
+        self.action("snooze", record.id)
+      end
+    end
+  end
+end
+
 function SidebarView:set_model(projects, window_id)
   self.projects, self.window_id = projects, window_id
+  self:forget_resumed_snoozes(projects)
   -- A Tab moved inside its Project shows its result in the next report.
   if self.pending and not self.pending.transfer then self.pending = nil end
   self:rebuild_rows()
@@ -695,7 +720,10 @@ function SidebarView:rebuild_rows()
     if session then
       local snooze = self.snoozes[session]
       row.attention = tab.attention(row.tab, self.seen[session], snooze)
-      if snooze and snooze > now and row.tab.terminal.state == "running" then row.snooze = snooze end
+      local running = row.tab.terminal.state == "running"
+      if snooze and snooze > now and running then row.snooze = snooze end
+      local span = self.snooze_spans[session]
+      if span and span.to <= now and running then row.woke = span end
     end
     return row
   end
@@ -1180,14 +1208,52 @@ function SidebarView:update_hover()
   return changed
 end
 
--- Show the original Terminal title only when the Tab hides part of it.
+-- A Snooze's length in whole minutes: "45m", "2h 30m", or whole days from two days: "3d".
+local function minutes_text(minutes)
+  if minutes < 60 then return minutes .. "m" end
+  if minutes >= 2 * 24 * 60 then return math.floor(minutes / (24 * 60) + 0.5) .. "d" end
+  local hours, rest = math.floor(minutes / 60), minutes % 60
+  return rest > 0 and string.format("%dh %02dm", hours, rest) or hours .. "h"
+end
+
+-- The time until a Snooze, rounded up to a whole minute.
+local function snooze_text(time, now)
+  return minutes_text(math.max(1, math.ceil((time - now) / 60)))
+end
+
+-- A Snooze's length, rounded to a whole minute.
+local function span_text(span)
+  return minutes_text(math.max(1, math.floor((span.to - span.from) / 60 + 0.5)))
+end
+
+-- An ended Snooze's note: its length and the time since its wake, such as "12h · 12m ago".
+local function woke_text(span, now)
+  local age = tab.age_text(span.to, now)
+  return span_text(span) .. " · " .. (age == "now" and age or age .. " ago")
+end
+
+-- The width of a Snooze's note with the text `label`.
+local function snooze_note_width(label)
+  local font = style.font
+  return font:get_width(label) + 4 * SCALE + math.floor(font:get_height() * 0.6 + 0.5)
+end
+
+-- An ended Snooze's note explains itself. Show the original Terminal title only when the Tab hides part of it.
 function SidebarView:get_tooltip()
   if self.scroll_drag or self.drag or self.reorder then return nil end
   local row = self.hover
   local item = row and row.tab
   if not item or not item.terminal then return nil end
+  local x, width = self:tab_bounds(row, self.width)
+  if row.woke then
+    local now = os.time()
+    if (self.hover_x or 0) >= x + width - snooze_note_width(woke_text(row.woke, now)) then
+      local age = tab.age_text(row.woke.to, now)
+      return string.format("Back from a %s Snooze %s", span_text(row.woke),
+        age == "now" and "just now" or age .. " ago")
+    end
+  end
   local name = tab.display_name(item)
-  local _, width = self:tab_bounds(row, self.width)
   local available = tab.name_width(item, width, self:metrics().terminal, {number_gutter = self:metrics().number_gutter})
   if name ~= item.name or tab.fit(style.font, name, available) ~= name then return item.name end
 end
@@ -2217,14 +2283,6 @@ function SidebarView:draw_attention(row, y, width)
   renderer.draw_rounded_rect(m.rail_x, y + 1, m.rail, h, m.rail / 2, color)
 end
 
--- The time until a Snooze in whole minutes, rounded up: "45m" or "2h 30m".
-local function snooze_text(time, now)
-  local minutes = math.max(1, math.ceil((time - now) / 60))
-  if minutes < 60 then return minutes .. "m" end
-  local hours, rest = math.floor(minutes / 60), minutes % 60
-  return rest > 0 and string.format("%dh %02dm", hours, rest) or hours .. "h"
-end
-
 -- A small clock, the Snooze icon, at the left edge `x` of a line centred at `cy`. Returns its width.
 local function clock(x, cy, color)
   local size = math.floor(style.font:get_height() * 0.6 + 0.5)
@@ -2237,16 +2295,14 @@ local function clock(x, cy, color)
   return size
 end
 
--- A Snooze's note, right-aligned at `right` on a line centred at `cy`: the clock and the time left.
--- Returns its width.
-local function draw_snooze(time, right, cy, now)
-  local label = snooze_text(time, now)
+-- A Snooze's note, right-aligned at `right` on a line centred at `cy`: the clock and `label`. Returns its width.
+local function draw_snooze(label, right, cy)
   local font = style.font
   local label_w = font:get_width(label)
   text(label, right - label_w, math.floor(cy - font:get_height() / 2), style.dim)
   local size = math.floor(font:get_height() * 0.6 + 0.5)
   clock(right - label_w - 4 * SCALE - size, cy, style.dim)
-  return label_w + 4 * SCALE + size
+  return snooze_note_width(label)
 end
 
 -- A Tab's or Terminal Session's content in [x, x + width): its icon, name and status, and an agent's step below.
@@ -2256,8 +2312,9 @@ function SidebarView:draw_tab(row, x, y, width, now)
   local shimmer = tab.working(row.tab.terminal or {}, row.agent) and self:shimmer_phase() or nil
   -- A Terminal that needs the user has a dot at the right edge of its name's line and a bold name.
   local name_font, right = nil, x + width
-  if row.snooze then
-    width = width - draw_snooze(row.snooze, x + width, y + m.terminal / 2, now) - 6 * SCALE
+  local note = row.snooze and snooze_text(row.snooze, now) or row.woke and woke_text(row.woke, now)
+  if note then
+    width = width - draw_snooze(note, x + width, y + m.terminal / 2) - 6 * SCALE
   end
   if row.attention then
     local radius = ATTENTION_DOT * SCALE
@@ -2265,9 +2322,9 @@ function SidebarView:draw_tab(row, x, y, width, now)
     width = width - radius * 2 - 6 * SCALE
     name_font = font_variant("bold")
   end
-  -- A Snooze's time left replaces the Terminal's age.
+  -- A Snooze's note replaces the Terminal's age.
   local spinning, name_x = tab.draw(row.tab, x, y, width, m.terminal, {name_color = style.text, now = now,
-    clock = self.clock, name_font = name_font, note = not row.snooze, dir = true, number_font = font_variant("number"), number_gutter = m.number_gutter, shimmer = not row.agent and shimmer or nil})
+    clock = self.clock, name_font = name_font, note = not note, dir = true, number_font = font_variant("number"), number_gutter = m.number_gutter, shimmer = not row.agent and shimmer or nil})
   if spinning then self.spinning = true end
   local unread = row.attention == "done" or row.attention == "error"
   if row.agent and tab.draw_agent(row.agent, name_x, y + m.terminal - 6 * SCALE, right - name_x,

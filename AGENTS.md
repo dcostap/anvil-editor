@@ -248,6 +248,9 @@ A Pi question counts during a Snooze. Other attention stays hidden until the Sno
 Each Project checks the saved times every 5 seconds (`core.snoozed_panes`). It does not change focus.
 Saved times repair a current Terminal View's missing Snooze flag, also after Workspace restore. A Terminal in Navigation History cannot hide the current View. A failed or invalid read wakes nothing. The Sidebar applies a Snooze change only after its save succeeds; a failed save keeps the previous time and sends no Pane change.
 Due Panes wake into new Pane Groups at the end, at most three side by side, oldest Snooze first. A shown Pane wakes in place.
+The Sidebar also saves each Snooze's start and end in `storage/sidebar/snooze_spans`. A new time for a Snooze that has not ended keeps its start. Only the Sidebar reads this file, and a failed save of it does not fail the Snooze.
+After the wake, the Terminal's row shows the clock, the Snooze's length and the time since the wake, such as `12h · 12m ago`, in the place of the time left. A tooltip on it gives the sentence. Looking at the Terminal ends the attention mark, but not this note.
+The note ends when the Sidebar model shows new work after the wake: an agent turn that started after it, or a shell command that started after it. A turn that ran at the wake and ends later is not new work. A turn that starts and ends between two models does not count. Remove Snooze and a new Snooze also end the note.
 Run `ui/snoozed_panes.lua`, `ui/sidebar_view.lua`, `ui/pending_panes.lua` and the `terminal-focus` shell probe after changes.
 
 Tabs show shared Pane numbers, not Tab positions. `core.numbered_panes` selects `core.pending_panes`.
