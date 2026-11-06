@@ -286,6 +286,51 @@ test.describe("Markdown Heading Outline", function()
     test.equal(current_title(heading_outline.layout(view)), "End")
   end)
 
+  test.it("limits hover and clicks to each heading's padded text or minimum target", function(context)
+    local view, buffer = open_view(context, 2400)
+    local layout = test.not_nil(heading_outline.layout(view))
+    local entry = test.not_nil(entry_titled(layout, "End"))
+    local y = entry.y + entry.h / 2
+    local blank_x = layout.x + layout.w - 1
+    draw_outline(view)
+    view:on_mouse_moved(blank_x, y, 0, 0)
+    test.ok(view.cursor ~= "hand", "unused margin must not hover a heading")
+    view:on_mouse_pressed("left", blank_x, y, 1)
+    view:on_mouse_released("left", blank_x, y)
+    test.ok((buffer:get_selection()) ~= entry.line, "unused margin must not jump to a heading")
+    test.ok(entry.w < layout.w, "a short heading leaves unused margin")
+    local text_end = entry.text_x + layout.font:get_width(entry.shown_title)
+    test.ok(entry.x + entry.w > text_end, "short labels keep a padded target")
+    local x = (text_end + entry.x + entry.w) / 2
+    view:on_mouse_moved(x, y, 0, 0)
+    test.equal(view.cursor, "hand")
+    view:on_mouse_pressed("left", x, y, 1)
+    view:on_mouse_released("left", x, y)
+    test.equal((buffer:get_selection()), entry.line)
+  end)
+
+  test.it("keeps long and clipped heading text clickable within the available margin", function(context)
+    local title = string.rep("Long heading ", 4) .. "end"
+    local view, buffer = open_view(context, 2400, "# Guide\n\n" .. filler(20) .. "\n\n### " .. title)
+    for _, width in ipairs({ 2400, 1400 }) do
+      buffer:set_selection(1, 1)
+      view.size.x = width
+      view:update()
+      local layout = test.not_nil(heading_outline.layout(view))
+      local entry = test.not_nil(entry_titled(layout, title))
+      local text_end = entry.text_x + layout.font:get_width(entry.shown_title)
+      test.ok(entry.x + entry.w >= text_end, "the target includes all visible text")
+      test.ok(entry.x + entry.w <= layout.x + layout.w, "the target stays in the margin")
+      local x, y = text_end - 1, entry.y + entry.h / 2
+      draw_outline(view)
+      view:on_mouse_moved(x, y, 0, 0)
+      test.equal(view.cursor, "hand")
+      view:on_mouse_pressed("left", x, y, 1)
+      view:on_mouse_released("left", x, y)
+      test.equal((buffer:get_selection()), entry.line)
+    end
+  end)
+
   test.it("keeps a clicked heading current until the user scrolls, also before a short section", function(context)
     local view = open_view(context, nil, table.concat({
       "# Top", filler(20), "## Short", "One line.", "## Next", filler(20), "## Last", filler(20),

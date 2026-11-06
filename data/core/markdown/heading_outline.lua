@@ -255,11 +255,14 @@ function heading_outline.layout(view)
   for index, heading in ipairs(list) do
     local text_x = x + scaled(TITLE_GAP) + heading.depth * scaled(INDENT)
     local text_width = x + width - text_x
-    if heading.fit_width ~= text_width or heading.fit_font ~= font then
-      heading.fit_width, heading.fit_font = text_width, font
+    if heading.fit_width ~= text_width or heading.fit_font ~= font or heading.column_width ~= width then
+      heading.fit_width, heading.fit_font, heading.column_width = text_width, font, width
       heading.shown_title = fit_text(font, heading.title, text_width)
+      -- Keep short labels easy to click without claiming the unused margin.
+      heading.w = math.min(width, math.max(scaled(MIN_WIDTH),
+        text_x - x + font:get_width(heading.shown_title) + scaled(TITLE_GAP)))
     end
-    heading.x, heading.y, heading.w, heading.h = x, top + (index - 1) * row_h - offset, width, row_h
+    heading.x, heading.y, heading.h = x, top + (index - 1) * row_h - offset, row_h
     heading.text_x = text_x
   end
   return {
@@ -276,7 +279,11 @@ local function entry_at(layout, x, y)
     return nil
   end
   for index, entry in ipairs(layout.entries) do
-    if y >= entry.y and y < entry.y + entry.h then return index, entry end
+    if y >= entry.y and y < entry.y + entry.h
+      and x >= entry.x and x < entry.x + entry.w
+    then
+      return index, entry
+    end
   end
 end
 
