@@ -1,12 +1,30 @@
 # SQL Server
 
-## First slice
+## Queries
 
 Use **SQL Server: Manage** in Command Search to open the Databases Dialog. Select Add Connection, enter its server and database, then select Connect. Connect checks access and loads metadata. Select Refresh to load metadata again. An empty Dialog shows only Add Connection. Windows authentication hides the user and password fields.
 
 New Query opens an Untitled SQL Query in a normal Editor. Use for Query assigns the selected connection to the current Editor. Queries use normal editing, Save As, completion, and symbol navigation. Navigation opens a read-only column summary; Back returns to the same query. The summary is not a CREATE script or complete DDL.
 
-Query execution, result grids, and table editing are outside this slice. The Dialog has no separate database sidebar.
+The Dialog has no separate database sidebar. Table editing and transaction controls are not available.
+
+## Run SQL
+
+Use **SQL Server: Run** in a connected SQL Query. It runs the primary selection, or the whole Query when that selection is empty. It sends that text as one batch. It does not split `GO` lines or select a statement at the caret.
+
+**SQL can change database data. Only the result display is read-only.** Each run opens a new connection with normal autocommit. Temporary tables, session settings, and transactions do not carry into the next run. Cancellation does not undo committed changes.
+
+Results open below the Query without taking focus or moving the caret. Another run replaces that Query's results. The View reuses Tabular Data Preview's selection, copy, sorting, filtering, column sizing, and scrolling. `NULL` is distinct from an empty value. Numbers remain text, so large integers and decimals keep their precision. Binary values show as hexadecimal.
+
+Sorting compares text. Use `ORDER BY` for the server's typed order. Copy uses tab-separated text, with `NULL` as an empty field.
+
+Use **SQL Server: Next Result** and **Previous Result** for a batch with several tables. The result's Context Menu offers these commands and **Messages**. Messages shows update counts or the error. Results do not enter the Workspace or modify the Query.
+
+Use **SQL Server: Cancel** from the Query or its results. Closing the results, closing the Buffer, disconnecting, or changing connection settings also requests cancellation. A login can take up to its 15-second timeout before cancellation takes effect. All database calls run off the UI thread.
+
+The default row limit is 1,000 per table. The execution timeout is 30 seconds after login. Set `config.plugins.sql_server.max_rows` from 1 to 10,000, and `config.plugins.sql_server.timeout_seconds` from 1 to 300.
+
+Batches are limited to 256 KiB. Each run holds at most 16 result records, 128 columns per table, 262,144 cells, and 8 MiB of value text. A cell holds at most 32,768 UTF-16 units. A warning marks incomplete results. A row limit discards extra rows and continues to later results. A total result limit stops result reading. Later statements can already have run; these limits are not write protection.
 
 ## Connections and persistence
 
@@ -14,7 +32,7 @@ Connection settings belong to the current Project on this PC. Each open query re
 
 Restoring a query does not connect. Select Connect to load metadata again. Explicitly closing an Untitled Query keeps the normal discard confirmation.
 
-Windows uses Microsoft ODBC Driver 18, or Driver 17 when 18 is absent. Windows authentication and SQL login are supported. Passwords are masked and are not saved. Enter a SQL login password again for each connection attempt.
+Windows uses Microsoft ODBC Driver 18, or Driver 17 when 18 is absent. Windows authentication and SQL login are supported. Passwords are masked and are not saved. A successful Connect keeps the password in memory for query runs. Disconnect, a connection change, a Project change, or exit clears it. Enter it again for each connection attempt.
 
 TLS defaults to certificate verification. Trust Certificate keeps encryption but accepts an unverified certificate. No Encryption is an explicit choice for servers such as LocalDB. Anvil never selects it after a failed encrypted connection.
 
@@ -43,17 +61,20 @@ The selected completion path has these parts:
 
 Anvil follows this context/provider structure for the supported cases. It does not port Swing, JDBC, or the complete product. Native ODBC and workers replace those platform boundaries. Existing Editors, completion providers, Dialog controls, and navigation supply the UI.
 
+For execution, `com/onseven/dbvis/o/f/l.java` supplies the reference for multiple results and cancellation from another thread. `com/onseven/dbvis/o/f/z.java` and `com/onseven/dbvis/db/s_.java` supply the row-limit reference. Anvil keeps its own bounded result model and uses its existing table View.
+
 ## Tests
 
-Default tests use a fixed schema at `plugins.sql_server.backend.read_schema`. The real Dialog, Editor, persistence, completion, and navigation run unchanged. They need no SQL Server, driver, credentials, or network access.
+Default UI tests replace the database boundary at `plugins.sql_server.backend` with fixed metadata and execution replies. The real Dialog, Editor, persistence, completion, navigation, and result View run unchanged. They need no SQL Server, driver, credentials, or network access. Runtime input tests reject invalid batches before a connection opens.
 
 ```sh
 meson test -C build-windows-x86_64 anvil:sql-context
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_context.lua
+meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_execution.lua
 meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/sql_server.lua
 ```
 
-The real-server test is opt-in. It needs an existing LocalDB installation and Microsoft ODBC Driver 18 or 17. It creates a uniquely named instance and a database in a private temporary folder. It checks metadata, escaped identifiers, unchanged table data, and connection-value isolation. It then deletes its instance and files. It never reads user connection settings or connects to another instance.
+The real-server test is opt-in. It needs an existing LocalDB installation and Microsoft ODBC Driver 18 or 17. It creates a uniquely named instance and a database in a private temporary folder. It checks metadata, escaped identifiers, unchanged table data, and connection-value isolation. Execution checks cover multiple results, update counts, exact values, Unicode, embedded NUL, limits, errors, and cancellation. It then deletes its instance and files. It never reads user connection settings or connects to another instance.
 
 ```sh
 ANVIL_SQL_INTEGRATION=1 meson test -C build-windows-x86_64 anvil:sql-server-integration --print-errorlogs
@@ -61,7 +82,7 @@ ANVIL_SQL_INTEGRATION=1 meson test -C build-windows-x86_64 anvil:sql-server-inte
 
 Without opt-in or dependencies, the test reports SKIP, not PASS. It installs nothing. LocalDB tests use Windows authentication and explicitly disable TLS because LocalDB does not support it. They do not prove remote TLS or SQL-login behavior.
 
-The `databases-dialog` render scenario uses fixed, disconnected settings on a private desktop. It makes no database connection.
+The `databases-dialog` and `sql-results` render scenarios use fixed data on a private desktop. They make no database connection.
 
 ## References
 

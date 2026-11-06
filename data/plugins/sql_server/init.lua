@@ -9,6 +9,18 @@ local M = { connections = {}, generation = 0 }
 local loaded, loading, storage_key, saving, pending_save
 local serial = 0
 local load_generation = 0
+local passwords, active_runs = {}, {}
+
+local function cancel_run(run)
+  if not run or not run.active or run.cancelled then return false end
+  run.cancelled = true
+  if run.view and not run.view.closed then
+    run.view.message, run.view.cancel_query = "Cancelling SQL…", nil
+    core.redraw = true
+  end
+  if run.handle then run.handle:cancel() end
+  return true
+end
 
 local function changed()
   M.generation = M.generation + 1
@@ -109,6 +121,8 @@ function M.disconnect(id)
   local c = M.find(id)
   if not c then return false end
   c.generation = c.generation + 1
+  passwords[c] = nil
+  for run in pairs(active_runs) do if run.connection == c then cancel_run(run) end end
   if c.job then c.job:cancel(); c.job = nil end
   c.catalog, c.password, c.error, c.state = nil, nil, nil, "Disconnected"
   changed()
@@ -152,6 +166,7 @@ function M.connect(id, password)
     if M.find(id) ~= c or c.generation ~= generation then return end
     c.job, c.password = nil, nil
     c.catalog, c.error = catalog, error
+    passwords[c] = catalog and not c.integrated and password or nil
     c.state = catalog and "Ready" or "Failed"
     changed()
     core.log_quiet("SQL Server: metadata connection=%s state=%s", id, c.state)
@@ -163,6 +178,7 @@ function M.connect(id, password)
 end
 function M.bind(buffer, id)
   if not M.find(id) then return false end
+  if buffer.sql_connection_id ~= id then cancel_run(buffer.sql_execution) end
   buffer.sql_connection_id = id
   buffer:set_language_mode("sql", { reason = "SQL Query" })
   changed()
@@ -170,6 +186,53 @@ function M.bind(buffer, id)
 end
 function M.connection_for(buffer)
   return buffer and M.find(buffer.sql_connection_id)
+end
+
+function M.run(editor)
+  local buffer = editor.buffer
+  local c = M.connection_for(buffer)
+  if not c or c.state ~= "Ready" then core.error("Connect this Query in Databases first."); return false end
+  if buffer.sql_execution and buffer.sql_execution.active then return false end
+  local line1, col1, line2, col2 = buffer:get_selection(true)
+  if line1 == line2 and col1 == col2 then
+    line1, col1, line2, col2 = 1, 1, #buffer.lines, #buffer.lines[#buffer.lines]
+  end
+  local bytes = col2 - col1
+  for line = line1, line2 - 1 do
+    bytes = bytes + #buffer.lines[line]
+    if bytes > 256 * 1024 then break end
+  end
+  if bytes > 256 * 1024 then core.error("SQL exceeds the 256 KiB batch limit."); return false end
+  local text = buffer:get_text(line1, col1, line2, col2)
+  if not text:find("%S") then return false end
+  local run = { active = true, connection = c, generation = c.generation, started = system.get_time() }
+  local view = buffer.sql_results
+  if not view or view.closed or not panes.pane_for_view(view) then
+    view = panes.place(function() return require("plugins.sql_server.results")(c.name) end,
+      { pane = panes.pane_for_view(editor), placement = "split", direction = "down", focus = false })
+    if not view then return false end
+    buffer.sql_results = view
+  end
+  run.view = view
+  buffer.sql_execution, active_runs[run] = run, true
+  view:begin_run(function() cancel_run(run) end)
+  buffer:add_metadata_listener("sql_execution", function(_, event)
+    if event.kind == "close" then cancel_run(run) end
+  end)
+  local function finish(data)
+    if not run.active then return end
+    run.active, run.handle, active_runs[run] = false, nil, nil
+    buffer:remove_metadata_listener("sql_execution")
+    if run.cancelled or c.generation ~= run.generation then data = { cancelled = true } end
+    if buffer.sql_execution == run and not view.closed then view:complete(data) end
+    core.log_quiet("SQL Server: execution connection=%s cancelled=%s failed=%s seconds=%.3f",
+      c.id, tostring(data.cancelled == true), tostring(data.error ~= nil), system.get_time() - run.started)
+  end
+  local handle, err = backend.execute({ server = c.server, database = c.database, user = c.user,
+    password = passwords[c], integrated = c.integrated, trust_certificate = c.trust_certificate, encrypt = c.encrypt }, text, finish)
+  if not handle then finish({ error = err or "Could not start SQL execution." })
+  elseif run.active then run.handle = handle; if run.cancelled then handle:cancel() end end
+  return handle ~= nil
 end
 function M.new_query(id)
   if not loaded or not M.find(id) then return nil end
@@ -237,9 +300,25 @@ end
 command.add(nil, {
   ["sql_server:manage"] = command.palette(function() return require("plugins.sql_server.dialog").open() end),
 })
+command.add(function()
+  local view = core.active_view
+  return view and view:extends(Editor) and M.connection_for(view.buffer) ~= nil, view
+end, {
+  ["sql_server:run"] = command.palette(M.run),
+})
+command.add(function()
+  local view = core.active_view
+  local run = view and view.buffer and view.buffer.sql_execution
+  return (run and run.active and not run.cancelled) or (view and view.cancel_query ~= nil), view, run
+end, {
+  ["sql_server:cancel"] = function(view, run)
+    if run then cancel_run(run) else view.cancel_query() end
+  end,
+})
 local exit = core.exit
 function core.exit(quit_fn, force)
   if force and not flush_settings() then return end
+  if force then for _, c in ipairs(M.connections) do M.disconnect(c.id) end end
   return exit(quit_fn, force)
 end
 local set_project = core.set_project

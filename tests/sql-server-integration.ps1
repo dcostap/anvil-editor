@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Probe)
+param([Parameter(Mandatory=$true)][string]$Probe, [string]$Editor)
 $ErrorActionPreference = 'Stop'
 if ($env:ANVIL_SQL_INTEGRATION -ne '1') {
     Write-Output 'SKIP: Set ANVIL_SQL_INTEGRATION=1 to test an isolated LocalDB instance.'
@@ -41,8 +41,21 @@ try {
     [void]$command.ExecuteNonQuery()
     & $Probe "(localdb)\$name"
     $result = $LASTEXITCODE
+    if ($result -eq 0 -and $Editor) {
+        $editorPath = (Resolve-Path $Editor).Path.Replace('\', '/')
+        $build = (Split-Path (Split-Path $editorPath -Parent) -Parent).Replace('\', '/')
+        $repo = (Split-Path $PSScriptRoot -Parent).Replace('\', '/')
+        $env:ANVIL_SQL_TEST_SERVER = "(localdb)\$name"
+        # The isolated editor has a private USERPROFILE. Use this instance's pipe,
+        # because LocalDB name lookup reads the real user's instance directory.
+        $pipe = (& $localdbPath info $name | Select-String 'np:\\\\.+').Matches.Value
+        if (!$pipe) { throw 'The test instance did not report its pipe.' }
+        $env:ANVIL_SQL_TEST_PIPE = $pipe.Trim()
+        & (Get-Command bash.exe).Source "$repo/tests/run-lua-tests.sh" $build $repo $editorPath 'tests/lua/runtime' 'sql-integration' 'runtime/sql_execution.lua'
+        $result = $LASTEXITCODE
+    }
     $command.CommandText = 'SELECT COUNT(*) FROM sales.customers'
-    if ($command.ExecuteScalar() -ne 1) { throw 'The metadata read changed table data.' }
+    if ($command.ExecuteScalar() -ne 1) { throw 'The checks changed table data.' }
     $command.Dispose()
 } finally {
     if ($connection) { $connection.Dispose() }

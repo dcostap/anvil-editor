@@ -369,6 +369,7 @@ config.force_scrollbar_status = "contracted"
 require_core_plugin "bookmarks"
 require_core_plugin "filetree"
 require_core_plugin "project_paths"
+config.plugins.sql_server = { max_rows = 1000, timeout_seconds = 30 }
 require_core_plugin "sql_server"
 require_core_plugin "terminal"
 -- Use hard tabs for indentation, displayed at 4 columns.

@@ -174,4 +174,24 @@ function parser.parse(lines, delimiter, options)
   }
 end
 
+function parser.distinct_values(result, should_cancel, yield_fn)
+  local distinct = {}
+  for column = 1, result.column_count do distinct[column] = { values = {}, counts = {} } end
+  for row_index, row in ipairs(result.rows) do
+    for column = 1, result.column_count do
+      local value, values = row.cells[column], distinct[column]
+      if values.counts[value] == nil then
+        values.counts[value] = 0
+        values.values[#values.values + 1] = value
+      end
+      values.counts[value] = values.counts[value] + 1
+    end
+    if row_index % 4096 == 0 then
+      if yield_fn then yield_fn() end
+      if should_cancel and should_cancel() then return nil end
+    end
+  end
+  return distinct
+end
+
 return parser

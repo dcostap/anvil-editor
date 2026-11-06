@@ -21,6 +21,7 @@ local function connected_query(context)
   local sql = require "plugins.sql_server"
   local backend = require "plugins.sql_server.backend"
   context.original_backend = backend.read_schema
+  context.original_execute = backend.execute
   backend.read_schema = function(_, callback)
     callback(schema)
     return { cancel = function() end }
@@ -41,6 +42,7 @@ test.describe("SQL Queries", function()
   test.after_each(function(context)
     autocomplete.close()
     if context.original_backend then require("plugins.sql_server.backend").read_schema = context.original_backend end
+    if context.original_execute then require("plugins.sql_server.backend").execute = context.original_execute end
     if context.connection_id then require("plugins.sql_server").remove(context.connection_id) end
     local open = dialog.current()
     if open then open:close() end
@@ -103,6 +105,138 @@ test.describe("SQL Queries", function()
     test.equal(autocomplete.get_selected_suggestion().text, "name")
     test.ok(command.perform("autocomplete:complete"))
     test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "SELECT c.name FROM sales.customers AS c")
+  end)
+
+  test.it("runs selected SQL and shows a read-only result without taking focus", function(context)
+    local editor = connected_query(context)
+    local backend = require "plugins.sql_server.backend"
+    local submitted, reply
+    backend.execute = function(options, text, callback)
+      test.equal(options.database, "AnvilTest")
+      submitted, reply = text, callback
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("-- not selected\nSELECT name FROM sales.customers\n-- not selected")
+    editor.buffer:set_selection(2, 1, 2, #"SELECT name FROM sales.customers" + 1)
+    test.ok(command.perform("sql_server:run"))
+    test.equal(submitted, "SELECT name FROM sales.customers")
+    test.equal(core.active_view, editor)
+    reply({ results = { {
+      headers = { "name", "note" }, column_count = 2,
+      rows = { { cells = { "Ada", false }, source_line1 = 1, source_line2 = 1 } },
+      distinct_values = { { values = { "Ada" }, counts = { Ada = 1 } }, { values = { false }, counts = { [false] = 1 } } },
+    } }, affected_rows = {} })
+    local Results = require "plugins.sql_server.results"
+    local result
+    for _, pane in ipairs(panes.ordered()) do
+      for _, view in ipairs(panes.views(pane)) do
+        if view:extends(Results) then result = view end
+      end
+    end
+    test.not_nil(result)
+    test.equal(result:cell_value(1, 1), "Ada")
+    test.equal(result:cell_value(1, 2), false)
+    test.equal(result.buffer, nil)
+    test.equal(result:get_state(), nil)
+    test.equal(core.active_view, editor)
+    test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "-- not selected\nSELECT name FROM sales.customers\n-- not selected")
+  end)
+
+  test.it("runs the whole Query at a caret and replaces results without changing its text", function(context)
+    local editor = connected_query(context)
+    local replies, submitted = {}, {}
+    require("plugins.sql_server.backend").execute = function(_, text, callback)
+      submitted[#submitted + 1], replies[#replies + 1] = text, callback
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("SELECT name FROM sales.customers")
+    test.ok(command.perform("sql_server:run"))
+    test.equal(submitted[1], "SELECT name FROM sales.customers")
+    replies[1]({ results = {}, affected_rows = { "3" } })
+    test.equal(core.active_view, editor)
+    test.ok(command.perform("sql_server:run"))
+    replies[2]({ error = "Test server refused the statement." })
+    test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "SELECT name FROM sales.customers")
+    local count = 0
+    for _, pane in ipairs(panes.ordered()) do
+      for _, view in ipairs(panes.views(pane)) do
+        if view:extends(require "plugins.sql_server.results") then
+          count = count + 1
+          test.equal(view.message, "Test server refused the statement.")
+        end
+      end
+    end
+    test.equal(count, 1)
+  end)
+
+  test.it("cancels a Query and rejects its late result after disconnect", function(context)
+    local editor, c = connected_query(context)
+    local reply, cancelled
+    require("plugins.sql_server.backend").execute = function(_, _, callback)
+      reply = callback
+      return { cancel = function() cancelled = true end }
+    end
+    editor.buffer:text_input("SELECT name FROM sales.customers")
+    test.ok(command.perform("sql_server:run"))
+    test.ok(command.perform("sql_server:cancel"))
+    test.ok(cancelled)
+    require("plugins.sql_server").disconnect(c.id)
+    reply({ error = "A late response must not replace cancellation." })
+    local found
+    for _, pane in ipairs(panes.ordered()) do
+      for _, view in ipairs(panes.views(pane)) do
+        if view:extends(require "plugins.sql_server.results") then
+          found = true
+          test.equal(#view.model.rows, 0)
+          test.ok(view.message:find("cancelled", 1, true))
+        end
+      end
+    end
+    test.ok(found)
+    test.not_ok(command.is_valid("sql_server:cancel"))
+  end)
+
+  test.it("closing a running result cancels it and does not reopen it for a late response", function(context)
+    local editor = connected_query(context)
+    local reply, cancelled
+    require("plugins.sql_server.backend").execute = function(_, _, callback)
+      reply = callback
+      return { cancel = function() cancelled = true end }
+    end
+    editor.buffer:text_input("SELECT name FROM sales.customers")
+    test.ok(command.perform("sql_server:run"))
+    local result_pane
+    for _, pane in ipairs(panes.ordered()) do
+      for _, view in ipairs(panes.views(pane)) do
+        if view:extends(require "plugins.sql_server.results") then result_pane = pane end
+      end
+    end
+    test.ok(panes.close(test.not_nil(result_pane)))
+    test.ok(cancelled)
+    reply({ error = "Late response" })
+    test.equal(#panes.ordered(), 1)
+    test.equal(core.active_view, editor)
+  end)
+
+  test.it("shows every row of the next result without the previous result's filter", function()
+    local Results = require "plugins.sql_server.results"
+    local function model(names)
+      local result = { headers = { "name" }, column_count = 1, rows = {} }
+      for i, name in ipairs(names) do
+        result.rows[i] = { cells = { name }, source_line1 = i, source_line2 = i }
+      end
+      result.distinct_values = require("plugins.tabular_data_preview.parser").distinct_values(result)
+      return result
+    end
+    local view = Results("Test")
+    panes.place(function() return view end, { placement = "new", focus = true })
+    view:complete({ results = { model({ "Ada" }), model({ "Ada", "Bea" }) } })
+    test.ok(view:toggle_filter_value(1, "Ada"))
+    test.ok(command.perform("sql_server:next_result"))
+    test.equal(view:row_count(), 2)
+    test.equal(view:cell_value(2, 1), "Bea")
+    test.ok(command.perform("sql_server:previous_result"))
+    test.equal(view:row_count(), 1)
   end)
 
   test.it("opens a table definition and returns to the same Untitled Query", function(context)

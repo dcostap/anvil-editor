@@ -3,7 +3,15 @@ local M = {}
 function M.run(payload, context)
   if context.cancelled() then return end
   local result, err
-  if payload.operation == "schema" then
+  if payload.operation == "execute" then
+    result = require("sql_server_native").execute(payload.options, payload.text,
+      payload.max_rows, payload.timeout_seconds, context.cancel_token_name)
+    payload.options.password = nil
+    for _, model in ipairs(result.results) do
+      model.distinct_values = require("plugins.tabular_data_preview.parser").distinct_values(model, context.cancelled)
+      if not model.distinct_values then return end
+    end
+  elseif payload.operation == "schema" then
     result, err = require("sql_server_native").read_schema(payload.options)
     payload.options.password = nil
   else

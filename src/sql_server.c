@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 void sql_server_catalog_free(SqlServerCatalog *c) {
   for (size_t i = 0; i < c->count; ++i) {
@@ -13,13 +14,11 @@ void sql_server_catalog_free(SqlServerCatalog *c) {
 }
 
 #ifdef _WIN32
-#include <windows.h>
-#include <sql.h>
-#include <sqlext.h>
+#include "sql_server_internal.h"
 #include <wchar.h>
 
 /* Keep credentials and server-controlled text out of logs and error messages. */
-static void diagnostic(SqlServerCatalog *out, SQLSMALLINT type, SQLHANDLE handle, const char *action) {
+void sql_server_diagnostic(char error[256], SQLSMALLINT type, SQLHANDLE handle, const char *action) {
   SQLWCHAR state[6] = {0};
   SQLINTEGER native = 0;
   SQLSMALLINT length = 0;
@@ -28,11 +27,11 @@ static void diagnostic(SqlServerCatalog *out, SQLSMALLINT type, SQLHANDLE handle
   char ascii[6] = {0};
   for (int i = 0; i < 5; ++i) ascii[i] = (char)state[i];
   if (!strcmp(ascii, "IM002"))
-    snprintf(out->error, sizeof(out->error), "Install Microsoft ODBC Driver 18 or 17 for SQL Server.");
+    snprintf(error, 256, "Install Microsoft ODBC Driver 18 or 17 for SQL Server.");
   else if (!strcmp(ascii, "28000"))
-    snprintf(out->error, sizeof(out->error), "SQL Server rejected the login. Check authentication and database access.");
+    snprintf(error, 256, "SQL Server rejected the login. Check authentication and database access.");
   else
-    snprintf(out->error, sizeof(out->error), "%s failed (SQLSTATE %.5s, error %ld).", action, ascii, (long)native);
+    snprintf(error, 256, "%s failed (SQLSTATE %.5s, error %ld).", action, ascii, (long)native);
 }
 static int append_value(char *s, size_t cap, const char *key, const char *value) {
   size_t n = strlen(s);
@@ -65,20 +64,19 @@ static int execute(SQLHDBC dbc, SQLHSTMT *stmt, const wchar_t *query, SqlServerC
   if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, dbc, stmt))) return 0;
   if (!SQL_SUCCEEDED(SQLSetStmtAttr(*stmt, SQL_ATTR_QUERY_TIMEOUT, (SQLPOINTER)15, 0))) return 0;
   if (!SQL_SUCCEEDED(SQLExecDirectW(*stmt, (SQLWCHAR *)query, SQL_NTS))) {
-    diagnostic(out, SQL_HANDLE_STMT, *stmt, "Metadata read"); return 0;
+    sql_server_diagnostic(out->error, SQL_HANDLE_STMT, *stmt, "Metadata read"); return 0;
   }
   return 1;
 }
-int sql_server_read_schema(const SqlServerOptions *o, SqlServerCatalog *out) {
-  memset(out, 0, sizeof(*out));
+int sql_server_open(const SqlServerOptions *o, int read_only, SqlServerConnection *session, char error[256]) {
+  memset(session, 0, sizeof(*session));
   SQLHENV env = SQL_NULL_HENV;
   SQLHDBC dbc = SQL_NULL_HDBC;
-  SQLHSTMT stmt = SQL_NULL_HSTMT;
   char connection[8192] = "";
   SQLWCHAR wide[8192] = {0};
-  int connected = 0, success = 0;
+  int success = 0;
   if (!o->server || !*o->server || !o->database || !*o->database) {
-    snprintf(out->error, sizeof(out->error), "Enter a server and database."); goto done;
+    snprintf(error, 256, "Enter a server and database."); goto done;
   }
   if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env)) ||
       !SQL_SUCCEEDED(SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (SQLPOINTER)SQL_OV_ODBC3, 0))) goto done;
@@ -92,7 +90,7 @@ int sql_server_read_schema(const SqlServerOptions *o, SqlServerCatalog *out) {
     if (!wcscmp((wchar_t *)description, L"ODBC Driver 18 for SQL Server")) { driver = "ODBC Driver 18 for SQL Server"; break; }
     if (!wcscmp((wchar_t *)description, L"ODBC Driver 17 for SQL Server")) driver = "ODBC Driver 17 for SQL Server";
   }
-  if (!driver) { snprintf(out->error, sizeof(out->error), "Install Microsoft ODBC Driver 18 or 17 for SQL Server."); goto done; }
+  if (!driver) { snprintf(error, 256, "Install Microsoft ODBC Driver 18 or 17 for SQL Server."); goto done; }
   if (!append_value(connection, sizeof(connection), "DRIVER", driver)) goto done;
   if (!append_value(connection, sizeof(connection), "SERVER", o->server) ||
       !append_value(connection, sizeof(connection), "Encrypt", o->encrypt ? "yes" : "no") ||
@@ -101,18 +99,44 @@ int sql_server_read_schema(const SqlServerOptions *o, SqlServerCatalog *out) {
       !append_value(connection, sizeof(connection), "Trusted_Connection", o->integrated ? "yes" : "no") ||
       (!o->integrated && (!append_value(connection, sizeof(connection), "UID", o->user ? o->user : "") ||
                         !append_value(connection, sizeof(connection), "PWD", o->password ? o->password : "")))) {
-    snprintf(out->error, sizeof(out->error), "Connection settings are too long."); goto done;
+    snprintf(error, 256, "Connection settings are too long."); goto done;
   }
   if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, connection, -1, (wchar_t *)wide, 8192)) {
-    snprintf(out->error, sizeof(out->error), "Connection settings contain invalid UTF-8."); goto done;
+    snprintf(error, 256, "Connection settings contain invalid UTF-8."); goto done;
   }
   if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc))) goto done;
   if (!SQL_SUCCEEDED(SQLSetConnectAttr(dbc, SQL_ATTR_LOGIN_TIMEOUT, (SQLPOINTER)15, 0)) ||
-      !SQL_SUCCEEDED(SQLSetConnectAttr(dbc, SQL_ATTR_ACCESS_MODE, (SQLPOINTER)SQL_MODE_READ_ONLY, 0))) goto done;
+      !SQL_SUCCEEDED(SQLSetConnectAttr(dbc, SQL_ATTR_ACCESS_MODE, (SQLPOINTER)(uintptr_t)(read_only ? SQL_MODE_READ_ONLY : SQL_MODE_READ_WRITE), 0))) goto done;
   if (!SQL_SUCCEEDED(SQLDriverConnectW(dbc, NULL, wide, SQL_NTS, NULL, 0, NULL, SQL_DRIVER_NOPROMPT))) {
-    diagnostic(out, SQL_HANDLE_DBC, dbc, "Connection"); goto done;
+    sql_server_diagnostic(error, SQL_HANDLE_DBC, dbc, "Connection"); goto done;
   }
-  connected = 1;
+  success = 1;
+done:
+  SecureZeroMemory(connection, sizeof(connection)); SecureZeroMemory(wide, sizeof(wide));
+  session->env = env; session->dbc = dbc; session->connected = success;
+  if (!success) {
+    sql_server_close(session);
+    if (!error[0]) snprintf(error, 256, "Could not open SQL Server connection.");
+  }
+  return success;
+}
+
+void sql_server_close(SqlServerConnection *session) {
+  if (session->dbc) {
+    if (session->connected) SQLDisconnect(session->dbc);
+    SQLFreeHandle(SQL_HANDLE_DBC, session->dbc);
+  }
+  if (session->env) SQLFreeHandle(SQL_HANDLE_ENV, session->env);
+  memset(session, 0, sizeof(*session));
+}
+
+int sql_server_read_schema(const SqlServerOptions *o, SqlServerCatalog *out) {
+  memset(out, 0, sizeof(*out));
+  SqlServerConnection session = {0};
+  SQLHSTMT stmt = SQL_NULL_HSTMT;
+  int success = 0;
+  if (!sql_server_open(o, 1, &session, out->error)) goto done;
+  SQLHDBC dbc = session.dbc;
   if (!execute(dbc, &stmt, L"SELECT DB_NAME(), SCHEMA_NAME(), CASE WHEN N'a'=N'A' THEN N'0' ELSE N'1' END", out)) goto done;
   if (!SQL_SUCCEEDED(SQLFetch(stmt))) goto done;
   out->database = cell(stmt, 1); out->default_schema = cell(stmt, 2);
@@ -138,7 +162,7 @@ int sql_server_read_schema(const SqlServerOptions *o, SqlServerCatalog *out) {
   for (;;) {
     SQLRETURN rc = SQLFetch(stmt);
     if (rc == SQL_NO_DATA) break;
-    if (!SQL_SUCCEEDED(rc)) { diagnostic(out, SQL_HANDLE_STMT, stmt, "Metadata read"); goto done; }
+    if (!SQL_SUCCEEDED(rc)) { sql_server_diagnostic(out->error, SQL_HANDLE_STMT, stmt, "Metadata read"); goto done; }
     if (out->count == 50000) { snprintf(out->error, sizeof(out->error), "Database metadata exceeds 50000 columns."); goto done; }
     if (out->count == capacity) {
       capacity = capacity ? capacity * 2 : 256;
@@ -159,13 +183,8 @@ int sql_server_read_schema(const SqlServerOptions *o, SqlServerCatalog *out) {
   }
   success = 1;
 done:
-  SecureZeroMemory(connection, sizeof(connection)); SecureZeroMemory(wide, sizeof(wide));
   if (stmt != SQL_NULL_HSTMT) SQLFreeHandle(SQL_HANDLE_STMT, stmt);
-  if (dbc != SQL_NULL_HDBC) {
-    if (connected) SQLDisconnect(dbc);
-    SQLFreeHandle(SQL_HANDLE_DBC, dbc);
-  }
-  if (env != SQL_NULL_HENV) SQLFreeHandle(SQL_HANDLE_ENV, env);
+  sql_server_close(&session);
   if (!success && !out->error[0]) snprintf(out->error, sizeof(out->error), "Could not read complete SQL Server metadata.");
   return success;
 }

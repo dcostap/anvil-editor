@@ -32,8 +32,8 @@ local function path_for_buffer(buffer)
   return buffer and (buffer.abs_filename or buffer.filename) or nil
 end
 
-local function value_label(value)
-  if value == false then return "<missing>" end
+local function value_label(value, missing_label)
+  if value == false then return missing_label or "<missing>" end
   if value == "" then return "<empty>" end
   return tostring(value)
 end
@@ -60,8 +60,8 @@ local function draw_text_clipped(font, color, text, x, y, width, height, align)
   core.pop_clip_rect()
 end
 
-local function display_text(value)
-  if value == false then return "" end
+local function display_text(value, missing_label)
+  if value == false then return missing_label or "" end
   return tostring(value or ""):gsub("\r\n", " ↵ "):gsub("[\r\n]", " ↵ ")
 end
 
@@ -69,8 +69,8 @@ function Preview:__tostring()
   return "TabularDataPreview"
 end
 
-function Preview:new(buffer, saved_state)
-  assert(buffer, "Tabular Data Preview requires a Buffer")
+function Preview:new(buffer, saved_state, snapshot)
+  assert(buffer or snapshot, "A table View requires a Buffer or a snapshot")
   Preview.super.new(self)
   self.scrollable = true
   self.buffer = buffer
@@ -103,9 +103,13 @@ function Preview:new(buffer, saved_state)
     self.scroll.y, self.scroll.to.y = sy, sy
   end
 
-  if core.buffer_registry then core.buffer_registry:retain(buffer, self) end
-  self:install_buffer_listeners()
-  self:schedule_parse(0, "open")
+  if buffer then
+    if core.buffer_registry then core.buffer_registry:retain(buffer, self) end
+    self:install_buffer_listeners()
+    self:schedule_parse(0, "open")
+  else
+    self:publish_model(snapshot, 0)
+  end
   core.log_quiet("Tabular Data Preview: opened %s", tostring(path_for_buffer(buffer)))
 end
 
@@ -137,26 +141,9 @@ function Preview:snapshot_lines()
 end
 
 function Preview:build_distinct_values(result, generation)
-  local distinct = {}
-  for column = 1, result.column_count do
-    distinct[column] = { values = {}, counts = {} }
-  end
-  for row_index, row in ipairs(result.rows) do
-    for column = 1, result.column_count do
-      local value = row.cells[column]
-      local values = distinct[column]
-      if values.counts[value] == nil then
-        values.counts[value] = 0
-        values.values[#values.values + 1] = value
-      end
-      values.counts[value] = values.counts[value] + 1
-    end
-    if row_index % 4096 == 0 then
-      coroutine.yield()
-      if self.closed or generation ~= self.parse_generation then return nil end
-    end
-  end
-  return distinct
+  return parser.distinct_values(result, function()
+    return self.closed or generation ~= self.parse_generation
+  end, coroutine.yield)
 end
 
 function Preview:schedule_parse(delay, reason)
@@ -555,7 +542,7 @@ function Preview:open_filter_prompt(column)
       local a_selected = self.filters[column] and self.filters[column][a] or false
       local b_selected = self.filters[column] and self.filters[column][b] or false
       if a_selected ~= b_selected then return a_selected end
-      return value_label(a):lower() < value_label(b):lower()
+      return value_label(a, self.model.missing_label):lower() < value_label(b, self.model.missing_label):lower()
     end)
     local choices = {}
     if self.filters[column]
@@ -567,7 +554,7 @@ function Preview:open_filter_prompt(column)
       }
     end
     for _, value in ipairs(values) do
-      local label = value_label(value)
+      local label = value_label(value, self.model.missing_label)
       if query == "" or label:lower():find(query, 1, true) then
         local selected = self.filters[column] and self.filters[column][value] or false
         choices[#choices + 1] = {
@@ -973,7 +960,7 @@ function Preview:draw_body()
         renderer.draw_rect(x, y, width, row_height, style.line_highlight)
       end
       draw_text_clipped(
-        font, style.text, display_text(self:cell_value(display_row, column)),
+        font, style.text, display_text(self:cell_value(display_row, column), self.model.missing_label),
         x + scaled(CELL_PADDING), y,
         math.max(0, width - scaled(CELL_PADDING * 2)), row_height
       )

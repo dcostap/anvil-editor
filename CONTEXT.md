@@ -159,6 +159,9 @@ _Avoid_: scratch buffer, unnamed file
 A SQL Buffer associated with a Database Connection. It can remain Untitled or have a file path.
 _Avoid_: SQL Commander, query tab
 
+**SQL Result**:
+A read-only table returned by running a SQL Query. One run can return several SQL Results.
+
 **Database Connection**:
 A named configuration that identifies a database server, database, and authentication method for SQL Queries.
 _Avoid_: database profile

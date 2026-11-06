@@ -21,6 +21,7 @@ anvil_sources = [
     'api/sql_server.c',
     'sql_context.c',
     'sql_server.c',
+    'sql_query.c',
     'fuzzy.c',
     'git_status_index.c',
     'worker_pool.c',
@@ -324,11 +325,8 @@ sql_context_test = executable('sql_context_test',
 test('sql-context', sql_context_test, env: anvil_test_env, suite: 'anvil')
 if host_machine.system() == 'windows'
     sql_server_integration = executable('sql_server_integration',
-        ['../tests/native/sql_server_integration.c', 'sql_server.c'],
+        ['../tests/native/sql_server_integration.c', 'sql_server.c', 'sql_query.c'],
         include_directories: include_directories('.'), dependencies: [cc.find_library('odbc32')])
-    test('sql-server-integration', find_program('powershell.exe'),
-        args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', files('../tests/sql-server-integration.ps1'), '-Probe', sql_server_integration],
-        env: anvil_test_env, suite: 'anvil', timeout: 180)
 endif
 
 project_sidebar_test = executable('project_sidebar_test',
@@ -634,6 +632,12 @@ anvil_exe = executable('anvil',
     install: true,
     win_subsystem: 'windows',
 )
+
+if host_machine.system() == 'windows'
+    test('sql-server-integration', find_program('powershell.exe'),
+        args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', files('../tests/sql-server-integration.ps1'), '-Probe', sql_server_integration, '-Editor', anvil_exe],
+        env: anvil_test_env, suite: 'anvil', timeout: 180)
+endif
 
 if embedded_runtime
     standalone_runtime_powershell = find_program('powershell')

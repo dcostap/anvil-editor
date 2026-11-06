@@ -1,6 +1,9 @@
 #include "api.h"
 #include "../sql_context.h"
 #include "../sql_server.h"
+#include "../sql_query.h"
+#include "../worker_pool.h"
+#include <stdio.h>
 #include <string.h>
 
 static void text(lua_State *L, const char *key, const char *value) {
@@ -43,7 +46,7 @@ static const char *option(lua_State *L, const char *key) {
 static int catalog_gc(lua_State *L) {
   sql_server_catalog_free(luaL_checkudata(L, 1, "anvil.sql_catalog")); return 0;
 }
-static int read_schema(lua_State *L) {
+static SqlServerOptions read_options(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
   SqlServerOptions options = {0};
   options.server = option(L, "server"); options.database = option(L, "database");
@@ -51,6 +54,10 @@ static int read_schema(lua_State *L) {
   lua_getfield(L, 1, "integrated"); options.integrated = lua_toboolean(L, -1);
   lua_getfield(L, 1, "trust_certificate"); options.trust_certificate = lua_toboolean(L, -1);
   lua_getfield(L, 1, "encrypt"); options.encrypt = lua_isnil(L, -1) || lua_toboolean(L, -1);
+  return options;
+}
+static int read_schema(lua_State *L) {
+  SqlServerOptions options = read_options(L);
   SqlServerCatalog *c = lua_newuserdata(L, sizeof(*c));
   memset(c, 0, sizeof(*c));
   luaL_setmetatable(L, "anvil.sql_catalog");
@@ -83,9 +90,81 @@ static int read_schema(lua_State *L) {
   sql_server_catalog_free(c);
   return 1;
 }
+static int query_gc(lua_State *L) {
+  sql_query_free(luaL_checkudata(L, 1, "anvil.sql_query")); return 0;
+}
+static bool query_cancelled(void *token) {
+  return anvil_worker_cancel_token_cancelled(token);
+}
+static int execute_query(lua_State *L) {
+  size_t length;
+  const char *sql = luaL_checklstring(L, 2, &length);
+  lua_Integer max_rows = luaL_checkinteger(L, 3), timeout = luaL_checkinteger(L, 4);
+  luaL_argcheck(L, max_rows > 0 && max_rows <= 10000, 3, "invalid row limit");
+  luaL_argcheck(L, timeout > 0 && timeout <= 300, 4, "invalid timeout");
+  const char *token_name = luaL_optstring(L, 5, NULL);
+  SqlServerOptions options = read_options(L);
+  SqlQueryResult *result = lua_newuserdata(L, sizeof(*result));
+  memset(result, 0, sizeof(*result));
+  luaL_setmetatable(L, "anvil.sql_query");
+  AnvilWorkerCancelToken *token = token_name ? anvil_worker_cancel_token_open(token_name) : NULL;
+  luaL_argcheck(L, !token_name || token, 5, "cancel token unavailable");
+  sql_query_execute(&options, sql, length, (unsigned)max_rows, (unsigned)timeout,
+                    token ? query_cancelled : NULL, token, result);
+  if (token) anvil_worker_cancel_token_release(token);
+  lua_newtable(L);
+  if (result->error[0]) text(L, "error", result->error);
+  boolean(L, "cancelled", result->cancelled);
+  boolean(L, "limited", result->limited);
+  lua_newtable(L);
+  int tables = 0;
+  for (size_t i = 0; i < result->count; ++i) {
+    SqlQueryTable *t = &result->tables[i];
+    if (!t->column_count || !t->columns) continue;
+    lua_newtable(L);
+    lua_pushinteger(L, (lua_Integer)t->column_count); lua_setfield(L, -2, "column_count");
+    text(L, "missing_label", "NULL");
+    if (t->truncated) text(L, "warning", "Row or cell limit reached. This result is incomplete.");
+    lua_newtable(L);
+    for (size_t col = 0; col < t->column_count; ++col) {
+      lua_pushstring(L, t->columns[col] ? t->columns[col] : ""); lua_rawseti(L, -2, (int)col + 1);
+    }
+    lua_setfield(L, -2, "headers");
+    lua_newtable(L);
+    for (size_t row = 0; row < t->row_count; ++row) {
+      lua_newtable(L);
+      lua_pushinteger(L, (lua_Integer)row + 1); lua_setfield(L, -2, "source_line1");
+      lua_pushinteger(L, (lua_Integer)row + 1); lua_setfield(L, -2, "source_line2");
+      lua_newtable(L);
+      for (size_t col = 0; col < t->column_count; ++col) {
+        SqlQueryCell *cell = &t->cells[row * t->column_count + col];
+        if (cell->text) lua_pushlstring(L, cell->text, cell->length); else lua_pushboolean(L, 0);
+        lua_rawseti(L, -2, (int)col + 1);
+      }
+      lua_setfield(L, -2, "cells");
+      lua_rawseti(L, -2, (int)row + 1);
+    }
+    lua_setfield(L, -2, "rows");
+    lua_rawseti(L, -2, ++tables);
+  }
+  lua_setfield(L, -2, "results");
+  lua_newtable(L);
+  int counts = 0;
+  for (size_t i = 0; i < result->count; ++i) {
+    SqlQueryTable *t = &result->tables[i];
+    if (t->column_count || t->affected_rows < 0) continue;
+    char number[32]; snprintf(number, sizeof(number), "%lld", t->affected_rows);
+    lua_pushstring(L, number); lua_rawseti(L, -2, ++counts);
+  }
+  lua_setfield(L, -2, "affected_rows");
+  sql_query_free(result);
+  return 1;
+}
 int luaopen_sql_server_native(lua_State *L) {
   luaL_newmetatable(L, "anvil.sql_catalog");
   lua_pushcfunction(L, catalog_gc); lua_setfield(L, -2, "__gc"); lua_pop(L, 1);
-  const luaL_Reg functions[] = { {"context", context}, {"read_schema", read_schema}, {NULL, NULL} };
+  luaL_newmetatable(L, "anvil.sql_query");
+  lua_pushcfunction(L, query_gc); lua_setfield(L, -2, "__gc"); lua_pop(L, 1);
+  const luaL_Reg functions[] = { {"context", context}, {"read_schema", read_schema}, {"execute", execute_query}, {NULL, NULL} };
   luaL_newlib(L, functions); return 1;
 }

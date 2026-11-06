@@ -1164,6 +1164,29 @@ local function scenario_is_ready()
     open.password:set_text("render-test-password")
     return false
   end
+  if benchmark.scenario == "tabular-data-preview" then
+    local Preview = require "plugins.tabular_data_preview"
+    if view:extends(Preview) then return view.parse_status == "ready" end
+    local buffer = core.open_buffer(common.dirname(benchmark.fixture) .. PATHSEP .. "table.csv")
+    benchmark.view = Preview(buffer)
+    require("core.panes").present(benchmark.view, { focus = true })
+    return false
+  end
+  if benchmark.scenario == "sql-results" then
+    local Results = require "plugins.sql_server.results"
+    if view:extends(Results) then view:select_cell(2, 2, false); return true end
+    local model = { headers = { "id", "name", "city", "note" }, column_count = 4,
+      missing_label = "NULL", rows = {} }
+    for i = 1, 100 do
+      model.rows[i] = { cells = { tostring(i), "Customer " .. i, "Lisbon", i % 2 == 0 and "" or false },
+        source_line1 = i, source_line2 = i }
+    end
+    model.distinct_values = require("plugins.tabular_data_preview.parser").distinct_values(model)
+    benchmark.view = Results("Example SQL Server")
+    benchmark.view:complete({ results = { model }, affected_rows = {} })
+    require("core.panes").present(benchmark.view, { focus = true })
+    return false
+  end
   if benchmark.scenario == "update-dialog" then
     -- A fixed release offer. This scene makes no network request and cannot install anything.
     if require("core.ui.dialog").current() then return true end

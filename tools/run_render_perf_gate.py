@@ -142,6 +142,8 @@ SCENARIOS["image-zoom"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["context-menu"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["project-paths-dialog"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["databases-dialog"] = dict(SCENARIOS["image-viewer"])
+SCENARIOS["tabular-data-preview"] = dict(SCENARIOS["image-viewer"])
+SCENARIOS["sql-results"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["databases-dialog-empty"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["databases-dialog-windows"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["file-types-dialog"] = dict(SCENARIOS["image-viewer"])
@@ -815,6 +817,11 @@ def generate_fixture(work: Path) -> tuple[Path, Path, Path]:
         ])
     lines.append("return RenderBenchmark\n")
     fixture.write_text("".join(lines), encoding="utf-8", newline="\n")
+    (fixture_dir / "table.csv").write_text(
+        "id,name,city,total,note\n" + "".join(
+            f'{i},Customer {i},Lisbon,{i}.25,"A note, with a comma"\n' for i in range(1, 1001)
+        ), encoding="utf-8", newline="\n",
+    )
     for i in range(1, 41):
         (tab_dir / f"benchmark-tab-{i:03d}.lua").write_text(
             f"-- benchmark tab {i}\nreturn {{ id = {i}, title = 'tab-{i:03d}' }}\n",
