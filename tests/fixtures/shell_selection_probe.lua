@@ -3,7 +3,8 @@
 -- previous Project's frame on screen, so the switch shows no empty Project area. This holds for a Project that
 -- starts on selection and for a loaded Project that is slow to present.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
-if action ~= "select-hold" then return end
+local terminal_case = action == "select-terminal-hold"
+if action ~= "select-hold" and not terminal_case then return end
 local core, common = require "core", require "core.common"
 local style = require "core.style"
 local ffi = require "ffi"
@@ -77,10 +78,10 @@ end
 local function same(a, b) return a[1] == b[1] and a[2] == b[2] and a[3] == b[3] end
 local function show(color) return string.format("#%02x%02x%02x", color[1], color[2], color[3]) end
 local function quit() core.exit(function() core.quit_request = true end, true) end
-local function ready(name, pane)
+local function ready(name, pane, session)
  wait(function() return system.window_has_focus(core.window) end, 10, "the selected Project did not get keyboard focus")
  local _, _, controls_w = system.get_window_controls()
- save(name, {pid = tonumber(kernel.GetCurrentProcessId()), controls_w = controls_w, pane = pane,
+ save(name, {pid = tonumber(kernel.GetCurrentProcessId()), controls_w = controls_w, pane = pane, session = session,
   background = {style.background[1], style.background[2], style.background[3]}})
 end
 
@@ -122,6 +123,16 @@ if path:match("/driver$") then
    wait(function() return load("a-blocking") end, 10, "Project A did not block")
    local selected = count(trace(), "Shell selected loaded Project")
    save("select-a", {go = true})
+   if terminal_case then
+    local row = wait(function()
+     user32.SendMessageW(window, 0x804d, 0, 0)
+     local page = load("sidebar-0")
+     for _, item in ipairs(page and page.items or {}) do
+      if item.kind == "terminal" and item.id == a.session then return item.row_id end
+     end
+    end, 15, "the Sidebar did not list the test Terminal Session")
+    user32.SendMessageW(window, 0x804d, 2, row)
+   end
    wait(function() return count(trace(), "Shell selected loaded Project") > selected end, 5,
     "the shell did not select Project A")
    local switching = capture(window).pixel(x, y)
@@ -145,6 +156,8 @@ if path:match("/driver$") then
   local file = assert(io.open(os.getenv("ANVIL_PROJECT_PROBE_RESULT"), "wb"))
   file:write("return ", common.serialize{ok=ok, error=ok and nil or tostring(err), action=action})
   file:close()
+  save("finish", {go = true})
+  if terminal_case then pcall(wait, function() return load("a-cleaned") end, 15) end
   if shell and shell:running() then shell:terminate(); shell:wait(1) end
   for _, name in ipairs {"a-ready", "b-ready"} do
    local state = load(name)
@@ -163,10 +176,23 @@ elseif path:match("/Project$") then
    renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, self.color)
   end
   local old = assert(panes.create {factory = function() return ColorView({192, 48, 32, 255}) end})
-  local target = assert(panes.create {factory = function() return ColorView({32, 160, 64, 255}) end})
+  local terminal
+  local target
+  if terminal_case then
+   terminal = assert(require("plugins.terminal").open {
+    cwd = path, shell = "cmd.exe /D /Q", placement = "new", focus = false})
+   wait(function() return terminal.session and terminal.state == "running" end, 30, "the test Terminal did not start")
+   -- Use a solid surface to detect which View the shell presents, independent of shell output.
+   function terminal:draw()
+    renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, {32, 160, 64, 255})
+   end
+   target = assert(panes.pane_for_view(terminal))
+  else
+   target = assert(panes.create {factory = function() return ColorView({32, 160, 64, 255}) end})
+  end
   panes.focus(old)
   coroutine.yield(.5)
-  ready("a-ready", target.id)
+  ready("a-ready", target.id, terminal and terminal.session_id)
   wait(function() return load("select-b") end, 60)
   assert(system.pane_request("select", root .. "/Replacement",
    common.serialize({action = "key", stroke = require("core.keymap").get_binding("pane:new_group")},
@@ -174,8 +200,13 @@ elseif path:match("/Project$") then
   wait(function() return load("a-block") end, 60)
   save("a-blocking", {go = true})
   system.sleep(1.5)
-  wait(function() return load("history-back") end, 60)
-  require("core.command").perform("pane:history_back")
+  wait(function() return load("history-back") or load("finish") end, 60)
+  if not load("finish") then require("core.command").perform("pane:history_back") end
+  if terminal then
+   wait(function() return load("finish") end, 60)
+   terminal.session:close()
+   save("a-cleaned", {go = true})
+  end
  end)
 elseif path:match("/Replacement$") then
  core.add_background_thread(function()
@@ -183,8 +214,10 @@ elseif path:match("/Replacement$") then
   ready("b-ready")
   wait(function() return load("select-a") end, 60)
   local target = assert(load("a-ready")).pane
-  assert(system.pane_request("select", root .. "/Project",
-   common.serialize({action = "focus", pane = target}, {escape = true})))
+  if not terminal_case then
+   assert(system.pane_request("select", root .. "/Project",
+    common.serialize({action = "focus", pane = target}, {escape = true})))
+  end
   local ok, err = pcall(function()
    wait(function()
     local previous = core.project_sidebar

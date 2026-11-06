@@ -539,7 +539,7 @@ Background Projects do not render. Keep the shell's first-frame guards separate 
 A Project's 30-second first-frame deadline starts again when the shell first shows it. Run the `restore-select-late` shell probe after changes.
 The `restore-loaded` probe checks readiness without selecting the restored background Project.
 
-A Sidebar Pane selection keeps the previous Project's frame until the requested Pane has rendered.
+A Sidebar Pane or Terminal Session selection keeps the previous Project's frame until the requested Pane has rendered.
 Keyboard focus waits until the requested Pane is applied, so Pane History records no visit to the Project's old Pane.
 Pane deliveries carry request IDs. Lua completes each request, including a rejected request, before the next redraw.
 Both renderers report the completed ID. The shell rejects frames that precede the requested ID.
@@ -548,7 +548,8 @@ The shell then publishes the destination Project and its requested Pane together
 Meanwhile the Sidebar View highlights the row that the user chose, so the highlight does not go back to the old Pane.
 A chosen Terminal Session keeps the highlight until the Tab that shows it is active.
 Runtime readiness permits delivery before the first frame, so selection cannot block a new Project's startup.
-Run `anvil:hosted-routing`, `ui/pane_requests.lua`, and the `select-hold` shell probe after changes.
+Terminal Session selections use the same Pane request, including when the Project starts or opens the session's View.
+Run `anvil:hosted-routing`, `ui/pane_requests.lua`, and the `select-hold`, `select-terminal-hold` and `terminal-focus` shell probes after changes.
 
 The shell waits for swapchain capacity without blocking its event loop. It collects input and new surfaces during that wait.
 Each Window has one pending presentation and one one-shot readiness wait. Idle Windows have no readiness wait.

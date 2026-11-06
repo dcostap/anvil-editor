@@ -100,6 +100,7 @@ local schemas = {
   transferred = {transfer = true, ok = true, error = true},
   drag = {phase = true, source = true, pane = true},
   terminal_find = {session = true, query = true, case_sensitive = true, row = true},
+  terminal_focus = {session = true},
   project_search = {from = true, id = true, mode = true, query = true, case_sensitive = true, limit = true},
   project_results = {source = true, id = true, rows = true, more = true},
   search = {text = true},
@@ -143,6 +144,9 @@ local function validate(request)
     or type(request.case_sensitive) ~= "boolean" or type(request.row) ~= "number"
     or request.row % 1 ~= 0 or request.row < 0) then
     return nil, "invalid Terminal match"
+  end
+  if request.action == "terminal_focus" and not identifier(request.session) then
+    return nil, "invalid Terminal Session"
   end
   if (schema.id or schema.line) and not (positive(request.id or 1) and positive(request.line or 1)
     and positive(request.col or 1) and positive(request.limit or 1)) then
@@ -217,6 +221,21 @@ local function execute(request, x, y)
   -- A Text Search match in a Terminal Session of this Project.
   if action == "terminal_find" then
     return require("plugins.terminal").show_match(request.session, request.query, request.case_sensitive, request.row)
+  end
+  if action == "terminal_focus" then
+    local terminal = require "plugins.terminal"
+    -- Runtime readiness includes Workspace restore. Select or open the session before completing this request.
+    if terminal.focus_session(request.session) then
+      core.log_quiet("Terminal Session %s focused for the Sidebar", request.session)
+      return true
+    end
+    local view, err = terminal.open_session(request.session)
+    if view then
+      core.log_quiet("Terminal Session %s opened for the Sidebar", request.session)
+    else
+      core.warn("Cannot open Terminal Session %s: %s", request.session, tostring(err))
+    end
+    return not not view, err
   end
   local pane = request.pane and panes.find(request.pane)
   if request.pane and not pane then return nil, "Pane not found" end

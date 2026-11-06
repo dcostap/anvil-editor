@@ -3225,7 +3225,7 @@ function M.request_editor(id, paths)
   return true
 end
 
--- Native shell launches and Project Sidebar rows target a Terminal Session, not the current directory.
+-- Native shell launches target a Terminal Session, not the current directory.
 do
   local on_event = core.on_event
   function core.on_event(type, ...)
@@ -3236,27 +3236,7 @@ do
       return true
     end
     if type == "terminaleditor" then return M.request_editor(...) end
-    if type ~= "focusterminal" or not system.is_hosted_surface() then return on_event(type, ...) end
-    local id = ...
-    if M.focus_session(id) then
-      core.log_quiet("Terminal Session %s focused for the Sidebar", id)
-      return true
-    end
-    -- A starting Project may still be restoring its Workspace views. Look again after that, then open it.
-    core.add_thread(function()
-      coroutine.yield()
-      if M.focus_session(id) then
-        core.log_quiet("Terminal Session %s focused for the Sidebar after Workspace restore", id)
-        return
-      end
-      local view, err = M.open_session(id)
-      if view then
-        core.log_quiet("Terminal Session %s opened for the Sidebar", id)
-      else
-        core.warn("Cannot open Terminal Session %s: %s", id, tostring(err))
-      end
-    end)
-    return true
+    return on_event(type, ...)
   end
 end
 

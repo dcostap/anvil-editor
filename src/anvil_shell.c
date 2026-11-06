@@ -212,8 +212,6 @@ typedef struct ShellProject {
   bool sidebar;
   /* The Project's latest Pane report, or NULL before its first one. */
   char *panes;
-  /* A Terminal Session the Sidebar asked the Project to focus once Ready. */
-  char pending_terminal[ANVIL_SURFACE_TERMINAL_ID_LEN + 1];
   PendingPane *pending_panes;
   uint64_t pane_request;
   uint64_t sidebar_pane_request;
@@ -857,19 +855,11 @@ static void set_state(ShellProject *project, ShellState state) {
       free(project->panes);
       project->panes = NULL;
     }
-    if (state == SHELL_FAILED || state == SHELL_DORMANT) project->pending_terminal[0] = 0;
     if (state == SHELL_FAILED || state == SHELL_DORMANT) {
       if (project->pending_panes) SDL_Log("Shell dropped pending Pane requests: Project=%u is unavailable", project->id);
       clear_pending_panes(project);
     }
     deliver_pending_panes(project);
-    if (state == SHELL_READY && project->pending_terminal[0]) {
-      SDL_Log("Shell Terminal Session focus delivered after start: Project=%u session=%s", project->id,
-              project->pending_terminal);
-      shell_send(project, ANVIL_SURFACE_MSG_FOCUS_TERMINAL, project->pending_terminal,
-                 ANVIL_SURFACE_TERMINAL_ID_LEN + 1, NULL, 0);
-      project->pending_terminal[0] = 0;
-    }
   }
   if (project == shell.sidebar_process) {
     for (ShellWindow *item = shell.windows; item; item = item->next) {
@@ -6060,8 +6050,6 @@ struct ProjectResolve {
   bool restored;
   /* A background load starts the Project in this Window. The Window keeps its selection. */
   bool background;
-  /* A Sidebar Terminal Session click: focus this session once the Project is selected. */
-  char terminal[ANVIL_SURFACE_TERMINAL_ID_LEN + 1];
   char *pane;
   int argc;
   char **argv;
@@ -6505,11 +6493,13 @@ static bool select_project_path(ShellWindow *window, const char *path) {
   return queue_resolution(window, path, 0, NULL, false, false, false, NULL);
 }
 
-/* Selects the Project like a Project row click, then focuses the Terminal Session in it. */
+/* Terminal rows use the same completion boundary as Pane rows, including during Project startup. */
 static bool select_terminal_path(ShellWindow *window, const char *path, const char *id) {
-  if (!select_project_path(window, path)) return false;
-  memcpy(shell.resolvers->terminal, id, ANVIL_SURFACE_TERMINAL_ID_LEN + 1);
-  return true;
+  if (strlen(id) != ANVIL_SURFACE_TERMINAL_ID_LEN ||
+      strspn(id, "0123456789abcdef") != ANVIL_SURFACE_TERMINAL_ID_LEN) return false;
+  char text[96];
+  int size = snprintf(text, sizeof(text), "{action=\"terminal_focus\",session=\"%s\"}", id);
+  return size > 0 && size < (int)sizeof(text) && select_pane_path(window, path, text, (uint32_t)size);
 }
 
 /* Selects the Project like a Project row click, then acts on its Pane. A close also selects the Project, so a
@@ -6781,17 +6771,6 @@ static bool initial_resolution_pending(void) {
   return false;
 }
 
-/* A Ready Project focuses the session now. A starting Project focuses it once Ready. */
-static void focus_terminal(ShellProject *project, const char *id) {
-  if (project->connected && project->state == SHELL_READY) {
-    SDL_Log("Shell Terminal Session focus sent: Project=%u session=%s", project->id, id);
-    shell_send(project, ANVIL_SURFACE_MSG_FOCUS_TERMINAL, id, ANVIL_SURFACE_TERMINAL_ID_LEN + 1, NULL, 0);
-  } else {
-    SDL_Log("Shell Terminal Session focus waits for its Project: Project=%u session=%s", project->id, id);
-    memcpy(project->pending_terminal, id, ANVIL_SURFACE_TERMINAL_ID_LEN + 1);
-  }
-}
-
 static void finish_resolutions(void) {
   ProjectResolve **link = &shell.resolvers;
   while (*link) {
@@ -6941,7 +6920,6 @@ static void finish_resolutions(void) {
           if (project->restore_waiting) project->restore_rank = -1;
         }
         if (!job->initial && !job->background) raise_owner(project);
-        if (job->terminal[0]) focus_terminal(project, job->terminal);
         if (created || (project->failed_close && project->process.hProcess &&
                         WaitForSingleObject(project->process.hProcess, 0) ==
                             WAIT_OBJECT_0)) {

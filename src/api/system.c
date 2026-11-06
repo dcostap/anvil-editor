@@ -2484,12 +2484,6 @@ static int projectsidebar_callback(lua_State *L, SDL_Event *event) {
   free(event->user.data1);
   return 2;
 }
-static int focusterminal_callback(lua_State *L, SDL_Event *event) {
-  lua_pushstring(L, "focusterminal");
-  lua_pushstring(L, event->user.data1);
-  free(event->user.data1);
-  return 2;
-}
 static int terminaleditor_callback(lua_State *L, SDL_Event *event) {
   const char *payload = event->user.data1;
   lua_pushstring(L, "terminaleditor");
@@ -3276,8 +3270,6 @@ int luaopen_system(lua_State *L) {
     return luaL_error(L, "Unable to register the Sidebar Zoom wheel event: %s", SDL_GetError());
   if (!register_custom_event("altnavigation", altnavigation_callback))
     return luaL_error(L, "Unable to register the Alt Navigation event: %s", SDL_GetError());
-  if (!register_custom_event("focusterminal", focusterminal_callback))
-    return luaL_error(L, "Unable to register the Terminal Session focus event: %s", SDL_GetError());
   if (!register_custom_event("terminaleditor", terminaleditor_callback))
     return luaL_error(L, "Unable to register the Terminal editor event: %s", SDL_GetError());
   if (!register_custom_event("terminalquit", terminalquit_callback))

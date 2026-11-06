@@ -42,8 +42,6 @@ typedef enum {
   ANVIL_SURFACE_MSG_SIDEBAR_CHANGED = 7,
   /* Another process saved a Color Theme; reload the saved one. No payload. */
   ANVIL_SURFACE_MSG_COLOR_THEME_CHANGED = 8,
-  /* Focus this Terminal Session, opening it in this Project if no view shows it. Payload: id + NUL. */
-  ANVIL_SURFACE_MSG_FOCUS_TERMINAL = 9,
   /* A Project shows a Color Theme it has not saved. Draw it until the next save or preview. Payload: the
    * preview + NUL, or only NUL to draw the saved Color Theme again. */
   ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEWED = 10,

@@ -622,15 +622,14 @@ static void dispatch_message(HostedMessage *message) {
     }
     goto complete;
   }
-  if (type == ANVIL_SURFACE_MSG_FOCUS_TERMINAL || type == ANVIL_SURFACE_MSG_TERMINAL_EDITOR) {
+  if (type == ANVIL_SURFACE_MSG_TERMINAL_EDITOR) {
     CustomEvent event = {0};
     event.code = message->size;
     event.data1 = malloc(message->size);
     if (event.data1) memcpy(event.data1, payload, message->size);
-    if (!event.data1 || !push_custom_event(type == ANVIL_SURFACE_MSG_FOCUS_TERMINAL ?
-        "focusterminal" : "terminaleditor", &event)) {
+    if (!event.data1 || !push_custom_event("terminaleditor", &event)) {
       free(event.data1);
-      SDL_Log("Terminal Session focus request dropped: copy or event delivery failed");
+      SDL_Log("Terminal editor request dropped: copy or event delivery failed");
     }
     goto complete;
   }
@@ -876,11 +875,6 @@ static int SDLCALL reader_thread(void *data) {
         break;
       case ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEWED:
         if (!hosted.sidebar || !size || body[size - 1] || memchr(body, 0, size - 1)) goto failed;
-        break;
-      case ANVIL_SURFACE_MSG_FOCUS_TERMINAL:
-        if (hosted.sidebar || size != ANVIL_SURFACE_TERMINAL_ID_LEN + 1 || body[size - 1] ||
-            strspn((const char *)body, "0123456789abcdef") != ANVIL_SURFACE_TERMINAL_ID_LEN)
-          goto failed;
         break;
       case ANVIL_SURFACE_MSG_TERMINAL_EDITOR:
         if (hosted.sidebar || size < ANVIL_SURFACE_TERMINAL_ID_LEN + 1 || body[size - 1] ||

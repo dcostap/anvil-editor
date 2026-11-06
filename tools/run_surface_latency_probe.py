@@ -139,6 +139,7 @@ def main() -> int:
     parser.add_argument("--reference-exe", type=Path, help="copy a saved reference executable into the isolated app")
     parser.add_argument("--reference-data", type=Path, help="use the saved reference's matching runtime data")
     parser.add_argument("--project-case", action="append", choices=[
+        "select-terminal-hold",
         "windows-sidebar-layout",
         "windows-sidebar-folding",
         "windows-close-terminals-keep", "windows-close-terminals-end",
@@ -224,7 +225,7 @@ def main() -> int:
                         fixture = "zoom_probe.lua"
                     if action == "maximize-button":
                         fixture = "shell_caption_buttons_probe.lua"
-                    if action == "select-hold":
+                    if action in ("select-hold", "select-terminal-hold"):
                         fixture = "shell_selection_probe.lua"
                     if action == "terminal-focus":
                         fixture = "shell_terminal_focus_probe.lua"
@@ -273,7 +274,7 @@ def main() -> int:
                     init = ('local open = shmem.open\nshmem.open = function(name, capacity)\n'
                             f'  return open(name == "anvil-ipc" and "{namespace}" or name, capacity)\nend\n')
                     # A hand-off needs the IPC check that finds the Project in another instance.
-                    if action != "launch-handoff" and (action == "dialog-blocked-close" or action.startswith(("windows-", "fault-", "startup-", "identity-", "launch-", "restore-", "adopt-", "resize-")) or action in ("layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "maximize-button", "zoom-global", "select-hold", "terminal-focus", "agent-projects", "toggle-sidebar", "alt-navigation", "project-menu", "project-menu-background", "project-reorder", "conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close", "loaded-switch")):
+                    if action != "launch-handoff" and (action == "dialog-blocked-close" or action.startswith(("windows-", "fault-", "startup-", "identity-", "launch-", "restore-", "adopt-", "resize-")) or action in ("layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "maximize-button", "zoom-global", "select-hold", "select-terminal-hold", "terminal-focus", "agent-projects", "toggle-sidebar", "alt-navigation", "project-menu", "project-menu-background", "project-reorder", "conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close", "loaded-switch")):
                         init += 'local config = require "core.config"\nconfig.plugins.ipc.single_instance = false\n'
                     (case_dir / "user/init.lua").write_text(init, encoding="utf-8")
                     if action in ("theme-global", "reveal"):
@@ -328,7 +329,7 @@ def main() -> int:
                         config["environment"]["ANVIL_SIDEBAR_SCAN_DELAY"] = "1"
                     if action == "restore-stagger":
                         config["environment"]["ANVIL_SURFACE_FAULT_PROBE"] = "1"
-                    if action in ("layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "select-hold", "terminal-focus", "toggle-sidebar", "project-menu", "project-menu-background", "project-reorder", "recovery", "shell-empty", "shell-sidebar"):
+                    if action in ("layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "select-hold", "select-terminal-hold", "terminal-focus", "toggle-sidebar", "project-menu", "project-menu-background", "project-reorder", "recovery", "shell-empty", "shell-sidebar"):
                         config["environment"]["ANVIL_SURFACE_FAULT_PROBE"] = "1"
                         config["environment"]["ANVIL_SHELL_CAPTURE_DIR"] = native_path(case_dir)
                     if action == "theme-global":
