@@ -1995,16 +1995,25 @@ function TerminalView:mouse_position(x, y)
   return col, row, native_x, math.max(0, local_y)
 end
 
+local function unescape_link_byte(hex)
+  return string.char(tonumber(hex, 16))
+end
+
+local function unescape_link_path(path)
+  path = path:gsub("%%(%x%x)", unescape_link_byte)
+  if not path:find("[%z%c]") then return path end
+end
+
 local function local_path_from_uri(uri)
   local authority, path = uri:match("^[Ff][Ii][Ll][Ee]://([^/]*)(/.*)$")
   if not path then return nil end
-  path = path:gsub("%%(%x%x)", function(hex) return string.char(tonumber(hex, 16)) end)
+  path = unescape_link_path(path)
+  if not path then return nil end
   if authority ~= "" and authority:lower() ~= "localhost" then
     path = "\\\\" .. authority .. path:gsub("/", "\\")
   elseif path:match("^/[A-Za-z]:") then
     path = path:sub(2)
   end
-  if path:find("[%z%c]") then return nil end
   local info = system.get_file_info(path)
   return info and (info.type == "file" or info.type == "dir") and path or nil
 end
@@ -2097,7 +2106,8 @@ function TerminalView:point_of_interest_at(col, row, explicit_only)
   elseif type(uri) == "string" and uri ~= "" and #uri <= 32768 and not uri:find("[%z%c]") then
     -- Markdown links can name a local file without a URI scheme. Resolve the hidden target,
     -- not its visible label, from the Terminal Session's directory.
-    local path = text_poi_locations.resolve_path(uri, self:get_cwd(), { dirs = true })
+    local target = unescape_link_path(uri)
+    local path = target and text_poi_locations.resolve_path(target, self:get_cwd(), { dirs = true })
     if path then point = { kind = "terminal-location", path = path } end
   end
   if point then return common.merge(point, self:hyperlink_extent(col, row, uri)) end

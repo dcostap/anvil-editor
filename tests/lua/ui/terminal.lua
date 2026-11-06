@@ -1803,39 +1803,47 @@ test.describe("Terminal View", function()
     system.open_in_system = previous_open
   end)
 
-  test.it("opens a relative hyperlink with a normal click using the terminal directory", function(context)
+  test.it("opens plain and escaped file hyperlinks with normal hover and click", function(context)
     context.link_cwd = system.getcwd()
     local folder = USERDIR .. PATHSEP .. "terminal-relative-link"
     context.link_folder = folder
     test.ok(common.mkdirp(folder .. PATHSEP .. "plans"))
-    local path = folder .. PATHSEP .. "plans" .. PATHSEP .. "SPARE_PROJECT_PROCESS_PLAN.md"
+    local relative = "plans/Spare + process.md"
+    local path = folder .. PATHSEP .. relative
     local file = assert(io.open(path, "wb"))
     file:write("# Spare Project process\n")
     file:close()
     local view = terminal.open { cwd = folder, focus = true }
+    local pane = panes.active()
     local session = context.sessions[1]
-    session.hyperlink = function(_, col, row)
-      if row == 0 and col >= 9 and col <= 16 then
-        return "plans/SPARE_PROJECT_PROCESS_PLAN.md"
-      end
-    end
     view.snapshot.mouse_tracking = true
     keymap.modkeys.ctrl = false
     local x, y = 7 + view.cell_width * 10, 7
-    view:on_mouse_moved(x, y, 0, 0)
-    local cursor, point = view.cursor, view.hover_point
-    view:on_mouse_pressed("left", x, y)
-    view:on_mouse_released("left", x, y)
-    keymap.modkeys.ctrl = false
-    view:clear_point_hover()
-    context.link_buffer = core.active_view.buffer
-
-    test.equal(cursor, "hand")
-    test.ok(point and common.path_equals(point.path, path))
-    test.same({ point.col, point.end_col, point.row }, { 9, 16, 0 })
+    for _, uri in ipairs({
+      relative,
+      (relative:gsub(" ", "%%20")),
+      (path:gsub("\\", "/"):gsub(" ", "%%20")),
+    }) do
+      session.hyperlink = function(_, col, row)
+        if row == 0 and col >= 9 and col <= 16 then return uri end
+      end
+      view:clear_point_hover()
+      view:on_mouse_moved(x, y, 0, 0)
+      test.equal(view.cursor, "hand", uri)
+      local point = view.hover_point
+      test.ok(point and common.path_equals(point.path, path))
+      test.ok(view.link_tooltip and common.path_equals(view.link_tooltip.text, path))
+      test.same({ point.col, point.end_col, point.row }, { 9, 16, 0 })
+      view:on_mouse_pressed("left", x, y)
+      view:on_mouse_released("left", x, y)
+      context.link_buffer = core.active_view.buffer
+      test.ok(core.active_view.buffer)
+      test.ok(common.path_equals(core.active_view.buffer.abs_filename, path))
+      panes.present(view, { pane = pane, focus = true })
+    end
     for _, event in ipairs(session.mouse_events) do test.equal(event[1], "motion") end
-    test.ok(core.active_view.buffer)
-    test.ok(common.path_equals(core.active_view.buffer.abs_filename, path))
+    session.hyperlink = function() return path .. "%00" end
+    test.equal(view:point_of_interest_at(10, 0, true), nil, "decoded controls are not file paths")
   end)
 
   test.it("opens a folder hyperlink in a File Tree with a normal click", function(context)
