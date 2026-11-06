@@ -196,6 +196,60 @@ test.describe("autocomplete batch behavior", function()
     until autocomplete.get_selected_suggestion().text == first
   end)
 
+  for _, filename in ipairs({ "words.txt", "words.md" }) do
+    test.it(filename .. " merges word casing and inserts the prefix's casing", function(context)
+      context.autocomplete_scope = config.plugins.autocomplete.suggestions_scope
+      config.plugins.autocomplete.suggestions_scope = "local"
+      local source = "readyword planificación—Planificación «PLANIFICACIÓN» ÁRBOL árbol NASA Madrid\n"
+      local view, buffer = open_editor(context, source .. "ready")
+      buffer:set_syntax(require("core.syntax").get(filename))
+      test.ok(wait_for_suggestion(view, "readyword"), "the Buffer words should become available")
+
+      for _, example in ipairs({
+        { "PLANI", "PLANIFICACIÓN" },
+        { "Plani", "Planificación" },
+        { "plani", "planificación" },
+        { "PlAn", "Planificación" },
+        { "P", "Planificación" },
+        { "ÁRB", "ÁRBOL" },
+        { "árb", "árbol" },
+        { "nasa", "NASA" },
+        { "madr", "Madrid" },
+      }) do
+        autocomplete.close()
+        set_view_selections(view, { 2, 1, 2, #buffer.lines[2] })
+        core.root_panel:on_text_input(example[1])
+        if example[1] == "PLANI" or example[1] == "árb" then
+          test.ok(autocomplete.is_open(), "a prose prefix should complete automatically")
+        end
+        view:with_selection_state(function() autocomplete.trigger() end)
+        test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, example[2])
+        test.ok(command.perform("autocomplete:next"))
+        test.equal(autocomplete.get_selected_suggestion().text, example[2], "casing variants should share one row")
+        test.ok(command.perform("autocomplete:complete"))
+        test.equal(table.concat(buffer.lines), source .. example[2] .. "\n")
+      end
+
+      autocomplete.close()
+      set_view_selections(view, { 2, 1, 2, #buffer.lines[2] })
+      core.root_panel:on_text_input("PLANIFICACIÓN")
+      view:with_selection_state(function() autocomplete.trigger() end)
+      test.not_ok(autocomplete.is_open(), "an adjusted word equal to the prefix should not appear")
+    end)
+  end
+
+  test.it("code completion keeps differently cased names distinct", function(context)
+    context.autocomplete_scope = config.plugins.autocomplete.suggestions_scope
+    config.plugins.autocomplete.suggestions_scope = "local"
+    local view, buffer = open_editor(context, "local presupuesto = 1\nlocal Presupuesto = 2\nPre")
+    buffer:set_syntax(require("core.syntax").get("words.lua"))
+    test.ok(wait_for_suggestion(view, "Presupuesto"))
+    test.ok(command.perform("autocomplete:next"))
+    test.equal(autocomplete.get_selected_suggestion().text, "presupuesto")
+    test.ok(command.perform("autocomplete:complete"))
+    test.equal(buffer.lines[3], "presupuesto\n")
+  end)
+
   test.it("typing over many overlapping selected ranges should not be rejected into autocomplete-only state", function(context)
     local line = string.rep("alpha", 20)
     local selections = {}

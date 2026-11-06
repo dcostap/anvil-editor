@@ -13,6 +13,7 @@ local View = require "core.view"
 local RootPanel = require "core.rootpanel"
 local project_paths = require "core.project_paths"
 local encoded_data = require "core.encoded_data"
+local syntax = require "core.syntax"
 local poi = require "core.poi"
 local symbol_icons = require "core.symbol_icons"
 local file_icons = require "core.file_icons"
@@ -318,6 +319,16 @@ end
 
 local WORD_APOSTROPHES = { "'", "’", "ʼ" }
 
+local function is_prose_buffer(buffer)
+  return buffer.syntax == syntax.plain_text_syntax
+    or require("core.markdown.live_render").is_markdown_buffer(buffer)
+end
+
+local function word_separator(char)
+  -- Keep byte positions for the data-run and apostrophe checks.
+  return string.rep(" ", #char)
+end
+
 local function is_ascii_letter_at(text, byte_index)
   local byte = text:byte(byte_index)
   return byte and (byte >= 65 and byte <= 90 or byte >= 97 and byte <= 122) or false
@@ -411,16 +422,22 @@ core.add_thread(function()
     local symbols_count = 0
     local scanned_symbols = 0
     local symbol_pattern = buffer:get_symbol_pattern()
+    local prose = is_prose_buffer(buffer)
     local slice_start = system.get_time()
     local slice_budget = 0.001
     while i <= #buffer.lines do
       local line = buffer.lines[i]
+      local scan_line, pattern = line, symbol_pattern
+      if prose and line:find("[\128-\255]") then
+        scan_line = line:ugsub("[^%w_]", word_separator)
+        pattern = "[%a_\128-\255][%w_\128-\255]*"
+      end
       local search_from = 1
       local run_start, run_end
       -- Fragments of encoded data, such as a pasted base64 image, are not words.
       run_start, run_end = encoded_data.next_run(line, 1)
       while search_from <= #line do
-        local match_start, match_end, captured_symbol = line:find(symbol_pattern, search_from)
+        local match_start, match_end, captured_symbol = scan_line:find(pattern, search_from)
         if not match_start then break end
         while run_end and run_end < match_start do
           run_start, run_end = encoded_data.next_run(line, run_end + 1)
@@ -769,6 +786,11 @@ local function automatic_buffer_word_match(item, needle)
   if type(item) ~= "table" or item.autocomplete_source ~= "buffer_word" then return true end
   local text = suggestion_text(item)
   needle = tostring(needle or "")
+  if item.autocomplete_word_key then
+    needle = needle:ulower()
+    return character_count(text) >= 5
+      and item.autocomplete_word_key:sub(1, #needle) == needle
+  end
   return character_count(text) >= 5
     and text:sub(1, #needle):lower() == needle:lower()
 end
@@ -896,9 +918,15 @@ end
 local function match_completion_items(items, needle)
   if needle == "" then return common.fuzzy_match(items, needle, false) end
   local matches = {}
+  local word_query
   for _, item in ipairs(items) do
     local text = type(item) == "table" and item.text or item
-    if completion_matches(tostring(text or ""), needle) then
+    local query = needle
+    if type(item) == "table" and item.autocomplete_word_key then
+      word_query = word_query or needle:ulower()
+      text, query = item.autocomplete_word_key, word_query
+    end
+    if completion_matches(tostring(text or ""), query) then
       matches[#matches + 1] = item
     end
   end
@@ -1222,6 +1250,7 @@ function update_suggestions()
 
   local lsp_available = has_lsp_completion(buffer)
   local markdown = require("core.markdown.live_render").is_markdown_buffer(buffer)
+  local prose_words = is_prose_buffer(buffer) and {} or nil
   prepare_project_completion(buffer, not provider_completion and not lsp_available and force_basic_suggestions
     and not markdown and project_completion_language_ids(buffer))
 
@@ -1329,11 +1358,20 @@ function update_suggestions()
     local function add_cache_symbols(symbols)
       for name in pairs(symbols or {}) do
         if name and name ~= "" and #name <= max_symbol_length() then
-          add_candidate_item(setmetatable({
-            text = name,
-            info = "normal",
-            autocomplete_source = "buffer_word",
-          }, mt), false)
+          if prose_words then
+            local key = name:ulower()
+            local previous_name = prose_words[key]
+            -- Prefer a lowercase occurrence; otherwise keep a stable original spelling.
+            if not previous_name or name == key or previous_name ~= key and name < previous_name then
+              prose_words[key] = name
+            end
+          else
+            add_candidate_item(setmetatable({
+              text = name,
+              info = "normal",
+              autocomplete_source = "buffer_word",
+            }, mt), false)
+          end
         end
       end
     end
@@ -1411,6 +1449,17 @@ function update_suggestions()
     end
 
     add_cache_symbols(text_symbols)
+
+    if prose_words then
+      for key, name in pairs(prose_words) do
+        add_candidate_item(setmetatable({
+          text = name,
+          info = "normal",
+          autocomplete_source = "buffer_word",
+          autocomplete_word_key = key,
+        }, mt), false)
+      end
+    end
 
     local symbol_index = tree_sitter_symbol_index_module()
     if symbol_index and project_completion then
@@ -1554,8 +1603,28 @@ function update_suggestions()
         end
       end
     end
+    local capitalized, uppercase = false, false
+    if prose_words then
+      -- One capital starts a sentence. Two or more capitals request an uppercase word.
+      local first = partial:usub(1, 1)
+      capitalized = first ~= first:ulower()
+      if capitalized and partial == partial:uupper() then
+        local letters = 0
+        for char in partial:ugmatch(".") do
+          if char:ulower() ~= char:uupper() then letters = letters + 1 end
+        end
+        uppercase = letters >= 2
+      end
+    end
     local function append_matches(matches, query)
       for _, item in ipairs(matches or {}) do
+        -- Change only matched Buffer words, never code or provider completions.
+        local word = type(item) == "table" and item.autocomplete_word_key
+        if word and uppercase then
+          item.text = word:uupper()
+        elseif word and capitalized then
+          item.text = word:usub(1, 1):uupper() .. word:usub(2)
+        end
         local key = suggestion_text(item)
         if key ~= "" and not is_noop_completion(item) and not seen[key] then
           annotate_match(item, query)
