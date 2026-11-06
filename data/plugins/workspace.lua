@@ -50,7 +50,7 @@ local loaded_workspace_path
 local suppress_next_exit_workspace_save = false
 -- False while a Project's Workspace restores. Saves during use would replace
 -- the saved state with the partly restored one.
-local workspace_restored = false
+core.workspace_restored = false
 local pending_save
 local save_thread_running = false
 local last_saved_key
@@ -404,7 +404,7 @@ local function run_pending_saves()
     else
       local reason = pending_save.reason
       pending_save = nil
-      if workspace_restored then
+      if core.workspace_restored then
         local ok, saved = core.try(save_workspace, true)
         if not ok or saved == false then
           local retry_at = system.get_time() + SAVE_MAX_DELAY_SECONDS
@@ -483,7 +483,7 @@ local function load_workspace()
     end
 
     restore_workspace_state()
-    workspace_restored = true
+    core.workspace_restored = true
   end)
 end
 
@@ -504,7 +504,7 @@ if not core.__workspace_hooks_installed then
     local was_empty_window = empty_window_requested()
     core.try(save_workspace)
     close_workspace_views()
-    workspace_restored = false
+    core.workspace_restored = false
     if was_empty_window then
       core.empty_window_request = false
       core.log_quiet("Workspace: enabled persistence after the empty window opened a Project")
@@ -584,7 +584,7 @@ function core.run(...)
     -- already treats this session as the current state.
     local workspace = not empty_window_requested() and consume_workspace(machine_project.root_key(core.root_project().path))
     diffview.load_workspace_state(workspace and workspace.diff_layout)
-    workspace_restored = true
+    core.workspace_restored = true
   end
   require("core.snoozed_panes").start()
   core.run = run

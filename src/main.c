@@ -345,8 +345,7 @@ static bool init_lua_state(AppState *app) {
     fprintf(stderr, "internal error when starting the application\n");
     return false;
   }
-  int init_status = lua_pcall(app->L, 0, 1, 0);
-  bool initialized = init_status == LUA_OK && lua_toboolean(app->L, -1);
+  lua_pcall(app->L, 0, 1, 0);
   lua_pop(app->L, 1);
 
   /* Store a reference to core.run_step for faster lookup on SDL_AppIterate. */
@@ -362,7 +361,6 @@ static bool init_lua_state(AppState *app) {
   }
   lua_pop(app->L, 1);
 
-  if (initialized && app->core_run_step_ref != -1) anvil_hosted_surface_runtime_ready();
   return true;
 }
 

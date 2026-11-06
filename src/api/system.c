@@ -2509,6 +2509,11 @@ static int f_complete_pane_request(lua_State *L) {
   return 0;
 }
 
+static int f_notify_runtime_ready(lua_State *L) {
+  anvil_hosted_surface_runtime_ready();
+  return 0;
+}
+
 static int panerequest_callback(lua_State *L, SDL_Event *event) {
   AnvilSurfacePaneDelivery *delivery = event->user.data1;
   lua_pushstring(L, "panerequest");
@@ -3184,6 +3189,7 @@ static const luaL_Reg lib[] = {
   { "set_project_panes",     f_set_project_panes     },
   { "pane_request",          f_pane_request          },
   { "complete_pane_request", f_complete_pane_request },
+  { "notify_runtime_ready",  f_notify_runtime_ready  },
   { "select_terminal",       f_select_terminal       },
   { "toggle_project_sidebar", f_toggle_project_sidebar },
   { "toggle_alt_navigation", f_toggle_alt_navigation },

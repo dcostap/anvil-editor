@@ -220,6 +220,10 @@ if path:match("/driver$") then
     assert(exits(launch(new), 20, "new file") == 0, "new file launch failed")
     opened("a", new)
     -- A known Project that is not loaded starts at its root, in the same Window.
+    assert(require("core.storage").save("ws", "Replacement-1", {
+     path = common.normalize_path(root .. "/Replacement"),
+     pane_state = {version = 1, groups = {}, panes = {}},
+    }))
     assert(exits(launch(deep), 20, "known Project file") == 0, "known Project file launch failed")
     local b = wait(function() return ready("b")[1] end, 30, "file launch did not start its known Project")
     opened("b", deep)
@@ -541,12 +545,14 @@ elseif names[path] then
    save("file-search", {ok = ok, error = not ok and tostring(latency) or nil, latency = ok and latency or nil})
   end
   if action == "launch-files" then
-   -- Report each opened file. Save new files so the isolated shell can close without a save prompt.
+   -- A Buffer can survive after restore removes its Pane. Report only files shown in Panes.
+   -- Save new files so the isolated shell can close without a save prompt.
    local reported = -1
    while true do
     local files, count = {}, 0
-    for _, buffer in ipairs(core.buffers) do
-     if buffer.abs_filename then
+    for _, pane in ipairs(require("core.panes").ordered()) do
+     local buffer = pane.current_view and pane.current_view.buffer
+     if buffer and buffer.abs_filename then
       if not system.get_file_info(buffer.abs_filename) then buffer:save() end
       files[buffer.abs_filename:gsub("\\", "/"):lower()] = true
       count = count + 1

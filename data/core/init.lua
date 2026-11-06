@@ -3758,6 +3758,14 @@ function core.run()
     run_next_frame_time = system.get_time() + 1 / config.fps
   end)
   if startup then startup.mark("core_run_ready") end
+  if system.is_hosted_surface() then
+    core.add_thread(function()
+      -- Restore can yield. Pane requests must not open Views that restore then replaces.
+      while core.workspace_restored == false do coroutine.yield() end
+      core.log_quiet("Project runtime ready after Workspace restore")
+      system.notify_runtime_ready()
+    end)
+  end
 end
 
 ---Report whether the window is being resized. A hosted Project receives
