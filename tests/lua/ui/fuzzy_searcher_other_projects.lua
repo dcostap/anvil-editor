@@ -460,8 +460,9 @@ test.describe("Project File Search in other Projects", function()
   end)
 
   test.it("answers another Project's Text Search with its matching lines", function(context)
+    write_file(context.local_file, "one\nun café\nthree\n")
     test.ok(pane_requests.perform(serialize {
-      action = "project_search", from = context.other, id = 8, mode = "text", query = "two",
+      action = "project_search", from = context.other, id = 8, mode = "text", query = "cafe",
       case_sensitive = false, limit = 5,
     }))
     test.ok(wait_until(function() return #sent(context, "project_results") > 0 end), "no answer was sent")
@@ -470,6 +471,8 @@ test.describe("Project File Search in other Projects", function()
     local row = answer.request.rows[1]
     test.ok(common.path_equals(row.abs_path, context.local_file))
     test.equal(row.line, 2)
-    test.equal(row.text, "two")
+    test.equal(row.text, "un café")
+    test.equal(row.col, 4)
+    test.same(row.spans, { {4, 8} })
   end)
 end)

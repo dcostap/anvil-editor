@@ -193,10 +193,10 @@ test.describe("Text Search in Terminals", function()
   end)
 
   test.it("opens a Terminal result at its line with the Terminal's find card", function()
-    local marker = "ANVIL_TERMINAL_SEARCH_OPEN"
+    local marker = "ANVIL_TERMINAL_CAFÉ_OPEN"
     local view = shell(marker)
 
-    fuzzy_searcher.open("#" .. marker)
+    fuzzy_searcher.open("#ANVIL_TERMINAL_CAFE_OPEN")
     local picker = test.not_nil(core.fuzzy_searcher_active_view)
     test.ok(wait_for(nil, function() return output_result(picker, marker) end, 10),
       "no Terminal result: " .. tostring(picker.status))

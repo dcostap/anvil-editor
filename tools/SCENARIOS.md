@@ -71,6 +71,18 @@ The standard frame-work budgets apply to the uncapped cases. The response case s
 
 ## Focused runtime workloads
 
+`fuzzy-text-accents` searches a generated 6,000-file Project with 2,400 accented lines. It checks composed and combining accents, quoted phrases, multiple terms, `ñ`, no matches, and rapid query replacement. Each action waits for completion, not only the first rows. It edits only a fixture-owned file and refuses `--project`.
+
+Run the scanner comparison separately from frame measurements:
+
+```sh
+gcc -O2 -Isrc tools/accent_search_probe.c src/fuzzy.c -o build-windows-x86_64/accent_search_probe.exe
+python tools/benchmark_accent_search.py --output tools/perf-results/accent-scan.json
+python tools/benchmark_accent_search.py --files 2048 --lines 2048 --output tools/perf-results/accent-scan-large.json
+```
+
+The probe uses the editor's candidate patterns. The script checks composed and combining Latin variants against Python's Unicode data. It alternates literal and accent-equivalent scans over private temporary Projects, then deletes them. Times include ripgrep output formatting, but not editor ranking or drawing. An accent-equivalent query can return more lines, so compare result counts as well as time. Query preparation time is separate from scan time.
+
 `text-poi-long-field` parses a 16,000-byte field followed by a file location. `text-poi-many-locations` parses 22,000 locations. `text-poi-limited-locations` uses the same input but requests only 32 results. Keep the limited case: limiting returned rows must also stop unnecessary scanning.
 
 `process-finalize-handles` drops eight process wrappers and requests two large GC steps. It measures GC and finalization together. Run `process-finalize-gc-control` beside it to measure the same GC requests without process wrappers. Separate runs do not give an exact native-finalizer subtraction.

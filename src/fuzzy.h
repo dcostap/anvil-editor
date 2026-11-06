@@ -78,6 +78,17 @@ typedef struct {
   uint32_t len;
 } FuzzyMatchBuffer;
 
+/* A prepared contiguous search. Results use original UTF-8 byte positions.
+ * The scratch ring belongs to the query; do not use one query concurrently. */
+typedef struct FuzzyLiteral FuzzyLiteral;
+FuzzyLiteral *fuzzy_literal_create(const char *query, uint32_t len, bool case_sensitive);
+void fuzzy_literal_free(FuzzyLiteral *query);
+bool fuzzy_literal_find(FuzzyLiteral *query, const char *text, uint32_t len,
+  uint32_t offset, FuzzySpan *span);
+/* Caller frees the ripgrep/PCRE2 candidate pattern. Check candidates with find:
+ * it admits extra combining marks and can use only a prefix of a long query. */
+char *fuzzy_literal_pattern(const FuzzyLiteral *query);
+
 typedef struct {
   const char *relative_prefix;
   const char *label;

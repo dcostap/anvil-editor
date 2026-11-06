@@ -1,3 +1,17 @@
+# Accent-insensitive Search
+
+The Fuzzy Searcher matches `cafe` with `café`, in both directions. It treats a composed accent and a separate combining accent the same way. It keeps `ñ` distinct from `n`.
+
+Case Sensitive controls letter case separately. Without it, `niño` matches `NIÑO`.
+
+Project File Search, symbol search, and Text Search use these rules. Text Search includes quoted phrases, filtered files, Git commits, other Projects, Machines, and Terminal output. Quotes require contiguous text; they do not require the same accents. Quoted spaces and search punctuation stay literal.
+
+Results show the original text. Highlights and selections use its original positions. A Terminal result opens its find card with the matched source spelling.
+
+Text Search uses ripgrep to find candidate lines, then checks them with the native matcher. Long queries use a bounded scanner prefix, but the matcher checks the whole query. Searches in Git commits need Git's PCRE2 support.
+
+Buffer Find, Replace, and explicit regular expressions keep their own matching rules. Everything-backed Path Search uses Everything's matching rules. Search does not change file text or file names. Letters without a canonical accent decomposition, such as `ø` and `ł`, stay distinct.
+
 # Bookmark Search
 
 Use `º` or run `fuzzy:open_bookmarks` from the Command Palette.

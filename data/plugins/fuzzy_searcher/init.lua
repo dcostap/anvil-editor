@@ -1595,20 +1595,13 @@ local function terms_fuzzy_query(terms)
   return table.concat(tokens, " ")
 end
 
-local function exact_term_spans(lower_text, terms)
+local function exact_term_spans(text, terms)
   local spans = {}
   for _, term in ipairs(terms or {}) do
     if term.exact then
-      local start = 1
-      local found = false
-      while true do
-        local s, e = lower_text:find(term.text, start, true)
-        if not s then break end
-        spans[#spans+1] = { s, e }
-        found = true
-        start = e + 1
-      end
-      if not found then return nil end
+      local matches = term.literal:spans(text)
+      if #matches == 0 then return nil end
+      for _, span in ipairs(matches) do spans[#spans+1] = span end
     end
   end
   return spans
@@ -1732,6 +1725,8 @@ local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored, case_
     }
     fuzzy_grep_jobs[key] = job
 
+    local pattern = fuzzy_native.literal(seed, { case_sensitive = case_sensitive }):pattern()
+
     job.thread_key = core.add_thread(function()
       core.log_quiet(
         "Fuzzy grep batch started seed=%s files=%s",
@@ -1747,9 +1742,8 @@ local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored, case_
         "--color", "never", "--max-columns", tostring(max_line_chars),
       }
       if not case_sensitive then args[#args + 1] = "-i" end
-      args[#args + 1] = "-F"
       project_files.add_filter_arguments(args, include_ignored)
-      args[#args + 1], args[#args + 2] = "-e", seed
+      args[#args + 1], args[#args + 2] = "-e", pattern
       if scope then
         args[#args+1] = "--"
         for _, f in ipairs(scope) do args[#args+1] = f end
@@ -1938,33 +1932,28 @@ local function merge_spans(spans, max_len)
 end
 
 local function literal_spans(text, query, offset, case_sensitive)
-  local spans = {}
-  text = tostring(text or "")
-  query = tostring(query or ""):gsub("^%s+", ""):gsub("%s+$", "")
-  if query == "" then return spans end
-  offset = offset or 0
-  local lower_text, lower_query = case_sensitive and text or text:lower(),
-    case_sensitive and query or query:lower()
-  local pos = 1
-  while true do
-    local s, e = lower_text:find(lower_query, pos, true)
-    if not s then break end
-    spans[#spans+1] = {offset + s, offset + e}
-    pos = e + 1
+  local spans = fuzzy_searcher.search.literal_query(query, case_sensitive):spans(tostring(text or ""))
+  if offset and offset ~= 0 then
+    for _, span in ipairs(spans) do span[1], span[2] = span[1] + offset, span[2] + offset end
   end
   return spans
 end
 
 -- Ripgrep reports the first match on a line. Skip a long-line marker, and
 -- move past matches inside encoded data such as a pasted base64 image.
-function fuzzy_searcher.text_grep_result(result, query, case_sensitive)
+function fuzzy_searcher.text_grep_result(result, query, case_sensitive, literal)
   if not result or fuzzy_searcher.search.omitted_long_line(result.text) then return nil end
-  if fuzzy_searcher.encoded_data.covers(result.text, result.col) then
-    local span = fuzzy_searcher.encoded_data.text_spans(result.text,
-      literal_spans(result.text, query, nil, case_sensitive))[1]
+  literal = literal or fuzzy_searcher.search.literal_query(query, case_sensitive)
+  local first, last = literal:find(result.text)
+  if not first then return nil end
+  if fuzzy_searcher.encoded_data.covers(result.text, first) then
+    local span = fuzzy_searcher.encoded_data.text_spans(result.text, literal:spans(result.text))[1]
     if not span then return nil end
-    result.col = span[1]
+    first, last = span[1], span[2]
   end
+  -- Only visible rows need every highlight. Scanned rows need one location.
+  result.content_selection_span = { first, last }
+  result.content_match_start, result.col = first, first
   return result
 end
 
@@ -2035,11 +2024,14 @@ function fuzzy_searcher.compile_grep(grep, case_sensitive)
   local terms = parse_code_search_terms(grep, case_sensitive)
   if exact ~= nil or #terms <= 1 then
     local query = exact or trim_query(grep)
+    local literal = fuzzy_searcher.search.literal_query(query, case_sensitive)
     return {
       seed = query,
+      seed_literal = literal,
+      pattern = literal:pattern(),
       case_sensitive = case_sensitive,
       match = function(text)
-        local spans = fuzzy_searcher.encoded_data.text_spans(text, literal_spans(text, query, nil, case_sensitive))
+        local spans = fuzzy_searcher.encoded_data.text_spans(text, literal:spans(text))
         if #spans == 0 then return end
         local score, _, _, _, boundary = fuzzy_match(query, text, case_sensitive)
         return {
@@ -2052,18 +2044,24 @@ function fuzzy_searcher.compile_grep(grep, case_sensitive)
     }
   end
   local fuzzy_query = terms_fuzzy_query(terms)
+  for _, term in ipairs(terms) do
+    term.literal = fuzzy_native.literal(term.text, { case_sensitive = case_sensitive })
+  end
+  local seed = seed_for_tokens(terms_to_legacy_tokens(terms))
+  local seed_literal = fuzzy_native.literal(seed, { case_sensitive = case_sensitive })
   return {
-    seed = seed_for_tokens(terms_to_legacy_tokens(terms)),
+    seed = seed,
+    seed_literal = seed_literal,
+    pattern = seed_literal:pattern(),
     case_sensitive = case_sensitive,
     match = function(text)
-      local lower = case_sensitive and text or text:lower()
-      local spans = exact_term_spans(lower, terms)
+      local spans = exact_term_spans(text, terms)
       if not spans then return end
       local text_spans = fuzzy_searcher.encoded_data.text_spans(text, spans)
       if #text_spans == 0 and #spans > 0 then return end
       spans = text_spans
       for _, term in ipairs(terms) do
-        if not term.exact and not lower:find(term.text, 1, true) then return end
+        if not term.exact and not term.literal:find(text) then return end
       end
       local score, fuzzy_spans, selection, start, boundary = 0, {}, nil, nil, 0
       if fuzzy_query ~= "" then
@@ -5409,9 +5407,8 @@ fuzzy_searcher.other_projects.search.text = function(query, case_sensitive, limi
       "--color", "never", "--max-columns", tostring(fuzzy_searcher.search.max_columns),
     }
     if not case_sensitive then args[#args + 1] = "-i" end
-    args[#args + 1] = "-F"
     project_files.add_filter_arguments(args, false)
-    args[#args + 1], args[#args + 2], args[#args + 3] = "-e", matcher.seed, "."
+    args[#args + 1], args[#args + 2], args[#args + 3] = "-e", matcher.pattern, "."
     local stream, start_error = text_search.start(args, { cwd = root.path })
     if not stream then
       core.log_quiet("Other Project search: Text Search could not start under %s: %s", root.path,
@@ -6840,6 +6837,9 @@ function FSView:start_grep(base, line, grep)
     return
   end
 
+  local literal = fuzzy_searcher.search.literal_query(grep, self.case_sensitive)
+  local pattern = literal:pattern()
+
   core.add_thread(function()
     local results_started = false
     local candidates = {}
@@ -6896,10 +6896,6 @@ function FSView:start_grep(base, line, grep)
       r.exact = exact
       r.grep_query = grep
       r.case_sensitive = self.case_sensitive
-      if exact and r.col and grep and grep ~= "" then
-        r.content_selection_span = { r.col, r.col + #grep - 1 }
-        r.content_match_start = r.col
-      end
       r.base_query = base:sub(1, 1) == ">" and "" or base
       local path_key = r.abs_path and common.path_compare_key(r.abs_path)
       local path_info = path_key and scope_meta and scope_meta.by_path and scope_meta.by_path[path_key]
@@ -6955,9 +6951,8 @@ function FSView:start_grep(base, line, grep)
           "--color", "never", "--max-columns", tostring(fuzzy_searcher.search.max_columns),
         }
         if not self.case_sensitive then args[#args + 1] = "-i" end
-        args[#args + 1] = "-F"
         project_files.add_filter_arguments(args, self.include_ignored == true)
-        args[#args + 1], args[#args + 2] = "-e", grep
+        args[#args + 1], args[#args + 2] = "-e", pattern
         if root_scope then
           args[#args+1] = "--"
           for _, f in ipairs(root_scope) do args[#args+1] = f end
@@ -6972,7 +6967,7 @@ function FSView:start_grep(base, line, grep)
             local line = stream:read_line()
             if line then
               local result = fuzzy_searcher.text_grep_result(decorate_grep_result(parse_vimgrep(line), root.path),
-                grep, self.case_sensitive)
+                grep, self.case_sensitive, literal)
               if result then add_result(result, seen, true) end
               yield_if_due()
             elseif stream.done then

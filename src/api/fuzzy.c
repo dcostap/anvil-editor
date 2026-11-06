@@ -772,6 +772,77 @@ static int f_match(lua_State *L) {
   return match_text(L, true);
 }
 
+#define LITERAL_TYPE "FuzzyLiteral"
+
+static FuzzyLiteral *literal_of(lua_State *L) {
+  return *(FuzzyLiteral **)luaL_checkudata(L, 1, LITERAL_TYPE);
+}
+
+static int literal_gc(lua_State *L) {
+  FuzzyLiteral **query = luaL_checkudata(L, 1, LITERAL_TYPE);
+  fuzzy_literal_free(*query);
+  *query = NULL;
+  return 0;
+}
+
+static int f_literal(lua_State *L) {
+  size_t len;
+  const char *text = luaL_checklstring(L, 1, &len);
+  luaL_argcheck(L, len <= UINT32_MAX, 1, "query is too large");
+  bool case_sensitive = opt_case_sensitive(L, 2);
+  FuzzyLiteral **query = lua_newuserdata(L, sizeof(*query));
+  *query = NULL;
+  luaL_setmetatable(L, LITERAL_TYPE);
+  *query = fuzzy_literal_create(text, (uint32_t)len, case_sensitive);
+  if (!*query) return luaL_error(L, "out of memory in literal search");
+  return 1;
+}
+
+static int literal_find(lua_State *L) {
+  FuzzyLiteral *query = literal_of(L);
+  size_t len;
+  const char *text = luaL_checklstring(L, 2, &len);
+  luaL_argcheck(L, len <= UINT32_MAX, 2, "text is too large");
+  FuzzySpan span;
+  if (!fuzzy_literal_find(query, text, (uint32_t)len, 0, &span)) return 0;
+  lua_pushinteger(L, span.start);
+  lua_pushinteger(L, span.end);
+  return 2;
+}
+
+static int literal_spans(lua_State *L) {
+  FuzzyLiteral *query = literal_of(L);
+  size_t len;
+  const char *text = luaL_checklstring(L, 2, &len);
+  luaL_argcheck(L, len <= UINT32_MAX, 2, "text is too large");
+  FuzzySpan span;
+  uint32_t offset = 0;
+  lua_Integer count = 0;
+  lua_newtable(L);
+  while (fuzzy_literal_find(query, text, (uint32_t)len, offset, &span)) {
+    push_span_table(L, &span);
+    lua_rawseti(L, -2, ++count);
+    offset = span.end;
+  }
+  return 1;
+}
+
+static int literal_pattern(lua_State *L) {
+  char *pattern = fuzzy_literal_pattern(literal_of(L));
+  if (!pattern) return luaL_error(L, "cannot build literal search pattern");
+  lua_pushstring(L, pattern);
+  free(pattern);
+  return 1;
+}
+
+static const luaL_Reg literal_methods[] = {
+  { "find", literal_find },
+  { "spans", literal_spans },
+  { "pattern", literal_pattern },
+  { "__gc", literal_gc },
+  { NULL, NULL }
+};
+
 static const luaL_Reg index_methods[] = {
   { "search", fuzzy_index_search_lua },
   { "set_items", fuzzy_index_set_items },
@@ -817,11 +888,18 @@ static const luaL_Reg lib[] = {
   { "index", f_index },
   { "score", f_score },
   { "match", f_match },
+  { "literal", f_literal },
   { "file_index_builder", f_file_index_builder },
   { NULL, NULL }
 };
 
 int luaopen_fuzzy(lua_State *L) {
+  luaL_newmetatable(L, LITERAL_TYPE);
+  lua_pushvalue(L, -1);
+  lua_setfield(L, -2, "__index");
+  luaL_setfuncs(L, literal_methods, 0);
+  lua_pop(L, 1);
+
   luaL_newmetatable(L, API_TYPE_FUZZY_INDEX);
   lua_pushvalue(L, -1);
   lua_setfield(L, -2, "__index");

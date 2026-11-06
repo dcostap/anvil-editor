@@ -73,6 +73,54 @@ test.describe("native fuzzy Lua API", function()
     test.equal(match.match_class, "contiguous")
   end)
 
+  test.it("keeps enye distinct and accepts its combining form", function()
+    test.is_nil(fuzzy.match("niño", "nino"))
+    test.is_nil(fuzzy.match("nin\204\131o", "nino"))
+    local match = test.not_nil(fuzzy.match("nin\204\131o", "NIÑO", { spans = true }))
+    test.same(match.spans, { { 1, 6 } })
+    test.is_nil(fuzzy.match("NIÑO", "niño", { case_sensitive = true }))
+  end)
+
+  test.it("finds literal accent equivalents at original byte positions", function()
+    local text = "café cafe cafe\204\129 CAFÉ"
+    for _, query in ipairs { "cafe", "café", "cafe\204\129" } do
+      local literal = fuzzy.literal(query)
+      test.same(literal:spans(text), { {1, 5}, {7, 10}, {12, 17}, {19, 23} })
+      test.equal(literal:find(text), 1)
+      -- The external candidate filter must not lose an accepted spelling.
+      local pattern = test.not_nil(regex.compile(literal:pattern(), "i"))
+      for _, spelling in ipairs { "café", "cafe", "cafe\204\129", "CAFÉ" } do
+        test.not_nil(pattern:find(spelling))
+      end
+    end
+    test.same(fuzzy.literal("café", { case_sensitive = true }):spans(text),
+      { {1, 5}, {7, 10}, {12, 17} })
+    test.same(fuzzy.literal("ñ"):spans("n ñ n\204\131 Ñ"), { {3, 4}, {6, 8}, {10, 11} })
+    test.same(fuzzy.literal("n"):spans("ñ n\204\131 n"), { {8, 8} })
+    test.same(fuzzy.literal("i"):spans("İ"), { {1, 2} })
+    test.not_nil(assert(regex.compile(fuzzy.literal("i"):pattern(), "i")):find("İ"))
+  end)
+
+  test.it("keeps literal punctuation, repeated matches and empty queries safe", function()
+    local query = "a.*[é](x)\\+$?{z}|^"
+    local literal = fuzzy.literal(query)
+    test.same(literal:spans(query .. " " .. query), { {1, #query}, {#query + 2, #query * 2 + 1} })
+    test.is_nil(literal:find("abcde"))
+    local pattern = test.not_nil(regex.compile(literal:pattern()))
+    test.not_nil(pattern:find(query))
+    test.is_nil(pattern:find("abcde"))
+    for _, empty in ipairs { "", "\204\129" } do
+      test.same(fuzzy.literal(empty):spans("cafe"), {})
+      test.is_nil(assert(regex.compile(fuzzy.literal(empty):pattern())):find("cafe"))
+    end
+    test.same(fuzzy.literal("aaa"):spans("aaaaaa"), { {1, 3}, {4, 6} })
+    test.same(fuzzy.literal("cafe"):spans("\255\0café"), { {3, 7} })
+    local long = string.rep("a", 4096) .. "é"
+    test.same(fuzzy.literal(long):spans("x" .. long), { {2, #long + 1} })
+    test.same(fuzzy.literal("σ"):spans("Σ ς σ"), { {1, 2}, {4, 5}, {7, 8} })
+    test.same(fuzzy.literal("s"):spans("ſ S"), { {1, 2}, {4, 4} })
+  end)
+
   test.it("matches text after embedded NUL bytes", function()
     local text = "prefix\0éclair"
     test.ok(fuzzy.score(text, "ecl"))

@@ -11,6 +11,7 @@
 #include <ctype.h>
 #include <limits.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #define FUZZY_SCORE_NO_MATCH INT_MIN
@@ -89,6 +90,10 @@ static bool is_combining_codepoint(uint32_t cp) {
 }
 
 static uint32_t fold_codepoint(uint32_t cp, uint32_t out[8], uint32_t count) {
+  if (cp < 0x80 || cp == 0xD1 || cp == 0xF1) {
+    if (count < 8) out[count++] = cp;
+    return count;
+  }
   if (is_combining_codepoint(cp)) return count;
   const decompose_table *decomposition = decompose_codepoint(cp);
   if (decomposition) {
@@ -100,19 +105,42 @@ static uint32_t fold_codepoint(uint32_t cp, uint32_t out[8], uint32_t count) {
   return count;
 }
 
+/* Consume one source character, including its combining marks. Keep enye as
+ * a letter in both encodings. All callers use this same source boundary. */
+static const char *fold_next(const char *p, const char *end, uint32_t folded[8], uint32_t *count) {
+  uint32_t cp;
+  const char *next = decode_utf8(p, end, &cp);
+  if (!next) { cp = (unsigned char)*p; next = p + 1; }
+  *count = fold_codepoint(cp, folded, 0);
+  while (next < end && (unsigned char)*next >= 0x80) {
+    uint32_t mark;
+    const char *after = decode_utf8(next, end, &mark);
+    if (!after || !is_combining_codepoint(mark)) break;
+    if (mark == 0x303 && *count == 1) {
+      if (folded[0] == 'n') folded[0] = 0xF1;
+      else if (folded[0] == 'N') folded[0] = 0xD1;
+    }
+    next = after;
+  }
+  return next;
+}
+
+static uint32_t lower_codepoint(uint32_t cp) {
+  if (cp >= 'A' && cp <= 'Z') return cp + ('a' - 'A');
+  return cp == 0xD1 ? 0xF1 : cp;
+}
+
 static uint32_t append_normalized_codepoint(
   FuzzyMode mode,
-  uint32_t cp,
+  const uint32_t *folded,
+  uint32_t count,
   char *match,
   char *lower,
   uint32_t offset
 ) {
-  uint32_t folded[8];
-  uint32_t count = fold_codepoint(cp, folded, 0);
   for (uint32_t i = 0; i < count; ++i) {
     uint32_t match_cp = folded[i];
-    uint32_t lower_cp = match_cp;
-    if (lower_cp >= 'A' && lower_cp <= 'Z') lower_cp += 'a' - 'A';
+    uint32_t lower_cp = lower_codepoint(match_cp);
     if (mode == FUZZY_MODE_PATH && (match_cp == '/' || match_cp == '\\')) match_cp = '/';
     if (mode == FUZZY_MODE_PATH && (lower_cp == '/' || lower_cp == '\\')) lower_cp = '/';
     char encoded[4], lower_encoded[4];
@@ -128,11 +156,10 @@ static uint32_t append_normalized_codepoint(
   return offset;
 }
 
-static uint32_t append_query_codepoint(FuzzyMode mode, uint32_t cp, char *out, uint32_t offset, bool case_sensitive) {
-  uint32_t folded[8];
-  uint32_t count = fold_codepoint(cp, folded, 0);
+static uint32_t append_query_codepoint(FuzzyMode mode, const uint32_t *folded, uint32_t count,
+  char *out, uint32_t offset, bool case_sensitive) {
   for (uint32_t i = 0; i < count; ++i) {
-    uint32_t folded_cp = folded[i];
+    uint32_t folded_cp = case_sensitive ? folded[i] : lower_codepoint(folded[i]);
     if (mode == FUZZY_MODE_PATH && (folded_cp == '/' || folded_cp == '\\')) folded_cp = '/';
     char encoded[4];
     uint32_t encoded_len = encode_utf8(folded_cp, encoded);
@@ -148,14 +175,8 @@ static bool normalized_length(const char *text, uint32_t text_len, uint32_t *out
   const char *end = text + text_len;
   uint64_t length = 0;
   while (p < end) {
-    uint32_t cp = 0;
-    const char *next = decode_utf8(p, end, &cp);
-    if (!next) {
-      next = p + 1;
-      cp = (unsigned char)*p;
-    }
-    uint32_t folded[8];
-    uint32_t count = fold_codepoint(cp, folded, 0);
+    uint32_t folded[8], count;
+    const char *next = fold_next(p, end, folded, &count);
     for (uint32_t i = 0; i < count; ++i) {
       char encoded[4];
       length += encode_utf8(folded[i], encoded);
@@ -178,13 +199,9 @@ static uint32_t normalize_into(
   const char *end = text + text_len;
   uint32_t offset = 0;
   while (p < end) {
-    uint32_t cp = 0;
-    const char *next = decode_utf8(p, end, &cp);
-    if (!next) {
-      next = p + 1;
-      cp = (unsigned char)*p;
-    }
-    offset = append_normalized_codepoint(mode, cp, match, lower, offset);
+    uint32_t folded[8], count;
+    const char *next = fold_next(p, end, folded, &count);
+    offset = append_normalized_codepoint(mode, folded, count, match, lower, offset);
     p = next;
   }
   match[offset] = '\0';
@@ -214,6 +231,182 @@ void fuzzy_match_buffer_free(FuzzyMatchBuffer *buffer) {
   if (!buffer) return;
   free(buffer->match);
   memset(buffer, 0, sizeof(*buffer));
+}
+
+struct FuzzyLiteral {
+  FuzzyMatchBuffer buffer;
+  char *needle;
+  uint32_t len;
+  uint32_t *failure, *starts;
+  bool case_sensitive;
+};
+
+/* ripgrep uses Unicode simple case folding. Keep that rule in its verifier,
+ * including folds whose UTF-8 byte length changes, such as long s. */
+static uint32_t literal_casefold(uint32_t cp) {
+  if (cp < 0x80) return lower_codepoint(cp);
+  size_t first = 0, last = sizeof(tofold_table) / sizeof(tofold_table[0]);
+  while (first < last) {
+    size_t mid = first + (last - first) / 2;
+    const conv_table *range = &tofold_table[mid];
+    if (cp < range->first) last = mid;
+    else if (cp > range->last) first = mid + 1;
+    else return (cp - range->first) % range->step == 0 ? cp + range->offset : cp;
+  }
+  return cp;
+}
+
+FuzzyLiteral *fuzzy_literal_create(const char *text, uint32_t len, bool case_sensitive) {
+  FuzzyLiteral *query = calloc(1, sizeof(*query));
+  if (!query) return NULL;
+  query->case_sensitive = case_sensitive;
+  if (!fuzzy_match_buffer_build(&query->buffer, FUZZY_MODE_GENERIC, text, len)) goto fail;
+#if SIZE_MAX <= UINT32_MAX
+  if (query->buffer.len > (SIZE_MAX - 1) / 4) goto fail;
+#endif
+  query->needle = malloc((size_t)query->buffer.len * 4 + 1);
+  if (!query->needle) goto fail;
+  const char *p = query->buffer.match, *end = p + query->buffer.len;
+  uint64_t length = 0;
+  while (p < end) {
+    uint32_t cp;
+    p = decode_utf8(p, end, &cp);
+    char bytes[4];
+    uint32_t n = encode_utf8(case_sensitive ? cp : literal_casefold(cp), bytes);
+    if (length + n > UINT32_MAX) goto fail;
+    memcpy(query->needle + length, bytes, n);
+    length += n;
+  }
+  uint32_t count = query->len = (uint32_t)length;
+  if (!count) return query;
+#if SIZE_MAX <= UINT32_MAX
+  if (count > SIZE_MAX / (2 * sizeof(uint32_t))) goto fail;
+#endif
+  query->failure = calloc((size_t)count * 2, sizeof(uint32_t));
+  if (!query->failure) goto fail;
+  query->starts = query->failure + count;
+  const char *bytes = query->needle;
+  for (uint32_t i = 1, matched = 0; i < count; ++i) {
+    while (matched && bytes[i] != bytes[matched]) matched = query->failure[matched - 1];
+    if (bytes[i] == bytes[matched]) matched++;
+    query->failure[i] = matched;
+  }
+  return query;
+fail:
+  fuzzy_literal_free(query);
+  return NULL;
+}
+
+void fuzzy_literal_free(FuzzyLiteral *query) {
+  if (!query) return;
+  fuzzy_match_buffer_free(&query->buffer);
+  free(query->needle);
+  free(query->failure);
+  free(query);
+}
+
+bool fuzzy_literal_find(FuzzyLiteral *query, const char *text, uint32_t len,
+  uint32_t offset, FuzzySpan *span) {
+  if (!query || !query->len || offset >= len) return false;
+  const char *needle = query->needle;
+  uint32_t matched = 0, ring = 0, size = query->len;
+  const char *end = text + len;
+  for (const char *p = text + offset; p < end;) {
+    uint32_t folded[8], count;
+    const char *next = fold_next(p, end, folded, &count);
+    for (uint32_t i = 0; i < count; ++i) {
+      char bytes[4];
+      uint32_t n = encode_utf8(query->case_sensitive ? folded[i] : literal_casefold(folded[i]), bytes);
+      for (uint32_t j = 0; j < n; ++j) {
+        query->starts[ring] = (uint32_t)(p - text) + 1;
+        ring = ring + 1 == size ? 0 : ring + 1;
+        while (matched && bytes[j] != needle[matched]) matched = query->failure[matched - 1];
+        if (bytes[j] == needle[matched]) matched++;
+        if (matched == size) {
+          *span = (FuzzySpan) { query->starts[ring], (uint32_t)(next - text) };
+          return true;
+        }
+      }
+    }
+    p = next;
+  }
+  return false;
+}
+
+typedef struct { char *text; size_t len, capacity; } Pattern;
+
+static bool pattern_append(Pattern *pattern, const char *text, size_t len) {
+  if (len > SIZE_MAX - pattern->len - 1) return false;
+  size_t needed = pattern->len + len + 1;
+  if (needed > pattern->capacity) {
+    size_t capacity = needed > SIZE_MAX / 2 ? needed : needed * 2;
+    char *next = realloc(pattern->text, capacity);
+    if (!next) return false;
+    pattern->text = next;
+    pattern->capacity = capacity;
+  }
+  memcpy(pattern->text + pattern->len, text, len);
+  pattern->len += len;
+  pattern->text[pattern->len] = 0;
+  return true;
+}
+
+static bool pattern_codepoint(Pattern *pattern, uint32_t cp) {
+  char bytes[16];
+  /* Hex also escapes controls and all regular-expression punctuation. */
+  int n = snprintf(bytes, sizeof(bytes), "\\x{%X}", cp);
+  return pattern_append(pattern, bytes, (size_t)n);
+}
+
+#define DECOMPOSITION_COUNT (sizeof(nfc_decompose_table) / sizeof(nfc_decompose_table[0]))
+
+static bool pattern_class(Pattern *pattern, uint32_t cp, const uint32_t *bases, bool sensitive) {
+  if (!pattern_append(pattern, "[", 1) || !pattern_codepoint(pattern, cp)) return false;
+  uint32_t key = sensitive ? cp : literal_casefold(cp);
+  for (size_t i = 0; i < DECOMPOSITION_COUNT; ++i) {
+    uint32_t variant = nfc_decompose_table[i].cp;
+    if (variant == cp) continue;
+    if (bases[i] == key) {
+      if (!pattern_codepoint(pattern, variant)) return false;
+    }
+  }
+  return pattern_append(pattern, "]", 1);
+}
+
+char *fuzzy_literal_pattern(const FuzzyLiteral *query) {
+  Pattern pattern = {0};
+  if (!query || !query->buffer.len) {
+    /* Empty or mark-only queries match nothing, not every line. */
+    if (!pattern_append(&pattern, "[^\\s\\S]", 7)) goto fail;
+    return pattern.text;
+  }
+  /* Fold the Unicode table once per query, not once per query character. */
+  uint32_t bases[DECOMPOSITION_COUNT];
+  for (size_t i = 0; i < DECOMPOSITION_COUNT; ++i) {
+    uint32_t folded[8];
+    bases[i] = fold_codepoint(nfc_decompose_table[i].cp, folded, 0) == 1 ? folded[0] : UINT32_MAX;
+    if (!query->case_sensitive && bases[i] != UINT32_MAX) bases[i] = literal_casefold(bases[i]);
+  }
+  const char *p = query->buffer.match, *end = p + query->buffer.len;
+  while (p < end) {
+    /* This is a candidate filter. A bounded prefix keeps long pasted queries
+     * below process argument limits; the literal matcher checks the rest. */
+    if (pattern.len >= 4096) break;
+    uint32_t cp;
+    p = decode_utf8(p, end, &cp);
+    if (!p) goto fail;
+    if (cp == 0xF1 || cp == 0xD1) {
+      if (!pattern_append(&pattern, "(?:", 3) || !pattern_class(&pattern, cp, bases, query->case_sensitive)
+          || !pattern_append(&pattern, "|", 1)
+          || !pattern_class(&pattern, cp == 0xF1 ? 'n' : 'N', bases, query->case_sensitive)
+          || !pattern_append(&pattern, "\\p{M}*\\x{303})", 14)) goto fail;
+    } else if (!pattern_class(&pattern, cp, bases, query->case_sensitive)) goto fail;
+    if (!pattern_append(&pattern, "\\p{M}*", 6)) goto fail;
+  }
+  return pattern.text;
+fail:
+  free(pattern.text);
+  return NULL;
 }
 
 static bool is_boundary_char(char c) {
@@ -261,10 +454,9 @@ static uint32_t parse_query_words(FuzzyMode mode, const char *query, FuzzyWord w
     if (!*p) break;
     uint32_t len = 0;
     while (*p && !isspace((unsigned char)*p)) {
-      uint32_t cp = 0;
-      const char *next = decode_utf8(p, end, &cp);
-      if (!next) { cp = (unsigned char)*p; next = p + 1; }
-      len = append_query_codepoint(mode, cp, words[count].text, len, case_sensitive);
+      uint32_t folded[8], folded_count;
+      const char *next = fold_next(p, end, folded, &folded_count);
+      len = append_query_codepoint(mode, folded, folded_count, words[count].text, len, case_sensitive);
       p = next;
     }
     if (len > 0) {
@@ -398,15 +590,8 @@ static uint32_t map_match_spans(
   uint32_t normalized_offset = 0;
   uint32_t previous_start = 0, previous_end = 0;
   while (p < end) {
-    uint32_t cp = 0;
-    const char *next = decode_utf8(p, end, &cp);
-    if (!next) {
-      next = p + 1;
-      cp = (unsigned char)*p;
-    }
-
-    uint32_t folded[8];
-    uint32_t folded_count = fold_codepoint(cp, folded, 0);
+    uint32_t folded[8], folded_count;
+    const char *next = fold_next(p, end, folded, &folded_count);
     uint32_t emitted = 0;
     for (uint32_t i = 0; i < folded_count; ++i) {
       uint32_t folded_cp = folded[i];

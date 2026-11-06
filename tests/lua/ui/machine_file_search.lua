@@ -54,7 +54,7 @@ test.describe("File Search on a Machine", function()
     write_file(machine_copy(context, context.project .. PATHSEP .. "notes.md"), "Notes\n")
     write_file(machine_copy(context, context.project .. PATHSEP .. "sub" .. PATHSEP .. "plan.md"), "Plan\n")
     write_file(machine_copy(context, context.project .. PATHSEP .. "sub" .. PATHSEP .. "steps.md"),
-      "one\nfind the needle\n")
+      "one\nfind the café needle\n")
     write_file(context.project .. PATHSEP .. "client-steps.md", "a needle on the Client\n")
     context.projects, context.visited_files = core.projects, core.visited_files
     core.visited_files = {}
@@ -159,7 +159,7 @@ test.describe("File Search on a Machine", function()
   -- Each query uses a different search path: exact text, fuzzy text, text in the files that match a name, and
   -- text with a query modifier.
   test.it("finds the text of the Machine's files", function()
-    for _, query in ipairs({ "#needle", "#find needle", "steps #needle", "#needle sort:name" }) do
+    for _, query in ipairs({ "#needle", "#find cafe", "steps #cafe", "#cafe sort:name", "#café" }) do
       fuzzy_searcher.open(query)
       local picker = test.not_nil(core.fuzzy_searcher_active_view)
       local function lines()
@@ -171,7 +171,7 @@ test.describe("File Search on a Machine", function()
         end
         return table.concat(found, ", ")
       end
-      test.ok(wait_until(function() return lines() == "steps.md:2:find the needle" end),
+      test.ok(wait_until(function() return lines() == "steps.md:2:find the café needle" end),
         query .. ": status=" .. tostring(picker.status) .. " lines=" .. lines())
       picker:close()
     end

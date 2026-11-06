@@ -113,6 +113,51 @@ static int test_diacritic_insensitive_matching(void) {
   return 0;
 }
 
+static int test_literal_source_ranges(void) {
+  const char *text = "x café cafe\314\201 CAFÉ";
+  FuzzyLiteral *query = fuzzy_literal_create("cafe", 4, false);
+  CHECK(query != NULL);
+  FuzzySpan span;
+  CHECK(fuzzy_literal_find(query, text, (uint32_t)strlen(text), 0, &span));
+  CHECK(span.start == 3 && span.end == 7);
+  CHECK(fuzzy_literal_find(query, text, (uint32_t)strlen(text), span.end, &span));
+  CHECK(span.start == 9 && span.end == 14);
+  CHECK(fuzzy_literal_find(query, text, (uint32_t)strlen(text), span.end, &span));
+  CHECK(span.start == 16 && span.end == 20);
+  CHECK(!fuzzy_literal_find(query, text, (uint32_t)strlen(text), span.end, &span));
+  char *pattern = fuzzy_literal_pattern(query);
+  CHECK(pattern != NULL);
+  free(pattern);
+  fuzzy_literal_free(query);
+
+  query = fuzzy_literal_create("nino", 4, false);
+  CHECK(query != NULL);
+  CHECK(!fuzzy_literal_find(query, "niño", 5, 0, &span));
+  CHECK(!fuzzy_literal_find(query, "nin\314\203o", 6, 0, &span));
+  fuzzy_literal_free(query);
+
+  /* Invalid bytes, embedded NUL, empty input, and a query longer than the
+   * fuzzy scorer's word limit must not truncate or corrupt source positions. */
+  query = fuzzy_literal_create("x", 1, false);
+  CHECK(query != NULL);
+  CHECK(fuzzy_literal_find(query, "\377\0x", 3, 0, &span));
+  CHECK(span.start == 3 && span.end == 3);
+  CHECK(!fuzzy_literal_find(query, "", 0, 0, &span));
+  fuzzy_literal_free(query);
+  char long_text[8192];
+  memset(long_text, 'a', sizeof(long_text));
+  query = fuzzy_literal_create(long_text, sizeof(long_text), false);
+  CHECK(query != NULL);
+  CHECK(fuzzy_literal_find(query, long_text, sizeof(long_text), 0, &span));
+  CHECK(span.start == 1 && span.end == sizeof(long_text));
+  fuzzy_literal_free(query);
+  query = fuzzy_literal_create("", 0, false);
+  CHECK(query != NULL);
+  CHECK(!fuzzy_literal_find(query, "text", 4, 0, &span));
+  fuzzy_literal_free(query);
+  return 0;
+}
+
 static int test_path_basename_preference(void) {
   const char *items[] = {
     "src/render/backend.c",
@@ -460,6 +505,7 @@ int main(void) {
   rc |= test_generic_basic();
   rc |= test_case_insensitive_and_limit();
   rc |= test_diacritic_insensitive_matching();
+  rc |= test_literal_source_ranges();
   rc |= test_path_basename_preference();
   rc |= test_path_mode_treats_slash_and_backslash_as_same_separator();
   rc |= test_generic_mode_keeps_slash_and_backslash_distinct();

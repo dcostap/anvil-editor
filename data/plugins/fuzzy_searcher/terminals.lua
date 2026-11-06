@@ -109,15 +109,6 @@ local function line_starts(entry)
   return starts
 end
 
-local function line_at(starts, offset)
-  local low, high = 1, #starts
-  while low < high do
-    local middle = math.floor((low + high + 1) / 2)
-    if starts[middle] <= offset then low = middle else high = middle - 1 end
-  end
-  return low
-end
-
 -- The text of line `line`, without its line end.
 function terminals.line(entry, line)
   local starts = line_starts(entry)
@@ -129,30 +120,27 @@ end
 
 -- Calls `add(source)` for each line of the session's text that `matcher` accepts, up to `limit` lines. A source
 -- has the fields of a ripgrep line, and `terminal` for the Terminal it came from. Yields to keep frames short.
-local function find(session, entry, matcher, add, limit)
+local function find(session, entry, matcher, add, limit, alive)
   local seed = matcher.seed
   if not seed or seed == "" then return end
-  local haystack, needle = entry.text, seed
-  if not matcher.case_sensitive then
-    entry.lower = entry.lower or entry.text:lower()
-    haystack, needle = entry.lower, seed:lower()
-  end
-  local starts, position, count = line_starts(entry), 1, 0
-  -- The find card searches for the seed. Each matching line contains it, also for a query of several words.
-  local terminal = {id = session.id, project = session.project, item = session.item, entry = entry, query = seed}
+  local starts, count = line_starts(entry), 0
   local name = tab.display_name(session.item)
   local slice = system.get_time()
-  while count < limit do
-    local found = haystack:find(needle, position, true)
-    if not found then break end
-    local line = line_at(starts, found)
-    position = starts[line + 1] or #haystack + 1
-    local text = terminals.line(entry, line)
-    local match = #text <= MAX_LINE and matcher.match(text)
+  for line, first in ipairs(starts) do
+    if count >= limit or not alive() then break end
+    local length = (starts[line + 1] or #entry.text + 1) - first
+    local text = length <= MAX_LINE + 2 and terminals.line(entry, line)
+    local match = text and #text <= MAX_LINE and matcher.match(text)
     if match then
+      -- Terminal Find is literal. Give it the seed's spelling in this source,
+      -- not the user's accent-equivalent spelling.
+      local s, e = matcher.seed_literal:find(text)
+      local terminal = {id = session.id, project = session.project, item = session.item,
+        entry = entry, query = s and text:sub(s, e) or seed}
       count = count + 1
-      add({kind = "grep", file = name, abs_path = "terminal:" .. session.id, terminal = terminal,
-        line = line, col = match.content_match_start or 1, text = text})
+      local source = common.merge(match, {kind = "grep", file = name, abs_path = "terminal:" .. session.id,
+        terminal = terminal, line = line, col = match.content_match_start or 1, text = text})
+      add(source)
     end
     if system.get_time() - slice > 0.004 then
       coroutine.yield(0)
@@ -174,7 +162,7 @@ function terminals.search(matcher, add, alive, limit)
       if entry.pending then
         waiting[#waiting + 1] = session
       elseif entry.text then
-        find(session, entry, matcher, add, limit)
+        find(session, entry, matcher, add, limit, alive)
         if not alive() then return end
       end
     end

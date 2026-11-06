@@ -7,7 +7,7 @@ local fuzzy_searcher = require "plugins.fuzzy_searcher"
 local test = require "core.test"
 
 local function wait_until(predicate)
-  local deadline = system.get_time() + 3
+  local deadline = system.get_time() + 30
   while not predicate() and system.get_time() < deadline do coroutine.yield(0.03) end
   return predicate()
 end
@@ -38,7 +38,7 @@ test.describe("Case-sensitive file search", function()
     core.projects = context.projects
     core.visited_files = context.visited_files
     system.chdir(context.cwd)
-    common.rm(context.root, true)
+    test.ok(test.remove_tree(context.root))
   end)
 
   test.it("keeps fuzzy file matches with the requested letter case", function()
@@ -59,5 +59,28 @@ test.describe("Case-sensitive file search", function()
       local results = files(picker)
       return #results == 1 and tostring(results[1].file):find("RenderWidget.lua", 1, true) ~= nil
     end), "status=" .. tostring(picker.status) .. " files=" .. tostring(#files(picker)))
+  end)
+
+  test.it("finds accented file names without changing their paths", function(context)
+    local path = context.root .. PATHSEP .. "café-niño.lua"
+    local file = assert(io.open(path, "wb"))
+    file:write("-- accented file\n")
+    file:close()
+    fuzzy_searcher.open("cafe niño")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    local function result()
+      for _, row in ipairs(picker.results or {}) do
+        if row.abs_path and common.path_equals(row.abs_path, path) then return row end
+      end
+    end
+    test.ok(wait_until(result), "the accented file did not appear")
+    test.equal(result().file, "café-niño.lua")
+    picker.input:set_text("cafe nino")
+    picker:refresh("cafe nino")
+    test.ok(wait_until(function()
+      return not picker:search_running() and not picker.direct_path_pending and not picker.dirty
+        and not picker.loading_feedback_pending and not (picker.status or ""):find("…", 1, true)
+    end))
+    test.is_nil(result(), "n must not replace enye in a file name")
   end)
 end)

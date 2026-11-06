@@ -13,6 +13,18 @@ local modifiers = require "plugins.fuzzy_searcher.modifiers"
 
 local search = {}
 
+-- Preview draws reuse the last prepared query. Search jobs keep their own query.
+local last_literal, last_query, last_case
+function search.literal_query(query, case_sensitive)
+  query = tostring(query or "")
+  case_sensitive = case_sensitive == true
+  if query ~= last_query or case_sensitive ~= last_case then
+    last_literal = native.literal(query, { case_sensitive = case_sensitive })
+    last_query, last_case = query, case_sensitive
+  end
+  return last_literal
+end
+
 -- Ripgrep prints the whole line for each match. A long line, such as a pasted
 -- base64 image, would stream megabytes for every match in it, so text search
 -- omits lines longer than this.
@@ -41,6 +53,7 @@ local function run(job, args, cwd, consume, allow_no_matches)
   })
   if not proc then error(err or "Cannot start search process", 0) end
   job.proc = proc
+  core.log_quiet("Search process started: program=%s arguments=%d", args[1], #args)
   local errors, error_size = {}, 0
   local function drain(stream)
     while true do
@@ -68,6 +81,7 @@ local function run(job, args, cwd, consume, allow_no_matches)
     coroutine.yield(0.005)
   until false
   local code = proc:wait(process.WAIT_INFINITE, 0.005)
+  core.log_quiet("Search process finished: program=%s code=%s", args[1], tostring(code))
   job.proc = nil
   if code ~= 0 and not (allow_no_matches and code == 1) then
     error(table.concat(errors) ~= "" and table.concat(errors) or ("Search exited with code " .. tostring(code)), 0)
@@ -329,9 +343,12 @@ local function grep_files(job, spec, candidates, visit)
     end
     if not spec.matcher.case_sensitive then args[#args + 1] = "-i" end
     if historical then args[#args + 1] = "-I" end
-    args[#args + 1] = "-F"
+    if historical then args[#args + 1] = "-P" end
     args[#args + 1] = "-e"
-    args[#args + 1] = spec.matcher.seed
+    -- Git does not infer UTF mode from an ASCII pattern of Unicode escapes.
+    -- The comment's space also forces Windows argument quoting. MSYS Git can
+    -- otherwise expand the pattern as a filename glob before it starts grep.
+    args[#args + 1] = historical and "(*UTF)(?# Anvil literal)" .. spec.matcher.pattern or spec.matcher.pattern
     if historical then args[#args + 1] = spec.history.revision end
     args[#args + 1] = "--"
     for _, file in ipairs(batch) do
@@ -360,7 +377,7 @@ local function grep_files(job, spec, candidates, visit)
           if match then
             local result = common.merge(source, match)
             result.kind, result.text = "grep", text
-            result.line, result.col = tonumber(line), tonumber(col)
+            result.line, result.col = tonumber(line), match.content_match_start or tonumber(col)
             result.file_spans = source.match_spans
             result.path_score = source.score
             result.path_match_class = spec.path_match_class(spec.base, source.file, spec.case_sensitive)

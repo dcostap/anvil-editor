@@ -76,6 +76,9 @@ _Avoid_: disable ignores, index ignored files
 A temporary search option that requires matching letter case. Fuzzy matching stays available.
 _Avoid_: exact name matching
 
+**Accent-insensitive Search**:
+Fuzzy Searcher matching that treats accented Latin letters as their base letters, in both directions. The letter `ñ` stays distinct from `n`; Case Sensitive controls letter case separately.
+
 **Search Modifier**:
 A temporary option that changes the search source, file filters, or result order without changing the text to match.
 Inline Search Modifiers use `modifier:value` and can combine in one search.
