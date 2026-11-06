@@ -178,6 +178,9 @@ SCENARIOS["project-sidebar-drag-dark"] = dict(SCENARIOS["project-sidebar"], them
 SCENARIOS["project-sidebar-reorder"] = dict(SCENARIOS["project-sidebar"])
 SCENARIOS["project-sidebar-reorder-dark"] = dict(SCENARIOS["project-sidebar"], theme="default")
 SCENARIOS["focus-feedback"] = dict(SCENARIOS["project-sidebar"], window_height=500)
+# A short scrolled Sidebar with a Terminal that needs the user below the main list's edge: an Attention Pill there.
+SCENARIOS["project-sidebar-pills"] = dict(SCENARIOS["project-sidebar"], window_height=520)
+SCENARIOS["project-sidebar-pills-dark"] = dict(SCENARIOS["project-sidebar"], window_height=520, theme="default")
 # A loaded Project that asks "Unload?" after Left.
 SCENARIOS["project-sidebar-unload"] = dict(SCENARIOS["project-sidebar"], theme="default")
 # A confirmation in the nag bar over a document: one line, and a File Tree operation list.

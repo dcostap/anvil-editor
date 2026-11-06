@@ -221,6 +221,9 @@ A Terminal without that icon shows the Terminal View's icon. Terminal Tabs have 
 The Project Sidebar marks only an Unread Result or an agent that waits for an answer.
 The mark is a dot, a bold name, and a coloured stripe that fades out to the right.
 It saves when the user last looked at each Terminal Session. Run `ui/sidebar_view.lua` after changes.
+A marked row that the scroll hides shows in an Attention Pill at that edge of its list. A click on the pill scrolls to the nearest hidden row. A collapsed loaded Project's count does not count, because its marked Terminals keep their rows.
+The list scrolls by itself only for a new selected row or a keyboard cursor move. Model updates keep the user's scroll. The hover highlight stays under the pointer while the list scrolls.
+Run `ui/sidebar_view.lua` after changes. Check the `project-sidebar-pills` render scenario after visual changes.
 
 A right-click on a Sidebar row opens its Context Menu. The Context Menu key opens the cursor row's menu.
 The Sidebar draws it with `core.context_menu`, the same menu as in the editor. Its items are `sidebar:` commands.

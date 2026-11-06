@@ -664,6 +664,10 @@ The connection that lets a coding agent work with Anvil's Projects, Panes and Te
 An agent's done or failed Agent Status, or a terminal bell, that came after the user last looked at its Terminal Session. The user looks at a Terminal Session when its Tab is the active Tab of a Selected Project.
 _Avoid_: notification, unseen result, badge
 
+**Attention Pill**:
+A mark at the top or bottom edge of a Project Sidebar list. It counts the Terminals that need the user, such as an Unread Result or an agent that waits for an answer, in rows that the list's scroll hides past that edge. A click on it scrolls to the nearest of them.
+_Avoid_: off-screen indicator, scroll badge
+
 **Snooze**:
 A time until which a Terminal's Pane is a Snoozed Pane. Until then, the Terminal Session needs nothing: its Unread Result, its agent's question, and its bell wait. Looking at it earlier does not end the Snooze; the user or an agent acting on request can remove it. At that time, the Pane returns to the work area and needs the user until the user looks at it, even when nothing else happened. The Project Sidebar then shows how long the Snooze was and when it ended, until the Terminal Session gets new work.
 _Avoid_: Reminder, timer

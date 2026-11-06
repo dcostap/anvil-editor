@@ -2293,3 +2293,112 @@ test.describe("Sidebar drops from other applications", function()
     test.same(actions, {})
   end)
 end)
+
+test.describe("Sidebar scrolling", function()
+  local config = require "core.config"
+  local style = require "core.style"
+  local now = os.time()
+
+  -- Project P in Window 7: the Terminal "asks" waits for an answer, then 40 files, then the Terminal "done" has an
+  -- Unread Result. `active` is the active Pane's index.
+  local function model(active)
+    local records = {
+      {id="asks",title="asks",state="running",activity=now,agent_state="blocked",agent_since=now - 60},
+      {id="done",title="done",state="running",activity=now,agent_state="done",agent_since=now - 60},
+    }
+    local panes = {active=active or 2,{id="asks",name="asks",terminal={session="asks",state="running"}}}
+    for index = 1, 40 do panes[#panes + 1] = {id="file-" .. index,name="file " .. index .. ".lua"} end
+    panes[#panes + 1] = {id="done",name="done",terminal={session="done",state="running"}}
+    -- Project Q is collapsed, and its agent asks a question.
+    local question = {id="q-asks",title="q-asks",state="running",activity=now,agent_state="blocked",
+      agent_since=now - 60}
+    return {{id=1,row_id=1,path="C:/P",state="ready",window_id=7,terminals=records,panes=panes},
+      {id=2,row_id=2,path="C:/Q",state="ready",window_id=7,terminals={question},panes={active=1,
+        {id="q-asks",name="q-asks",terminal={session="q-asks",state="running"}}}},
+      windows={{id=7,selected_project=1}}}
+  end
+
+  local function sidebar(active)
+    local view = SidebarView(function() end, {["project:C:/Q"]=true}, {})
+    view:set_size(300, 400)
+    view:set_model(model(active), 7)
+    return view
+  end
+
+  local function tab_index(view, id)
+    return row_index(view, function(row) return row.kind == "tab" and row.tab.id == id end)
+  end
+
+  local function visible(view, index)
+    local y = view:row_y(index)
+    return y >= view:list_top() and y + view.rows[index].h <= view:main_bottom()
+  end
+
+  test.it("keeps the user's scroll when the model refreshes, also while the Sidebar has the keyboard", function()
+    local view = sidebar()
+    view:on_focus(true)
+    view:on_mouse_wheel(-10, 400, 200)
+    local first = tab_index(view, "file-1")
+    local y = view:row_y(first)
+    test.ok(not visible(view, first), "The wheel did not scroll the list")
+    view:set_model(model(), 7)
+    test.equal(view:row_y(first), y, "A model refresh scrolled back to the cursor")
+  end)
+
+  test.it("scrolls a newly selected Tab into view once", function()
+    local view = sidebar()
+    view:set_model(model(30), 7)
+    local selected = tab_index(view, "file-29")
+    test.ok(visible(view, selected), "The newly selected Tab is not visible")
+    view:on_mouse_wheel(20, 400, 200)
+    local y = view:row_y(selected)
+    view:set_model(model(30), 7)
+    test.equal(view:row_y(selected), y, "The same selection scrolled the list again")
+  end)
+
+  test.it("keeps the hover highlight under the pointer while the list scrolls", function()
+    local saved = config.transitions
+    config.transitions = true
+    local ok, err = pcall(function()
+      local view = sidebar()
+      view:on_mouse_wheel(-10, 400, 200)
+      with_renderer({}, function() view:draw(300, 400) end)
+      for _ = 1, 60 do view:step(1 / 60) end
+      view:on_mouse_moved(100, 200)
+      for _ = 1, 60 do view:step(1 / 60) end
+      -- The keyboard focus scrolls to the current Tab.
+      view:on_focus(true)
+      for frame = 1, 20 do
+        local hover
+        with_renderer({draw_rounded_rect = function(_, y, _, h, _, color)
+          if color[1] == style.sidebar_hover[1] and color[4] == style.sidebar_hover[4] then hover = {y, h} end
+        end}, function() view:draw(300, 400) end)
+        view:step(1 / 60)
+        test.not_nil(hover, "No hover highlight in frame " .. frame)
+        test.ok(hover[1] <= 200 and 200 < hover[1] + hover[2] + 2,
+          string.format("Frame %d drew the hover highlight at %d, away from the pointer", frame, hover[1]))
+      end
+    end)
+    config.transitions = saved
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("shows off-view Terminals that need the user at the list's edge, and scrolls to them on a click", function()
+    local view = sidebar()
+    local function pill(edge)
+      for _, item in ipairs(view:offscreen_attention()) do
+        if item.area == "main" and item.edge == edge then return item end
+      end
+    end
+    test.is_nil(pill("top"))
+    -- The collapsed Project's question counts once, and it gives the pill its colour.
+    local below = test.not_nil(pill("bottom"))
+    test.equal(below.count, 2)
+    test.equal(below.kind, "blocked")
+    click(view, below.x + below.w / 2, below.y + below.h / 2)
+    test.ok(visible(view, tab_index(view, "done")), "The click did not scroll to the nearest Terminal")
+    local above = test.not_nil(pill("top"))
+    test.equal(above.count, 1)
+    test.equal(above.kind, "blocked")
+  end)
+end)

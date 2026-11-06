@@ -147,16 +147,23 @@ end
 
 function SidebarView:get_cursor() return self.rows[self.cursor] end
 
-function SidebarView:reveal_cursor()
-  local row = self:get_cursor()
+-- Scrolls the row's area as little as it can to show the row, with `margin` free space beside it.
+function SidebarView:reveal_row(index, margin)
+  local row = self.rows[index]
   if not row then return end
+  margin = margin or 0
   local field = row.area == "main" and "scroll" or "bottom_scroll"
   local top = row.area == "main" and self:list_top() or self:bottom_area()
   local bottom = row.area == "main" and self:main_bottom() or self.view_h
-  local y = self:row_y(self.cursor)
-  if y < top then self[field] = self[field] + y - top
-  elseif y + row.h > bottom then self[field] = self[field] + y + row.h - bottom end
+  local y, before = self:row_y(index), self[field]
+  if y - margin < top then self[field] = self[field] + y - margin - top
+  elseif y + row.h + margin > bottom then self[field] = self[field] + y + row.h + margin - bottom end
   self:clamp_scroll()
+  if self[field] ~= before and self.hover_y then self:update_hover() end
+end
+
+function SidebarView:reveal_cursor()
+  self:reveal_row(self.cursor)
 end
 
 function SidebarView:reset_cursor_to_selection()
@@ -975,7 +982,16 @@ function SidebarView:rebuild_rows()
   self.rows, self.main_h, self.bottom_h = rows, main_y, bottom_y
   self.was_selected, self.cursor = selected_keys, cursor
   self:clamp_scroll()
-  if self.focused then self:reveal_cursor() end
+  -- The list scrolls only to show a new selection or a cursor that moved to another row. Otherwise it keeps the
+  -- user's scroll, because the model changes often.
+  local selected_index
+  for index, row in ipairs(rows) do
+    if row.selected then selected_index = index; break end
+  end
+  local selected_key = selected_index and rows[selected_index].id_key
+  if selected_key and selected_key ~= self.selected_key then self:reveal_row(selected_index) end
+  self.selected_key = selected_key
+  if self.focused and cursor_key and cursor_key ~= row_key(rows[cursor]) then self:reveal_cursor() end
   if self.drag then self:update_drag() end
   if self.reorder and not self.reordering then self:update_reorder() end
   if self.hover_y then self:update_hover() end
@@ -1108,6 +1124,11 @@ function SidebarView:on_mouse_pressed(button, x, y)
     end
     return
   end
+  local pill = self:attention_pill_at(x, y)
+  if pill then
+    if button == "left" then self:open_attention_pill(pill) end
+    return
+  end
   local area = button == "left" and self:scrollbar_at(x, y)
   if area then
     -- A press on the track centres the thumb there, then drags it.
@@ -1196,10 +1217,11 @@ function SidebarView:update_hover()
   local row = inside and not self.drag and not self.reorder and self:row_at(self.hover_y)
   local hover = row and row.kind ~= "empty" and row or nil
   local scrollbar = self.hover_x and self:scrollbar_at(self.hover_x, self.hover_y)
-  if scrollbar then hover = nil end
+  local pill = inside and not self.drag and not self.reorder and self:attention_pill_at(self.hover_x, self.hover_y)
+  if scrollbar or pill then hover = nil end
   scrollbar = scrollbar and scrollbar.field
   local changed = hover ~= self.hover or scrollbar ~= self.scrollbar_hover
-  self.hover, self.scrollbar_hover = hover, scrollbar
+  self.hover, self.scrollbar_hover, self.pill_hover = hover, scrollbar, pill and pill.id or nil
   local tooltip = self:get_tooltip()
   if tooltip ~= self.tooltip_text then
     self.tooltip_text, self.tooltip_started = tooltip, system.get_time()
@@ -1317,6 +1339,7 @@ function SidebarView:pointer_cursor()
   if self.drag or self.reorder or self.scroll_drag or not self.hover_x then return "arrow" end
   if self.selecting or self:in_search(self.hover_x, self.hover_y) then return "ibeam" end
   if self.press then return "hand" end
+  if self.pill_hover then return "hand" end
   if self:scrollbar_at(self.hover_x, self.hover_y) then return "arrow" end
   return self.hover and "hand" or "arrow"
 end
@@ -1908,11 +1931,16 @@ function SidebarView:step(dt)
     self.pending, moving = nil, true
   end
   -- Highlights glide from row to row and fade where no row takes them. With `jump`, a highlight goes to a new row at
-  -- once.
+  -- once. A highlight that follows the pointer stays on the screen while the list scrolls: its row ends under the
+  -- pointer, so it glides only when the pointer moves to another row.
   local m = self:metrics()
-  local function mark(name, row, speed, jump)
+  local function mark(name, row, speed, jump, follows_pointer)
     local move, fade_rate = MARK_MOVE_RATE * speed, MARK_FADE_RATE * speed
     local current = self.marks[name]
+    if current and current.origin then
+      local origin = self:shown_origin(current.area)
+      current.y, current.origin = current.y + current.origin - origin, origin
+    end
     if not row or not row.shown then
       if current then
         current.alpha = ease(current.alpha, 0, fade_rate, 0.01)
@@ -1921,16 +1949,22 @@ function SidebarView:step(dt)
       return
     end
     local x = (row.kind == "project" or row.kind == "group" or row.kind == "empty") and m.pad or m.tab_left
+    local y, origin = row.shown.y, nil
+    if follows_pointer then
+      origin = self:shown_origin(row.area)
+      y = y + self:area_origin(row.area) - origin
+    end
     if not current or current.area ~= row.area or current.alpha <= 0.01 then
-      self.marks[name] = {area = row.area, x = x, y = row.shown.y, h = row.h, alpha = ease(0, 1, fade_rate, 0.01),
-        key = row.id_key}
+      self.marks[name] = {area = row.area, x = x, y = y, h = row.h, alpha = ease(0, 1, fade_rate, 0.01),
+        key = row.id_key, origin = origin}
       return
     end
+    current.origin = origin
     if jump and current.key ~= row.id_key or row.lifted then
-      current.x, current.y, current.h = x, row.shown.y, row.h
+      current.x, current.y, current.h = x, y, row.h
     else
       current.x = ease(current.x, x, move)
-      current.y = ease(current.y, row.shown.y, move)
+      current.y = ease(current.y, y, move)
       current.h = ease(current.h, row.h, move)
     end
     current.key = row.id_key
@@ -1944,7 +1978,7 @@ function SidebarView:step(dt)
   mark("active", active, SELECTION_SPEED, self.jump_selection)
   self.jump_selection = nil
   mark("cursor", self.focused and self:get_cursor() or nil, SELECTION_SPEED)
-  mark("hover", self.hover, HOVER_SPEED)
+  mark("hover", self.hover, HOVER_SPEED, false, true)
   -- The drop target's mark: a line between rows that grows into a box around a target row.
   local drop = self.marks.drop
   if target then
@@ -1979,6 +2013,20 @@ function SidebarView:step(dt)
       self.chevrons[row.key] = ease(self.chevrons[row.key], target, MOVE_RATE * 0.8, 0.01)
     end
   end
+  -- Attention Pills fade in and out at their edges. A drag scrolls at the edges, so it hides them.
+  local live, order = {}, self.drag == nil and self.reorder == nil and self:offscreen_attention() or {}
+  for _, item in ipairs(order) do live[item.id] = item end
+  local pills = {}
+  for _, entry in ipairs(self.pills or {}) do
+    local item = live[entry.item.id]
+    if item then entry.item, live[item.id] = item, nil end
+    entry.alpha = ease(entry.alpha, item and 1 or 0, FADE_RATE, 0.01)
+    if entry.alpha > 0 then pills[#pills + 1] = entry end
+  end
+  for _, item in ipairs(order) do
+    if live[item.id] then pills[#pills + 1] = {item = item, alpha = ease(0, 1, FADE_RATE, 0.01)} end
+  end
+  self.pills = pills
   return moving
 end
 
@@ -2090,6 +2138,106 @@ local function font_variant(name)
     else fonts[name] = base:copy(math.max(1, math.floor(size * 0.84 + 0.5))) end
   end
   return fonts[name]
+end
+
+-- What a row shows that needs the user: the attention kind, and how many Terminals it stands for. A Terminal's mark
+-- counts one. A Dormant Project's or collapsed age group's pill counts its Terminals, which show no rows. A collapsed
+-- loaded Project still shows its Terminals that need the user, so its pill does not count. Nil when the row needs
+-- nothing.
+local function row_need(row)
+  if row.attention then return row.attention, 1 end
+  local pending = row.pending
+  if pending and (row.kind == "group" and row.collapsed
+    or row.kind == "project" and row.project.state == "dormant" and not row.project.scratch) then
+    return pending.kind, pending.count
+  end
+end
+
+-- The Attention Pills: for each edge of a scrolling area that hides rows that need the user, a pill with their
+-- count. `target` is the hidden row nearest the edge. A question sets the pill's kind, as in a pending count.
+function SidebarView:offscreen_attention()
+  local key = self.rows
+  local cache = self.attention_cache
+  if cache and cache.rows == key and cache.scroll == self.scroll and cache.bottom_scroll == self.bottom_scroll
+    and cache.width == self.width and cache.height == self.view_h and cache.top == self:list_top() then
+    return cache.marks
+  end
+  local font = font_variant("small")
+  local h = font:get_height() + 4 * SCALE
+  local inset = 6 * SCALE
+  local bottom_top = self:bottom_area()
+  local spans = {main = {self:list_top(), self:main_bottom()}, bottom = {bottom_top, self.view_h}}
+  local found = {}
+  for index, row in ipairs(self.rows) do
+    local kind, count = row_need(row)
+    local span = kind and spans[row.area]
+    if span then
+      local centre = self:row_y(index) + row.h / 2
+      local edge = centre < span[1] and "top" or centre > span[2] and "bottom" or nil
+      if edge then
+        local id = row.area .. ":" .. edge
+        local item = found[id]
+        if not item then
+          item = {area = row.area, edge = edge, count = 0, id = id}
+          found[id], found[#found + 1] = item, item
+        end
+        item.count = item.count + count
+        if not item.kind or kind == "blocked" then item.kind = kind end
+        -- The nearest hidden row: the last one above the top, or the first one below the bottom.
+        if edge == "top" or not item.target then item.target = index end
+      end
+    end
+  end
+  local marks = {}
+  for _, item in ipairs(found) do
+    local span = spans[item.area]
+    local label = tostring(item.count)
+    item.label, item.h = label, h
+    item.w = math.floor(font:get_width(label) + h + 8 * SCALE)
+    item.x = math.floor((self.width - item.w) / 2)
+    item.y = math.floor(item.edge == "top" and span[1] + inset or span[2] - inset - h)
+    marks[#marks + 1] = item
+  end
+  self.attention_cache = {rows = key, scroll = self.scroll, bottom_scroll = self.bottom_scroll, width = self.width,
+    height = self.view_h, top = self:list_top(), marks = marks}
+  return marks
+end
+
+-- The Attention Pill at the point.
+function SidebarView:attention_pill_at(x, y)
+  for _, item in ipairs(self:offscreen_attention()) do
+    if x >= item.x and x < item.x + item.w and y >= item.y and y < item.y + item.h then return item end
+  end
+end
+
+-- A click on an Attention Pill scrolls to the nearest hidden row, clear of a pill at the same edge.
+function SidebarView:open_attention_pill(item)
+  self:reveal_row(item.target, item.h + 12 * SCALE)
+  core.log_quiet("Sidebar Attention Pill: area=%s edge=%s count=%d", item.area, item.edge, item.count)
+end
+
+-- Each Attention Pill floats over the rows at its edge, with a shadow: an arrow toward the hidden rows and their count.
+function SidebarView:draw_attention_pills()
+  local font = font_variant("small")
+  for _, entry in ipairs(self.pills or {}) do
+    local item, alpha = entry.item, entry.alpha
+    local x, y, w, h = item.x, item.y, item.w, item.h
+    for i = 3, 1, -1 do
+      local spread = i * SCALE
+      renderer.draw_rounded_rect(x - spread, y - spread + SCALE, w + 2 * spread, h + 2 * spread, h / 2 + spread,
+        fade(style.sidebar_shadow, alpha * (4 - i) / 8))
+    end
+    renderer.draw_rounded_rect(x, y, w, h, h / 2, fade(tab.attention_color(item.kind), alpha))
+    local color = fade(style.background, alpha)
+    local size, cx, cy = h * 0.2, x + h / 2 + SCALE, y + h / 2
+    local d = item.edge == "top" and -1 or 1
+    renderer.draw_poly({{cx - size * 1.2, cy - d * size * 0.6}, {cx + size * 1.2, cy - d * size * 0.6},
+      {cx, cy + d * size * 0.8}}, color)
+    -- The digits' ink centres in the pill, as in a pending count.
+    local ink_top, ink_bottom = font:get_ink_extent(item.label)
+    local ty = ink_top and y + (h - ink_top - ink_bottom) / 2 or y + 2 * SCALE
+    text(item.label, x + h + SCALE, math.floor(ty + 0.5), color, font)
+  end
 end
 
 -- Seconds until the next spinner frame, elapsed-time update, animation frame or hover tooltip.
@@ -2604,6 +2752,7 @@ function SidebarView:draw(width, height)
       renderer.draw_rounded_rect(width - bar_w - 4 * SCALE, thumb_top, bar_w, h, bar_w / 2, color)
     end
   end
+  self:draw_attention_pills()
   self:draw_card(width, height, now)
   self.focus_feedback:draw(0, 0, width, height, self.clock)
   self:draw_tooltip(width, height)
