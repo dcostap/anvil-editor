@@ -540,6 +540,7 @@ A Project's 30-second first-frame deadline starts again when the shell first sho
 The `restore-loaded` probe checks readiness without selecting the restored background Project.
 
 A Sidebar Pane selection keeps the previous Project's frame until the requested Pane has rendered.
+Keyboard focus waits until the requested Pane is applied, so Pane History records no visit to the Project's old Pane.
 Pane deliveries carry request IDs. Lua completes each request, including a rejected request, before the next redraw.
 Both renderers report the completed ID. The shell rejects frames that precede the requested ID.
 Pane reports also carry the completed ID. The shell's Sidebar model keeps the previous selection until that report arrives.

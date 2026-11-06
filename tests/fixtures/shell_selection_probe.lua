@@ -78,6 +78,7 @@ local function same(a, b) return a[1] == b[1] and a[2] == b[2] and a[3] == b[3] 
 local function show(color) return string.format("#%02x%02x%02x", color[1], color[2], color[3]) end
 local function quit() core.exit(function() core.quit_request = true end, true) end
 local function ready(name, pane)
+ wait(function() return system.window_has_focus(core.window) end, 10, "the selected Project did not get keyboard focus")
  local _, _, controls_w = system.get_window_controls()
  save(name, {pid = tonumber(kernel.GetCurrentProcessId()), controls_w = controls_w, pane = pane,
   background = {style.background[1], style.background[2], style.background[3]}})
@@ -89,7 +90,9 @@ if path:match("/driver$") then
   local ok, err = pcall(function()
    local process = require "core.process"
    shell = assert(process.start({EXEFILE, "--shell", root .. "/Project"},
-    {stdin=process.REDIRECT_DISCARD, stdout=process.REDIRECT_DISCARD, stderr=process.REDIRECT_DISCARD}))
+    {stdin=process.REDIRECT_DISCARD, stdout=process.REDIRECT_DISCARD, stderr=process.REDIRECT_DISCARD,
+     -- The private desktop has no foreground Window. Use the probe's focus support, without sending input.
+     env={ANVIL_INPUT_LATENCY_PROBE="1", ANVIL_INPUT_LATENCY_WARMUP_MS="600000"}}))
    local a = wait(function() return load("a-ready") end, 30, "Project A did not start")
    local window = wait(function() return shell_window(shell:pid()) end, 10, "shell Window not found")
    coroutine.yield(.5)
@@ -135,6 +138,9 @@ if path:match("/driver$") then
    end, 15, "the requested Pane did not appear")
    local sidebar = wait(function() return load("sidebar-selection") end, 15, "Sidebar selection check did not finish")
    assert(sidebar.ok, sidebar.error)
+   save("history-back", {go = true})
+   local history = wait(function() return load("history-result") end, 15, "Pane History check did not finish")
+   assert(history.ok, history.error)
   end)
   local file = assert(io.open(os.getenv("ANVIL_PROJECT_PROBE_RESULT"), "wb"))
   file:write("return ", common.serialize{ok=ok, error=ok and nil or tostring(err), action=action})
@@ -168,6 +174,8 @@ elseif path:match("/Project$") then
   wait(function() return load("a-block") end, 60)
   save("a-blocking", {go = true})
   system.sleep(1.5)
+  wait(function() return load("history-back") end, 60)
+  require("core.command").perform("pane:history_back")
  end)
 elseif path:match("/Replacement$") then
  core.add_background_thread(function()
@@ -192,5 +200,11 @@ elseif path:match("/Replacement$") then
    end, 15, "Sidebar did not select the requested Pane")
   end)
   save("sidebar-selection", {ok = ok, error = ok and nil or tostring(err)})
+  local history_ok, history_error = pcall(function()
+   wait(function() return load("history-back") end, 60)
+   wait(function() return system.window_has_focus(core.window) end, 10,
+    "Back visited the old Pane in Project A instead of returning to Project B")
+  end)
+  save("history-result", {ok = history_ok, error = history_ok and nil or tostring(history_error)})
  end)
 end

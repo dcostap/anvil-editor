@@ -1607,7 +1607,9 @@ bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surf
 }
 
 bool anvil_hosted_surface_has_focus(void) {
-  return SDL_GetAtomicInt(&view->focused) != 0;
+  /* A Project selection can deliver focus before Lua applies its requested Pane. The old Pane has not been
+   * visited: keep keyboard focus out of its report until the selection completes, as we do for its frame. */
+  return SDL_GetAtomicInt(&view->focused) != 0 && view->pane_request >= view->config.pane_request;
 }
 
 bool anvil_hosted_surface_should_render(void) {
