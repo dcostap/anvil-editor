@@ -30,6 +30,7 @@ local icons = require("core.context_menu").icons
 -- click acts on the row that moves to the pointer.
 -- Drag and drop: a dragged Tab or a drop from another application lands on a line between Tabs, which places a new
 -- Pane there, or on a row. A Tab's middle takes the drop into its Pane; a Project's row takes it into that Project.
+-- The Snoozed fold takes a drop after the Project's other Tabs. A dropped Snoozed Tab wakes.
 -- The receiving Project performs each request and reports its new Tabs, which then slide to their places.
 local SidebarView = Object:extend()
 local TOOLTIP_DELAY = 0.4
@@ -843,7 +844,7 @@ function SidebarView:rebuild_rows()
     if #snoozed > 0 then
       local fold_key = "snoozed:" .. project.path
       local fold = {kind = "terminal_group", project = project, label = "Snoozed", count = #snoozed, key = fold_key,
-        id_key = fold_key, collapsed = self:is_collapsed(fold_key, true)}
+        id_key = fold_key, snoozed = true, collapsed = self:is_collapsed(fold_key, true)}
       for _, row in ipairs(snoozed) do fold.attention = fold.attention or needs_user(row.attention, row.agent) end
       if not only_attention or fold.attention then add(fold, m.terminal) end
       if not only_attention and (searching or not fold.collapsed) then
@@ -1367,7 +1368,8 @@ end
 
 -- Whether placing the dragged Tab `source` beside `anchor` leaves its Project's layout as it is.
 function SidebarView:unchanged(source, place, anchor)
-  if anchor.project.path ~= source.project.path then return false end
+  -- A dropped Snoozed Tab wakes.
+  if anchor.project.path ~= source.project.path or source.tab.snoozed then return false end
   local single = not source.bracket
   if anchor.id_key == source.id_key then return place.mode == "join" or single end
   local group, own = anchor.tab.group, source.tab.group
@@ -1390,6 +1392,15 @@ function SidebarView:line_target(row, side, outer, source)
     y = side == "before" and row.y or row.y + row.h}
 end
 
+-- The line after the last Tab of `project` outside its Snoozed fold.
+function SidebarView:end_target(project, source)
+  local last
+  for _, row in ipairs(self.rows) do
+    if row.kind == "tab" and row.project.path == project.path and not row.tab.snoozed then last = row end
+  end
+  return last and self:line_target(last, "after", true, source) or nil
+end
+
 -- The drop target at a point: a line between Tabs, or a row. `source` is the dragged Tab's row, or nil for a drop
 -- from another application.
 function SidebarView:drop_target_at(x, y, source)
@@ -1401,9 +1412,15 @@ function SidebarView:drop_target_at(x, y, source)
     -- Just below a Project's last Tab: in the gap before the next Project, or below the list.
     local above = lines and self:tab_above(y)
     if not above or not accepts(above.project) then return nil end
+    if above.tab.snoozed then return self:end_target(above.project, source) end
     return self:line_target(above, "after", true, source)
   end
   if not row.project or not accepts(row.project) then return nil end
+  -- A drop cannot snooze, and the Snoozed Panes have no visible place in the Project's order. So the Snoozed
+  -- fold takes a drop after the Project's other Tabs.
+  if row.snoozed or row.kind == "tab" and row.tab.snoozed then
+    return lines and self:end_target(row.project, source) or nil
+  end
   local part = (y - self:row_y(index)) / row.h
   if row.kind == "project" then
     local first = self.rows[index + 1]
@@ -1537,6 +1554,10 @@ function SidebarView:finish_drag(x, y)
   local target, source = drag.target, drag.row
   self:end_drag(target)
   if not target then return end
+  local session = source.tab.snoozed and source.tab.terminal and source.tab.terminal.session
+  if session and not self:set_snooze({session = session, pane = source.tab.id, path = source.project.path}, nil) then
+    return
+  end
   local route, path, request = self:drop_request(target, source)
   local transfer = request.action == "export"
   self.pending = {key = source.id_key, transfer = transfer,

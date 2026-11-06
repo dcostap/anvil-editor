@@ -244,6 +244,7 @@ A Snooze whose time has not come stays saved, even when the model does not list 
 The Sidebar then sends `snooze` or `unsnooze` to the Pane's Project through the direct route.
 The Project moves a Snoozed Pane into its own Pane Group with the `snoozed` flag, saved in the Workspace.
 Pane navigation, Pane numbers, the Title Bar and the close fallback skip it. A focus request still shows it.
+A Sidebar drop cannot snooze a Pane. The Snoozed fold takes a drop after the Project's other Tabs. A Snoozed Tab that the user drops in the Sidebar wakes.
 The Pane report marks it, and the Sidebar lists it in the collapsed Snoozed fold at the end of its Project.
 The fold shows the mark of a Snoozed Pane that needs the user, also in a collapsed Project.
 Collapsed Projects and Dormant Projects show a coloured count of Terminals that need the user. Collapsed age groups show their total.

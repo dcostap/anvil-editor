@@ -2059,10 +2059,17 @@ test.describe("Sidebar drag and drop", function()
 
   local function sidebar(projects)
     local actions, action = recorder()
-    local view = SidebarView(action, {["group:week"]=false})
+    local view = SidebarView(action, {["group:week"]=false, ["snoozed:C:/A"]=false})
     view:set_size(300, 800)
     view:set_model(projects or model(), 5)
     return view, actions
+  end
+
+  -- The model with the Terminal's Pane Snoozed.
+  local function snoozed_model()
+    local projects = model()
+    projects[1].panes[5].snoozed = true
+    return projects
   end
 
   -- A point at `part` of a row's height, from its top.
@@ -2203,6 +2210,29 @@ test.describe("Sidebar drag and drop", function()
     test.same({sent[1][3], sent[1][4].action, sent[1][4].pane, sent[1][4].to}, {"C:/A", "export", "pane-5", "C:/B"})
     test.same(drag(view, actions, "pane-5", tab_y(view, "pane-1", 0.25)),
       {move("pane-5", {mode = "group", anchor = "pane-1", side = "before"})})
+  end)
+
+  test.it("places a Tab dropped on the Snoozed fold after the Project's other Tabs", function()
+    local view, actions = sidebar(snoozed_model())
+    local fold_y
+    for index, row in ipairs(view.rows) do
+      if row.label == "Snoozed" then fold_y = view:row_y(index) + row.h / 2 end
+    end
+    local after_last = {move("pane-1", {mode = "group", anchor = "pane-4", side = "after"})}
+    test.same(drag(view, actions, "pane-1", fold_y), after_last, "The fold's header")
+    test.same(drag(view, actions, "pane-1", tab_y(view, "pane-5", 0.1)), after_last, "Above a Snoozed Tab")
+    test.same(drag(view, actions, "pane-1", tab_y(view, "pane-5", 0.5)), after_last, "A Snoozed Tab's middle")
+    local gap_y = tab_y(view, "pane-5", 1) + view:metrics().project_gap / 2
+    test.same(drag(view, actions, "pane-1", gap_y), after_last, "Below the fold")
+  end)
+
+  test.it("ends the Snooze of a Snoozed Tab dropped among the other Tabs", function()
+    local view, actions = sidebar(snoozed_model())
+    test.same(drag(view, actions, "pane-5", tab_y(view, "pane-4", 0.95)), {
+      {"snooze", "s1"},
+      {"request", "direct", "C:/A", {action = "unsnooze", pane = "pane-5"}},
+      move("pane-5", {mode = "group", anchor = "pane-4", side = "after"}),
+    })
   end)
 
   test.it("scrolls the list while a dragged Tab waits near its edge", function()
