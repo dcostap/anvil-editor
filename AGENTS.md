@@ -882,14 +882,6 @@ A click moves the caret to the heading and scrolls it near the top with `scroll_
 The selection marker stays in the visible column while a long heading list scrolls. Sections in the middle share one marker position.
 Run `ui/markdown_heading_outline.lua` after changes. Check the `markdown-heading-outline` render scenario after visual changes.
 
-## SQL Server
-
-`sql_server:manage` opens the Databases Dialog. SQL Queries use normal Editors, Untitled recovery, completion, and navigation. Connection settings belong to the Project on this PC. Passwords and metadata are not saved. Restore never connects automatically.
-
-`src/sql_context.c` finds supported SELECT contexts. `src/sql_server.c` reads fixed catalog queries through Microsoft ODBC Driver 18 or 17 on a worker. Completion uses its snapshot. Navigation shows a read-only column summary, not complete DDL. Query execution is outside this slice. See [SQL Server](docs/sql-server.md) for limits.
-
-Run `anvil:sql-context`, `runtime/sql_context.lua` and `ui/sql_server.lua` after changes. Default tests replace only the database boundary. `anvil:sql-server-integration` skips unless `ANVIL_SQL_INTEGRATION=1` and LocalDB plus a supported driver exist. It creates and deletes its own instance and files. It never uses the user's server or settings. Check the `databases-dialog` render scenario after visual changes.
-
 ## Binary files
 
 `core.open_file` asks how to open a binary file: with the default app, as text, or not at all. It returns `false` while the dialog asks.

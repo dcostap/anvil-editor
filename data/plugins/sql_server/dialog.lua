@@ -12,7 +12,7 @@ local Databases = Dialog:extend()
 
 function Databases:new()
   Databases.super.new(self, { title = "Databases", width = 660 })
-  self.fields, self.labels = {}, {}
+  self.fields = {}
   self.list = self:add(List {
     row_height = ui.metrics().control_h,
     draw_row = function(c, x, y, w, h)
@@ -21,9 +21,7 @@ function Databases:new()
     end,
     on_select = function() self:show_selected() end,
   })
-  for _, spec in ipairs({ { "name", "Name" }, { "server", "Server" }, { "database", "Database" }, { "user", "User" } }) do
-    local key = spec[1]
-    self.labels[key] = spec[2]
+  for _, key in ipairs({ "name", "server", "database" }) do
     self.fields[key] = self:add(TextField {
       on_submit = function(value)
         local c = self:selected()
@@ -38,6 +36,10 @@ function Databases:new()
     return false
   end })
   self.auth:set_options({ { value = "windows", label = "Windows" }, { value = "sql", label = "SQL Login" } }, "windows")
+  self.fields.user = self:add(TextField { on_submit = function(value)
+    local c = self:selected()
+    return c and sql.update(c.id, "user", value) or false
+  end })
   self.password = self:add(TextField { secret = true })
   self.trust = self:add(Segmented { on_change = function(value)
     local c = self:selected()
@@ -47,7 +49,7 @@ function Databases:new()
   end })
   self.trust:set_options({ { value = "verify", label = "Verify" }, { value = "trust", label = "Trust Certificate" },
     { value = "none", label = "No Encryption" } }, "verify")
-  self.add_button = self:add(Button { label = "Add", on_click = function()
+  self.add_button = self:add(Button { label = "Add Connection", on_click = function()
     local c = sql.add_connection()
     if c then self:refresh(c.id); self:focus(self.fields.name) end
   end })
@@ -73,6 +75,11 @@ function Databases:new()
     local c = self:selected()
     if c and self.source and self.source.buffer then sql.bind(self.source.buffer, c.id); self:close() end
   end })
+  self.form_rows = {
+    { "Name", self.fields.name }, { "Server", self.fields.server }, { "Database", self.fields.database },
+    { "Authentication", self.auth }, { "User", self.fields.user }, { "Password", self.password }, { "TLS", self.trust },
+  }
+  self.actions = { self.add_button, self.remove_button, self.connect_button, self.disconnect_button }
   self:refresh()
 end
 function Databases:selected() return self.list:selected_row() end
@@ -91,18 +98,32 @@ function Databases:show_selected()
   for key, field in pairs(self.fields) do
     if self.selected_id ~= (c and c.id) or field:get_text() == field.accepted then field:set_text(c and c[key] or "") end
     field.enabled = c ~= nil and (key ~= "user" or not c.integrated)
+    field.visible = field.enabled
   end
   self.selected_id = c and c.id
   self.auth.value = c and not c.integrated and "sql" or "windows"
   self.trust.value = c and c.encrypt == false and "none" or (c and c.trust_certificate and "trust" or "verify")
   self.auth.enabled, self.trust.enabled = c ~= nil, c ~= nil
+  self.auth.visible, self.trust.visible = c ~= nil, c ~= nil
   self.password.enabled = c ~= nil and not c.integrated
+  self.password.visible = self.password.enabled
+  if not self.password.visible then self.password:set_text("") end
+  self.list.visible = c ~= nil
+  self.width = c and 660 or 360
   self.add_button.enabled = sql.ready()
+  self.add_button.kind = c and "secondary" or "primary"
   self.remove_button.enabled = c ~= nil
+  self.remove_button.visible = c ~= nil
   self.connect_button.enabled = c ~= nil and c.state ~= "Connecting"
+  self.connect_button.visible = c ~= nil
+  self.connect_button.label = c and c.state == "Ready" and "Refresh" or "Connect"
   self.disconnect_button.enabled = c ~= nil and c.state ~= "Disconnected"
+  self.disconnect_button.visible = c ~= nil and (c.state == "Ready" or c.state == "Connecting")
   self.query_button.enabled = c ~= nil
+  self.query_button.visible = c ~= nil
   self.bind_button.enabled = c ~= nil and self.source ~= nil and self.source.buffer ~= nil
+  self.bind_button.visible = self.bind_button.enabled
+  if self.is_open and (not self.focused or not self.focused:can_focus()) then self:focus(c and self.list or self.add_button) end
 end
 function Databases:on_update()
   if self.generation ~= sql.generation then self:refresh() end
@@ -110,43 +131,55 @@ end
 function Databases:layout_content(x, y, w, max_h)
   local m = ui.metrics()
   local gap, h = m.gap, m.control_h
-  local list_h = h * math.max(1, math.min(#sql.connections, 3))
-  list_h = math.max(h, math.min(list_h, max_h - 11 * (h + gap)))
-  self.list:set_rect(x, y, w, list_h)
-  local cy = y + list_h + gap
-  self.captions = self.captions or {}
-  local label_w = ui.font():get_width("Authentication") + m.pad_x * 2
-  local function row(label, control)
-    self.captions[label] = cy
-    control:set_rect(x + label_w, cy, w - label_w, h)
-    cy = cy + h + gap
+  local c = self:selected()
+  self.content_x, self.content_w = x, w
+  self.status_error = sql.load_error or sql.save_error or (c and c.error)
+  self.status_text = self.status_error or (not sql.ready() and "Loading…") or nil
+  local cy = y
+  if not c then
+    if self.status_text then self.status_y = cy; cy = cy + h + gap end
+    self.add_button:set_rect(x, cy, w, h)
+    return cy + h - y
   end
-  row("Name", self.fields.name); row("Server", self.fields.server); row("Database", self.fields.database)
-  row("Authentication", self.auth); row("User", self.fields.user); row("Password", self.password); row("TLS", self.trust)
-  self.status_y = cy
-  cy = cy + h + gap
+  local rows = 2
+  for _, row in ipairs(self.form_rows) do if row[2].visible then rows = rows + 1 end end
+  if self.status_text then rows = rows + 1 end
+  local list_h = math.max(h, math.min(h * math.min(#sql.connections, 3), max_h - rows * (h + gap)))
+  self.list:set_rect(x, cy, w, list_h)
+  cy = cy + list_h + gap
+  local label_w = ui.font():get_width("Authentication") + m.pad_x * 2
+  for _, row in ipairs(self.form_rows) do
+    local control = row[2]
+    if control.visible then
+      control:set_rect(x + label_w, cy, w - label_w, h)
+      cy = cy + h + gap
+    end
+  end
+  if self.status_text then self.status_y = cy; cy = cy + h + gap end
   local bx = x
-  for _, button in ipairs({ self.add_button, self.remove_button, self.connect_button, self.disconnect_button }) do
-    local width = button:measure()
-    button:set_rect(bx, cy, width, h); bx = bx + width + gap
+  for _, button in ipairs(self.actions) do
+    if button.visible then
+      local width = button:measure()
+      button:set_rect(bx, cy, width, h); bx = bx + width + gap
+    end
   end
   cy = cy + h + gap
   local width = self.query_button:measure()
   self.query_button:set_rect(x + w - width, cy, width, h)
   self.bind_button:set_rect(x, cy, self.bind_button:measure(), h)
-  self.content_x, self.content_w = x, w
   return cy + h - y
 end
 function Databases:draw_content()
   local font, h = ui.font(), ui.metrics().control_h
-  for label, y in pairs(self.captions) do
-    common.draw_text(font, style.card_text, label, "left", self.content_x, y, self.content_w, h)
+  for _, row in ipairs(self.form_rows) do
+    if row[2].visible then
+      common.draw_text(font, style.card_text, row[1], "left", self.content_x, row[2].y, self.content_w, h)
+    end
   end
-  local c = self:selected()
-  local error = sql.load_error or sql.save_error or (c and c.error)
-  local message = error or (sql.is_saving() and "Saving") or (not sql.ready() and "Loading") or ""
-  common.draw_text(font, error and style.error or style.card_text, ui.fit_text(font, message, self.content_w),
-    "left", self.content_x, self.status_y, self.content_w, h)
+  if self.status_text then
+    common.draw_text(font, self.status_error and style.error or style.card_text, ui.fit_text(font, self.status_text, self.content_w),
+      "left", self.content_x, self.status_y, self.content_w, h)
+  end
   Databases.super.draw_content(self)
 end
 function Databases:on_close()
@@ -160,7 +193,7 @@ function M.open()
   local instance = Databases()
   instance.source = core.active_view and core.active_view:extends(require "core.editor") and core.active_view or nil
   instance:refresh(instance.source and instance.source.buffer.sql_connection_id)
-  instance:open(instance.list)
+  instance:open(instance:selected() and instance.list or instance.add_button)
   return instance
 end
 return M

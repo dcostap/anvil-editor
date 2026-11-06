@@ -2,7 +2,7 @@
 
 ## First slice
 
-Use **SQL Server: Manage** in Command Search to open the Databases Dialog. Add a connection, enter its server and database, then select Connect. Connect checks access and loads metadata. Select Connect again to refresh it.
+Use **SQL Server: Manage** in Command Search to open the Databases Dialog. Select Add Connection, enter its server and database, then select Connect. Connect checks access and loads metadata. Select Refresh to load metadata again. An empty Dialog shows only Add Connection. Windows authentication hides the user and password fields.
 
 New Query opens an Untitled SQL Query in a normal Editor. Use for Query assigns the selected connection to the current Editor. Queries use normal editing, Save As, completion, and symbol navigation. Navigation opens a read-only column summary; Back returns to the same query. The summary is not a CREATE script or complete DDL.
 

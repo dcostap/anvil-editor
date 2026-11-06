@@ -1144,17 +1144,21 @@ local function scenario_is_ready()
     require("plugins.project_paths").open({ select = DATADIR .. PATHSEP .. "colors" })
     return false
   end
-  if benchmark.scenario == "databases-dialog" then
+  if benchmark.scenario:find("^databases%-dialog") then
     if require("core.ui.dialog").current() then return true end
     config.transitions = false
     local sql = require "plugins.sql_server"
     sql.load()
     if not sql.ready() then return false end
+    if benchmark.scenario == "databases-dialog-empty" then
+      require("plugins.sql_server.dialog").open()
+      return false
+    end
     local c = sql.connections[1] or sql.add_connection()
     sql.update(c.id, "name", "Development")
     sql.update(c.id, "server", "test-only.invalid")
     sql.update(c.id, "database", "Example")
-    sql.update(c.id, "integrated", false)
+    sql.update(c.id, "integrated", benchmark.scenario == "databases-dialog-windows")
     sql.update(c.id, "user", "reader")
     local open = require("plugins.sql_server.dialog").open()
     open.password:set_text("render-test-password")
