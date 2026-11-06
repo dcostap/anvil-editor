@@ -944,9 +944,13 @@ function SidebarView:rebuild_rows()
       target.selected = true
     end
   end
+  -- A Snooze puts the cursor's Tab away like a close, so the cursor follows the Project's new active Tab.
   local cursor
   for index, row in ipairs(rows) do
-    if cursor_key and row_key(row) == cursor_key then cursor = index; break end
+    if cursor_key and row_key(row) == cursor_key then
+      if not (row.tab and row.tab.snoozed and not cursor_row.tab.snoozed) then cursor = index end
+      break
+    end
   end
   if not cursor and cursor_row and cursor_row.kind == "tab" then
     -- The Pane manager chooses the replacement. Follow its report, within the same Project.

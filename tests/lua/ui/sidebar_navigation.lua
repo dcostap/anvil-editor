@@ -253,6 +253,24 @@ test.describe("Sidebar keyboard navigation", function()
     test.same(actions, {{"return_focus"}})
   end)
 
+  test.it("moves the cursor to the newly focused Tab when its Tab is Snoozed, as for a close", function()
+    local function model(snoozed)
+      return {{id=1,row_id=1,path="C:/P",state="ready",window_id=7,
+        terminals={{id="t",title="shell",state="running"}},
+        panes={active=snoozed and 1 or 2,
+          {id="a",group=1,name="a.lua"},
+          {id="t",group=2,name="shell",terminal={session="t",state="running"},snoozed=snoozed or nil}}},
+        windows={{id=7,selected_project=1}}}
+    end
+    -- The Snoozed fold is open, so the Snoozed Tab keeps a row.
+    local view = SidebarView(function() end, {["snoozed:C:/P"]=false})
+    view:set_model(model(false), 7)
+    view:on_focus(true)
+    test.equal(view:get_cursor().tab.id, "t")
+    view:set_model(model(true), 7)
+    test.equal(view:get_cursor().tab.id, "a")
+  end)
+
   test.it("keeps search results when the focus refresh arrives", function()
     local view = sidebar()
     view:on_focus(true, true)
