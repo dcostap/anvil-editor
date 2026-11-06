@@ -71,7 +71,7 @@ The standard frame-work budgets apply to the uncapped cases. The response case s
 
 ## Focused runtime workloads
 
-`fuzzy-text-accents` searches a generated 6,000-file Project with 2,400 accented lines. It checks composed and combining accents, quoted phrases, multiple terms, `ñ`, no matches, and rapid query replacement. Each action waits for completion, not only the first rows. It edits only a fixture-owned file and refuses `--project`.
+`fuzzy-text-accents` runs in the default `smoke` suite and the focused `search` suite. It searches a generated 6,000-file Project with 2,400 accented lines. It checks composed and combining accents, quoted phrases, multiple terms, `ñ`, no matches, and rapid query replacement. Each action waits for completion, not only the first rows. It edits only a fixture-owned file and refuses `--project`.
 
 Run the scanner comparison separately from frame measurements:
 

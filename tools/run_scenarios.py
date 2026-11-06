@@ -340,7 +340,7 @@ SCENARIOS: dict[str, Scenario] = {
         settings={"mode": "text", "query": "return va", "behind": "editor", "action": "type"},
         action_budget_ms=300.0),
     "fuzzy-text-accents": Scenario(
-        "accent_search", REPO_MEDIUM, actions=24, suites=("search",), targets=1, writes=True,
+        "accent_search", REPO_MEDIUM, actions=24, suites=("smoke", "search"), targets=1, writes=True,
         action_budget_ms=1000.0),
     "fuzzy-symbols-navigate-huge": Scenario(
         "fuzzy_picker", REPO_HUGE, actions=48, suites=("scale",), window=WINDOW_LARGE,
