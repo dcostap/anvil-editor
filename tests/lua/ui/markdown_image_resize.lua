@@ -22,10 +22,11 @@ local function wait_ready(buffer)
   test.equal(instance.status, "ready", instance.reason)
 end
 
-local function draw()
-  local x, y = view:get_line_screen_position(1)
-  view:draw_line_text(1, x, y)
-  return test.not_nil(image_controls.layout(view, 1))
+local function draw(line)
+  line = line or 1
+  local x, y = view:get_line_screen_position(line)
+  view:draw_line_text(line, x, y)
+  return test.not_nil(image_controls.layout(view, line))
 end
 
 local function open_note(text)
@@ -195,5 +196,98 @@ test.describe("Markdown Live Preview image resize", function()
     view:on_mouse_pressed("left", zoom.x + zoom.w / 2, zoom.y + zoom.h / 2, 1)
     view:on_mouse_released("left", zoom.x + zoom.w / 2, zoom.y + zoom.h / 2)
     test.ok(image_overlay.is_open())
+  end)
+
+  test.it("uses the image link and hover controls inside a table", function()
+    local buffer = open_note("| Photo | Note |\n| --- | --- |\n| ![[photo.png]] | Keep me |\n\nnext")
+    buffer:set_selection(5, 1)
+    local layout = draw(3)
+    local render = view:get_line_render(3)
+    local link_row = render.position_rows[1]
+    local line_x, line_y = view:get_line_screen_position(3)
+    local x = line_x + link_row.x_offset + 10
+    local y = line_y + link_row.y_offset + link_row.height / 2
+    local target = test.not_nil(view:get_render_fragment_at_position(x, y))
+    test.equal(target.fragment.text, "photo.png")
+    view:on_mouse_pressed("left", x, y, 1)
+    view:on_mouse_released("left", x, y)
+    local a, b, c, d = buffer:get_selection(true)
+    test.equal(buffer:get_text(a, b, c, d), "photo.png")
+    draw(3)
+    local shown_source = false
+    for _, fragment in ipairs(view:get_line_render(3).fragments) do
+      if fragment.table_cell and fragment.text:find("![[photo.png]]", 1, true) then
+        shown_source = true
+      end
+    end
+    test.ok(shown_source, "edit reveals the source above the image")
+
+    buffer:set_selection(5, 1)
+    layout = draw(3)
+    view:on_mouse_moved(layout.image.x + 20, layout.image.y + 20, 0, 0)
+    local buttons = test.not_nil(draw(3).buttons)
+    local edit = buttons.edit
+    view:on_mouse_pressed("left", edit.x + edit.w / 2, edit.y + edit.h / 2, 1)
+    view:on_mouse_released("left", edit.x + edit.w / 2, edit.y + edit.h / 2)
+    a, b, c, d = buffer:get_selection(true)
+    test.equal(buffer:get_text(a, b, c, d), "photo.png")
+    test.not_ok(image_overlay.is_open())
+    buffer:set_selection(5, 1)
+    layout = draw(3)
+    view:on_mouse_moved(layout.image.x + 20, layout.image.y + 20, 0, 0)
+    local zoom = test.not_nil(draw(3).buttons.zoom)
+    view:on_mouse_pressed("left", zoom.x + zoom.w / 2, zoom.y + zoom.h / 2, 1)
+    view:on_mouse_released("left", zoom.x + zoom.w / 2, zoom.y + zoom.h / 2)
+    test.ok(image_overlay.is_open())
+    test.equal(buffer.lines[3], "| ![[photo.png]] | Keep me |\n")
+  end)
+
+  test.it("resizes table images without changing the other cells", function()
+    for _, source in ipairs({ "![[photo.png]]", "![Photo](photo.png)" }) do
+      local buffer = open_note("| Photo | Note |\n| --- | --- |\n| " .. source .. " | Keep me |\n\nnext")
+      buffer:set_selection(5, 1)
+      local layout = draw(3)
+      local width = math.floor(layout.image.w / 2)
+      local x, y = corner_point(layout)
+      view:on_mouse_moved(x, y, 0, 0)
+      view:on_mouse_pressed("left", x, y, 1)
+      view:on_mouse_moved(layout.image.x + width, layout.image.y + 10, 0, 0)
+      test.equal(draw(3).image.w, width, "the table image follows the pointer")
+      view:on_mouse_released("left", layout.image.x + width, layout.image.y + 10)
+      local expected = source == "![[photo.png]]" and "![[photo.png\\|" .. width .. "]]"
+        or "![Photo\\|" .. width .. "](photo.png)"
+      test.equal(buffer.lines[3], "| " .. expected .. " | Keep me |\n")
+      test.equal(draw(3).image.w, width, "the image stays while the table is parsed again")
+      wait_ready(buffer)
+      test.equal(draw(3).image.w, width)
+      x, y = corner_point(draw(3))
+      view:on_mouse_pressed("left", x, y, 2)
+      view:on_mouse_released("left", x, y)
+      test.equal(buffer.lines[3], "| " .. source .. " | Keep me |\n")
+    end
+  end)
+
+  test.it("targets the pointed image when two table cells show the same file", function()
+    local buffer = open_note("| Before | After |\n| --- | --- |\n| ![[photo.png]] | ![[photo.png]] |\n\nnext")
+    buffer:set_selection(5, 1)
+    draw(3)
+    local layouts = {}
+    for _, fragment in ipairs(view:get_line_render(3).fragments) do
+      if fragment.widget and fragment.widget.image_layout then
+        layouts[#layouts + 1] = fragment.widget.image_layout
+      end
+    end
+    test.equal(#layouts, 2)
+    test.ok(layouts[1].image.x + layouts[1].image.w < layouts[2].image.x,
+      "each image stays in its column")
+    local image = layouts[2].image
+    local x, y = image.x + 20, image.y + 20
+    view:on_mouse_moved(x, y, 0, 0)
+    local remove
+    for _, item in ipairs(view:context_menu(x, y)) do
+      if type(item) == "table" and item.command == "markdown:remove_image" then remove = item end
+    end
+    test.ok(perform(test.not_nil(remove)))
+    test.equal(buffer.lines[3], "| ![[photo.png]] |  |\n")
   end)
 end)

@@ -581,46 +581,11 @@ test.describe("Markdown Interactive Table Editing", function()
       buffer:set_selection(7, 1)
       refresh(view)
 
-      test.equal(table_cells(view, 3)[1].image_cell, true)
-      test.equal(table_cells(view, 4)[1].image_cell, true)
-      test.equal(table_cells(view, 5)[1].image_cell, nil)
       local embedded = test.not_nil(view:get_line_render(3)).table_row_height
       local resized = test.not_nil(view:get_line_render(4)).table_row_height
       local text = test.not_nil(view:get_line_render(5)).table_row_height
       test.ok(embedded >= 90, "the row holds the image")
       test.ok(resized < embedded and resized > text, "the escaped width resizes the image")
-    end)
-  end)
-
-  test.it("selects a whole image cell instead of revealing its source", function()
-    with_table_images(function(filename)
-      local view, buffer = make_view(IMAGE_TABLE, filename)
-      local old_active = core.active_view
-      core.active_view = view
-      local ok, err = pcall(function()
-        buffer:set_selection(5, 4)
-        refresh(view)
-        test.equal(command.perform("markdown:table_cell_up"), true)
-        test.equal(selected_text(buffer), "![[pic.png\\|60]]")
-        test.equal(command.perform("markdown:table_cell_up"), true)
-        test.equal(selected_text(buffer), "![Logo](data:image/png;base64,dGFibGUtaW1hZ2Vz)")
-        test.equal(command.perform("markdown:table_next_char"), true)
-        test.equal(selected_text(buffer), "![Logo](data:image/png;base64,dGFibGUtaW1hZ2Vz)")
-        refresh(view)
-        test.equal(table_cells(view, 3)[1].image_cell, true)
-
-        test.equal(command.perform("markdown:table_cell_down"), true)
-        test.equal(command.perform("markdown:table_cell_down"), true)
-        test.equal((buffer:get_selection()), 5)
-
-        refresh(view)
-        local x, y = cell_center(view, 4, 1)
-        test.equal(view:on_mouse_pressed("left", x, y, 1), true)
-        view:on_mouse_released("left", x, y)
-        test.equal(selected_text(buffer), "![[pic.png\\|60]]")
-      end)
-      core.active_view = old_active
-      if not ok then error(err, 0) end
     end)
   end)
 

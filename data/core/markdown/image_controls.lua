@@ -59,7 +59,7 @@ end
 local function set_width(view, spec, width)
   local buffer = view.buffer
   local source = (buffer.lines[spec.line] or ""):sub(spec.col1, spec.col2 - 1)
-  local text = links.with_image_width(source, width)
+  local text = links.with_image_width(source, width, spec.table_cell)
   if not text then
     core.log_quiet("Markdown image at %s:%d is no longer an image link; its size stays",
       buffer:get_name(), spec.line)

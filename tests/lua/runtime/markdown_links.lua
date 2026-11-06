@@ -158,6 +158,8 @@ test.describe("Markdown image width in source", function()
       { "![[photo.png\\|120]]", 300, "![[photo.png\\|300]]" },
       { "![[photo.png\\|Alt]]", 300, "![[photo.png\\|Alt\\|300]]" },
       { "![[photo.png\\|Alt\\|120]]", nil, "![[photo.png\\|Alt]]" },
+      { "![Alt\\|120](photo.png)", 300, "![Alt\\|300](photo.png)" },
+      { "![A\\|B|120](photo.png)", 300, "![A\\|B|300](photo.png)" },
     }
     for _, case in ipairs(cases) do
       test.equal(links.with_image_width(case[1], case[2]), case[3], case[1])

@@ -42,9 +42,8 @@ local function table_cell_text(text, cell)
   return (table_cell_content(text, cell))
 end
 
--- A cell that holds only an image draws it, as a prose line that holds only
--- an image does. Live Preview supplies the image; the cell never reveals its
--- source, and a caret that lands in it selects the whole cell.
+-- Live Preview supplies the same image widget as prose. The cell lays out
+-- its link above the widget and limits the image to its column.
 local function image_cell_presentation(view, line_text, line, source_col1, source_col2, header)
   local provider = table_presentation.cell_image
   if not provider or source_col1 >= source_col2 then return nil end
@@ -57,7 +56,7 @@ local function image_cell_presentation(view, line_text, line, source_col1, sourc
   local natural = image(table_presentation.available_width(view))
   if not natural then return nil end
   return {
-    text = "",
+    text = natural.image_data and "Embedded image" or line_text:sub(source_col1, source_col2 - 1),
     source_col1 = source_col1,
     source_col2 = source_col2,
     font = header and live_fonts.inline_style(view, "strong") or live_fonts.body(view),
@@ -288,6 +287,17 @@ local function normalize_runs(line_text, pieces)
     end
     if piece.hidden or not piece.text then
       add({ col1 = col1, col2 = col2, hidden = true })
+    elseif piece.text_lines and #piece.text_lines == 1 and piece.text_lines[1].runs then
+      local x = 0
+      for _, part in ipairs(piece.text_lines[1].runs) do
+        local run = styled({ col1 = col1, col2 = col2, text = part.text })
+        run.font = part.font or run.font
+        run.width = part.width or run.font:get_width(part.text)
+        run.x_offset = (part.x or x) - x
+        run.underline, run.strikethrough = part.underline, part.strikethrough
+        add(run)
+        x = x + run.width
+      end
     elseif piece.text == line_text:sub(col1, col2 - 1) then
       add(styled({ col1 = col1, col2 = col2, text = piece.text, exact = true }))
     elseif piece.text_source_col1 and piece.text_source_col2
@@ -335,7 +345,7 @@ end
 local function runs_natural_width(runs)
   local width = 0
   for _, run in ipairs(runs) do
-    if not run.hidden and run.text ~= "" then width = width + run.font:get_width(run.text) end
+    if not run.hidden and run.text ~= "" then width = width + (run.width or run.font:get_width(run.text)) end
   end
   return width
 end
@@ -369,7 +379,7 @@ end
 
 local function token_width(token)
   if token.hidden or token.text == "" then return 0 end
-  return token.run.font:get_width(token.text)
+  return token.run.width or token.run.font:get_width(token.text)
 end
 
 ---Greedily wrap styled runs at word boundaries within `width`. Each line
@@ -458,12 +468,14 @@ local function wrap_runs(runs, width, empty_col)
           font = run.font, color = run.color, background = run.background,
           strikethrough = run.strikethrough, underline = run.underline,
           target = run.target,
+          width = run.width, x_offset = run.x_offset,
         }
       end
     end
     for _, piece in ipairs(pieces) do
-      piece.x = x
-      piece.width = (piece.hidden or piece.text == "") and 0 or piece.font:get_width(piece.text)
+      piece.x = x + (piece.x_offset or 0)
+      piece.width = (piece.hidden or piece.text == "") and 0 or piece.width or piece.font:get_width(piece.text)
+      piece.x_offset = nil
       x = x + piece.width
       piece.source = nil
       texts[#texts + 1] = piece.text
@@ -564,28 +576,25 @@ local function presentation_has_link(presentation)
 end
 
 local function presentation_lines(presentation, width)
-  if presentation.runs then return rich_cell_lines(presentation, width) end
+  local lines = presentation.runs and rich_cell_lines(presentation, width)
+    or table_wrap_cell_text(presentation.font, presentation.text, width, presentation.literal_breaks)
   if presentation.image then
     local fragment = presentation.image(width)
     local widget = fragment and fragment.widget
     if widget then
-      return { {
+      lines[#lines + 1] = {
         text = "", col1 = 1, col2 = presentation.source_col2 - presentation.source_col1 + 1,
-        image = widget, width = widget.width, height = widget.height,
-      } }
+        image = fragment, width = widget.width, height = widget.height,
+      }
     end
   end
-  return table_wrap_cell_text(
-    presentation.font, presentation.text, width, presentation.literal_breaks
-  )
+  return lines
 end
 
 local function presentation_natural_width(presentation)
-  if presentation.runs then return rich_cell_natural_width(presentation) end
-  if presentation.image then return presentation.natural_width end
-  return table_cell_natural_width(
-    presentation.font, presentation.text, presentation.literal_breaks
-  )
+  local width = presentation.runs and rich_cell_natural_width(presentation)
+    or table_cell_natural_width(presentation.font, presentation.text, presentation.literal_breaks)
+  return math.max(width, presentation.natural_width or 0)
 end
 
 local function inline_base(view, header)
@@ -801,14 +810,15 @@ function table_presentation.layout(view, table_node, instance)
             view, text, source_col1, source_col2, line == line1
           )
         end
-        if not (presentation.source_elided or presentation.image) then
-          presentation = rich_presentation(runs, text, source_col1, source_col2, base)
-            or presentation
+        if not presentation.source_elided then
+          local rich = rich_presentation(runs, text, source_col1, source_col2, base)
+          if rich then
+            rich.image, rich.natural_width = presentation.image, presentation.natural_width
+            presentation = rich
+          end
         end
         presentations[line][column] = presentation
-        if presentation.image then
-          -- An image cell keeps its image while it holds the caret.
-        elseif presentation.source_elided or presentation_has_link(presentation) then
+        if presentation.image or presentation.source_elided or presentation_has_link(presentation) then
           -- Revealing elided source or a link destination can add lines.
           selection_stable_layout = false
         else
@@ -1567,13 +1577,14 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
     local wrapped = layout.wrapped_cells[line][column]
     local active = cell_active(cell)
     active_columns[column] = active
-    if active and not presentation.image then
+    if active then
       -- An active cell reveals the Markdown source of the span holding the
       -- caret, like prose. Elided cells reveal their complete source.
       local text, source_col1, source_col2 = table_cell_content(row.text, cell)
       if active_runs == nil and not presentation.source_elided then
         active_runs = row_inline_runs(view, row.text, line, selection_state, base) or false
       end
+      local image = presentation.image
       presentation = not presentation.source_elided and rich_presentation(
         active_runs or nil, text, source_col1, source_col2, base
       ) or {
@@ -1583,6 +1594,7 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
         font = base.base_font,
         color = base.color,
       }
+      presentation.image = image
       wrapped = presentation_lines(
         presentation, layout.widths[column] - layout.padding * 2
       )
@@ -1651,10 +1663,7 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
         source_col2 = wrapped.runs and wrapped.source_col2
           or presentation.source_col1 + (wrapped.col2 or 1) - 1,
         height = wrapped.height,
-        draw = wrapped.image and function(x, y)
-          local widget = wrapped.image
-          widget.draw(view, { widget = widget, draw_y_offset = widget.padding }, x, y, widget.height)
-        end or nil,
+        image = wrapped.image,
       }
     end
     local separator = row.separators[column]
@@ -1686,12 +1695,6 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
       background_border_bottom = not header and style.markdown_live_table_separator or nil,
       semantic_id = table_node.id .. ":cell:" .. line .. ":" .. column,
       table_cell = true, table_header = header, table_column = column,
-      image_cell = presentation.image and true or nil,
-      on_mouse_pressed = presentation.image and function(_, owner, _, button)
-        if button ~= "left" then return false end
-        owner.buffer:set_selection(line, presentation.source_col2, line, presentation.source_col1)
-        return true
-      end or nil,
     }
   end
   local separator = row.separators[#row.cells + 1]
@@ -1708,6 +1711,7 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
     }
   end
   local position_rows = {}
+  local images = {}
   local fragment_x = 0
   local cell_x = {}
   -- A Table Cell Selection's frame runs along the grid lines around its cell.
@@ -1734,53 +1738,63 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
       local text_lines = fragment.text_lines or {}
       local line_y = band + (fragment.text_y_padding or 0)
       for visual_index, text_line in ipairs(text_lines) do
-        local last = visual_index == #text_lines
+        local last = visual_index == #text_lines or text_lines[visual_index + 1].image ~= nil
         local line_height = text_line.height or fragment.text_line_height or layout.text_line_height
-        position_rows[#position_rows + 1] = {
-          source_col1 = text_line.source_col1,
-          source_col2 = text_line.source_col2,
-          end_inclusive = true,
-          -- The cell's last row also holds a caret in the whitespace after its
-          -- text, such as a space just typed, and places it after that space.
-          trailing_col2 = last and fragment.source_col2 or nil,
-          trailing_font = last and fragment.font or nil,
-          trailing_x2 = last and fragment_x + (fragment.width or 0) or nil,
-          x_offset = fragment_x + (text_line.x_offset or 0),
-          hit_x1 = fragment_x,
-          hit_x2 = fragment_x + (fragment.width or 0),
-          y_offset = line_y,
-          height = line_height,
-          runs = text_line.runs,
-          navigation_group = fragment.table_column,
-          navigation_index = visual_index,
-          table_cell = fragment.table_column,
-          cell_source_col1 = fragment.text_source_col1,
-          cell_source_col2 = fragment.text_source_col2,
-          selection_full_cell = visual_index == 1,
-          selection_empty_cell = visual_index == 1
-            and fragment.text_source_col1 == fragment.text_source_col2,
-          selection_x1 = fragment_x,
-          selection_x2 = fragment_x + (fragment.width or 0),
-          selection_y = band,
-          selection_height = row_height,
-          selection_fill = style.markdown_live_table_cell_selection,
-          selection_outline = style.markdown_live_table_cell_selection_outline,
-          selection_frame_x1 = fragment_x - layout.separator_width + grid_line_offset,
-          selection_frame_x2 = fragment_x + (fragment.width or 0)
-            + grid_line_offset + grid_line_width,
-          -- A body row's top grid line is the bottom line of the row above.
-          selection_frame_y1 = header and band or -grid_line_width,
-          selection_frame_y2 = band + row_height,
-          table_row_above = row_above,
-          table_row_below = row_below,
-          -- The active cell's tint marks the caret row inside a table.
-          suppress_line_highlight = true,
-        }
+        if text_line.image then
+          local image = text_line.image
+          image.width = 0
+          image.layout_x = fragment_x + (text_line.x_offset or 0)
+          image.draw_y_offset = line_y - band + image.widget.padding
+          image.image_block = true
+          images[#images + 1] = image
+        else
+          position_rows[#position_rows + 1] = {
+            source_col1 = text_line.source_col1,
+            source_col2 = text_line.source_col2,
+            end_inclusive = true,
+            -- The cell's last row also holds a caret in the whitespace after its
+            -- text, such as a space just typed, and places it after that space.
+            trailing_col2 = last and fragment.source_col2 or nil,
+            trailing_font = last and fragment.font or nil,
+            trailing_x2 = last and fragment_x + (fragment.width or 0) or nil,
+            x_offset = fragment_x + (text_line.x_offset or 0),
+            hit_x1 = fragment_x,
+            hit_x2 = fragment_x + (fragment.width or 0),
+            y_offset = line_y,
+            height = line_height,
+            runs = text_line.runs,
+            navigation_group = fragment.table_column,
+            navigation_index = visual_index,
+            table_cell = fragment.table_column,
+            cell_source_col1 = fragment.text_source_col1,
+            cell_source_col2 = fragment.text_source_col2,
+            selection_full_cell = visual_index == 1,
+            selection_empty_cell = visual_index == 1
+              and fragment.text_source_col1 == fragment.text_source_col2,
+            selection_x1 = fragment_x,
+            selection_x2 = fragment_x + (fragment.width or 0),
+            selection_y = band,
+            selection_height = row_height,
+            selection_fill = style.markdown_live_table_cell_selection,
+            selection_outline = style.markdown_live_table_cell_selection_outline,
+            selection_frame_x1 = fragment_x - layout.separator_width + grid_line_offset,
+            selection_frame_x2 = fragment_x + (fragment.width or 0)
+              + grid_line_offset + grid_line_width,
+            -- A body row's top grid line is the bottom line of the row above.
+            selection_frame_y1 = header and band or -grid_line_width,
+            selection_frame_y2 = band + row_height,
+            table_row_above = row_above,
+            table_row_below = row_below,
+            -- The active cell's tint marks the caret row inside a table.
+            suppress_line_highlight = true,
+          }
+        end
         line_y = line_y + line_height
       end
     end
     fragment_x = fragment_x + (fragment.width or 0)
   end
+  for _, image in ipairs(images) do fragments[#fragments + 1] = image end
 
   local first_presentation = row_presentations[1]
   local last = line == layout.line2

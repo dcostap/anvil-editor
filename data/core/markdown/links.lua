@@ -318,12 +318,14 @@ local function image_parts(source)
   end
   local link, finish = links.parse_markdown_link_at(source, 1)
   if not (link and link.kind == "image" and finish == #source + 1) then return nil end
+  local label = source:sub(link.link_text_range.col1, link.link_text_range.col2 - 1)
+  local bar = label:match(".*()|")
   return {
     target_col1 = link.link_destination_range.col1,
     target_col2 = link.link_destination_range.col2,
     label_col1 = link.link_text_range.col1,
     label_col2 = link.link_text_range.col2,
-    bar = "|",
+    bar = bar and label:sub(bar - 1, bar - 1) == "\\" and "\\|" or "|",
   }
 end
 
@@ -344,10 +346,12 @@ end
 ---complete image link, such as a reference image.
 ---@param source string
 ---@param width integer?
+---@param table_cell boolean?
 ---@return string?
-function links.with_image_width(source, width)
+function links.with_image_width(source, width, table_cell)
   local parts = image_parts(source)
   if not parts then return nil end
+  if table_cell then parts.bar = "\\|" end
   local label = label_with_width(
     source:sub(parts.label_col1, parts.label_col2 - 1), width, parts.bar
   )

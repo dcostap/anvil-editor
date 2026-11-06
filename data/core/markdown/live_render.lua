@@ -1161,6 +1161,7 @@ local function image_fragment(view, span, opts)
       col2 = span.col2,
       reference_id = reference_id,
       max_width = max_width,
+      table_cell = opts.table_cell,
       image = entry.image,
       open = function(owner, hit)
         owner.buffer:set_selection(hit.line, 1)
@@ -1171,8 +1172,10 @@ local function image_fragment(view, span, opts)
         })
       end,
       invalidate = function(owner)
-        owner:invalidate_line_render(PROVIDER_ID, span.line, span.line)
-        owner:invalidate_visual_metrics(PROVIDER_ID, span.line, span.line)
+        local line1, line2 = span.line, span.line
+        if opts.table_cell then line1, line2 = drop_table_layouts_at(owner, span.line) end
+        owner:invalidate_line_render(PROVIDER_ID, line1, line2)
+        owner:invalidate_visual_metrics(PROVIDER_ID, line1, line2)
         core.redraw = true
       end,
     })
@@ -1310,15 +1313,15 @@ end
 -- Parsing the links of a long line, such as an embedded image, takes
 -- milliseconds, and a width change rebuilds that line's layout. The spans
 -- depend only on the text and its semantic nodes, so reuse them.
-local long_line_link_spans, long_line_link_span_count = {}, 0
+local link_span_cache = { entries = {}, count = 0, pending_nodes = {} }
 local build_semantic_link_spans
 
-local function semantic_link_spans(view, line_text, line)
-  local nodes = semantic_line(view, line)
+local function semantic_link_spans(view, line_text, line, allow_pending)
+  local nodes = semantic_line(view, line) or allow_pending and link_span_cache.pending_nodes
   if #line_text < LONG_SOURCE_LINE then
     return build_semantic_link_spans(view, line_text, line, nodes)
   end
-  local cached = long_line_link_spans[line_text]
+  local cached = link_span_cache.entries[line_text]
   if cached and cached.view == view and cached.line == line and cached.nodes == nodes then
     return cached.spans
   end
@@ -1327,9 +1330,9 @@ local function semantic_link_spans(view, line_text, line)
   for _, node in ipairs(nodes or {}) do
     if node.type == "link_reference" then return spans end
   end
-  if long_line_link_span_count >= 8 then long_line_link_spans, long_line_link_span_count = {}, 0 end
-  long_line_link_spans[line_text] = { view = view, line = line, nodes = nodes, spans = spans }
-  long_line_link_span_count = long_line_link_span_count + 1
+  if link_span_cache.count >= 8 then link_span_cache.entries, link_span_cache.count = {}, 0 end
+  link_span_cache.entries[line_text] = { view = view, line = line, nodes = nodes, spans = spans }
+  link_span_cache.count = link_span_cache.count + 1
   return spans
 end
 
@@ -1922,17 +1925,21 @@ table_presentation.inline_pieces = function(view, line_text, line, reveal, base)
   plain(col, #line_text + 1)
   for _, span in ipairs(semantic_link_spans(view, line_text, line)) do
     local inserted
+    local link = span.link
+    local image = link and (link.kind == "image" or link.kind == "embed") and is_image_target(link.path)
     -- Table layout sizes for "all" so revealed markers never resize a column.
     -- A revealed link destination is usually long, so it wraps inside the cell
     -- while it is edited instead of widening the column permanently.
     if reveal ~= "all"
+      and not (image and images.is_data_image(link.path))
       and reveal_unit_matches(reveal_units, span.semantic_id, span.col1, span.col2)
     then
       inserted = revealed_link_fragments(view, line_text, line, span, opts)
+    elseif image then
+      inserted = { live._image_attachment_link(view, line, span, opts) }
     else
       inserted = live._formatted_link_label_fragments(view, line_text, line, span, opts, reveal_units)
       if not inserted then
-        local link = span.link
         local kind, icon = attachment_kind(link.path or link.raw_target)
         local label = textual_link_label(link)
         local fragment = kind and {
@@ -1953,12 +1960,14 @@ end
 ---Return the drawn image of a table cell that holds only an image link, at
 ---most `width` wide, or nil.
 table_presentation.cell_image = function(view, line_text, line, col1, col2, width)
-  for _, span in ipairs(semantic_link_spans(view, line_text, line)) do
+  -- A resize edits only the link's size. Read its current source while the
+  -- semantic parse is pending, so the image does not disappear on release.
+  for _, span in ipairs(semantic_link_spans(view, line_text, line, true)) do
     local link = span.link
     if span.col1 == col1 and span.col2 == col2 and link
       and (link.kind == "image" or link.kind == "embed") and is_image_target(link.path)
     then
-      local fragment = image_fragment(view, span, { block = true, available_width = width })
+      local fragment = image_fragment(view, span, { block = true, available_width = width, table_cell = true })
       return fragment and fragment.widget and fragment or nil
     end
   end
