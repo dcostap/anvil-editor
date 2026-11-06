@@ -88,10 +88,13 @@ This audit is outside the default `runtime/` and `ui/` test folders. It checks 1
 
 ## Edit history
 
-Two files play random edits, then check that Undo goes back through each earlier text in order and that Redo goes forward again:
+Three files play random edits, then check that Undo restores earlier text and Redo restores later text:
 
 - `runtime/buffer_edit_history.lua` applies batch edits, reloads and saved-state checkpoints to a Buffer. A second generator checks timed edit groups with the normal undo merge timeout.
 - `ui/edit_history_commands.lua` runs editing commands, typing and paste in a Text View and Markdown Live Preview. It checks table source editing with 17 carets, table cells, lists, tasks, quotes, Selection Surrounding and the per-caret clipboard.
+- `ui/edit_command_results.lua` also checks command results against independent string edits, not just recorded output. It covers typing, character deletion, plain paste and selected-text case changes. A second View keeps a reversed selection outside the edits, including Undo and Redo from either View. A separate check copies, cuts and pastes Unicode selections with up to 24 carets.
+
+The result generator keeps edits away from the second View's selection boundaries. Boundary affinity and whole-Buffer case replacement need separate checks. Its text has no indentation or language syntax; the command-history generator covers those interactions.
 
 A scenario is plain data: a start text and a list of steps. A step sets carets, then runs a command or types text. A step can also be an undo or a redo. A seed makes the same scenarios on each run. `tests/fixtures/edit_history.lua` holds the history model and the shrinker.
 
