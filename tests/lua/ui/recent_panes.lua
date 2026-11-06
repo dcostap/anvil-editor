@@ -77,54 +77,6 @@ test.describe("Recent Panes in a Project", function()
     now = now + (seconds or 5)
   end
 
-  -- Focuses another Project's Pane: this Project loses keyboard focus.
-  local function leave(seconds)
-    focused = false
-    pane_report.publish()
-    now = now + (seconds or 5)
-  end
-
-  test.it("does not count a Pane that the user only passes", function()
-    local one = panes.create { factory = factory("one") }
-    local two = panes.create { factory = factory("two") }
-    local three = panes.create { factory = factory("three") }
-    focus(one)
-    focus(two, 0.2)
-    focus(three)
-    test.ok(recent_panes.focus(1))
-    test.equal(panes.active(), one, "The first Recent Pane is a Pane that the user only passed")
-  end)
-
-  test.it("counts a short visit when the user types in the Pane", function()
-    local one = panes.create { factory = factory("one") }
-    local two = panes.create { factory = factory("two") }
-    local three = panes.create { factory = factory("three") }
-    focus(one)
-    focus(two, 0.1)
-    core.on_event("textinput", "y")
-    now = now + 0.1
-    focus(three)
-    test.ok(recent_panes.focus(1))
-    test.equal(panes.active(), two)
-  end)
-
-  test.it("does not count the old active Pane when a Pane request follows the Project's focus", function()
-    local one = panes.create { factory = factory("one") }
-    local two = panes.create { factory = factory("two") }
-    focus(one)
-    leave()
-    core.project_sidebar = {{path = "C:/Other", panes = {{id = "far", focused = now}}}}
-    now = now + 5
-    -- The Project takes keyboard focus and draws a frame before the Pane request runs.
-    focused = true
-    pane_report.publish()
-    now = now + 0.3
-    focus(two)
-    test.ok(recent_panes.focus(1))
-    test.equal(#requests, 1, "The first Recent Pane is not in the other Project")
-    test.same({requests[1][1], requests[1][2]}, {"select", "C:/Other"})
-  end)
-
   test.it("stamps a Pane when it takes focus while the Project has keyboard focus", function()
     local one = panes.create { factory = factory("one") }
     local two = panes.create { factory = factory("two") }
@@ -144,7 +96,7 @@ test.describe("Recent Panes in a Project", function()
     local two = panes.create { factory = factory("two") }
     local three = panes.create { factory = factory("three") }
     focus(one)
-    focus(two)
+    focus(two, 0.2)
     focus(three)
     recent_panes.focus(1)
     test.equal(panes.active(), two)

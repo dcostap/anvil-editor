@@ -31,18 +31,6 @@ function pane_history.visited(id, time)
   if #log > pane_history.LIMIT then table.remove(log, 1) end
 end
 
--- The focus of `id` at `time` was not a visit: the user only passed the Pane. A history move stays.
-function pane_history.passed(id, time)
-  local at = ms(time)
-  for index = #log, 1, -1 do
-    local entry = log[index]
-    if entry.id == id and entry.at == at then
-      if not entry.to then table.remove(log, index) end
-      return
-    end
-  end
-end
-
 -- The next focus of `id` is a history move to the entry named `to`.
 function pane_history.arrive(id, to)
   arriving = {id = id, to = to, deadline = system.get_time() + ARRIVAL}

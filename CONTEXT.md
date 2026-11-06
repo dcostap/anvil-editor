@@ -402,11 +402,11 @@ A work area that shows one Current View and owns one Navigation History. Each Pa
 _Avoid_: Left Pane, Right Pane, panel, split
 
 **Pane History**:
-The order of the Panes that the user visited, in any Project or Anvil Window. Back and Forward move through it and add no visit. A Pane that had focus only for a moment, without typing, does not count.
+The order of the Panes that the user visited, in any Project or Anvil Window. Back and Forward move through it and add no visit.
 _Avoid_: global Navigation History, Pane navigation history
 
 **Recent Pane**:
-One of the Panes that had focus most recently before the current Pane, in any Project or Anvil Window. Recent Panes fill unused numbers after Pending Panes, newest first. A Pane gets only one number. The current Pane gets no Recent Pane number. A Pane that had focus only for a moment, without typing, does not count.
+One of the Panes that had focus most recently before the current Pane, in any Project or Anvil Window. Recent Panes fill unused numbers after Pending Panes, newest first. A Pane gets only one number. The current Pane gets no Recent Pane number.
 _Avoid_: Pane number, Tab number
 
 **Pending Pane**:

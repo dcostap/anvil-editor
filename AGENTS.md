@@ -85,7 +85,7 @@ The prepared Pi has no Terminal record or saved screen until a Pane takes it. It
 Run `ui/terminal_pi_prepared.lua`, `ui/terminal_prepared.lua` and `runtime/terminal_prepared.lua` after changes.
 
 Pane History is the order of the Panes that the user visited, across Projects and Windows. `pane:history_back` and `pane:history_forward` move through it; `pane:history_oldest` and `pane:history_newest` go to its ends.
-Recent Panes decide what a visit is, so a Pane that the user only passes does not count. A history move adds no visit. When the user leaves a Pane that a move showed, that Pane goes again at the end, so no visit is lost.
+Each observed Pane focus counts as a visit. A history move adds no visit. When the user leaves a Pane that a move showed, that Pane goes again at the end, so no visit is lost.
 Each Project keeps its last 40 visits (`core.pane_history`) and sends them as `history` in its Pane report. Each entry has the Pane ID and the time in milliseconds. A move entry also names the entry that it showed (`to`). A move to another Project sends that name in its `focus` Pane request.
 Moves skip closed, Snoozed and Dormant Panes. Visits are not saved across restarts. Run `ui/global_pane_history.lua`, `ui/recent_panes.lua` and `ui/pane_requests.lua` after changes.
 
@@ -256,8 +256,6 @@ The Sidebar passes its shared seen times. Projects read the persisted seen times
 Recent Panes fill unused numbers after Pending Panes, without duplicates. The current Pane gets no focus-history slot.
 `core.recent_panes` supplies the focus history. There is no numbering setting.
 Each Project stamps its active Pane when the Pane takes keyboard focus. The Pane report sends the stamps.
-A Pane that loses focus within 1 second, without typed text, gets its previous stamp again (`recent_panes.VISIT`).
-So a Pane cycle, or a Project's old Pane in the frame before a Pane request, adds no Recent Pane.
 A Project fetches the reports when it takes keyboard focus. Focus-history numbering ranks these stamps across Projects.
 The shell also notifies each Window's Selected Project when the Sidebar model changes.
 Selected Projects fetch the changed state, so Pending Pane commands work without a keyboard focus change.
