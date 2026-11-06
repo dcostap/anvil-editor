@@ -1247,6 +1247,8 @@ end
 
 function Index:track_buffer(buffer)
   if not (buffer and buffer.add_text_change_listener) then return false end
+  -- Read-only snapshots use disk entries, not editable Buffer overlays.
+  if buffer.read_only then return false end
   if not (buffer.abs_filename and common.path_belongs_to(common.normalize_path(buffer.abs_filename), self.root)) then return false end
   if self.buffer_listeners[buffer] then
     self:schedule_buffer_update(buffer)

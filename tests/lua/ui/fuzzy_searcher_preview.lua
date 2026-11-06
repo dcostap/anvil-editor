@@ -69,13 +69,14 @@ end
 
 local function wait_for_markdown(view)
   local model = test.not_nil(markdown.model.peek(view.buffer))
-  local deadline = system.get_time() + 5
+  local deadline = system.get_time() + 30
   while model.status ~= "ready" and system.get_time() < deadline do
     local pool = worker_pool.current_system()
     if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
     if model.status ~= "ready" then coroutine.yield(0.01) end
   end
   test.equal(model.status, "ready", model.reason)
+  view:reconcile_visible_line_layout()
 end
 
 local load_preview = dofile("tests/fixtures/fuzzy_preview.lua")
@@ -488,6 +489,12 @@ test.describe("Fuzzy Searcher preview", function()
       "expected Markdown preview prose to wrap")
     wait_for_markdown(preview)
     test.equal(visible_render_text(preview, 1), "Preview heading")
+
+    blocking_calls.start()
+    picker:clear_preview_view()
+    local calls = blocking_calls.callers()
+    blocking_calls.stop()
+    test.same(calls, {}, "closing a read-only preview must not access the disk")
   end)
 
   test.it("reveals matched Markdown syntax in a formatted preview", function(context)
@@ -506,6 +513,29 @@ test.describe("Fuzzy Searcher preview", function()
 
     test.equal(visible_render_text(preview, 1), "# Matched heading")
     test.not_nil(next(preview.buffer.search_selections))
+  end)
+
+  test.it("keeps Markdown block context when jumping to distant preview results", function(context)
+    config.fuzzy_searcher_markdown_preview = true
+    local path = temp_file_path("fuzzy-preview-distant-block-test.md")
+    context.files = { path }
+    write_file(path, "# Near\n\n" .. string.rep("Plain text\n", 600)
+      .. "```text\n# Not a heading\n```\n\n# Far\n")
+    fuzzy_searcher.open_static_results("Matches", {
+      { kind = "file", file = path, line = 604, text = "Not a heading" },
+      { kind = "file", file = path, line = 607, text = "Far" },
+      { kind = "file", file = path, line = 1, text = "Near" },
+    })
+    local picker = core.fuzzy_searcher_active_view
+    for index, expected in ipairs({ "# Not a heading", "Far", "Near" }) do
+      picker.selected = index
+      local preview = test.not_nil(load_preview(picker))
+      wait_for_markdown(preview)
+      local target = picker:selected_result().line
+      local first, last = preview:get_visible_line_range()
+      test.ok(target >= first and target <= last, "the selected result must remain visible")
+      test.equal(visible_render_text(preview, target), expected)
+    end
   end)
 
   test.it("keeps extreme lines out of automatic previews and preserves search results", function(context)

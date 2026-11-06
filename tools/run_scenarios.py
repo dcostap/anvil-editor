@@ -238,6 +238,26 @@ SCENARIOS: dict[str, Scenario] = {
         "markdown_resize", MARKDOWN_TABLES, actions=48, suites=("smoke",), window=(780, 900),
         settings={"note": MARKDOWN_TABLES.note, "image_line": MARKDOWN_TABLES.image_line},
         frame_budget_ms=16.7, frame_spike_ms=33.0),
+    "markdown-preview-small": Scenario(
+        "markdown_preview", FolderSpec("markdown-preview-small", files=1),
+        actions=16, suites=("preview",), settings={"sections": 8},
+        blocking_call_budget=0, writes=True),
+    "markdown-preview-large": Scenario(
+        "markdown_preview", FolderSpec("markdown-preview-large", files=1),
+        actions=16, suites=("preview",), settings={"sections": 180},
+        blocking_call_budget=0, writes=True),
+    "markdown-preview-prepared": Scenario(
+        "markdown_preview", FolderSpec("markdown-preview-prepared", files=1),
+        actions=16, suites=("preview",), settings={"sections": 30, "same_file": True},
+        blocking_call_budget=0, writes=True),
+    "markdown-preview-burst": Scenario(
+        "markdown_preview", FolderSpec("markdown-preview-burst", files=1),
+        actions=1, suites=("preview",), settings={"sections": 180, "burst": True},
+        action_budget_ms=500.0, blocking_call_budget=0, writes=True),
+    "markdown-preview-source": Scenario(
+        "markdown_preview", FolderSpec("markdown-preview-source", files=1),
+        actions=16, suites=("preview",), settings={"sections": 8, "source": True},
+        blocking_call_budget=0, writes=True),
     # Open the gallery from a short note until Live Preview shows it parsed and wrapped.
     "markdown-gallery-open": Scenario(
         "markdown_gallery", MARKDOWN_GALLERY, actions=1, suites=("markdown",),

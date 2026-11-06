@@ -1,4 +1,4 @@
--- Fonts for Markdown live presentation. Sized copies are cached per view.
+-- Fonts for Markdown live presentation. Read-only snapshots share sized copies.
 local config = require "core.config"
 local style = require "core.style"
 
@@ -15,7 +15,7 @@ function live_fonts.scaled(view, source, size)
     cache[source] = fonts
   end
   if not fonts[size] then
-    fonts[size] = source:copy(size)
+    fonts[size] = view.buffer.read_only and style.get_scaled_font(source, size) or source:copy(size)
     view.__markdown_live_font_measurements = view.__markdown_live_font_measurements or {}
     view.__markdown_live_font_measurements[fonts[size]] = {
       source = source, anchor = "scale", factor = size / SCALE,
@@ -100,7 +100,7 @@ function live_fonts.inline_style(
     or live_fonts.body(view):get_size()
   local key = tostring(font) .. ":" .. tostring(size) .. ":" .. tostring(span_type)
   if not cache[key] then
-    cache[key] = font:copy(size)
+    cache[key] = view.buffer.read_only and style.get_scaled_font(font, size) or font:copy(size)
     view.__markdown_live_font_measurements = view.__markdown_live_font_measurements or {}
     local base_measurement = view.__markdown_live_font_measurements[base_font]
     local anchor = base_measurement and base_measurement.anchor == "scale" and "scale"

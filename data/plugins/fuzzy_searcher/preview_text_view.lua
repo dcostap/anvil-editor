@@ -87,6 +87,8 @@ end
 local MarkdownPreviewTextView = Editor:extend()
 
 function MarkdownPreviewTextView:new(buffer)
+  -- Keep the full Markdown context, but measure only the text that shows.
+  self.wrap_visible_only = true
   initialize(self, buffer, true)
   self.__fuzzy_markdown_preview = true
   require("core.markdown.live_render").refresh_view(self)

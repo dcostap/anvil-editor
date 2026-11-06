@@ -29,6 +29,19 @@ local function find_node(nodes, node_type)
 end
 
 test.describe("Markdown semantic model", function()
+  test.it("keeps read-only snapshots asynchronous during pre-draw settling", function()
+    local buffer = make_buffer("# Preview\n")
+    buffer.read_only = true
+    local instance = markdown_model.get(buffer)
+    instance:add_listener("preview", function() end)
+    instance:settle(1000)
+    local after_settle = instance.status
+    test.ok(wait_status(instance, "ready", 30), instance.reason)
+    test.not_nil(find_node(instance:nodes_for_lines(1, 1), "heading"))
+    markdown_model.close(buffer, "test")
+    test.equal(after_settle, "pending", "the UI thread must leave a read-only parse to its worker")
+  end)
+
   test.it("completes fenced-code info metadata from a body-line lookup", function()
     local buffer = make_buffer("```javascript title=example\nconst value = 1\n```\n")
     local instance = markdown_model.get(buffer)

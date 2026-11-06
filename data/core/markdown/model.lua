@@ -453,6 +453,9 @@ function Model:settle(budget_ms)
   then
     return nil
   end
+  -- Read-only snapshots have no edit to settle before drawing. Their worker
+  -- already parses this revision; do not repeat it on the UI thread.
+  if self:buffer().read_only then return nil end
   -- Without a listener nothing draws this Buffer.
   if not next(self.listeners) then return nil end
   local first = not self.result

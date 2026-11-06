@@ -52,6 +52,18 @@ A scenario can also set `churn_interval`. A background thread then edits
 modified files in the fixture during the run, as a build or a coding agent
 does. File watchers and Git status refreshes stay busy during measurement.
 
+## Markdown picker previews
+
+`--suite preview` measures rendered preview replacement, returns, same-file navigation, a navigation burst, and a source-text control. Static results isolate preview work from search ranking. The scene still uses the real picker commands and asynchronous file loader.
+
+Each action checks the selected file and observes its target line drawing. A rendered result needs current Markdown semantics and hidden syntax markers in its committed presentation. A ready parser alone does not finish the action. Same-file navigation excludes the first load and initial visible layout, but includes preparation of newly visible text.
+
+The burst sends twelve frame-driven commands with a minimum 20 ms interval. It does not measure native key repeat. Its 500 ms action budget includes command dispatch and the final draw. Other actions have the normal 100 ms budget. File-call counters cover the tracked Lua APIs, not all native disk access. These fixtures contain no images or fenced code.
+
+```sh
+python tools/run_scenarios.py --suite preview --runs 1 --no-build
+```
+
 ## Heading Outline navigation
 
 `markdown-gallery-outline-sections` moves between adjacent and distant sections in the complete gallery. `markdown-gallery-outline-click` clicks visible headings in both directions. Both keep transitions enabled and require an outline longer than its visible area.

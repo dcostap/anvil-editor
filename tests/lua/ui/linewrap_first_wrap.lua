@@ -117,4 +117,30 @@ test.describe("First wrap of a long rendered document", function()
     test.equal(after_y, before_y)
     restored.buffer:on_close()
   end)
+
+  test.it("prepares offscreen text only when an on-demand View shows it", function(context)
+    local buffer = Buffer()
+    context.buffer = buffer
+    buffer:insert(1, 1, long_text())
+    local planned = {}
+    local view = prepare(TextView(buffer), planned)
+    view.wrap_visible_only = true
+    view:update_wrap_cache()
+    view:reconcile_visible_line_layout()
+    LineWrapping.complete_async_reconstruction(view)
+    test.ok(planned[1], "visible text must have a presentation")
+    test.is_nil(planned[1500], "an unseen line must not need a presentation")
+
+    local _, y = view:get_line_screen_position(2900)
+    view.scroll.y, view.scroll.to.y = y, y
+    view:reconcile_visible_line_layout()
+    local first, last = view:get_visible_line_range()
+    test.ok(first > 2000, "the scroll must reach the distant text")
+    for line = first, math.min(last, 3000) do
+      test.ok(planned[line], "newly visible text must have a presentation")
+      test.ok(view:get_visual_row_count_for_line(line) > 1, "newly visible text must wrap")
+    end
+    test.is_nil(planned[1500], "a jump must not prepare the skipped text")
+    view:on_close()
+  end)
 end)

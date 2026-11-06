@@ -3,6 +3,32 @@ local TextView = require "core.textview"
 local test = require "core.test"
 
 test.describe("TextView owned features", function()
+  test.it("does not render released features while closing a wrapped View", function()
+    local buffer = Buffer()
+    buffer:insert(1, 1, string.rep("wrapped words\n", 300))
+    local view = TextView(buffer)
+    view.size.x, view.size.y = 200, 300
+    local released, rendered_after_close = false, false
+    view:add_line_render_provider("remaining", {
+      render_line = function()
+        if released then rendered_after_close = true end
+      end,
+    })
+    view:add_line_render_provider("owned", { render_line = function() end })
+    view:add_owned_feature("owned", {
+      on_release = function(_, owner)
+        released = true
+        owner:remove_line_render_provider("owned")
+      end,
+    })
+    view:set_wrapping_enabled(true)
+    require("core.linewrapping").complete_async_reconstruction(view)
+    view:on_close()
+    require("core.linewrapping").complete_async_reconstruction(view)
+    buffer:on_close()
+    test.equal(rendered_after_close, false, "closed Views must not request more presentation")
+  end)
+
   test.it("round-trips optional owned feature workspace state", function()
     local buffer = Buffer("owned-state.txt", "owned-state.txt", true)
     local first = TextView(buffer)

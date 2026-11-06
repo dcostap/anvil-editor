@@ -71,6 +71,8 @@ function LineWrapping.register_textview(textview)
 end
 
 function LineWrapping.unregister_textview(textview)
+  -- A closed View has no consumer for unfinished layout.
+  if textview then textview.__async_wrap_reconstruction = nil end
   local buffer = textview and textview.buffer
   local views = buffer and views_by_buffer[buffer]
   if not views then return end
@@ -1050,7 +1052,42 @@ local function same_wrap_settings(a, b)
     and a.indent_size == b.indent_size
 end
 
+---Start with one provisional row per line, without a render plan. The Text
+---View measures each visible line before drawing it.
+local function set_provisional_rows(textview, settings)
+  local buffer = textview.buffer
+  local wrapped_lines, wrapped_line_to_idx, wrapped_line_offsets = {}, {}, {}
+  local presentations = {}
+  for line = 1, #buffer.lines do
+    wrapped_lines[line * 2 - 1] = line
+    wrapped_lines[line * 2] = 1
+    wrapped_line_to_idx[line] = line
+    wrapped_line_offsets[line] = 0
+    presentations[line] = { source_line = buffer.lines[line], render_line = false, provisional = true }
+  end
+  textview.__async_wrap_reconstruction = nil
+  textview.wrapped_lines = wrapped_lines
+  textview.wrapped_line_to_idx = wrapped_line_to_idx
+  textview.wrapped_line_offsets = wrapped_line_offsets
+  textview.wrapped_presentations = presentations
+  textview.wrapped_settings = settings
+  textview.wrapped_buffer_line_count = #buffer.lines
+  textview.wrapped_text_revision = buffer.text_revision or 0
+  textview.__wrap_layout_generation = (textview.__wrap_layout_generation or 0) + 1
+  textview:clear_composed_visual_row_cache()
+end
+
 function LineWrapping.reconstruct_breaks(textview, default_font, width)
+  if textview.textview_closed then return end
+  if textview.wrap_visible_only and width ~= math.huge then
+    -- Keep unknown lines as provisional rows. TextView measures each visible
+    -- line before drawing it, including after a jump or a scroll.
+    local anchor = textview:capture_viewport_anchor()
+    set_provisional_rows(textview, wrap_settings_signature(textview, default_font, width))
+    textview:invalidate_visual_metrics("on-demand-wrap")
+    textview:restore_viewport_anchor(anchor)
+    return
+  end
   textview.__async_wrap_reconstruction = nil
   textview.__wrap_layout_generation = (textview.__wrap_layout_generation or 0) + 1
   textview:clear_composed_visual_row_cache()
@@ -1112,7 +1149,13 @@ end
 
 ---Rebuild in bounded slices. Publish rendered plans and wrapped rows together.
 function LineWrapping.reconstruct_breaks_async(textview, default_font, width, opts)
+  if textview.textview_closed then return false end
   opts = opts or {}
+  if textview.wrap_visible_only then
+    LineWrapping.reconstruct_breaks(textview, default_font, width)
+    if opts.on_complete then opts.on_complete(true) end
+    return true
+  end
   if width == math.huge then
     LineWrapping.clear_wrap_cache(textview)
     if opts.on_complete then opts.on_complete(true) end
@@ -1640,6 +1683,7 @@ function LineWrapping.update_same_line_suffix_breaks(textview, range, transactio
 end
 
 function LineWrapping.update_breaks(textview, old_line1, old_line2, net_lines, opts)
+  if textview.textview_closed then return end
   opts = opts or {}
   if perf_recording() then
     local caller = debug.getinfo(2, "Sl") or {}
@@ -1808,32 +1852,6 @@ function LineWrapping.compute_wrap_width(textview)
     or (textview.size.x - textview:get_gutter_width() - scrollbar_width)
 end
 
----Show each line as one provisional row until the wrap of the document
----commits. A provisional line has no render plan, so row metrics do not
----build a plan for each line. The Text View wraps a provisional line before
----it draws it.
-local function set_provisional_rows(textview, settings)
-  local buffer = textview.buffer
-  local wrapped_lines, wrapped_line_to_idx, wrapped_line_offsets = {}, {}, {}
-  local presentations = {}
-  for line = 1, #buffer.lines do
-    wrapped_lines[line * 2 - 1] = line
-    wrapped_lines[line * 2] = 1
-    wrapped_line_to_idx[line] = line
-    wrapped_line_offsets[line] = 0
-    presentations[line] = { source_line = buffer.lines[line], render_line = false, provisional = true }
-  end
-  textview.wrapped_lines = wrapped_lines
-  textview.wrapped_line_to_idx = wrapped_line_to_idx
-  textview.wrapped_line_offsets = wrapped_line_offsets
-  textview.wrapped_presentations = presentations
-  textview.wrapped_settings = settings
-  textview.wrapped_buffer_line_count = #buffer.lines
-  textview.wrapped_text_revision = buffer.text_revision or 0
-  textview.__wrap_layout_generation = (textview.__wrap_layout_generation or 0) + 1
-  textview:clear_composed_visual_row_cache()
-end
-
 function LineWrapping.update_textview_breaks(textview, width)
   -- A reload retains one committed presentation, including its wrap map.
   -- Do not combine frozen row heights with breaks from the new source.
@@ -1862,7 +1880,9 @@ function LineWrapping.update_textview_breaks(textview, width)
       perf_frame_add("linewrapping_update_textview_breaks_width_changed", 1)
     end
     textview.scroll.to.x = 0
-    if pending_current and not stale_line_count and not stale_text then
+    if textview.wrap_visible_only then
+      LineWrapping.reconstruct_breaks(textview, settings.font, width)
+    elseif pending_current and not stale_line_count and not stale_text then
       -- A pending presentation has not replaced the committed rows yet.
       -- A resize must not turn that sliced work into a full UI-thread pass.
       LineWrapping.reconstruct_breaks_async(textview, settings.font, width, {
