@@ -842,6 +842,13 @@ This is a personal fork with first-party ownership of the whole codebase, includ
 
 AGENTS.md and docs describe what exists now. When you remove a feature, remove its text. Do not write that it is gone. Put that history in the commit message.
 
+## Popups
+
+A popup is a card that floats over its host: the Root Panel, or a Sidebar's surface. `core.popup` places popups in their host and hit-tests them. The Context Menu, the autocomplete description and the treelist tooltip use it.
+In a hosted Project, the Root Panel starts at `content_x`. The shell shows the Sidebar over each Project pixel left of it, so a popup must not leave the Root Panel. Do not clamp popups to the window size.
+Autocomplete follows the Context Menu's pointer rules: hover selects a row, and a release on a row chooses it after a press on the popup. The popup also closes when the Project loses the keyboard. Unlike the menu, it does not hold input: a press outside closes it and also reaches the View under it, and the wheel scrolls a long list. A press on the popup does not move the caret.
+Run `ui/autocomplete_pointer.lua`, `ui/autocomplete_layout.lua`, `ui/context_menu.lua` and the `popup-sidebar` shell probe after changes.
+
 ## Dialogs
 
 A Dialog is a modal card over the app, for management tasks that need more than a prompt. `core.ui.dialog` owns it. Only one Dialog is open at a time.

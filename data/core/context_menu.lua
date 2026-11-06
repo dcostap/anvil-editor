@@ -5,6 +5,7 @@ local config = require "core.config"
 local keymap = require "core.keymap"
 local style = require "core.style"
 local card = require "core.card"
+local popup = require "core.popup"
 local RowHighlight = require "core.row_highlight"
 local LineInput = require "core.line_input"
 
@@ -164,11 +165,6 @@ local function filtered_rows(rows, query)
   return result
 end
 
-local function bounds()
-  local host = state.host
-  return host.position.x, host.position.y, host.size.x, host.size.y
-end
-
 -- Lays out one level of rows with its top left corner near (x, y).
 -- `flip_x` is the x to use when the level does not fit to the right of x.
 local function layout_level(rows, x, y, flip_x, min_w)
@@ -189,12 +185,7 @@ local function layout_level(rows, x, y, flip_x, min_w)
   end
   local h = m.pad * 2
   for _, row in ipairs(rows) do h = h + (row.separator and m.sep_h or m.row_h) end
-  local bx, by, bw, bh = bounds()
-  w = math.min(w, bw - m.margin * 2)
-  if x + w > bx + bw - m.margin then x = (flip_x or x) - w end
-  x = common.clamp(x, bx + m.margin, bx + bw - m.margin - w)
-  if y + h > by + bh - m.margin then y = by + bh - m.margin - h end
-  y = math.max(y, by + m.margin)
+  x, y, w = popup.place(state.host, x, y, w, h, flip_x, m.margin)
   local level = { rows = rows, x = math.floor(x), y = math.floor(y), w = math.floor(w), h = math.floor(h), icon_w = icon_w,
     highlight = RowHighlight(RowHighlight.selection) }
   local ry = level.y + m.pad
@@ -206,9 +197,7 @@ local function layout_level(rows, x, y, flip_x, min_w)
   return level
 end
 
-local function contains(r, x, y)
-  return x >= r.x and y >= r.y and x < r.x + r.w and y < r.y + r.h
-end
+local contains = popup.contains
 
 -- The deepest level and row under the point.
 local function hit(x, y)

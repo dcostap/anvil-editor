@@ -6,6 +6,7 @@ local config = require "core.config"
 local keymap = require "core.keymap"
 local style = require "core.style"
 local card = require "core.card"
+local popup = require "core.popup"
 local RowHighlight = require "core.row_highlight"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
@@ -1010,7 +1011,15 @@ end
 local desc_view
 local desc_view_text
 local desc_view_font
+-- The description as the last frame drew it, or nil.
 local desc_rect
+local desc_box = {}
+-- The list as the last frame drew it, for pointer input: its card, its rows and its Editor (`view`).
+local list_rect = {}
+-- The mouse button whose press began on the popup. Its release can choose a suggestion.
+local pressed_button
+-- Wheel movement, in rows, that has not scrolled the list yet.
+local wheel_rows = 0
 local desc_font_size = config.plugins.autocomplete.desc_font_size
 local previous_scale = SCALE
 local desc_font = style.code_font:copy(desc_font_size * SCALE)
@@ -1205,6 +1214,8 @@ local function reset_suggestions(skip_close)
   suggestions = {}
   selection_highlight:reset()
   desc_rect = nil
+  list_rect.view = nil
+  wheel_rows = 0
   desc_view = nil
   desc_view_text = nil
   desc_view_font = nil
@@ -1717,11 +1728,11 @@ local function get_suggestions_rect(av)
   local icon_column_width = 0
   local hide_icons = config.plugins.autocomplete.hide_icons
 
-  local window_width, window_height = system.get_window_size(core.window)
-  local view_left = math.max(style.padding.x, av.position.x + style.padding.x)
-  local view_right = math.min(window_width - style.padding.x, av.position.x + av.size.x - style.padding.x)
-  local view_top = math.max(0, av.position.y)
-  local view_bottom = math.min(window_height - style.padding.y, av.position.y + av.size.y)
+  local bx, by, bw, bh = popup.bounds(core.root_panel)
+  local view_left = math.max(bx + style.padding.x, av.position.x + style.padding.x)
+  local view_right = math.min(bx + bw - style.padding.x, av.position.x + av.size.x - style.padding.x)
+  local view_top = math.max(by, av.position.y)
+  local view_bottom = math.min(by + bh - style.padding.y, av.position.y + av.size.y)
   if view_right <= view_left or view_bottom <= view_top
     or row_y >= view_bottom or row_y + row_height <= view_top
   then
@@ -1797,12 +1808,6 @@ local function get_visible_suggestion_count(av)
   if not av then return #suggestions end
   local _, _, _, _, _, visible_count = get_suggestions_rect(av)
   return math.max(1, math.min(#suggestions, visible_count or #suggestions))
-end
-
-local function point_over_rect(x, y, rect)
-  return rect
-    and x >= rect.x and y >= rect.y
-    and x <= rect.x + rect.w and y <= rect.y + rect.h
 end
 
 -- The popup and its description box are cards with these corner radii.
@@ -2039,39 +2044,34 @@ local function preferred_description_width(text, max_width)
   return math.max(min_width, math.min(width, max_width))
 end
 
+-- The description goes right of the list, or left of it when it does not fit there, like a Context Menu's
+-- submenu. A wide list, or a list without room beside it, has the description below it.
+-- It stays in the Root Panel: in a hosted shell, the Sidebar covers the Project's surface left of it.
 local function draw_description_box(text, sx, sy, sw, sh)
-  local ww, wh = system.get_window_size(core.window)
+  local host = core.root_panel
+  local bx, by, bw, bh = popup.bounds(host)
+  local margin = style.padding.x
   local gap = style.padding.x / 4
-  local max_width = math.max(360 * SCALE, ww * 0.65)
+  local max_width = math.max(360 * SCALE, bw * 0.65)
   local view = get_description_view(text)
-  local x = sx + sw + gap
-  local y = sy
-  local width
-  local available_width
-
-  if sw > (ww - style.padding.x * 2) * 0.5 then
-    x = sx
-    y = sy + sh + gap
-    available_width = ww - x - style.padding.x * 2
-  elseif sx < ww - sx - sw then
-    available_width = ww - x - style.padding.x * 2
+  local beside = math.max(bx + bw - margin - (sx + sw + gap), sx - gap - (bx + margin))
+  local x, y, flip_x, available_width
+  if sw > (bw - margin * 2) * 0.5 or beside < math.min(160 * SCALE, bw - margin * 2) then
+    x, y, available_width = sx, sy + sh + gap, bw - margin * 2
   else
-    available_width = sx - gap - style.padding.x * 2
+    x, y, flip_x, available_width = sx + sw + gap, sy, sx - gap, beside
   end
 
-  width = preferred_description_width(text, math.min(max_width, available_width))
-  if not (sw > (ww - style.padding.x * 2) * 0.5) and sx >= ww - sx - sw then
-    x = sx - gap - width
-  end
-
+  local width = preferred_description_width(text, math.min(max_width, available_width))
   local _, content_height = view:get_rendered_size(width)
-  local max_height = math.max(120 * SCALE, wh * 0.55)
-  local available_height = wh - y - style.padding.y
-  local height = math.min(content_height, max_height, math.max(available_height, 1))
+  local max_height = math.max(120 * SCALE, bh * 0.55)
+  local height = math.min(content_height, max_height, math.max(by + bh - margin - y, 1))
+  x, y, width = popup.place(host, x, y, width, height, flip_x, margin)
 
   card.draw(x, y, width, height, popup_radius())
   view:draw_at(x, y, width, height, nil, true)
-  desc_rect = { x = x, y = y, w = width, h = height }
+  desc_rect = desc_box
+  desc_rect.x, desc_rect.y, desc_rect.w, desc_rect.h = x, y, width, height
 end
 
 local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, icon_column_width)
@@ -2140,6 +2140,7 @@ function autocomplete.draw(av)
 
   local rx, ry, rw, rh, icon_column_width, visible_count = get_suggestions_rect(av)
   desc_rect = nil
+  list_rect.view = nil
   if visible_count == 0 then return end
   card.draw(rx, ry, rw, rh, popup_radius())
 
@@ -2147,6 +2148,9 @@ function autocomplete.draw(av)
   local lh = font:get_height() + style.padding.y
   local y = ry + style.padding.y / 2
   local show_count = math.min(#suggestions, visible_count)
+  local list = list_rect
+  list.view, list.x, list.y, list.w, list.h = av, rx, ry, rw, rh
+  list.row_y, list.row_h, list.rows = y, lh, show_count
   local start_index = suggestions_offset
   local selected_item, selected_desc
 
@@ -2240,6 +2244,7 @@ local on_mouse_pressed = RootPanel.on_mouse_pressed
 local on_mouse_released = RootPanel.on_mouse_released
 local on_mouse_moved = RootPanel.on_mouse_moved
 local on_mouse_wheel = RootPanel.on_mouse_wheel
+local on_focus_lost = RootPanel.on_focus_lost
 local update = RootPanel.update
 local draw = RootPanel.draw
 
@@ -2248,42 +2253,125 @@ RootPanel.on_text_input = function(self, text, ...)
   show_autocomplete({ text = text })
 end
 
+-- Pointer input follows the Context Menu: hover selects a row, and a release on a row chooses it after a press
+-- on the popup. Unlike the menu, the popup does not hold input: a press elsewhere closes it and goes on to the
+-- View under it, and the wheel scrolls a long list.
+
+-- The suggestion under the point as the last frame drew it: its index, or false on the list's card outside a
+-- row. Nil off the list.
+local function list_hit(x, y)
+  local list = list_rect
+  if not list.view or list.view ~= get_active_view() or not popup.contains(list, x, y) then return nil end
+  local row = math.floor((y - list.row_y) / list.row_h)
+  local index = suggestions_offset + row
+  return row >= 0 and row < list.rows and suggestions[index] ~= nil and index
+end
+
+local function hover(index)
+  if index and index ~= suggestions_idx then
+    suggestions_idx = index
+    core.redraw = true
+  end
+end
+
+-- Scrolls the list by wheel movement. Whole rows scroll; the rest waits for more movement.
+local function scroll_list(amount)
+  wheel_rows = wheel_rows - amount * config.mouse_wheel_scroll / list_rect.row_h
+  local rows = wheel_rows < 0 and math.ceil(wheel_rows) or math.floor(wheel_rows)
+  wheel_rows = wheel_rows - rows
+  local last = math.max(1, #suggestions - list_rect.rows + 1)
+  local offset = common.clamp(suggestions_offset + rows, 1, last)
+  if offset == suggestions_offset then
+    wheel_rows = 0
+  else
+    suggestions_offset = offset
+    core.redraw = true
+  end
+end
+
 RootPanel.on_mouse_pressed = function(self, button, x, y, clicks)
-  if desc_view and point_over_rect(x, y, desc_rect) then
-    if desc_view:on_mouse_pressed(button, x, y, clicks) then
-      return true
-    end
+  local on_list = list_hit(x, y) ~= nil
+  if on_list or (desc_view and popup.contains(desc_rect, x, y)) then
+    -- The Editor under the popup does not get the press, so its caret stays where a suggestion goes.
+    self.mouse.x, self.mouse.y = x, y
+    pressed_button = button
+    if not on_list then desc_view:on_mouse_pressed(button, x, y, clicks) end
+    return true
+  end
+  if #suggestions > 0 then
+    core.log_quiet("Autocomplete: closed for a %s press outside the popup", button)
+    reset_suggestions()
   end
   return on_mouse_pressed(self, button, x, y, clicks)
 end
 
-RootPanel.on_mouse_released = function(self, button, x, y)
+RootPanel.on_mouse_released = function(self, button, x, y, ...)
   if desc_view then
     desc_view:on_mouse_released(button, x, y)
   end
-  return on_mouse_released(self, button, x, y)
+  if pressed_button == button then
+    pressed_button = nil
+    local index = button == "left" and list_hit(x, y)
+    if index then
+      suggestions_idx = index
+      core.log_quiet("Autocomplete: pointer chose suggestion %d", index)
+      command.perform("autocomplete:complete")
+    end
+    return true
+  end
+  return on_mouse_released(self, button, x, y, ...)
+end
+
+-- The pointer is over the popup: the View under it gets no hover.
+local function cover_view(root, x, y)
+  root.mouse.x, root.mouse.y = x, y
+  local view = root.overlapping_view
+  root.overlapping_view = nil
+  if view then view:on_mouse_left() end
 end
 
 RootPanel.on_mouse_moved = function(self, x, y, dx, dy)
-  if desc_view and (point_over_rect(x, y, desc_rect) or desc_view:scrollbar_dragging()) then
-    local handled = desc_view:on_mouse_moved(x, y, dx, dy)
-    if handled then
-      core.request_cursor(desc_view.cursor)
-      core.redraw = true
-      return true
-    end
-    local result = on_mouse_moved(self, x, y, dx, dy)
+  local scrolling = desc_view and desc_view:scrollbar_dragging()
+  local index
+  if not (self.grab or scrolling) then index = list_hit(x, y) end
+  if index ~= nil then
+    cover_view(self, x, y)
+    hover(index)
+    if desc_view then desc_view:on_mouse_left() end
+    core.request_cursor("arrow")
+    return true
+  end
+  if desc_view and (scrolling or (not self.grab and popup.contains(desc_rect, x, y))) then
+    cover_view(self, x, y)
+    desc_view:on_mouse_moved(x, y, dx, dy)
     core.request_cursor(desc_view.cursor)
     core.redraw = true
-    return result
+    return true
   elseif desc_view then
     desc_view:on_mouse_left()
   end
   return on_mouse_moved(self, x, y, dx, dy)
 end
 
+-- Like a Context Menu, the popup closes when the Project loses the keyboard, such as for a click on the Sidebar.
+RootPanel.on_focus_lost = function(self, ...)
+  if #suggestions > 0 then
+    core.log_quiet("Autocomplete: closed because the Window lost focus")
+    reset_suggestions()
+  end
+  return on_focus_lost(self, ...)
+end
+
 RootPanel.on_mouse_wheel = function(self, y, x)
-  if desc_view and point_over_rect(core.root_panel.mouse.x, core.root_panel.mouse.y, desc_rect) then
+  local mx, my = self.mouse.x, self.mouse.y
+  if list_hit(mx, my) ~= nil then
+    if y and y ~= 0 then
+      scroll_list(y)
+      hover(list_hit(mx, my))
+    end
+    return true
+  end
+  if desc_view and popup.contains(desc_rect, mx, my) then
     if keymap.modkeys["shift"] then
       x = y
       y = 0

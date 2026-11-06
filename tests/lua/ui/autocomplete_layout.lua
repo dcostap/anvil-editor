@@ -231,6 +231,47 @@ test.describe("autocomplete popup layout", function()
     assert_inside_editor(view, x, y, w, h)
   end)
 
+  -- Seam: the cards that the popup draws. A hosted Project's UI starts right of the shell's Sidebar, which the
+  -- shell shows over any Project pixel left of that edge.
+  test.it("keeps the description inside the Project area beside the Sidebar", function(context)
+    local view, _, items = open_popup(context, 3)
+    for _, item in ipairs(items) do
+      item.preview_text = nil
+      item.desc = item.text .. ": " .. string.rep("a long description ", 4)
+    end
+    autocomplete.trigger()
+    local root = core.root_panel
+    local ww, wh = system.get_window_size(core.window)
+    local saved_x, saved_w = root.position.x, root.size.x
+    -- A narrow Editor at the right edge leaves less room right of the list than left of it.
+    root.position.x, root.size.x = math.floor(ww / 2), ww - math.floor(ww / 2)
+    view.position.x, view.size.x = ww - 220 * SCALE, 220 * SCALE
+    local cards = {}
+    local card = require "core.card"
+    local draw_card = card.draw
+    card.draw = function(x, y, w, h, ...)
+      cards[#cards + 1] = { x = x, y = y, w = w, h = h }
+      return draw_card(x, y, w, h, ...)
+    end
+    local window = renwindow.create("autocomplete-bounds", ww, wh)
+    local old_clip = core.clip_rect_stack[1]
+    renderer.begin_frame(window)
+    core.clip_rect_stack[1] = { 0, 0, ww, wh }
+    renderer.set_clip_rect(0, 0, ww, wh)
+    local ok, err = pcall(autocomplete.draw, view)
+    renderer.end_frame()
+    core.clip_rect_stack[1] = old_clip
+    card.draw = draw_card
+    root.position.x, root.size.x = saved_x, saved_w
+    if not ok then error(err, 0) end
+    test.equal(#cards, 2, "the popup must draw its list and the selected suggestion's description")
+    for _, drawn in ipairs(cards) do
+      test.ok(drawn.x >= math.floor(ww / 2), string.format("a card starts at %.1f, under the Sidebar", drawn.x))
+      test.ok(drawn.x + drawn.w <= ww, "a card leaves the Window")
+      test.ok(drawn.y >= 0 and drawn.y + drawn.h <= wh, "a card leaves the Window")
+    end
+  end)
+
   test.it("hides the popup when no complete suggestion row fits", function(context)
     local view = open_popup(context, 20)
     view.size.y = view:get_font():get_height() / 2

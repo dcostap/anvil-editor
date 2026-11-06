@@ -6,6 +6,7 @@
 
 local core = require "core"
 local common = require "core.common"
+local popup = require "core.popup"
 local style = require "core.style"
 local Widget = require "widget"
 
@@ -453,9 +454,8 @@ function TreeList:draw_tooltip()
   local x, y = self.tooltip.x + tooltip_offset, self.tooltip.y + tooltip_offset
   w, h = w + style.padding.x, h + style.padding.y
 
-  if x + w > core.root_panel.position.x + core.root_panel.size.x then -- check if we can span right
-    x = x - w -- span left instead
-  end
+  -- Right of the pointer, or left of it when it does not fit there.
+  x, y, w = popup.place(core.root_panel, x, y, w, h)
 
   local tooltip_border = 1
   local bx, by = x - tooltip_border, y - tooltip_border
