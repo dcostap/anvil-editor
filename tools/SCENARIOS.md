@@ -85,7 +85,7 @@ python tools/benchmark_accent_search.py --output tools/perf-results/accent-scan.
 python tools/benchmark_accent_search.py --files 2048 --lines 2048 --output tools/perf-results/accent-scan-large.json
 ```
 
-The probe uses the editor's candidate patterns. The script checks composed and combining Latin variants against Python's Unicode data. It alternates literal and accent-equivalent scans over private temporary Projects, then deletes them. Times include ripgrep output formatting, but not editor ranking or drawing. An accent-equivalent query can return more lines, so compare result counts as well as time. Query preparation time is separate from scan time.
+The probe uses the editor's candidate patterns. The script checks Latin variants and multi-character NFC decompositions against Python's Unicode data. It also checks literal matches for canonical forms that NFC does not compose. It checks candidate retention, not native verification or selection positions. It alternates literal and accent-equivalent scans over private temporary Projects, then deletes them. Times include ripgrep output formatting, but not editor ranking or drawing. An accent-equivalent query can return more lines, so compare result counts as well as time. Query preparation time is separate from scan time.
 
 `text-poi-long-field` parses a 16,000-byte field followed by a file location. `text-poi-many-locations` parses 22,000 locations. `text-poi-limited-locations` uses the same input but requests only 32 results. Keep the limited case: limiting returned rows must also stop unnecessary scanning.
 

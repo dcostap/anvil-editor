@@ -359,14 +359,26 @@ static bool pattern_codepoint(Pattern *pattern, uint32_t cp) {
 }
 
 #define DECOMPOSITION_COUNT (sizeof(nfc_decompose_table) / sizeof(nfc_decompose_table[0]))
+#define PATTERN_MULTI_BASE (UINT32_MAX - 1)
 
-static bool pattern_class(Pattern *pattern, uint32_t cp, const uint32_t *bases, bool sensitive) {
+static bool pattern_class(Pattern *pattern, uint32_t cp, const uint32_t *bases,
+                          bool sensitive, bool *prefix_only) {
   if (!pattern_append(pattern, "[", 1) || !pattern_codepoint(pattern, cp)) return false;
   uint32_t key = sensitive ? cp : literal_casefold(cp);
   for (size_t i = 0; i < DECOMPOSITION_COUNT; ++i) {
     uint32_t variant = nfc_decompose_table[i].cp;
-    if (variant == cp) continue;
-    if (bases[i] == key) {
+    bool matches = bases[i] == key;
+    if (bases[i] == PATTERN_MULTI_BASE) {
+      uint32_t folded[8], count = fold_codepoint(variant, folded, 0);
+      for (uint32_t j = 0; j < count; ++j) {
+        if ((sensitive ? folded[j] : literal_casefold(folded[j])) == key) {
+          matches = true;
+          *prefix_only = true;
+          break;
+        }
+      }
+    }
+    if (matches && variant != cp) {
       if (!pattern_codepoint(pattern, variant)) return false;
     }
   }
@@ -380,12 +392,13 @@ char *fuzzy_literal_pattern(const FuzzyLiteral *query) {
     if (!pattern_append(&pattern, "[^\\s\\S]", 7)) goto fail;
     return pattern.text;
   }
-  /* Fold the Unicode table once per query, not once per query character. */
+  /* Cache single-codepoint folds. Multi-codepoint folds need a broader prefix. */
   uint32_t bases[DECOMPOSITION_COUNT];
   for (size_t i = 0; i < DECOMPOSITION_COUNT; ++i) {
     uint32_t folded[8];
-    bases[i] = fold_codepoint(nfc_decompose_table[i].cp, folded, 0) == 1 ? folded[0] : UINT32_MAX;
-    if (!query->case_sensitive && bases[i] != UINT32_MAX) bases[i] = literal_casefold(bases[i]);
+    uint32_t count = fold_codepoint(nfc_decompose_table[i].cp, folded, 0);
+    bases[i] = count == 1 ? folded[0] : count > 1 ? PATTERN_MULTI_BASE : UINT32_MAX;
+    if (!query->case_sensitive && count == 1) bases[i] = literal_casefold(bases[i]);
   }
   const char *p = query->buffer.match, *end = p + query->buffer.len;
   while (p < end) {
@@ -395,13 +408,19 @@ char *fuzzy_literal_pattern(const FuzzyLiteral *query) {
     uint32_t cp;
     p = decode_utf8(p, end, &cp);
     if (!p) goto fail;
+    bool prefix_only = false;
     if (cp == 0xF1 || cp == 0xD1) {
-      if (!pattern_append(&pattern, "(?:", 3) || !pattern_class(&pattern, cp, bases, query->case_sensitive)
+      if (!pattern_append(&pattern, "(?:", 3)
+          || !pattern_class(&pattern, cp, bases, query->case_sensitive, &prefix_only)
           || !pattern_append(&pattern, "|", 1)
-          || !pattern_class(&pattern, cp == 0xF1 ? 'n' : 'N', bases, query->case_sensitive)
+          || !pattern_class(&pattern, cp == 0xF1 ? 'n' : 'N', bases, query->case_sensitive, &prefix_only)
           || !pattern_append(&pattern, "\\p{M}*\\x{303})", 14)) goto fail;
-    } else if (!pattern_class(&pattern, cp, bases, query->case_sensitive)) goto fail;
+    } else if (!pattern_class(&pattern, cp, bases, query->case_sensitive, &prefix_only)) goto fail;
     if (!pattern_append(&pattern, "\\p{M}*", 6)) goto fail;
+    /* A source character can contain this query character and its neighbours.
+     * Stop here rather than require separate source characters for the rest.
+     * The native matcher still verifies the complete query. */
+    if (prefix_only) break;
   }
   return pattern.text;
 fail:

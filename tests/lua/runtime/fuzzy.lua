@@ -101,6 +101,21 @@ test.describe("native fuzzy Lua API", function()
     test.not_nil(assert(regex.compile(fuzzy.literal("i"):pattern(), "i")):find("İ"))
   end)
 
+  test.it("keeps scanner candidates with multi-character canonical decompositions", function()
+    for _, case in ipairs {
+      { "কো", "কো" }, { "কো", "কো" }, { "কো", "কো" },
+      { "ো", "কো" }, { "ে", "কো" }, { "া", "কো" },
+      { "কো xyz", "কো xyz" }, { "கொ", "கொ" }, { "གྷ", "གྷ" },
+    } do
+      local literal = fuzzy.literal(case[1])
+      test.not_nil(literal:find(case[2]), "native matcher lost " .. case[1])
+      test.not_nil(assert(regex.compile(literal:pattern(), "i")):find(case[2]),
+        "candidate filter lost " .. case[1] .. " in " .. case[2])
+    end
+    test.same(fuzzy.literal("ে"):spans("কো"), { {4, 6} })
+    test.same(fuzzy.literal("া"):spans("কো"), { {4, 6} })
+  end)
+
   test.it("keeps literal punctuation, repeated matches and empty queries safe", function()
     local query = "a.*[é](x)\\+$?{z}|^"
     local literal = fuzzy.literal(query)

@@ -21,7 +21,7 @@ def pattern(probe, query, sensitive=False):
 
 
 def check_variants(rg, probe, root):
-    """An independent Unicode oracle checks that the scanner loses no Latin variants."""
+    """Check candidate retention against independent Unicode decompositions."""
     variants = []
     for cp in list(range(0xC0, 0x250)) + list(range(0x1E00, 0x1F00)):
         text = chr(cp)
@@ -31,6 +31,17 @@ def check_variants(rg, probe, root):
             if text in "ñÑ":
                 base = text
             variants.extend([(text, base), (nfd, base)])
+    for cp in range(0x110000):
+        text = chr(cp)
+        decomposition = unicodedata.decomposition(text)
+        if not decomposition or decomposition.startswith("<"):
+            continue
+        nfd = unicodedata.normalize("NFD", text)
+        base = "".join(c for c in nfd if not unicodedata.combining(c))
+        if len(base) > 1:
+            # Only NFC-composable forms share a query. Other forms must still find themselves.
+            composed_query = base if unicodedata.normalize("NFC", nfd) == text else text
+            variants.extend([(text, composed_query), (nfd, base)])
     path = root / "unicode-oracle.txt"
     path.write_text("\n".join(text for text, _ in variants) + "\n", encoding="utf-8")
     for sensitive in (False, True):
@@ -45,7 +56,7 @@ def check_variants(rg, probe, root):
             if missing:
                 raise AssertionError((query, sensitive, [variants[i - 1] for i in missing]))
     path.unlink()
-    print(f"Candidate filter kept all {len(variants)} composed and decomposed Latin variants", flush=True)
+    print(f"Candidate filter kept all {len(variants)} canonical variants", flush=True)
     return len(variants)
 
 

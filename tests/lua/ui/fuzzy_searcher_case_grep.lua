@@ -131,4 +131,16 @@ test.describe("Case-sensitive text search", function()
     test.equal(picker.results[1].line, rejected + 1)
     test.equal(picker.results[1].text, "nino ok")
   end)
+
+  test.it("finds composed and decomposed Bengali text at original byte positions", function(context)
+    local file = assert(io.open(context.root .. PATHSEP .. "search.txt", "wb"))
+    file:write("কো\nকো\nকে\n")
+    file:close()
+    fuzzy_searcher.open("#কো")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return picker.status == "2 exact matches" end), tostring(picker.status))
+    local spans = {}
+    for _, result in ipairs(picker.results) do spans[result.line] = result.content_selection_span end
+    test.same(spans, { {1, 6}, {1, 9} })
+  end)
 end)
