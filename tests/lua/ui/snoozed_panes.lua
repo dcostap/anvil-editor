@@ -22,8 +22,8 @@ local function file() return panes.create {factory = function() return View() en
 local function terminal(session) return panes.create {factory = function() return FakeTerminal(session) end} end
 
 -- Seam: shell requests delivered through the public event handler.
-local function request(value)
-  core.on_event("panerequest", common.serialize(value, {escape = true}), -1, -1, 0)
+local function request(value, x, y)
+  core.on_event("panerequest", common.serialize(value, {escape = true}), x or -1, y or -1, 0)
 end
 
 local function snooze(pane) request {action = "snooze", pane = pane.id} end
@@ -85,6 +85,21 @@ test.describe("Snoozed Panes", function()
     test.equal(panes.visible_group(), t.group)
     test.ok(report_item(t).snoozed)
     test.same(panes.navigable(), {a})
+  end)
+
+  test.it("wakes a Snoozed Pane that the Sidebar drops on the work area", function()
+    local title, projects = core.title_bar, core.projects
+    core.title_bar, core.projects = require("core.titlebar")(), {{path = "C:/Project"}}
+    local a, t = file(), terminal("t")
+    snooze(t)
+    panes.focus(a)
+    layout.update_rects(a.group.root, {x = 0, y = 50, w = 200, h = 100})
+    -- A drop on the middle swaps the two Panes.
+    request({action = "drag", phase = "drop", source = "C:/Project", pane = t.id}, 100, 100)
+    core.title_bar, core.projects = title, projects
+    test.is_nil(report_item(t).snoozed)
+    test.is_nil(report_item(a).snoozed, "the swap hid the other Pane")
+    test.equal(panes.active(), t)
   end)
 
   test.it("gives a Snoozed Pane no Pane number", function()

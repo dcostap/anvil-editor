@@ -555,6 +555,9 @@ function TitleBar:sidebar_pane_drag(pane, phase, x, y)
   self.drag_target = self:resolve_pane_drag_target(x, y)
   core.redraw = true
   if phase == "drop" then
+    -- A dropped Snoozed Pane wakes first, so a swap cannot put the other Pane in its Snoozed group. The Sidebar's
+    -- own wake request can arrive later.
+    if self.drag_target and pane.group.snoozed then require("core.snoozed_panes").wake(pane) end
     local outcome = self:apply_pane_drag_target(self.drag_target)
     self.sidebar_dragging = false
     self:clear_pane_drag(outcome and "dropped" or "cancelled")

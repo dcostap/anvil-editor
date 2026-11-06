@@ -1547,17 +1547,21 @@ function SidebarView:finish_drag(x, y)
   drag.x, drag.y = x, y
   self:update_drag()
   if not self.drag then return end
+  local target, source = drag.target, drag.row
+  -- A dropped Snoozed Tab wakes. Its saved time goes first, so the Project's check does not snooze it again.
+  local session = source.tab.snoozed and source.tab.terminal and source.tab.terminal.session
+  if session and (target or drag.x >= self.width) then
+    if not self:set_snooze({session = session, pane = source.tab.id, path = source.project.path}, nil) then
+      self:end_drag(nil)
+      return
+    end
+  end
   if self:send_work("drop") then
     self.drag, self.card = nil, nil
     return
   end
-  local target, source = drag.target, drag.row
   self:end_drag(target)
   if not target then return end
-  local session = source.tab.snoozed and source.tab.terminal and source.tab.terminal.session
-  if session and not self:set_snooze({session = session, pane = source.tab.id, path = source.project.path}, nil) then
-    return
-  end
   local route, path, request = self:drop_request(target, source)
   local transfer = request.action == "export"
   self.pending = {key = source.id_key, transfer = transfer,

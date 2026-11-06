@@ -2235,6 +2235,16 @@ test.describe("Sidebar drag and drop", function()
     })
   end)
 
+  test.it("ends the Snooze of a Snoozed Tab dropped on the work area before the drop", function()
+    local view, actions = sidebar(snoozed_model())
+    test.same(drag(view, actions, "pane-5", 220, 450), {
+      {"request", "pointer", nil, {action = "drag", phase = "move", source = "C:/A", pane = "pane-5"}, 450, 220},
+      {"snooze", "s1"},
+      {"request", "direct", "C:/A", {action = "unsnooze", pane = "pane-5"}},
+      {"request", "pointer", nil, {action = "drag", phase = "drop", source = "C:/A", pane = "pane-5"}, 450, 220},
+    })
+  end)
+
   test.it("scrolls the list while a dragged Tab waits near its edge", function()
     local panes = {active=1,visible=1}
     for i = 1, 60 do panes[i] = {id="pane-" .. i,group=i,name="file" .. i .. ".lua"} end
