@@ -2545,24 +2545,27 @@ local commands = {
     end
 
     local undo_idx = dv.buffer.undo_stack.idx
+    local indented_lines = {}
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
       -- A selection of one whole empty line holds no line to indent.
       local selected_empty_line = dv.buffer.lines[line1] == "\n"
         and dv.buffer.selections[idx * 4 - 1] ~= line2
       local l1, c1, l2, c2
       if not selected_empty_line then
-        l1, c1, l2, c2 = dv.buffer:indent_text(false, line1, col1, line2, col2)
+        l1, c1, l2, c2 = dv.buffer:indent_text(false, line1, col1, line2, col2, indented_lines)
       end
       if l1 then
         dv.buffer:set_selections(idx, l1, c1, l2, c2)
       end
     end
     dv.buffer:join_undo_since(undo_idx)
+    dv.buffer:merge_cursors()
   end,
 
   ["core:unindent"] = function(dv)
     if not can_edit(dv, "unindent") then return end
     local undo_idx = dv.buffer.undo_stack.idx
+    local indented_lines = {}
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
       local line_text = dv.buffer.lines[line1] or ""
       local content_start = markdown_list_content_start(
@@ -2574,7 +2577,10 @@ local commands = {
       local l1, c1, l2, c2
       local parent_indent = keep_list_caret_position and old_indent_length > 0
         and markdown_parent_list_indent(dv.buffer, line1, old_indent_length)
-      if parent_indent then
+      if keep_list_caret_position and indented_lines[line1] then
+        l1, c1, l2, c2 = line1, col1, line2, col2
+      elseif parent_indent then
+        indented_lines[line1] = true
         dv.buffer:apply_edits({ {
           line1 = line1, col1 = 1, line2 = line1,
           col2 = old_indent_length + 1, text = parent_indent,
@@ -2584,7 +2590,7 @@ local commands = {
         l1, c1, l2, c2 = line1, col1, line2, col2
       else
         l1, c1, l2, c2 = dv.buffer:indent_text(
-          true, line1, col1, line2, col2
+          true, line1, col1, line2, col2, indented_lines
         )
       end
       if l1 then

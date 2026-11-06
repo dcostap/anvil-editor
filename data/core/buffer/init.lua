@@ -3271,7 +3271,9 @@ end
 --   inserts the appropriate whitespace, as if you typed them normally.
 -- * if you are unindenting, the cursor will jump to the start of the line,
 --   and remove the appropriate amount of spaces (or a tab).
-function Buffer:indent_text(unindent, line1, col1, line2, col2)
+-- Commands share indented_lines across selections to change each line once.
+-- Tabs inserted inside text still act at each caret.
+function Buffer:indent_text(unindent, line1, col1, line2, col2, indented_lines)
   local _, se = self.lines[line1]:find("^[ \t]+")
   local text, text_stop = self:get_indent_string(
     unindent and (se and se + 1 or 1) or col1
@@ -3282,7 +3284,10 @@ function Buffer:indent_text(unindent, line1, col1, line2, col2)
     local line1_delta, line2_delta = 0, 0
     local edits = {}
     for line = line1, line2 do
-      if not has_selection or #self.lines[line] > 1 then -- don't indent empty lines in a selection
+      if (not indented_lines or not indented_lines[line])
+        and (not has_selection or #self.lines[line] > 1)
+      then -- don't indent empty lines in a selection
+        if indented_lines then indented_lines[line] = true end
         local e, rnded = self:get_line_indent(self.lines[line], unindent)
         local removed = e or 0
         local replacement = unindent and rnded:sub(

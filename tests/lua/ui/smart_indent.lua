@@ -66,6 +66,69 @@ test.describe("smart indentation", function()
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
   end)
 
+  test.it("changes a shared line's indentation only once per command", function(context)
+    local buffer, view = new_editor(context, "    alpha")
+    core.set_active_view(view)
+    buffer:set_selection_list({ 1, 5, 1, 6, 1, 7, 1, 8 }, 2)
+
+    test.ok(command.perform("core:indent"))
+    test.equal(text(buffer), "      alpha\n")
+    test.ok(command.perform("core:undo"))
+    test.equal(text(buffer), "    alpha\n")
+    test.ok(command.perform("core:redo"))
+    test.equal(text(buffer), "      alpha\n")
+    test.ok(command.perform("core:unindent"))
+    test.equal(text(buffer), "    alpha\n")
+    local selected = {}
+    for _, l1, c1, l2, c2 in buffer:get_selections(true) do
+      selected[#selected + 1] = buffer:get_text(l1, c1, l2, c2)
+    end
+    test.same(selected, { "a", "p" })
+  end)
+
+  test.it("unindents once when several carets share a line", function(context)
+    local buffer, view = new_editor(context, "    alpha")
+    core.set_active_view(view)
+    buffer:set_selection_list({ 1, 5, 1, 5, 1, 8, 1, 8 }, 2)
+
+    test.ok(command.perform("core:unindent"))
+    test.equal(text(buffer), "  alpha\n")
+    test.same(view:get_selection_state().selections, { 1, 3, 1, 3 })
+    test.ok(command.perform("core:undo"))
+    test.equal(text(buffer), "    alpha\n")
+  end)
+
+  test.it("indents shared lines once across multiline selections", function(context)
+    local buffer, view = new_editor(context, "  first\n  shared\n  last")
+    core.set_active_view(view)
+    buffer:set_selection_list({ 1, 3, 2, 4, 2, 5, 3, 7 }, 2)
+
+    test.ok(command.perform("core:indent"))
+    test.equal(text(buffer), "    first\n    shared\n    last\n")
+    test.ok(command.perform("core:unindent"))
+    test.equal(text(buffer), "  first\n  shared\n  last\n")
+  end)
+
+  test.it("merges carets that reach the same indentation", function(context)
+    local buffer, view = new_editor(context, "    alpha")
+    core.set_active_view(view)
+    buffer:set_selection_list({ 1, 1, 1, 1, 1, 2, 1, 2 }, 2)
+
+    test.ok(command.perform("core:indent"))
+    test.equal(text(buffer), "      alpha\n")
+    test.same(view:get_selection_state().selections, { 1, 7, 1, 7 })
+  end)
+
+  test.it("unindents a Markdown item once with several carets", function(context)
+    local buffer, view = new_editor(context, "- parent\n  - child\n    - leaf", "sample.md")
+    core.set_active_view(view)
+    buffer:set_selection_list({ 3, 7, 3, 7, 3, 10, 3, 10 }, 2)
+
+    test.ok(command.perform("core:unindent"))
+    test.equal(text(buffer), "- parent\n  - child\n  - leaf\n")
+    test.same(view:get_selection_state().selections, { 3, 5, 3, 5, 3, 8, 3, 8 })
+  end)
+
   test.it("indents after Python colon block openers on Enter", function(context)
     local buffer, view = new_editor(context, "if ok:\npass", "sample.py")
     core.set_active_view(view)
