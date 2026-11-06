@@ -208,19 +208,11 @@ test.describe("empty line indentation", function()
     near(caret_dx(view, 2, 1), view:get_font():get_width("  "))
   end)
 
-  test.it("End and Backspace on an empty line move its caret to the block's indentation without writing whitespace", function(context)
+  test.it("Backspace on an empty line moves its caret to the block's indentation without writing whitespace", function(context)
     -- The empty line shows the indentation of `b)`, deeper than the block's.
     local buffer, view = new_editor(context, "f {\n  g(a,\n    b)\n\n}", "sample.odin")
     local block = view:get_font():get_width("  ")
 
-    buffer:set_selection(4, 1, 4, 1)
-    command.perform("core:move_to_end_of_line")
-    view:update()
-    test.equal(text(buffer), "f {\n  g(a,\n    b)\n\n}\n")
-    near(caret_dx(view, 4, 1), block)
-
-    buffer:set_selection(3, 1, 3, 1)
-    view:update()
     buffer:set_selection(4, 1, 4, 1)
     command.perform("core:backspace")
     view:update()
@@ -349,7 +341,7 @@ test.describe("empty line indentation", function()
     test.equal(text(buffer), "  - a\nx\n- b\n")
   end)
 
-  test.it("moving to an empty line's start clears its shown indentation before typing", function(context)
+  test.it("moving to an empty line's start places its caret at the margin before typing", function(context)
     for _, filename in ipairs { "notes.md", "notes.txt" } do
       for _, wrapped in ipairs { false, true } do
         for _, name in ipairs { "core:move_to_start_of_line", "core:move_to_start_of_indentation" } do
@@ -370,6 +362,39 @@ test.describe("empty line indentation", function()
           test.equal(text(buffer), "    tipoArquillas\nx\n\nnext\n")
         end
       end
+    end
+  end)
+
+  test.it("Home and End move between the edges of the same shown indentation", function(context)
+    for _, case in ipairs {
+      { filename = "home-end.txt", content = "    text\n\nnext", line = 2 },
+      { filename = "home-end.md", content = "- item\n    text\n\nnext", line = 3 },
+      { filename = "home-end.odin", content = "f {\n  g(a,\n    b)\n\n}", line = 4 },
+    } do
+      local buffer, view = new_editor(context, case.content, case.filename, Editor)
+      buffer:set_selection(case.line, 1, case.line, 1)
+      local initial = view:get_caret_screen_position(case.line, 1)
+      for _ = 1, 2 do
+        test.ok(command.perform("core:move_to_start_of_line"))
+        near(caret_dx(view, case.line, 1), 0)
+        test.ok(command.perform("core:move_to_end_of_line"))
+        near(view:get_caret_screen_position(case.line, 1), initial)
+      end
+      test.equal(text(buffer), case.content .. "\n")
+
+      command.perform("core:indent")
+      local deeper = view:get_caret_screen_position(case.line, 1)
+      test.ok(deeper > initial)
+      command.perform("core:move_to_start_of_indentation")
+      command.perform("core:move_to_end_of_line")
+      near(view:get_caret_screen_position(case.line, 1), deeper)
+      command.perform("core:unindent")
+      near(view:get_caret_screen_position(case.line, 1), initial)
+      command.perform("core:move_to_start_of_line")
+      command.perform("core:move_to_end_of_line")
+      near(view:get_caret_screen_position(case.line, 1), initial)
+      test.ok(view:on_text_input("x"))
+      test.equal(buffer.lines[case.line], "    x\n")
     end
   end)
 

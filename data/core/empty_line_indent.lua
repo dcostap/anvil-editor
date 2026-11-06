@@ -2,7 +2,7 @@
 -- initially shows where Enter at the end of the line above would put the caret.
 -- Each View keeps its chosen position. Arrows and clicks move within the
 -- indentation; text selections still use real text positions.
--- Tab, Shift+Tab, End, Backspace and typed spaces or tabs change the level of
+-- Tab, Shift+Tab, Backspace and typed spaces or tabs change the level of
 -- that caret without an edit, until the caret leaves the line. Typing and paste write the
 -- indentation first. A line that the user's edits leave holding only
 -- whitespace becomes empty when no caret is on it, or at once when it holds
@@ -155,7 +155,7 @@ local function forget_left_positions(view, selections)
   end
 end
 
-local function set_level(view, line, indent)
+local function set_level(view, line, indent, resize)
   local state = caret_states[view]
   if not state then
     state = { levels = {} }
@@ -170,7 +170,9 @@ local function set_level(view, line, indent)
   end
   local position = state.levels[line]
   local extent = position and position.extent or entry(view.buffer, line).indent
-  if extent:sub(1, #indent) ~= indent then extent = indent end
+  -- An edit to the indentation changes its end. Navigation only changes
+  -- the position within it, so Home does not discard the destination of End.
+  if resize or extent:sub(1, #indent) ~= indent then extent = indent end
   if position then
     position.indent, position.extent = indent, extent
   else
@@ -224,7 +226,7 @@ function empty_line_indent.shift_level(view, outdent)
   end
   for _, line in ipairs(lines) do
     local indent = empty_line_indent.get(view, line)
-    set_level(view, line, outdent and remove_level(buffer, indent) or indent .. buffer:get_indent_string(1))
+    set_level(view, line, outdent and remove_level(buffer, indent) or indent .. buffer:get_indent_string(1), true)
   end
   core.log_quiet("Empty Line Indent moved %d caret(s) one level %s in %s",
     #lines, outdent and "out" or "in", buffer:get_name())
@@ -246,12 +248,12 @@ function empty_line_indent.type_whitespace(view, text)
     lines[#lines + 1] = line1
   end
   for _, line in ipairs(lines) do
-    set_level(view, line, empty_line_indent.get(view, line) .. text)
+    set_level(view, line, empty_line_indent.get(view, line) .. text, true)
   end
   return true
 end
 
----Line-start movement clears Shown Indentation at each empty-line caret.
+---Line-start movement moves each empty-line caret to the margin.
 ---The line stays empty; the next edit starts at column 1.
 ---@param view core.textview
 function empty_line_indent.move_to_start(view)
@@ -291,17 +293,14 @@ function empty_line_indent.arrive(view, line, col, from_end)
   set_level(view, line, from_end and extent or "")
 end
 
----End on an empty line moves its caret to `block_indent` without an edit.
----Returns true when the caret is on an empty line.
+---End moves each empty-line caret to the end of its Shown Indentation.
 ---@param view core.textview
----@param block_indent string
----@return boolean
-function empty_line_indent.end_at(view, block_indent)
-  local buffer = view.buffer
-  local line = single_empty_line_caret(buffer)
-  if not line then return false end
-  if empty_line_indent.get(view, line) ~= block_indent then set_level(view, line, block_indent) end
-  return true
+function empty_line_indent.move_to_end(view)
+  for _, line1, col1, line2, col2 in view.buffer:get_selections(true) do
+    if line1 == line2 and col1 == col2 then
+      empty_line_indent.arrive(view, line1, col1, true)
+    end
+  end
 end
 
 ---Backspace on an empty line whose caret shows deeper than `block_indent`
@@ -316,7 +315,7 @@ function empty_line_indent.backspace(view, block_indent)
   if not line then return false end
   local indent = empty_line_indent.get(view, line)
   if visual_width(buffer, indent) <= visual_width(buffer, block_indent) then return false end
-  set_level(view, line, block_indent)
+  set_level(view, line, block_indent, true)
   return true
 end
 
@@ -441,7 +440,7 @@ function empty_line_indent.write_then(view, edit, chosen_only)
       if caret.indent == "" then
         local line, col, line2, col2 = buffer:get_selection_idx(caret.idx)
         if line == line2 and col == 1 and col2 == 1 and buffer.lines[line] == "\n" then
-          set_level(view, line, "")
+          set_level(view, line, "", true)
         end
       end
     end
@@ -510,7 +509,7 @@ function empty_line_indent.update(view)
     time = top and top.time, joins_previous = top ~= nil,
   })
   for line, indent in pairs(kept_levels) do
-    if empty_line_indent.get(view, line) ~= indent then set_level(view, line, indent) end
+    if empty_line_indent.get(view, line) ~= indent then set_level(view, line, indent, true) end
   end
   core.log_quiet("Empty Line Indent emptied %d line(s) in %s", #edits, buffer:get_name())
 end

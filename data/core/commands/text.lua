@@ -1552,17 +1552,16 @@ local function smart_indent_backspace(buffer)
   return true
 end
 
--- End on a blank line moves to the block's indentation. On an empty line only
--- the caret moves; the line stays empty.
+-- End on a whitespace-only line moves to the block's indentation.
+-- Empty lines use their Shown Indentation instead.
 local function smart_end_on_blank_line(view)
   local buffer = view.buffer
   local line = single_caret(buffer)
   if not line then return false end
   local leading = (buffer.lines[line] or ""):gsub("\n$", "")
-  if not leading:match("^[\t ]*$") then return false end
+  if leading == "" or not leading:match("^[\t ]*$") then return false end
   local expected = block_indent(buffer, line)
   if not expected then return false end
-  if leading == "" and empty_line_indent.end_at(view, expected) then return true end
   if expected == leading then return false end
   buffer:apply_edits({
     { line1 = line, col1 = 1, line2 = line, col2 = #leading + 1, text = expected },
@@ -4160,7 +4159,8 @@ commands["core:delete_to_start_of_indentation"] = function(dv)
 end
 commands["core:move_to_end_of_line"] = function(dv)
   if smart_end_on_blank_line(dv) then return end
-  return wrapped_move_to(dv, "core:move_to_end_of_line", move_to_wrapped_end_of_line, dv)
+  wrapped_move_to(dv, "core:move_to_end_of_line", move_to_wrapped_end_of_line, dv)
+  empty_line_indent.move_to_end(dv)
 end
 commands["core:select_to_end_of_line"] = function(dv)
   return wrapped_select_to(dv, "core:select_to_end_of_line", move_to_wrapped_end_of_line, dv)
