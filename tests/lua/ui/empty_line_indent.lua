@@ -335,4 +335,28 @@ test.describe("empty line indentation", function()
     test.ok(view:on_text_input("x"))
     test.equal(text(buffer), "  - a\nx\n- b\n")
   end)
+
+  test.it("moving to an empty line's start clears its shown indentation before typing", function(context)
+    for _, filename in ipairs { "notes.md", "notes.txt" } do
+      for _, wrapped in ipairs { false, true } do
+        for _, name in ipairs { "core:move_to_start_of_line", "core:move_to_start_of_indentation" } do
+          local buffer, view = new_editor(context, "    tipoArquillas\n\n\nnext",
+            "line-start-" .. #context.buffers .. "-" .. filename)
+          view:set_wrapping_enabled(wrapped)
+          linewrapping.complete_async_reconstruction(view)
+          buffer:set_selection(2, 1, 2, 1)
+          test.ok(caret_dx(view, 2, 1) > 0)
+
+          test.ok(command.perform(name), name .. " in " .. filename .. " wrapped=" .. tostring(wrapped)
+            .. " active=" .. tostring(core.active_view))
+          view:update()
+
+          near(caret_dx(view, 2, 1), 0)
+          test.equal(buffer.lines[2], "\n")
+          test.ok(view:on_text_input("x"))
+          test.equal(text(buffer), "    tipoArquillas\nx\n\nnext\n")
+        end
+      end
+    end
+  end)
 end)

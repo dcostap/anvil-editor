@@ -915,6 +915,7 @@ Run `ui/buffer_reload.lua` and `runtime/buffer_apply_lines.lua` after changes.
 An empty line holds no whitespace. Its caret shows at the indentation that Enter at the end of the line above writes (`core.empty_line_indent`).
 The Buffer keeps the caret at column 1. Only the drawn caret, the Up/Down goal column and the next edit use the Shown Indentation.
 Tab, Shift+Tab, End and Backspace on an empty line only change the caret's level. The level stays until the caret leaves the line or the text changes. Enter carries it to the new line.
+Move to Start of Line and Move to Start of Indentation clear the Shown Indentation without editing the line.
 Typing and paste first write the Shown Indentation. One undo reverts it with the edit (`Buffer:join_undo_since`).
 The module tracks the lines that user edits leave holding only whitespace. It moves them through later edits with `changed_ranges`.
 A tracked line becomes empty when no selection touches it. With the caret at its end, it becomes empty at once, and its whitespace becomes the caret's level, so the caret does not move.

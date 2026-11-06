@@ -4122,10 +4122,11 @@ for _, name in ipairs({
 end
 
 commands["core:move_to_start_of_line"] = function(dv)
-  return wrapped_move_to(
+  wrapped_move_to(
     dv, "core:move_to_start_of_line",
     move_to_wrapped_start_of_line, dv
   )
+  empty_line_indent.move_to_start(dv.buffer)
 end
 commands["core:select_to_start_of_line"] = function(dv)
   return wrapped_select_to(dv, "core:select_to_start_of_line", move_to_wrapped_start_of_line, dv)
@@ -4134,10 +4135,11 @@ commands["core:delete_to_start_of_line"] = function(dv)
   return wrapped_delete_to(dv, "core:delete_to_start_of_line", move_to_wrapped_start_of_line, dv)
 end
 commands["core:move_to_start_of_indentation"] = function(dv)
-  return wrapped_move_to(
+  wrapped_move_to(
     dv, "core:move_to_start_of_indentation",
     move_to_wrapped_start_of_indentation, dv
   )
+  empty_line_indent.move_to_start(dv.buffer)
 end
 commands["core:select_to_start_of_indentation"] = function(dv)
   return wrapped_select_to(dv, "core:select_to_start_of_indentation", move_to_wrapped_start_of_indentation, dv)

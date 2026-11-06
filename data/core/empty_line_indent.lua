@@ -209,6 +209,23 @@ function empty_line_indent.type_whitespace(buffer, text)
   return true
 end
 
+---Line-start movement clears Shown Indentation at each empty-line caret.
+---The line stays empty; the next edit starts at column 1.
+---@param buffer core.buffer
+function empty_line_indent.move_to_start(buffer)
+  local count = 0
+  for _, line1, col1, line2, col2 in buffer:get_selections(true) do
+    if line1 == line2 and col1 == 1 and col2 == 1
+    and buffer.lines[line1] == "\n" and empty_line_indent.get(buffer, line1) ~= "" then
+      set_level(buffer, line1, "")
+      count = count + 1
+    end
+  end
+  if count > 0 then
+    core.log_quiet("Empty Line Indent moved %d caret(s) to the line start in %s", count, buffer:get_name())
+  end
+end
+
 ---End on an empty line moves its caret to `block_indent` without an edit.
 ---Returns true when the caret is on an empty line.
 ---@param buffer core.buffer
