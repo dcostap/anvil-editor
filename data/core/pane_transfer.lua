@@ -1,5 +1,6 @@
 local core = require "core"
 local common = require "core.common"
+local Editor = require "core.editor"
 local machine_project = require "core.machine_project"
 local panes = require "core.panes"
 local system = require "system"
@@ -81,15 +82,21 @@ local function export(request)
           return refuse("Could not save " .. buffer.filename .. ": " .. tostring(err or "unsaved edits remain"))
         end
       end
-      buffers[buffer] = buffer:get_change_id()
+      buffers[buffer] = { revision = buffer.text_revision, filename = buffer.abs_filename,
+        crlf = buffer.crlf, encoding = buffer.encoding }
     end
   end
   local snapshot, err = panes.snapshot(pane)
   if not snapshot then return refuse(err) end
-  -- Editor state already includes Untitled text. File paths must cross Project roots.
+  -- Workspace state can omit text backed by this Project's recovery folder. A move cannot use that folder.
   for index, view in ipairs(views) do
-    if view.buffer and view.buffer.abs_filename and snapshot.views[index].state.filename then
-      snapshot.views[index].state.filename = view.buffer.abs_filename
+    local buffer, state = view.buffer, snapshot.views[index].state
+    if buffer and not buffer.filename and view:is(Editor) then
+      state.text = buffer:get_text(1, 1, math.huge, math.huge)
+      state.intellij_untitled_backing_current = nil
+      snapshot.views[index].untitled = true
+    elseif buffer and buffer.abs_filename and state.filename then
+      state.filename = buffer.abs_filename
     end
   end
   local project = core.root_project()
@@ -113,8 +120,18 @@ local function import(request)
   local pane
   local ok, err = pcall(function()
     local reason
-    pane, reason = panes.restore(request.snapshot, { focus = false })
+    pane, reason = panes.restore(request.snapshot, { focus = false, transfer = true })
     assert(pane, reason)
+    local views = panes.views(pane)
+    for index, saved in ipairs(request.snapshot.views) do
+      if saved.untitled or saved.state.intellij_untitled then
+        local buffer = views[index] and views[index].buffer
+        assert(type(saved.state.text) == "string" and buffer
+          and buffer:get_text(1, 1, math.huge, math.huge) == saved.state.text
+          and not not buffer.crlf == not not saved.state.crlf,
+          "The target did not restore the Untitled text")
+      end
+    end
     local placed
     placed, reason = require("core.pane_requests").place(pane, request.target)
     assert(placed, reason)
@@ -129,7 +146,7 @@ local function import(request)
   end
   core.log_quiet("Pane transfer %s import: %s", request.transfer, ok and "restored" or tostring(err))
   local sent, send_error = send("direct", request.source, { action = "transferred",
-    transfer = request.transfer, ok = ok, error = not ok and tostring(err) or nil })
+    transfer = request.transfer, ok = ok, contents_verified = ok, error = not ok and tostring(err) or nil })
   if not sent then return refuse(send_error) end
   if not ok then return refuse(err) end
   return true
@@ -142,9 +159,9 @@ local function transferred(request)
     return true
   end
   pending[request.transfer] = nil
-  if not request.ok then
+  if not request.ok or not request.contents_verified then
     reattach(transfer.terminals)
-    return refuse(request.error or "The target could not restore the Pane")
+    return refuse(request.error or "The target did not verify the Pane contents; the source stays open")
   end
   -- The target owns the Terminal Sessions now. Closing these Views leaves them running.
   for _, view in ipairs(transfer.terminals) do view:release_session() end
@@ -159,8 +176,10 @@ local function transferred(request)
   for index, view in ipairs(views) do
     if view ~= transfer.views[index] then changed = true end
   end
-  for buffer, revision in pairs(transfer.buffers) do
-    if buffer:get_change_id() ~= revision or (buffer.filename and buffer:is_dirty()) then changed = true end
+  for buffer, saved in pairs(transfer.buffers) do
+    if buffer.text_revision ~= saved.revision or buffer.abs_filename ~= saved.filename
+        or buffer.crlf ~= saved.crlf or buffer.encoding ~= saved.encoding
+        or (buffer.filename and buffer:is_dirty()) then changed = true end
   end
   if changed then
     for _, view in ipairs(transfer.terminals) do

@@ -235,10 +235,17 @@ if not core.__untitled_tabs_patched then
   end
 
   local editor_from_state = Editor.from_state
-  function Editor.from_state(state)
+  function Editor.from_state(state, opts)
+    local transfer = opts and opts.transfer
     if state and state.intellij_untitled then
+      if transfer then assert(type(state.text) == "string", "Untitled transfer has no text") end
       local existing_buffer = open_untitled_buffer_by_id(state.intellij_untitled_id)
       if existing_buffer then
+        if transfer then
+          assert(existing_buffer:get_text(1, 1, math.huge, math.huge) == state.text
+            and not not existing_buffer.crlf == not not state.crlf,
+            "The target Project has a different copy of this Untitled Buffer")
+        end
         local view = Editor(existing_buffer)
         apply_view_state(view, state)
         if core.log_quiet then core.log_quiet("Untitled recovery: reused open buffer for restored view %s", state.intellij_untitled_id) end
@@ -249,7 +256,13 @@ if not core.__untitled_tabs_patched then
     local view = editor_from_state(state)
     if view and view.buffer and state and state.intellij_untitled then
       tag_buffer(view.buffer, state.intellij_untitled_name, state.intellij_untitled_id)
-      local loaded_backing = untitled_recovery.attach_from_workspace_state(view.buffer, state)
+      local loaded_backing
+      if transfer then
+        -- The sender's live text is authoritative. A local recovery copy can belong to an earlier move.
+        untitled_recovery.mark_dirty(view.buffer)
+      else
+        loaded_backing = untitled_recovery.attach_from_workspace_state(view.buffer, state)
+      end
       local file_changes = package.loaded["plugins.gitdiff_highlight"]
       if file_changes and file_changes.refresh_buffer then file_changes.refresh_buffer(view.buffer) end
       if loaded_backing then apply_view_state(view, state) end

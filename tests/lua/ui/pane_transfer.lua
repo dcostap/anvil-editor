@@ -66,6 +66,109 @@ test.describe("Pane transfer", function()
     test.equal(panes.find(pane.id), pane)
   end)
 
+  for _, destination in ipairs { "missing", "stale", "open", "matching" } do
+    test.it("moves Untitled text safely when the target recovery copy is " .. destination, function()
+      local recovery = require "plugins.untitled_recovery"
+      local untitled = require "plugins.untitled_tabs"
+      local BufferRegistry = require "core.buffer_registry"
+      local Project = require "core.project"
+      local path = USERDIR .. PATHSEP .. "transfer-untitled-" .. sequence
+      test.ok(common.mkdirp(path))
+      local projects, buffers, registry = core.projects, core.buffers, core.buffer_registry
+      local pane = panes.create()
+      local buffer = untitled.tag_buffer(pane.current_view.buffer)
+      buffer.crlf = false
+      local text = "# Pasted Markdown\n\nText with **bold**, ñ and 日本語.\n"
+      buffer:insert(1, 1, text)
+      buffer:set_language_mode("Markdown")
+      local sibling = panes.create { factory = function() return Editor(buffer) end }
+      test.ok(recovery.flush_buffer(buffer, "transfer test", true))
+      test.ok(export(pane))
+      -- Another process has another Buffer registry and another Project recovery folder.
+      core.projects, core.buffers = { Project(path) }, {}
+      core.buffer_registry = BufferRegistry(core.buffers)
+      local moved, old
+      local ok, err = pcall(function()
+        if destination ~= "missing" then
+          old = untitled.tag_buffer(core.open_buffer(), "Untitled-1", buffer.intellij_untitled_id)
+          old.crlf = false
+          if destination == "matching" then
+            old:insert(1, 1, text)
+            old:set_language_mode("Markdown")
+          else
+            old:insert(1, 1, "different")
+            old:insert(1, 1, "older ")
+            old:insert(1, 1, "still ")
+          end
+          test.ok(recovery.flush_buffer(old, "transfer test", true))
+          if destination == "stale" then core.buffer_registry:remove(old, true) end
+        end
+        if destination == "open" then
+          test.not_ok(perform(sent[1].request))
+          test.equal(old:get_text(1, 1, math.huge, math.huge), "still older different")
+          return
+        end
+        test.ok(perform(sent[1].request))
+        moved = panes.active()
+        test.equal(moved.current_view.buffer:get_text(1, 1, math.huge, math.huge), text)
+        test.equal(moved.current_view.buffer.language_mode_override, "Markdown")
+        test.ok(moved.current_view.buffer:is_dirty())
+        if destination == "matching" then test.ok(moved.current_view.buffer == old) end
+        recovery.flush_buffer(moved.current_view.buffer, "transfer test", true)
+        local file = assert(io.open(moved.current_view.buffer.intellij_untitled_backing_path, "rb"))
+        local bytes = file:read("*a"); file:close()
+        test.equal(bytes, text .. "\n")
+      end)
+      if moved then panes.close(moved, { force = true }) end
+      core.projects, core.buffers, core.buffer_registry = projects, buffers, registry
+      test.ok(test.remove_tree(recovery.project_paths(path).root))
+      test.ok(test.remove_tree(path))
+      test.ok(ok, err)
+      if destination == "open" then
+        test.not_ok(perform(sent[2].request))
+        test.ok(panes.find(pane.id) == pane)
+        test.equal(buffer:get_text(1, 1, math.huge, math.huge), text)
+      else
+        test.ok(perform(sent[2].request))
+        test.not_ok(panes.find(pane.id))
+      end
+      test.equal(sibling.current_view.buffer:get_text(1, 1, math.huge, math.huge), text)
+    end)
+  end
+
+  test.it("keeps new text after undo and a replacement edit while the move waits", function()
+    local pane = panes.create()
+    local buffer = pane.current_view.buffer
+    buffer:insert(1, 1, "exported")
+    test.ok(export(pane))
+    test.ok(perform(sent[1].request))
+    buffer:undo()
+    buffer:insert(1, 1, "replacement")
+    test.ok(perform(sent[2].request))
+    test.ok(panes.find(pane.id) == pane)
+    test.equal(buffer:get_text(1, 1, math.huge, math.huge), "replacement")
+  end)
+
+  test.it("keeps the source when a target confirms without checking its text", function()
+    local pane = panes.create()
+    pane.current_view.buffer:insert(1, 1, "keep this")
+    test.ok(export(pane))
+    test.not_ok(perform { action = "transferred", transfer = transfer_id, ok = true })
+    test.ok(panes.find(pane.id) == pane)
+  end)
+
+  test.it("refuses an older transfer that has no Untitled text", function()
+    local untitled = require "plugins.untitled_tabs"
+    local pane = panes.create()
+    untitled.tag_buffer(pane.current_view.buffer):insert(1, 1, "keep this")
+    test.ok(export(pane))
+    sent[1].request.snapshot.views[1].state.text = nil
+    test.not_ok(perform(sent[1].request))
+    test.not_ok(perform(sent[2].request))
+    test.equal(panes.count(), 1)
+    test.equal(pane.current_view.buffer:get_text(1, 1, math.huge, math.huge), "keep this")
+  end)
+
   test.it("names a Project on a Machine by its key, and moves a Pane only where its files are", function()
     local machine_project = require "core.machine_project"
     local machine = "anvil-machine://0123456789abcdef0123456789abcdef/"
@@ -225,8 +328,11 @@ test.describe("Pane transfer", function()
 
   test.it("refuses text that exceeds the transport limit", function()
     local pane = panes.create()
-    pane.current_view.buffer:insert(1, 1, string.rep("x", 65536))
+    local buffer = require("plugins.untitled_tabs").tag_buffer(pane.current_view.buffer)
+    buffer:insert(1, 1, string.rep("x", 65536))
+    test.ok(require("plugins.untitled_recovery").flush_buffer(buffer, "transfer test", true))
     test.not_ok(export(pane))
     test.equal(#sent, 0)
+    test.ok(panes.find(pane.id) == pane)
   end)
 end)

@@ -1729,7 +1729,7 @@ function M.restore(snapshot, opts)
   local ok, result = pcall(function()
     local owner
     for index, saved in ipairs(snapshot.views) do
-      local view = assert(require(saved.module).from_state(saved.state),
+      local view = assert(require(saved.module).from_state(saved.state, opts),
         "Cannot restore " .. saved.module)
       if M.pane_for_view(view) then error("Restored View already belongs to a Pane") end
       views[index] = view
