@@ -368,6 +368,7 @@ local function update_manifest_entry(buffer, fields)
   entry.updated_at = os.time()
   entry.created_at = entry.created_at or entry.updated_at
   entry.explicit_closed = false
+  entry.sql_connection_id = buffer.sql_connection_id
   write_manifest_for(paths, manifest)
   return entry
 end
@@ -691,6 +692,9 @@ function M.attach_from_workspace_state(buffer, state)
   local paths = project_paths(buffer.intellij_untitled_project_path)
   local manifest = load_manifest_for(paths)
   local manifest_buffer = manifest_entry(manifest, buffer.intellij_untitled_id)
+  if manifest_buffer and type(manifest_buffer.sql_connection_id) == "string" then
+    buffer.sql_connection_id = manifest_buffer.sql_connection_id
+  end
   local restored_language_mode = state.language_mode or (manifest_buffer and manifest_buffer.language_mode)
   local restored_inference = state.inferred_language_mode
       or (manifest_buffer and manifest_buffer.inferred_language_mode)
@@ -799,6 +803,9 @@ local function open_recovered_buffer(entry, paths, backing, reason)
   buffer.display_name = buffer.intellij_untitled_name
   buffer.intellij_untitled_id = sanitize_id(entry.id) or new_buffer_id()
   buffer.intellij_untitled_project_path = paths.project
+  if type(entry.sql_connection_id) == "string" then
+    buffer.sql_connection_id = entry.sql_connection_id
+  end
   buffer.intellij_untitled_backing_rel = entry.backing or backing_rel_for_id(buffer.intellij_untitled_id)
   buffer.intellij_untitled_backing_path, buffer.intellij_untitled_backing_rel = backing_abs_for(paths.project, buffer.intellij_untitled_id, buffer.intellij_untitled_backing_rel)
   if type(entry.inferred_language_mode) == "string" then

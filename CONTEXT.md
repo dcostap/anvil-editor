@@ -155,6 +155,18 @@ _Avoid_: background save, auto-save
 An editable Buffer that is not linked to a filesystem file.
 _Avoid_: scratch buffer, unnamed file
 
+**SQL Query**:
+A SQL Buffer associated with a Database Connection. It can remain Untitled or have a file path.
+_Avoid_: SQL Commander, query tab
+
+**Database Connection**:
+A named configuration that identifies a database server, database, and authentication method for SQL Queries.
+_Avoid_: database profile
+
+**Databases Dialog**:
+The Dialog for managing Database Connections and opening SQL Queries.
+_Avoid_: database manager, database hub
+
 **Language Mode**:
 The language Anvil uses to interpret a Buffer for syntax highlighting and other language-aware behavior. It is normally detected from the file name or content, but a Buffer may have an explicit Language Mode override.
 _Avoid_: File type, syntax mode

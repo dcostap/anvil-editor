@@ -18,6 +18,9 @@ anvil_sources = [
     'api/layout_rows.c',
     'api/worker_pool.c',
     'api/keyboard.c',
+    'api/sql_server.c',
+    'sql_context.c',
+    'sql_server.c',
     'fuzzy.c',
     'git_status_index.c',
     'worker_pool.c',
@@ -220,6 +223,7 @@ if host_machine.system() == 'windows'
     anvil_deps += cc.find_library('shell32', required: true)
     anvil_deps += cc.find_library('ole32', required: true)
     anvil_deps += cc.find_library('crypt32', required: true)
+    anvil_deps += cc.find_library('odbc32', required: true)
     anvil_rc += windows.compile_resources('../resources/icons/icon.rc',
         depend_files : files('../resources/icons/icon.ico')
     )
@@ -313,6 +317,19 @@ if host_machine.system() == 'windows'
     test('terminal-replay', terminal_replay_test, env: anvil_test_env, suite: 'anvil')
 endif
 test('fuzzy', fuzzy_test, env: anvil_test_env)
+
+sql_context_test = executable('sql_context_test',
+    ['../tests/native/sql_context_test.c', 'sql_context.c'],
+    include_directories: include_directories('.'))
+test('sql-context', sql_context_test, env: anvil_test_env, suite: 'anvil')
+if host_machine.system() == 'windows'
+    sql_server_integration = executable('sql_server_integration',
+        ['../tests/native/sql_server_integration.c', 'sql_server.c'],
+        include_directories: include_directories('.'), dependencies: [cc.find_library('odbc32')])
+    test('sql-server-integration', find_program('powershell.exe'),
+        args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', files('../tests/sql-server-integration.ps1'), '-Probe', sql_server_integration],
+        env: anvil_test_env, suite: 'anvil', timeout: 180)
+endif
 
 project_sidebar_test = executable('project_sidebar_test',
     ['../tests/native/project_sidebar_test.c', 'project_sidebar.c'],

@@ -29,6 +29,7 @@ local core_plugins = {
   file_types = true,
   filetree = true,
   project_paths = true,
+  sql_server = true,
   global_prompt_bar_sanitize = true,
   intellij_actions = true,
   intellij_find = true,
@@ -368,6 +369,7 @@ config.force_scrollbar_status = "contracted"
 require_core_plugin "bookmarks"
 require_core_plugin "filetree"
 require_core_plugin "project_paths"
+require_core_plugin "sql_server"
 require_core_plugin "terminal"
 -- Use hard tabs for indentation, displayed at 4 columns.
 config.indent_size = 4

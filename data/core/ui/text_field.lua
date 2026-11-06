@@ -14,7 +14,7 @@ TextField.focusable = true
 TextField.takes_text = true
 TextField.cursor = "ibeam"
 
----@param options { text: string?, placeholder: string?, on_submit: (fun(text: string): boolean?, string?)?, on_change: fun(text: string)?, enabled: boolean? }
+---@param options { text: string?, placeholder: string?, on_submit: (fun(text: string): boolean?, string?)?, on_change: fun(text: string)?, enabled: boolean?, secret: boolean? }
 function TextField:new(options)
   TextField.super.new(self, options)
   self.input = LineInput(options.text or "")
@@ -22,6 +22,7 @@ function TextField:new(options)
   self.placeholder = options.placeholder
   self.on_submit = options.on_submit
   self.on_change = options.on_change
+  self.secret = options.secret == true
   self.scroll = 0
   self.error = nil
 end
@@ -78,6 +79,7 @@ end
 
 function TextField:perform(name)
   if not self.enabled then return false end
+  if self.secret and (name == "copy" or name == "cut") then return true end
   local before_text, before_caret, before_anchor = self.input.text, self.input.caret, self.input.anchor
   if not self.input:perform(name) then return false end
   if self.input.text ~= before_text then
@@ -120,6 +122,11 @@ local function text_x(self)
 end
 
 function TextField:offset_at(x)
+  if self.secret then
+    local width = ui.font():get_width("*")
+    local count = math.max(0, math.min(utf8.len(self.input.text), math.floor((x - text_x(self)) / width + 0.5)))
+    return count == 0 and 0 or (utf8.offset(self.input.text, count + 1) or (#self.input.text + 1)) - 1
+  end
   return self.input:offset_at(ui.font(), x - text_x(self))
 end
 
@@ -147,6 +154,11 @@ function TextField:on_mouse_released()
   return true
 end
 
+local function offset_x(field, font, pos)
+  if field.secret then return font:get_width("*") * utf8.len(field.input.text:sub(1, pos)) end
+  return font:get_width(field.input.text:sub(1, pos))
+end
+
 function TextField:draw(focused)
   local m = ui.metrics()
   local x, y, w, h, r = self.x, self.y, self.w, self.h, m.radius
@@ -163,23 +175,30 @@ function TextField:draw(focused)
   local available = w - 2 * m.pad_x
   local ty = y + math.floor((h - font:get_height()) / 2)
   local caret_w = math.max(1, math.floor(1.5 * SCALE))
-  local function offset_x(pos) return font:get_width(input.text:sub(1, pos)) end
   -- The text scrolls as little as it can to keep the caret in view.
-  local caret_x = offset_x(input.caret)
-  local scroll = math.min(self.scroll, math.max(0, offset_x(#input.text) + caret_w - available))
+  local caret_x = offset_x(self, font, input.caret)
+  local scroll = math.min(self.scroll, math.max(0, offset_x(self, font, #input.text) + caret_w - available))
   scroll = math.max(0, math.min(caret_x, math.max(scroll, caret_x + caret_w - available)))
   self.scroll = focused and scroll or 0
   local tx = x + m.pad_x - self.scroll
   core.push_clip_rect(x + m.pad_x, y, available, h)
   local first, last = input:selection()
   if focused and first ~= last then
-    local left = offset_x(first)
-    renderer.draw_rect(tx + left, ty, offset_x(last) - left, font:get_height(), style.selection)
+    local left = offset_x(self, font, first)
+    renderer.draw_rect(tx + left, ty, offset_x(self, font, last) - left, font:get_height(), style.selection)
   end
   if input.text == "" and self.placeholder then
     renderer.draw_text(font, self.placeholder, tx, ty, style.dim)
   end
-  renderer.draw_text(font, input.text, tx, ty, self.enabled and style.text or style.card_text)
+  local shown = input.text
+  if self.secret then
+    local count = utf8.len(input.text)
+    if count ~= self.mask_length then
+      self.mask_length, self.mask_text = count, string.rep("*", count)
+    end
+    shown = self.mask_text
+  end
+  renderer.draw_text(font, shown, tx, ty, self.enabled and style.text or style.card_text)
   if focused then renderer.draw_rect(tx + caret_x, ty, caret_w, font:get_height(), style.accent) end
   core.pop_clip_rect()
 end

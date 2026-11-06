@@ -1,0 +1,58 @@
+param([Parameter(Mandatory=$true)][string]$Probe)
+$ErrorActionPreference = 'Stop'
+if ($env:ANVIL_SQL_INTEGRATION -ne '1') {
+    Write-Output 'SKIP: Set ANVIL_SQL_INTEGRATION=1 to test an isolated LocalDB instance.'
+    exit 77
+}
+$localdb = Get-Command SqlLocalDB.exe -ErrorAction SilentlyContinue
+if (!$localdb) {
+    $localdb = Get-ChildItem 'C:\Program Files\Microsoft SQL Server' -Filter SqlLocalDB.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+}
+if (!$localdb) { Write-Output 'SKIP: SQL Server LocalDB is not installed.'; exit 77 }
+$localdbPath = if ($localdb.Source) { $localdb.Source } else { $localdb.FullName }
+$drivers = (Get-Item 'HKLM:\SOFTWARE\ODBC\ODBCINST.INI\ODBC Drivers' -ErrorAction SilentlyContinue).Property
+if (!($drivers -contains 'ODBC Driver 18 for SQL Server') -and !($drivers -contains 'ODBC Driver 17 for SQL Server')) {
+    Write-Output 'SKIP: Microsoft ODBC Driver 18 or 17 is not installed.'
+    exit 77
+}
+$name = 'AnvilTest_' + [Guid]::NewGuid().ToString('N')
+$folder = Join-Path ([System.IO.Path]::GetTempPath()) $name
+[void](New-Item -ItemType Directory -Path $folder)
+$created = $false
+$connection = $null
+$result = 1
+try {
+    & $localdbPath create $name
+    if ($LASTEXITCODE -ne 0) { throw 'LocalDB instance creation failed.' }
+    $created = $true
+    & $localdbPath start $name
+    if ($LASTEXITCODE -ne 0) { throw 'LocalDB instance startup failed.' }
+    $connection = New-Object System.Data.SqlClient.SqlConnection("Server=(localdb)\$name;Database=master;Integrated Security=true;Connect Timeout=30")
+    $connection.Open()
+    $command = $connection.CreateCommand()
+    $data = (Join-Path $folder 'data.mdf').Replace("'", "''")
+    $log = (Join-Path $folder 'log.ldf').Replace("'", "''")
+    $command.CommandText = "CREATE DATABASE AnvilTest ON (NAME=AnvilTest, FILENAME=N'$data') LOG ON (NAME=AnvilTestLog, FILENAME=N'$log')"
+    [void]$command.ExecuteNonQuery()
+    $connection.ChangeDatabase('AnvilTest')
+    $command.CommandText = 'CREATE SCHEMA sales'
+    [void]$command.ExecuteNonQuery()
+    $command.CommandText = 'CREATE TABLE sales.customers (id int IDENTITY PRIMARY KEY, [na]]me] nvarchar(80) NULL); INSERT sales.customers ([na]]me]) VALUES (N''Example'')'
+    [void]$command.ExecuteNonQuery()
+    & $Probe "(localdb)\$name"
+    $result = $LASTEXITCODE
+    $command.CommandText = 'SELECT COUNT(*) FROM sales.customers'
+    if ($command.ExecuteScalar() -ne 1) { throw 'The metadata read changed table data.' }
+    $command.Dispose()
+} finally {
+    if ($connection) { $connection.Dispose() }
+    [System.Data.SqlClient.SqlConnection]::ClearAllPools()
+    if ($created) {
+        & $localdbPath stop $name -k
+        if ($LASTEXITCODE -ne 0) { throw "Could not stop test instance $name" }
+        & $localdbPath delete $name
+        if ($LASTEXITCODE -ne 0) { throw "Could not remove test instance $name" }
+    }
+    Remove-Item -LiteralPath $folder -Recurse -Force
+}
+exit $result
