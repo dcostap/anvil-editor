@@ -2436,13 +2436,6 @@ function SidebarView:draw_project(row, y, width, now)
   local left, right = m.pad, width - m.pad
   local project = row.project
   local dormant = project.state == "dormant"
-  -- A line in the middle of the gap above the Project separates it from the rows above. It takes no input.
-  -- A lifted Project leaves its line behind until it lands.
-  local line = row.lifted and self.lift and 1 - self.lift.amount or 1
-  if row.gap and line > 0.01 then
-    renderer.draw_rect(left, math.floor(y - m.project_gap / 2), right - left, math.max(1, math.floor(SCALE)),
-      fade(style.divider, line))
-  end
   local asked = self.unload_shown
   local asking = asked and asked.key == row.id_key and asked.amount
   if asking then
