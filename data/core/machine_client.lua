@@ -76,6 +76,35 @@ local function write_file(path, text)
   return system.replace_file(temporary, path)
 end
 
+local function records_directory()
+  return USERDIR .. PATHSEP .. "machines"
+end
+
+-- The records of the paired Machines, by host. Each has `machine`, `host`, `port`, `level` and `path`, its file.
+function MachineClient.records()
+  local records = {}
+  for _, name in ipairs(system.list_dir(records_directory()) or {}) do
+    local path = records_directory() .. PATHSEP .. name
+    local file = name:match("^%x+%.json$") and io.open(path, "rb")
+    local ok, record = pcall(json.decode, file and file:read("*a") or "")
+    if file then file:close() end
+    if ok and type(record) == "table" and type(record.machine) == "string" and type(record.host) == "string" then
+      records[#records + 1] = {machine = record.machine, host = record.host, port = record.port,
+        level = record.level, device = record.device, path = path}
+    end
+  end
+  table.sort(records, function(a, b) return a.host:lower() < b.host:lower() end)
+  return records
+end
+
+-- Deletes the record of `machine`. Its token is gone, so this PC must pair again to reach it.
+function MachineClient.forget(machine)
+  if not machine:match("^%x+$") then return false end
+  local ok, err = os.remove(records_directory() .. PATHSEP .. machine .. ".json")
+  core.log_quiet("Forgot Machine %s: %s", machine, ok and "done" or tostring(err))
+  return ok ~= nil
+end
+
 -- Pairs with the Machine at `host` and `port` through a pairing code. Saves the Machine's record in
 -- `USERDIR/machines` with its token protected for this user, then calls `on_done(err, path)`.
 -- A failure does not try again, because each wrong code counts as an attempt.
@@ -113,7 +142,7 @@ function MachineClient.pair(host, port, code, name, on_done)
     end
     local protected, protect_err = machine.protect(hello.device.token)
     if not protected then return done({code = "protect_failed", message = protect_err}) end
-    local directory = USERDIR .. PATHSEP .. "machines"
+    local directory = records_directory()
     net.private_directory(directory)
     local path = directory .. PATHSEP .. hello.machine .. ".json"
     ok, err = write_file(path, json.encode {version = 1, machine = hello.machine, host = host, port = port,

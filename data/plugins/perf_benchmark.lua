@@ -1227,6 +1227,30 @@ local function scenario_is_ready()
     file_types.open()
     return false
   end
+  if benchmark.scenario == "machines-dialog" or benchmark.scenario == "machines-dialog-others" then
+    -- The Machines Dialog with fixed rows. The scene connects to no server and does not run Tailscale.
+    if require("core.ui.dialog").current() then return true end
+    config.transitions = false
+    require("core.machine_access").run = function(_, on_done) on_done(nil, "missing") end
+    local open = require("core.machine_dialog").open()
+    open.owner:close()
+    local function closed() end
+    open.owner = { state = "ready", request = closed, close = closed }
+    open.access = { state = "on", address = "desktop-toros8f.tailf9fe20.ts.net:7690" }
+    open.code = { code = "482913", level = "full", expires = system.get_time() + 271.5, made = os.time() }
+    open.device_list:set_rows({
+      { id = "a", name = "2412DPC0AG", level = "view", paired = os.time() - 86400 },
+      { id = "b", name = "PC-035", level = "full", paired = os.time() - 3 * 86400 },
+    })
+    open.clients = { a = { state = "ready", close = closed }, b = { state = "waiting", error = "Offline", close = closed } }
+    open.machine_list:set_rows({
+      { machine = "a", host = "pc-035.tailf9fe20.ts.net", port = 7690 },
+      { machine = "b", host = "laptop.tailf9fe20.ts.net", port = 7690 },
+    })
+    if benchmark.scenario == "machines-dialog-others" then open:show_page("others") end
+    open:update_buttons()
+    return false
+  end
   if benchmark.scenario == "context-menu-markdown" then
     -- The Markdown Context Menu at a caret, with its Insert submenu open.
     local context_menu = require "core.context_menu"

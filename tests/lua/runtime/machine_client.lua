@@ -1,6 +1,4 @@
-local command = require "core.command"
 local common = require "core.common"
-local core = require "core"
 local json = require "core.json"
 local machine = require "machine"
 local MachineClient = require "core.machine_client"
@@ -124,17 +122,11 @@ test.describe("Machine client", function()
     return table.unpack(reply, 1, reply.n)
   end
 
-  test.it("pairs with the Machine: Pair command and connects through the saved record", function(context)
+  test.it("pairs with a code and connects through the saved record", function(context)
     local _, pairing = call(context.client, "pairing.start", {level = "view"})
-    test.ok(command.get_metadata("machine:pair").palette, "The Command Palette lists Machine: Pair")
-    command.perform("machine:pair")
-    core.global_prompt_bar:set_text("127.0.0.1:" .. context.discovery.port)
-    core.global_prompt_bar:submit()
-    core.global_prompt_bar:set_text(pairing.code)
-    core.global_prompt_bar:submit()
-    local path = USERDIR .. PATHSEP .. "machines" .. PATHSEP .. context.client.machine .. ".json"
-    local deadline = system.get_time() + 10
-    while not system.get_file_info(path) and system.get_time() < deadline do coroutine.yield(0.01) end
+    local err, path = pair(context, pairing.code)
+    test.is_nil(err)
+    test.equal(path, USERDIR .. PATHSEP .. "machines" .. PATHSEP .. context.client.machine .. ".json")
 
     -- The record keeps the device's token only in protected form.
     local text = read_file(path)
