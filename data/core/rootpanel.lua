@@ -767,12 +767,16 @@ function RootPanel:update()
   -- Confirmations have their own button focus ring. Their View spans the content area, not just the card.
   if target == core.nag_view then target = nil end
   local pane = target and panes().pane_for_view(target)
-  -- A new file in the same Pane keeps the same focus region. Compound Views use their focused child.
-  local identity = pane and pane.current_view == target and pane or target
   local kind = self.focus_feedback_kind
-  local active, changed, finished = self.focus_feedback:update(identity, nil, kind)
   -- A remote request can arrive before this Project gains keyboard focus.
   if target then self.focus_feedback_kind = nil end
+  -- A whole-Pane flash only helps when its group has more than one Pane.
+  if pane and pane.current_view == target and pane.group.root.kind == "pane" then
+    target, pane = nil, nil
+  end
+  -- A new file in the same Pane keeps the same focus region. Compound Views use their focused child.
+  local identity = pane and pane.current_view == target and pane or target
+  local active, changed, finished = self.focus_feedback:update(identity, nil, kind)
   self.focus_feedback_view = target
   if active or changed or finished then core.redraw = true end
   if changed or (target and kind) then

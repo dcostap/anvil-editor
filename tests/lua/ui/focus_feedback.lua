@@ -126,6 +126,34 @@ test.describe("Focus feedback surfaces", function()
     inside(view)
   end
 
+  test.it("does not flash an unsplit Pane when focus changes or returns", function()
+    local first = panes.create {factory=function() return View() end}
+    local second = panes.create {factory=function() return View() end}
+    local root = core.root_panel
+    root:update()
+    draw(function() root:draw() end)
+    test.same(rectangles, {}, "A one-Pane group needs no focus feedback")
+    panes.focus(first, "numbered")
+    root:update()
+    for _ = 1, 10 do
+      clock = clock + 0.05
+      root:update()
+      draw(function() root:draw() end)
+      test.same(rectangles, {}, "Numbered focus must not flash a one-Pane group")
+    end
+    test.equal(core.active_view, first.current_view)
+    focused = false
+    root:update()
+    focused = true
+    root:update()
+    draw(function() root:draw() end)
+    test.same(rectangles, {}, "Window focus must not flash a one-Pane group")
+    panes.focus(second)
+    root:update()
+    draw(function() root:draw() end)
+    test.same(rectangles, {}, "Changing groups must not flash an unsplit Pane")
+  end)
+
   test.it("dims pointer focus without changing ordinary focus feedback", function()
     local left = panes.create {factory=function() return View() end}
     local right = panes.split(left, "right", {factory=function() return View() end})
@@ -154,7 +182,7 @@ test.describe("Focus feedback surfaces", function()
     local first = panes.create {factory=function() return View() end}
     recent.observe(first)
     clock = clock + 1
-    local second = panes.create {factory=function() return View() end}
+    local second = panes.split(first, "right", {factory=function() return View() end})
     recent.observe(second)
     local root = core.root_panel
     root:update()
@@ -169,6 +197,7 @@ test.describe("Focus feedback surfaces", function()
 
   test.it("starts remote numbered feedback only after the destination gains focus", function()
     local pane = panes.create {factory=function() return View() end}
+    panes.split(pane, "right", {factory=function() return View() end})
     local root = core.root_panel
     root:update()
     focused = false
@@ -233,6 +262,7 @@ test.describe("Focus feedback surfaces", function()
 
   test.it("draws Pane feedback below popups and the app overlay", function()
     local pane = panes.create {factory=function() return View() end}
+    panes.split(pane, "right", {factory=function() return View() end})
     local root = core.root_panel
     root:update()
     -- The draw index of the first rectangle in each color.
@@ -264,7 +294,8 @@ test.describe("Focus feedback surfaces", function()
   end)
 
   test.it("does not highlight the content area when a confirmation takes focus", function()
-    local pane = panes.create {factory=function() return View() end}
+    local first = panes.create {factory=function() return View() end}
+    local pane = panes.split(first, "right", {factory=function() return View() end})
     local root = core.root_panel
     root:update()
     clock = clock + 10
