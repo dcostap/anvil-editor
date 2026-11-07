@@ -252,12 +252,12 @@ require_core_plugin "tabular_data_preview"
 require_core_plugin "centered_editor"
 require_core_plugin "theme_editor"
 require_core_plugin "keyboard_input_checker"
--- With no Panes, Alt+Left reopens the last closed Pane instead of navigating
--- through Navigation History. Fuzzy Searcher installs a higher-priority
--- picker-local binding immediately below this one.
+-- With no selected Pane, Alt+Left reopens the last closed Pane instead of
+-- navigating through Navigation History. Fuzzy Searcher installs a
+-- higher-priority picker-local binding immediately below this one.
 keymap.add({
   ["alt+left"] = function(...)
-    if panes.count() > 0 then return false end
+    if panes.active() then return false end
     return command.perform("core:reopen_last_closed_pane", ...)
   end,
 })

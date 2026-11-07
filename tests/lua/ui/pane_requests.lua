@@ -85,10 +85,11 @@ test.describe("Pane requests", function()
   test.it("takes the keyboard from the Sidebar only when a Sidebar close asks first", function()
     local NagView = require "core.nagview"
     local stroke, taken = "ctrl+alt+shift+f12", {}
-    local saved_nag, saved_focus = core.nag_view, system.focus_project_sidebar
+    local saved_nag, saved_focus, saved_has_focus = core.nag_view, system.focus_project_sidebar, system.window_has_focus
     core.nag_view = NagView()
-    -- The shell is the boundary: record the keyboard request instead of sending it.
+    -- The shell is the boundary: record the keyboard request instead of sending it. The Sidebar has the keyboard.
     system.focus_project_sidebar = function(focused) taken[#taken + 1] = focused; return true end
+    system.window_has_focus = function() return false end
     keymap.add {[stroke] = "pane:close"}
     local asking = panes.create {factory = function()
       local view = View()
@@ -110,7 +111,7 @@ test.describe("Pane requests", function()
     keymap.unbind(stroke, "pane:close")
     core.nag_view.queue = {}
     if core.nag_view.visible then core.nag_view:next() end
-    core.nag_view, system.focus_project_sidebar = saved_nag, saved_focus
+    core.nag_view, system.focus_project_sidebar, system.window_has_focus = saved_nag, saved_focus, saved_has_focus
     assert(ok, err)
   end)
 

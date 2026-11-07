@@ -1789,7 +1789,6 @@ local function commit_close(pane)
   closed_panes[#closed_panes + 1] = ok and snapshot or { error = tostring(snapshot) }
   if #closed_panes > 20 then table.remove(closed_panes, 1) end
   quiet("Pane close snapshot: %s (%s)", pane.id, ok and "saved" or tostring(snapshot))
-  local old_index = navigable_index(pane)
   local closed_active_view = M.pane_for_view(core.active_view) == pane
   local group = pane.group
   local old_group_order = layout.leaves(group.root)
@@ -1810,20 +1809,21 @@ local function commit_close(pane)
     if index then table.remove(M.groups, index) end
     M.groups_by_id[group.id] = nil
   end
-  local survivors = M.ordered()
-  local group_survivors = group.root and layout.leaves(group.root) or {}
-  local next_pane = nearest_after_removal(group_survivors, old_group_index)
-    or nearest_after_removal(M.navigable(), old_index) or survivors[1]
-  if #survivors == 0 then
-    M.active_pane = nil
-    M.visible_group_value = nil
-    if closed_active_view and core.clear_active_view then core.clear_active_view(core.active_view) end
-  elseif M.active_pane == pane or not M.contains(M.active_pane) then
+  -- The active Pane's group keeps the selection while it has Panes. Otherwise no Pane is selected, and a Project
+  -- that has the keyboard gives it to the Sidebar, whose cursor then shows this Project's row.
+  if M.active_pane == pane then
+    local next_pane = group.root and nearest_after_removal(layout.leaves(group.root), old_group_index)
     M.active_pane = next_pane
-    M.visible_group_value = next_pane.group
-    focus_view(next_pane)
-  elseif M.visible_group_value == group and not group.root then
-    M.visible_group_value = M.active_pane.group
+    M.visible_group_value = next_pane and next_pane.group
+    if next_pane then
+      focus_view(next_pane)
+    else
+      if closed_active_view and core.clear_active_view then core.clear_active_view(core.active_view) end
+      if M.count() > 0 and core.window and system.window_has_focus(core.window) then
+        local sent = system.focus_project_sidebar(true)
+        quiet("Pane close selects no Pane; Sidebar takes the keyboard: sent=%s", tostring(sent))
+      end
+    end
   end
   after_mutation("closed " .. pane.id)
 end
@@ -1981,6 +1981,7 @@ function M.save_workspace_state(save_view)
   if M.active_pane and valid[M.active_pane] and saved_groups[M.active_pane.group] then
     state.focused_pane_id = M.active_pane.id
   end
+  state.unselected = not M.active_pane or nil
   return state
 end
 
@@ -2121,7 +2122,8 @@ function M.restore_workspace_state(state, load_view)
   end
 
   local first = M.navigable()[1]
-  local visible = M.groups_by_id[state.visible_group_id] or first and first.group or M.groups[1]
+  local visible = not state.unselected
+    and (M.groups_by_id[state.visible_group_id] or first and first.group or M.groups[1]) or nil
   local focused = M.panes_by_id[state.focused_pane_id]
   if not focused or not visible or focused.group ~= visible then
     focused = visible and layout.leaves(visible.root)[1] or nil
@@ -2225,10 +2227,10 @@ function M.validate()
     assert(seen_owned_views[owner], "focus target owner is not retained by a Pane")
     assert(owner.__pane_owner == seen_owned_views[owner], "focus target owner points to the wrong Pane")
   end
-  if not next(seen_panes) then
-    assert(M.active_pane == nil and M.visible_group_value == nil, "zero Panes require no active Pane or visible group")
+  if not next(seen_panes) or not M.active_pane then
+    assert(M.active_pane == nil and M.visible_group_value == nil, "no active Pane requires no visible group")
   else
-    assert(M.active_pane and seen_panes[M.active_pane], "active Pane is invalid")
+    assert(seen_panes[M.active_pane], "active Pane is invalid")
     assert(M.visible_group_value and M.groups_by_id[M.visible_group_value.id] == M.visible_group_value, "visible Pane Group is invalid")
     assert(M.active_pane.group == M.visible_group_value, "active Pane must belong to visible Pane Group")
   end

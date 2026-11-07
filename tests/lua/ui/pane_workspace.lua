@@ -71,6 +71,20 @@ test.describe("Pane Workspace state", function()
     test.equal(panes.visible_group(), panes.active().group)
   end)
 
+  test.it("round-trips a Project that selects no Pane", function()
+    local one = panes.create { factory = factory("one") }
+    panes.create { factory = factory("two") }
+    panes.focus(one)
+    panes.close(one, { force = true })
+    local state = panes.save_workspace_state(save_view)
+
+    panes.reset_for_tests()
+    test.ok(panes.restore_workspace_state(state, load_view))
+    test.same(names(), { "two" })
+    test.is_nil(panes.active())
+    test.is_nil(panes.visible_group())
+  end)
+
   test.it("round-trips one Editor through its View state protocol", function()
     local old_buffers, old_registry = core.buffers, core.buffer_registry
     core.buffers = {}

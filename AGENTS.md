@@ -90,6 +90,8 @@ The combined history compresses repeated consecutive Pane sequences, such as A â
 Each Project keeps its last 40 visits (`core.pane_history`) and sends them as `history` in its Pane report. Each entry has the Pane ID and the time in milliseconds. A move entry also names the entry that it showed (`to`). A move to another Project sends that name in its `focus` Pane request.
 Moves skip closed, Snoozed and Dormant Panes. Visits are not saved across restarts. Run `ui/global_pane_history.lua`, `ui/recent_panes.lua` and `ui/pane_requests.lua` after changes.
 
+When the active Pane closes, the next Pane in its Pane Group takes focus. When the group has no other Pane, the Project selects no Pane and shows its wallpaper. The other Pane Groups stay. If the Project has the keyboard, the Sidebar takes it, with its cursor on the Project's row. A Workspace saves and restores this state. With no selected Pane, Alt+Left reopens the last closed Pane. Run `ui/panes.lua` and `ui/pane_workspace.lua` after changes.
+
 A Terminal Session is busy while its shell has a child process.
 A new shell is idle until its host reports busy state, so closing it during startup asks nothing.
 A session that attaches to an existing host counts as busy until that report, because a command can still run there.
@@ -244,7 +246,7 @@ The Sidebar saves each Snooze as a Unix time in `storage/sidebar/snoozes`, besid
 A Snooze whose time has not come stays saved, even when the model does not list its Terminal Session.
 The Sidebar then sends `snooze` or `unsnooze` to the Pane's Project through the direct route.
 The Project moves a Snoozed Pane into its own Pane Group with the `snoozed` flag, saved in the Workspace.
-Pane navigation, Pane numbers, the Title Bar and the close fallback skip it. A focus request still shows it.
+Pane navigation, Pane numbers and the Title Bar skip it. A focus request still shows it.
 A Sidebar drop cannot snooze a Pane. The Snoozed fold takes a drop after the Project's other Tabs. A Snoozed Tab that the user drops, in the Sidebar or on the Project's Panes, wakes. The Sidebar removes its saved time first, and the Project wakes it before a drop on its Panes, because the two requests take different routes.
 The Pane report marks it, and the Sidebar lists it in the collapsed Snoozed fold at the end of its Project.
 The fold shows the mark of a Snoozed Pane that needs the user, also in a collapsed Project.
