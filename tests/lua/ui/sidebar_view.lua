@@ -1938,11 +1938,11 @@ test.describe("Sidebar motion", function()
       local view = SidebarView(function() end)
       view:set_model({project(1, "Alpha"), project(2, "Beta")})
       view:on_focus(true)
-      -- The cursor's highlight is the only box in the row selection colour while the Sidebar has focus.
+      -- The cursor's highlight is the only box in the cursor colour while the Sidebar has focus.
       local function highlight_y()
         local y
         with_renderer({draw_rounded_rect = function(_, top, _, _, _, color)
-          if color == style.row_selection then y = top end
+          if color == style.sidebar_cursor then y = top end
         end}, function() view:draw(400, 800) end)
         return test.not_nil(y, "The cursor has no highlight")
       end

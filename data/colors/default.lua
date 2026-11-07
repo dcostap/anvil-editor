@@ -300,6 +300,10 @@ style.drop_target_accent = p("ctrl_clickable")
 style.drop_target_background = { common.color "rgba(89, 160, 250, 0.12)" }
 -- Project Sidebar: a row under the pointer, and a dragged Tab with its shadow.
 style.sidebar_hover = { 255, 255, 255, 14 }
+-- Project Sidebar selection. Without the keyboard, the selected row is grey. With it, the cursor row is the only coloured row.
+style.sidebar_selection = { 188, 201, 217, 33 }
+style.sidebar_selection_behind = { 188, 201, 217, 15 }
+style.sidebar_cursor = { 89, 160, 250, 56 }
 
 style.sidebar_card = c("313338")
 style.sidebar_shadow = { 0, 0, 0, 110 }

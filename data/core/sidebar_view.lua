@@ -2607,7 +2607,7 @@ function SidebarView:draw_lifted(width, active_color, now)
   renderer.draw_rounded_rect(x, y, w, h, m.radius, fade(style.sidebar_card, amount))
   self:draw_containers("main", width, true)
   self:draw_mark("active", "main", width, active_color, true)
-  self:draw_mark("cursor", "main", width, style.row_selection, true)
+  self:draw_mark("cursor", "main", width, style.sidebar_cursor, true)
   for _, row in ipairs(self.rows) do
     if row.lifted then self:draw_shown(row, origin + row.shown.y, row.shown.alpha * row.shown.dim, width, now) end
   end
@@ -2743,14 +2743,14 @@ function SidebarView:draw(width, height)
   self:draw_search(width, height)
   local top, main_bottom = self:shown_list_top(), self:main_bottom(self.shown.bottom_h)
   local bottom_top = self:bottom_area(self.shown.bottom_h)
-  local active_color = self.focused and style.row_selection_inactive or style.row_selection
+  local active_color = self.focused and style.sidebar_selection_behind or style.sidebar_selection
   for _, area in ipairs({{"main", top, main_bottom}, {"bottom", bottom_top, height}}) do
     local name, area_top, area_bottom = area[1], area[2], area[3]
     renderer.set_clip_rect(0, area_top, width, math.max(0, area_bottom - area_top))
     self:draw_containers(name, width, false)
     self:draw_mark("hover", name, width, style.sidebar_hover, false)
     self:draw_mark("active", name, width, active_color, false)
-    self:draw_mark("cursor", name, width, style.row_selection, false)
+    self:draw_mark("cursor", name, width, style.sidebar_cursor, false)
     self:draw_drop(name, false)
     local origin = self:shown_origin(name)
     for _, item in ipairs(self.leaving) do
