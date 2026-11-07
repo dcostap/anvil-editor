@@ -535,6 +535,17 @@ function SidebarView:selected_project()
   end
 end
 
+-- Pane History belongs to the Window, not the Sidebar cursor's row.
+function SidebarView:move_pane_history(direction)
+  if not self.focused or self.hours then return false end
+  local project = self:selected_project()
+  if not project then return false end
+  self.focus_pending, self.unload_ask = nil, nil
+  self.action("return_focus")
+  self.action("request", "select", project.path, {action = "perform", command = "pane:history_" .. direction})
+  return true
+end
+
 -- Keys with Ctrl or Alt, and function keys, cannot type text. AltGr and Shift keys type text in the search field.
 local function forwardable(stroke)
   for part in stroke:gmatch("[^+]+") do
@@ -775,7 +786,7 @@ function SidebarView:rebuild_rows()
     selected_projects[window.selected_project] = true
     if window.id == window_id then selected = window.selected_project end
   end
-  local numbers = numbered_panes.numbers(projects, self.seen, self.snoozes)
+  local numbers = numbered_panes.numbers(projects, self.seen, self.snoozes, window_id)
   -- The next Snooze time. The rows change then.
   self.next_snooze = nil
   for _, time in pairs(self.snoozes) do

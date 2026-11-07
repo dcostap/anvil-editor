@@ -502,11 +502,19 @@ function core.init()
   for _, binding in ipairs(bindings_for("core:copy")) do
     keymap.add {[binding] = function() return current ~= nil and current.view:copy_cursor_name() end}
   end
-  -- Numbered Panes can be in any Project. Focusing one gives the keyboard back to the Projects.
+  for _, direction in ipairs {"back", "forward", "oldest", "newest"} do
+    local name = "pane:history_" .. direction
+    command.add(nil, {[name] = function()
+      return current ~= nil and current.view:move_pane_history(direction)
+    end})
+    for _, binding in ipairs(bindings_for(name)) do keymap.add {[binding] = name} end
+  end
+  -- Numbered Panes stay in this Window. Focusing one gives the keyboard back to the Projects.
   for number = 1, numbered_panes.COUNT do
     local name = "pane:focus_number_" .. number
     command.add(nil, {[name] = function()
-      local item, stamped = numbered_panes.target(core.project_sidebar, number, seen, snoozes)
+      if not current then return false end
+      local item, stamped = numbered_panes.target(core.project_sidebar, number, seen, snoozes, current.id)
       if not item then
         core.log_quiet("Sidebar Numbered Pane %d: none of %d pending Panes", number, stamped)
         return false

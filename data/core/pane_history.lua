@@ -1,4 +1,4 @@
--- Pane History: the Panes that the user visited, in order, across Projects and Anvil Windows. Back and Forward move
+-- Pane History: the Panes that the user visited, in order, across this Window's Projects. Back and Forward move
 -- through it and add no visit. Each Project keeps the visits to its own Panes and sends them in its Pane report.
 -- system.get_time() reads one clock for every process on the computer, so the visits of all Projects merge.
 local core = require "core"
@@ -14,6 +14,15 @@ local ARRIVAL = 5
 -- This Project's entries, oldest first. `at` is the time in milliseconds, which also names the entry. An entry with
 -- `to` is a history move: the Pane took focus to show the entry named `to`.
 local log, arriving = {}, nil
+local last_window
+
+local function sync_window()
+  local window = system.get_anvil_window_id()
+  if window ~= last_window then
+    if last_window ~= nil then core.log_quiet("Pane History cleared after Window move: %d -> %d", last_window, window) end
+    log, arriving, last_window = {}, nil, window
+  end
+end
 
 local function ms(time) return math.floor(time * 1000) end
 
@@ -23,6 +32,7 @@ end
 
 -- The Pane `id` took focus at `time`. Recent Panes decide what a focus is.
 function pane_history.visited(id, time)
+  sync_window()
   local entry = {id = id, at = ms(time)}
   if arriving and arriving.id == id and time <= arriving.deadline then
     entry.to, arriving = arriving.to, nil
@@ -33,11 +43,13 @@ end
 
 -- The next focus of `id` is a history move to the entry named `to`.
 function pane_history.arrive(id, to)
+  sync_window()
   arriving = {id = id, to = to, deadline = system.get_time() + ARRIVAL}
 end
 
 -- This Project's entries for its Pane report.
 function pane_history.entries()
+  sync_window()
   return log
 end
 
@@ -74,13 +86,17 @@ end
 
 -- The Pane History in the Project Sidebar model `projects`, oldest first, as {path, id, at}, and the position of the
 -- current entry. When the user leaves a Pane that a move showed, that Pane goes again at the end, so no visit is lost.
-function pane_history.timeline(projects)
+function pane_history.timeline(projects, window_id)
+  window_id = window_id or system.get_anvil_window_id()
   local entries = {}
   for _, project in ipairs(projects or {}) do
-    local history = type(project.panes) == "table" and project.panes.history
-    for _, entry in ipairs(type(history) == "table" and history or {}) do
-      if type(entry) == "table" and type(entry.at) == "number" and entry.id ~= nil then
-        entries[#entries + 1] = {path = project.path, id = entry.id, at = entry.at, to = entry.to}
+    local panes = type(project.panes) == "table" and project.panes
+    if (project.window_id or 0) == window_id and panes
+        and (not panes.navigation_window or panes.navigation_window == window_id) then
+      for _, entry in ipairs(type(panes.history) == "table" and panes.history or {}) do
+        if type(entry) == "table" and type(entry.at) == "number" and entry.id ~= nil then
+          entries[#entries + 1] = {path = project.path, id = entry.id, at = entry.at, to = entry.to}
+        end
       end
     end
   end
@@ -118,9 +134,9 @@ local function model()
   for _, item in ipairs(core.project_sidebar or {}) do
     if common.path_compare_key(item.path) ~= own and type(item.panes) == "table" then projects[#projects + 1] = item end
   end
-  local items = {history = log}
+  local items = {history = pane_history.entries()}
   for _, pane in ipairs(panes.ordered()) do items[#items + 1] = {id = pane.id, snoozed = pane.group.snoozed} end
-  projects[#projects + 1] = {path = path, panes = items}
+  projects[#projects + 1] = {path = path, panes = items, window_id = system.get_anvil_window_id()}
   return projects, path
 end
 
@@ -167,6 +183,7 @@ end
 
 function pane_history.reset_for_tests()
   log, arriving = {}, nil
+  last_window = nil
 end
 
 return pane_history

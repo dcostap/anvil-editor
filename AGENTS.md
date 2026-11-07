@@ -88,7 +88,7 @@ The prepared Pi has no Terminal record or saved screen until a Pane takes it. It
 `config.plugins.terminal.prepare_pi` defaults to true and has a separate Terminal setting. It uses extra memory and runs Pi startup, including extensions, early.
 Run `ui/terminal_pi_prepared.lua`, `ui/terminal_prepared.lua` and `runtime/terminal_prepared.lua` after changes.
 
-Pane History is the order of the Panes that the user visited, across Projects and Windows. `pane:history_back` and `pane:history_forward` move through it; `pane:history_oldest` and `pane:history_newest` go to its ends.
+Pane History is the order of the Panes that the user visited across Projects in one Window. Each Window has its own history. `pane:history_back` and `pane:history_forward` move through it; `pane:history_oldest` and `pane:history_newest` go to its ends.
 Each observed Pane focus counts as a visit. A history move adds no visit. When the user leaves a Pane that a move showed, that Pane goes again at the end, so no visit is lost.
 The combined history compresses repeated consecutive Pane sequences, such as A → B → A → B, into their later copy. It preserves the current position. Pane identity includes its Project, so equal IDs in different Projects stay distinct.
 Each Project keeps its last 40 visits (`core.pane_history`) and sends them as `history` in its Pane report. Each entry has the Pane ID and the time in milliseconds. A move entry also names the entry that it showed (`to`). A move to another Project sends that name in its `focus` Pane request.
@@ -264,13 +264,15 @@ After the wake, the Terminal's row shows the clock, the Snooze's length and the 
 The note ends when the Sidebar model shows new work after the wake: an agent turn that started after it, or a shell command that started after it. A turn that ran at the wake and ends later is not new work. A turn that starts and ends between two models does not count. Remove Snooze and a new Snooze also end the note.
 Run `ui/snoozed_panes.lua`, `ui/sidebar_view.lua`, `ui/pending_panes.lua` and the `terminal-focus` shell probe after changes.
 
-Tabs show shared Pane numbers, not Tab positions. `core.numbered_panes` selects `core.pending_panes`.
+Tabs show Pane numbers shared by the Projects in their Window, not Tab positions. Each Window has its own numbers. `core.numbered_panes` selects `core.pending_panes`.
 Unread Results and agents waiting for an answer get numbers 1 to 5, oldest pending event first.
 The Sidebar passes its shared seen times. Projects read the persisted seen times with a short cache.
 Recent Panes fill unused numbers after Pending Panes, without duplicates. The current Pane gets no focus-history slot.
 `core.recent_panes` supplies the focus history. There is no numbering setting.
 Each Project stamps its active Pane when the Pane takes keyboard focus. The Pane report sends the stamps.
-A Project fetches the reports when it takes keyboard focus. Focus-history numbering ranks these stamps across Projects.
+The report's `navigation_window` identifies the Window of its focus stamps and history. Readers ignore those fields after a move until the Project reports its new Window.
+A Project fetches the reports when it takes keyboard focus. Focus-history numbering ranks these stamps across Projects in the same Window.
+Moving a Project to another Window clears its focus stamps and Pane History. Pending Panes join the destination Window's numbers. Other Windows' Tabs have no numbers in this Window's Sidebar, also during a search.
 The shell also notifies each Window's Selected Project when the Sidebar model changes.
 Selected Projects fetch the changed state, so Pending Pane commands work without a keyboard focus change.
 `system.get_time()` reads one clock for all processes, so stamps from different Projects compare.
@@ -279,7 +281,7 @@ Run `ui/pending_panes.lua`, `ui/recent_panes.lua`, `ui/titlebar.lua` and `ui/sid
 
 The Sidebar process has no Buffer or Text View. Its search field uses `core.line_input`.
 The Sidebar reads the user's bindings for the editor's line commands, such as `core:select_to_start_of_indentation`.
-The Sidebar keeps list navigation, search-field editing, Sidebar focus, and Numbered Panes.
+The Sidebar keeps list navigation, search-field editing, Sidebar focus, Numbered Panes and Pane History. Pane History commands run in this Window's Selected Project, not the cursor row's Project.
 Copy (`core:copy`'s keys) copies the cursor row's name: a file Tab's path as File Search shows it, absolute outside the Project Paths, a Terminal's shown title, or a Project's path. The search field's copy goes first while it has a query.
 It sends each other key with Ctrl or Alt, and each function key, to the cursor row's Pane, or else to its Project.
 A row without a Project sends the key to the Selected Project. Do not add Sidebar copies of editor commands.

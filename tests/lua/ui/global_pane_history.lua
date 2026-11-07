@@ -29,7 +29,9 @@ test.describe("Pane History", function()
     recent_panes.reset_for_tests()
     saved = {hosted = system.is_hosted_surface, send = system.set_project_panes, focus = system.window_has_focus,
       request = system.pane_request, set_active_view = core.set_active_view, root = core.root_project,
-      model = core.project_sidebar, fetch = core.request_project_sidebar, time = system.get_time}
+      model = core.project_sidebar, fetch = core.request_project_sidebar, time = system.get_time,
+      window = system.get_anvil_window_id}
+    system.get_anvil_window_id = function() return 0 end
     requests, now, focused = {}, 1000, true
     system.get_time = function() return now end
     system.is_hosted_surface = function() return true end
@@ -49,6 +51,7 @@ test.describe("Pane History", function()
     system.is_hosted_surface, system.set_project_panes, system.window_has_focus, system.pane_request =
       saved.hosted, saved.send, saved.focus, saved.request
     system.get_time = saved.time
+    system.get_anvil_window_id = saved.window
     core.set_active_view, core.root_project, core.project_sidebar, core.request_project_sidebar =
       saved.set_active_view, saved.root, saved.model, saved.fetch
   end)
@@ -171,5 +174,41 @@ test.describe("Pane History", function()
     test.same({route, path}, {"select", "C:/Other"})
     test.same(assert(load("return " .. text, "=request", "t", {}))(),
       {action = "focus", pane = "far", feedback = "numbered", history = far})
+  end)
+
+  test.it("keeps history moves inside their Window despite visits and moves in another Window", function()
+    local one = panes.create {factory = factory("one")}
+    local two = panes.create {factory = factory("two")}
+    visit(one)
+    visit(two)
+    core.project_sidebar = {
+      {path = "C:/Elsewhere", window_id = 2, panes = {{id = "far"}, history = {
+        {id = "far", at = 1002000}, {id = "far", at = 1007000},
+        {id = "far", at = 1008000, to = 1002000},
+      }}},
+    }
+    move("back")
+    test.equal(panes.active(), one)
+    move("forward")
+    test.equal(panes.active(), two)
+    move("oldest")
+    test.equal(panes.active(), one)
+    move("newest")
+    test.equal(panes.active(), two)
+    test.same(requests, {})
+  end)
+
+  test.it("starts fresh history when its Project moves to another Window", function()
+    local one = panes.create {factory = factory("one")}
+    local two = panes.create {factory = factory("two")}
+    visit(one)
+    visit(two)
+    system.get_anvil_window_id = function() return 2 end
+    stay()
+    test.not_ok(require("core.pane_history").move("back"))
+    test.equal(panes.active(), two)
+    visit(one)
+    move("back")
+    test.equal(panes.active(), two)
   end)
 end)

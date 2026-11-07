@@ -3,6 +3,24 @@ local numbered = require "core.numbered_panes"
 
 -- Seam: the shared numbering and navigation API consumes Project reports and seen times.
 test.describe("Pending Pane numbers", function()
+  test.it("gives each Window its own pending and recent numbers", function()
+    local projects = {
+      {path = "C:/A", window_id = 1, panes = {
+        {id = "current", focused = 100}, {id = "recent", focused = 80},
+        {id = "pending", terminal = {session = "a", state = "running", bell = 20}}}},
+      {path = "C:/B", window_id = 2, panes = {
+        {id = "current", focused = 110}, {id = "recent", focused = 90},
+        {id = "pending", terminal = {session = "b", state = "running", bell = 10}}}},
+    }
+    for window, path in ipairs {"C:/A", "C:/B"} do
+      local numbers = numbered.numbers(projects, {}, {}, window)
+      test.same(numbers, {[numbered.key(path, "pending")] = 1, [numbered.key(path, "recent")] = 2})
+      test.equal(numbered.target(projects, 1, {}, {}, window).path, path)
+      test.equal(numbered.target(projects, 2, {}, {}, window).path, path)
+      test.is_nil(numbered.target(projects, 3, {}, {}, window))
+    end
+  end)
+
   test.it("fills spare numbers from focus history without repeating pending or current Panes", function()
     local projects = {{path = "C:/A", panes = {
       {id = "current", focused = 100},

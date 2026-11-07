@@ -42,7 +42,9 @@ test.describe("Recent Panes in a Project", function()
     recent_panes.reset_for_tests()
     saved = {hosted = system.is_hosted_surface, send = system.set_project_panes, focus = system.window_has_focus,
       request = system.pane_request, set_active_view = core.set_active_view, root = core.root_project,
-      model = core.project_sidebar, fetch = core.request_project_sidebar, time = system.get_time}
+      model = core.project_sidebar, fetch = core.request_project_sidebar, time = system.get_time,
+      window = system.get_anvil_window_id}
+    system.get_anvil_window_id = function() return 0 end
     reports, requests, fetches, focused, now = {}, {}, 0, true, 1000
     system.get_time = function() return now end
     system.is_hosted_surface = function() return true end
@@ -62,6 +64,7 @@ test.describe("Recent Panes in a Project", function()
     system.is_hosted_surface, system.set_project_panes, system.window_has_focus, system.pane_request =
       saved.hosted, saved.send, saved.focus, saved.request
     system.get_time = saved.time
+    system.get_anvil_window_id = saved.window
     core.set_active_view, core.root_project, core.project_sidebar, core.request_project_sidebar =
       saved.set_active_view, saved.root, saved.model, saved.fetch
   end)
@@ -195,5 +198,29 @@ test.describe("Recent Panes in a Project", function()
     pane_report.publish()
     pane_report.publish()
     test.equal(fetches, 1)
+  end)
+
+  test.it("keeps numbered commands and local markers in the current Window after a Project move", function()
+    local numbered = require "core.numbered_panes"
+    local command = require "core.command"
+    system.get_anvil_window_id = function() return 7 end
+    local one = panes.create {factory = factory("one")}
+    local two = panes.create {factory = factory("two")}
+    focus(one)
+    focus(two)
+    core.project_sidebar = {
+      {path = "C:/Other", window_id = 8, panes = {
+        {id = "far", focused = now - 1, terminal = {session = "far", state = "running", bell = 20}},
+      }},
+    }
+    test.equal(numbered.local_numbers()[one.id], 1)
+    test.ok(command.perform("pane:focus_number_1"))
+    test.equal(panes.active(), one)
+    test.same(requests, {})
+    system.get_anvil_window_id = function() return 8 end
+    pane_report.publish()
+    test.is_nil(numbered.local_numbers()[two.id], "The move kept the old Window's focus stamps")
+    test.ok(command.perform("pane:focus_number_1"))
+    test.equal(requests[1][2], "C:/Other")
   end)
 end)

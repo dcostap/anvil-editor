@@ -1808,20 +1808,23 @@ test.describe("Sidebar pending Pane numbers", function()
       windows={{id=1,selected_project=1},{id=2,selected_project=2}}}
   end
 
-  test.it("numbers pending Tabs FIFO across Windows", function()
+  test.it("shows only this Window's Pane numbers, including during a search", function()
     local view = SidebarView(function() end)
-    view:set_model(model(true), 1)
-    local texts = drawn_texts(view, 400, 800)
-    local numbers = {}
-    for _, item in ipairs(texts) do
-      if item.text:match("^%d$") then
-        -- The number and the name of one Tab share a row.
-        for _, name in ipairs(texts) do
-          if name.text:match("%.lua$") and math.abs(name.y - item.y) < 4 then numbers[name.text] = item.text end
-        end
+    local projects = model(true)
+    projects[1].panes[2].focused = 25
+    view:set_model(projects, 1)
+    view:on_focus(true)
+    view:on_text_input(".lua")
+    local function numbers()
+      local result = {}
+      for _, row in ipairs(view.rows) do
+        if row.kind == "tab" then result[row.tab.id] = row.tab.number end
       end
+      return result
     end
-    test.same(numbers, {["older.lua"] = "1", ["previous.lua"] = "2"})
+    test.same(numbers(), {a2 = 1})
+    view:set_model(projects, 2)
+    test.same(numbers(), {b1 = 1, b2 = 2})
   end)
 
   test.it("draws the numbers beside the Tabs, so they move no row content", function()

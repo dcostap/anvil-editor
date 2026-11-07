@@ -1,4 +1,4 @@
--- Recent Panes: the Panes, from every Project and Anvil Window, that had focus most recently before the current
+-- Recent Panes: the Panes, from this Window's Projects, that had focus most recently before the current
 -- Pane. The latest five get the numbers 1 to 5, newest first, so the first one is the previous Pane.
 -- Each Project's Pane report stamps its Panes with the time they last took focus. system.get_time() reads one clock
 -- for every process on the computer, so stamps from different Projects compare.
@@ -13,10 +13,20 @@ recent_panes.COUNT = 5
 -- When each Pane of this Project last took focus, by Pane ID. The active Pane and the keyboard focus at the last
 -- observation.
 local focused_at, last_active, had_focus = {}, nil, false
+local last_window
+
+local function sync_window()
+  local window = system.get_anvil_window_id()
+  if last_window ~= window then
+    focused_at, last_active, had_focus = {}, nil, false
+    last_window = window
+  end
+end
 
 -- Stamps the active Pane when it takes focus: the active Pane changes while the Project has keyboard focus, or the
 -- Project takes keyboard focus. Then the other Projects' stamps can have changed, so it fetches them too.
 function recent_panes.observe(active)
+  sync_window()
   local has_focus = core.window ~= nil and system.window_has_focus(core.window)
   if has_focus and active and (active ~= last_active or not had_focus) then
     local now = system.get_time()
@@ -28,6 +38,7 @@ function recent_panes.observe(active)
 end
 
 function recent_panes.focused_at(pane)
+  sync_window()
   return focused_at[pane.id]
 end
 
@@ -38,12 +49,16 @@ end
 
 -- Every stamped Pane in the Project Sidebar model `projects`, newest first, as {path, id}. The first is the current
 -- Pane.
-function recent_panes.order(projects)
+function recent_panes.order(projects, window_id)
+  window_id = window_id or system.get_anvil_window_id()
   local list = {}
   for _, project in ipairs(projects or {}) do
-    for _, item in ipairs(project.panes or {}) do
-      if type(item.focused) == "number" and not item.snoozed then
-        list[#list + 1] = {path = project.path, id = item.id, focused = item.focused}
+    if (project.window_id or 0) == window_id
+        and (not project.panes or not project.panes.navigation_window or project.panes.navigation_window == window_id) then
+      for _, item in ipairs(project.panes or {}) do
+        if type(item.focused) == "number" and not item.snoozed then
+          list[#list + 1] = {path = project.path, id = item.id, focused = item.focused}
+        end
       end
     end
   end
@@ -52,8 +67,8 @@ function recent_panes.order(projects)
 end
 
 -- The Recent Pane numbers in `projects` by key, and the order that gives them.
-function recent_panes.numbers(projects)
-  local order, numbers = recent_panes.order(projects), {}
+function recent_panes.numbers(projects, window_id)
+  local order, numbers = recent_panes.order(projects, window_id), {}
   for number = 1, math.min(recent_panes.COUNT, #order - 1) do
     local item = order[number + 1]
     numbers[recent_panes.key(item.path, item.id)] = number
@@ -62,8 +77,8 @@ function recent_panes.numbers(projects)
 end
 
 -- The Recent Pane with `number` in `projects`, as {path, id}, or nil.
-function recent_panes.target(projects, number)
-  local _, order = recent_panes.numbers(projects)
+function recent_panes.target(projects, number, window_id)
+  local _, order = recent_panes.numbers(projects, window_id)
   return number >= 1 and number <= recent_panes.COUNT and order[number + 1] or nil, #order
 end
 
@@ -87,9 +102,9 @@ local function model()
   end
   local items = {}
   for _, pane in ipairs(panes.ordered()) do
-    items[#items + 1] = {id = pane.id, focused = focused_at[pane.id], snoozed = pane.group.snoozed}
+    items[#items + 1] = {id = pane.id, focused = recent_panes.focused_at(pane), snoozed = pane.group.snoozed}
   end
-  projects[#projects + 1] = {path = path, panes = items}
+  projects[#projects + 1] = {path = path, panes = items, window_id = system.get_anvil_window_id()}
   return projects, path
 end
 
@@ -121,6 +136,7 @@ end
 
 function recent_panes.reset_for_tests()
   focused_at, last_active, had_focus = {}, nil, false
+  last_window = nil
   pane_history.reset_for_tests()
 end
 

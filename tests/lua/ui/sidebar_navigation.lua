@@ -17,6 +17,18 @@ local function sidebar()
 end
 
 test.describe("Sidebar keyboard navigation", function()
+  test.it("runs Pane History in this Window's Selected Project, not the cursor's Project", function()
+    local view, actions = sidebar()
+    view.projects[2].window_id = 8
+    view:set_model(view.projects, 7)
+    view:on_focus(true)
+    view:on_text_input("beta")
+    test.equal(view:get_cursor().project.id, 2)
+    test.ok(view:move_pane_history("back"))
+    test.same(actions, {{"return_focus"},
+      {"request", "select", "C:/Alpha", {action = "perform", command = "pane:history_back"}}})
+  end)
+
   test.it("unloads the cursor's Project without selecting it or closing its Pane", function()
     local view, actions = sidebar()
     view:on_focus(true)

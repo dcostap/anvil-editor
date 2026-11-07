@@ -25,7 +25,7 @@ local sent, built_at
 -- A Project on a Machine also sends `terminals`, the Machine's Terminal Sessions of the Project. The shell's scan
 -- reads only this PC's session records.
 function pane_report.build()
-  local report, groups, held = {}, {}, {}
+  local report, groups, held = {navigation_window = system.get_anvil_window_id()}, {}, {}
   local active, visible = panes.active(), panes.visible_group()
   for number, pane in ipairs(panes.ordered()) do
     if number > TAB_LIMIT then break end

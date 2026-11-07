@@ -424,15 +424,15 @@ A work area that shows one Current View and owns one Navigation History. Each Pa
 _Avoid_: Left Pane, Right Pane, panel, split
 
 **Pane History**:
-The order of the Panes that the user visited, in any Project or Anvil Window. Back and Forward move through it and add no visit.
+The order of the Panes that the user visited across Projects in one Anvil Window. Each Window has its own history. Back and Forward move through it and add no visit.
 _Avoid_: global Navigation History, Pane navigation history
 
 **Recent Pane**:
-One of the Panes that had focus most recently before the current Pane, in any Project or Anvil Window. Recent Panes fill unused numbers after Pending Panes, newest first. A Pane gets only one number. The current Pane gets no Recent Pane number.
+One of the Panes that had focus most recently before the current Pane, across Projects in the same Anvil Window. Recent Panes fill unused numbers after Pending Panes, newest first. A Pane gets only one number. The current Pane gets no Recent Pane number.
 _Avoid_: Pane number, Tab number
 
 **Pending Pane**:
-A Pane with an Unread Result, an agent waiting for an answer, or an ended Snooze. The first five Pending Panes have numbers 1 to 5 across Projects and Anvil Windows, oldest pending event first. Reading a result removes it from the queue. An agent waiting for an answer stays pending until it stops waiting.
+A Pane with an Unread Result, an agent waiting for an answer, or an ended Snooze. The first five Pending Panes in each Anvil Window have numbers 1 to 5 across its Projects, oldest pending event first. Reading a result removes it from the queue. An agent waiting for an answer stays pending until it stops waiting.
 
 **Constrained Pane**:
 A Pane dedicated to one owner, such as a Git Log or commit comparison.
