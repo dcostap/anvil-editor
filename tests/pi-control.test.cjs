@@ -111,13 +111,14 @@ test("Pi exposes paged conversation text and live parallel tools without startin
   const entries = [
     {id: "system", type: "message", timestamp, message: {role: "system", content: "PRIVATE SYSTEM"}},
     {id: "user", type: "message", timestamp, message: {role: "user", content: "Check this"}},
+    {id: "model", type: "model_change", timestamp, provider: "local", modelId: "scripted"},
     {id: "summary", type: "compaction", timestamp, summary: "Earlier work"},
     {id: "assistant", type: "message", timestamp, message: {role: "assistant", content: [
-      {type: "thinking", thinking: "PRIVATE THINKING"}, {type: "text", text: "Checking"},
+      {type: "thinking", thinking: "HIDDEN THINKING"}, {type: "text", text: "Checking"},
       {type: "toolCall", id: "call-a", name: "bash", arguments: {command: "npm test"}},
-    ]}},
+    ], usage: {input: 10, output: 5, cacheRead: 100, cacheWrite: 0, cost: {total: 0.5}}}},
     {id: "tool", type: "message", timestamp, message: {role: "toolResult", toolName: "bash", toolCallId: "call-a",
-      content: [{type: "text", text: "Passed"}], isError: false}},
+      content: [{type: "text", text: "Passed\n" + "ok\n".repeat(1000) + "FAILURE at the end"}], isError: false}},
     {id: "agent", type: "custom_message", timestamp, customType: "anvil-task", content: "Review this",
       details: {from: "other-terminal"}},
     {id: "long", type: "message", timestamp, message: {role: "assistant", content: [{type: "text", text: "😀".repeat(2000)}]}},
@@ -155,7 +156,7 @@ test("Pi exposes paged conversation text and live parallel tools without startin
   let sequence = 0;
   const read = async options => {
     const id = "read-" + ++sequence;
-    requests.push({id, options});
+    requests.push({id, options: {format: "json", ...options}});
     await until(() => replies.has(id));
     const reply = replies.get(id);
     if (reply.error) throw new Error(reply.error);
@@ -185,18 +186,46 @@ test("Pi exposes paged conversation text and live parallel tools without startin
     }
     assert.equal(text, "😀".repeat(2000), "Text chunks must not lose or split Unicode characters");
     page = await read({before: page.next_before, limit: 10});
-    assert.deepEqual(page.messages.map(m => m.id), ["user", "summary", "assistant"]);
-    assert.equal(page.messages[2].text, "Checking");
+    assert.deepEqual(page.messages.map(m => m.id), ["user", "model", "summary", "assistant"]);
+    assert.equal(page.messages[1].text, "local/scripted");
+    assert.equal(page.messages[3].text, "Checking");
     assert.equal(page.next_before, undefined);
     const detailed = await read({before: "agent", include_tools: true, include_summaries: false});
-    assert.deepEqual(detailed.messages.map(m => m.id), ["user", "assistant", "tool"]);
-    assert.match(detailed.messages[1].text, /npm test/);
-    assert.equal(detailed.messages[2].tool_call_id, "call-a");
-    assert.ok(!JSON.stringify(detailed).includes("PRIVATE"));
+    assert.deepEqual(detailed.messages.map(m => m.id), ["user", "model", "assistant", "tool"]);
+    assert.match(detailed.messages[2].text, /npm test/);
+    assert.equal(detailed.messages[3].tool_call_id, "call-a");
+    assert.equal(detailed.messages[3].text.length, 400, "Each tool result has its own cap");
+    assert.ok(!JSON.stringify(detailed).includes("PRIVATE") && !JSON.stringify(detailed).includes("HIDDEN"));
+    // The default text names each entry once and does not escape tool JSON a second time.
+    const rendered = (await read({format: "text", before: "agent", include_tools: true, tool_chars: 100})).text;
+    assert.match(rendered, /\[user 2026-01-01 00:00:00 user\]\nCheck this/);
+    assert.match(rendered, /\[assistant 00:00:00 assistant\]\nChecking\n→ bash \{"command":"npm test"\}/);
+    assert.match(rendered, /\[tool 00:00:00 tool bash\]\nPassed/);
+    assert.match(rendered, /more chars: entry_id=tool offset=100/);
+    assert.ok(!rendered.includes("HIDDEN"));
+    assert.match((await read({format: "text", entry_id: "assistant", include_thinking: true})).text, /\(thinking\) HIDDEN THINKING/);
+    const found = await read({query: "failure", include_tools: true});
+    assert.deepEqual(found.messages.map(m => m.id), ["tool"]);
+    assert.ok(found.messages[0].offset > 0 && found.messages[0].text.includes("FAILURE"), "A match shows its own text");
+    page = await read({from_start: true, limit: 2});
+    assert.deepEqual(page.messages.map(m => m.id), ["user", "model"]);
+    assert.equal(page.next_after, "model");
+    assert.deepEqual((await read({after: page.next_after, limit: 1})).messages.map(m => m.id), ["summary"]);
+    const summary = (await read({overview: true})).overview;
+    assert.equal(summary.first_request.text, "Check this");
+    assert.equal(summary.last_answer.id, "long");
+    assert.deepEqual(summary.tools, {bash: 1});
+    assert.deepEqual(summary.models, ["local/scripted"]);
+    assert.equal(summary.counts.tool_results, 1);
+    assert.equal(summary.usage.cost, 0.5);
+    assert.equal(summary.context_tokens, 115);
+    assert.match((await read({format: "text", overview: true})).text, /first request \[user\]: Check this/);
+    await assert.rejects(read({from_start: true, before: "agent"}), /one of/);
+    await assert.rejects(read({query: "("}), /regular expression/);
     await assert.rejects(read({before: "missing"}), /branch/);
     await assert.rejects(read({entry_id: "long", offset: 1}), /offset/);
     // Navigation changes the active branch. Reads must not return abandoned messages.
-    entries.splice(3);
+    entries.splice(4);
     await assert.rejects(read({entry_id: "long"}), /branch/);
     assert.deepEqual((await read({limit: 1})).messages.map(m => m.id), ["summary"]);
     await handlers.get("tool_execution_start")({toolCallId: "a", toolName: "bash", args: {command: "npm test"}}, ctx);

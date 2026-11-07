@@ -68,14 +68,17 @@ tool("snooze", "Set or remove Anvil's Snooze for a Terminal's Pane. Omit pane an
 tool("agent_send", "Send a task to a specific Pi conversation. Queue waits until idle; steer changes active work. Returns a task ID, not a completed answer.",
   {terminal = id, instance = id, text = string_schema(32768), delivery = choice("queue", "steer"), request_id = id},
   {"terminal", "instance", "text", "delivery", "request_id"}, false)
-tool("agent_read", "Read Pi status, live activity, parallel tools, or a saved task result. Activity includes command/path details and start times. Set include_activity=false for status only. Disconnected activity is stale; a finished tool call does not prove its background command finished.",
-  {terminal = id, instance = id, task = id, include_activity = {type = "boolean"}}, {"terminal", "instance"}, true)
-tool("agent_transcript", "Read Pi conversation text without starting a turn. Returns the latest limit entries (default 10, chronological). Pass next_before as before for older pages. Summaries count as entries; include_summaries defaults true. include_tools adds tool calls/results. System and thinking blocks are excluded. max_chars is a shared text budget (default 12000). Continue truncated text with entry_id and next_offset as offset (UTF-16 units). include_partial adds a separate, unstable streaming preview (up to 1000 characters). Reads use the current branch; missing IDs fail. Requires a connected Pi with transcript support.",
-  {terminal = id, instance = id, limit = {type = "integer", minimum = 1, maximum = 100}, before = id,
+tool("agent_read", "Read Pi status, live activity, parallel tools, session_file, or a saved task result. Omit instance to read the Terminal's current conversation. Activity includes command/path details and start times. Set include_activity=false for status only. Disconnected activity is stale; a finished tool call does not prove its background command finished.",
+  {terminal = id, instance = id, task = id, include_activity = {type = "boolean"}}, {"terminal"}, true)
+tool("agent_transcript", "Read a Pi conversation without starting a turn. Omit instance to read the Terminal's current conversation. overview=true gives the first request, last answer, counts, tools, models, tokens and cost. Otherwise returns the latest limit entries (default 10, chronological); before pages older, after or from_start pages newer. query keeps entries that match a case-insensitive regular expression. include_tools adds tool calls and results, each cut to tool_chars (default 400). include_thinking adds thinking text. max_chars is a shared budget (default 12000). Continue cut text with entry_id and offset. Output is compact text; format=json gives fields. Reads use the current branch.",
+  {terminal = id, instance = id, overview = {type = "boolean"}, limit = {type = "integer", minimum = 1, maximum = 100},
+    before = id, after = id, from_start = {type = "boolean"}, query = string_schema(512),
     entry_id = id, offset = {type = "integer", minimum = 0, maximum = 1000000000},
     max_chars = {type = "integer", minimum = 256, maximum = 32000},
-    include_tools = {type = "boolean"}, include_summaries = {type = "boolean"}, include_partial = {type = "boolean"}},
-  {"terminal", "instance"}, true)
+    tool_chars = {type = "integer", minimum = 0, maximum = 32000},
+    include_tools = {type = "boolean"}, include_thinking = {type = "boolean"}, include_summaries = {type = "boolean"},
+    include_partial = {type = "boolean"}, format = choice("text", "json")},
+  {"terminal"}, true)
 tool("agent_interrupt", "Interrupt Pi's active work and cancel its queued Anvil tasks. Keep its Terminal Session open.",
   {terminal = id, instance = id, request_id = id}, {"terminal", "instance", "request_id"}, false)
 tool("agent_wait", "Wait up to 30 seconds for a task. Timeout does not cancel it. A question or disconnect ends the wait.",
@@ -385,7 +388,10 @@ end
 
 function M:peer(args, live)
   local peer = assert(self.peers[args.terminal], "Pi is not connected")
-  assert(peer.instance == args.instance, "Pi conversation changed; inspect workspace_state again")
+  -- Only reads omit the instance. Mutations require it, so they never reach a replacement conversation.
+  if args.instance ~= nil and peer.instance ~= args.instance then
+    error(string.format("Instance %s is not this Terminal's current Pi conversation (%s)", args.instance, peer.instance), 0)
+  end
   if live then assert(system.get_time() - peer.seen < 10, "Pi is disconnected") end
   return peer
 end
@@ -413,7 +419,7 @@ function M:agent_read(args)
   local result = {terminal = args.terminal, instance = peer.instance, connected = connected,
     status = connected and (peer.busy and "working" or "idle") or "disconnected",
     model = peer.model, thinking = peer.thinking, capabilities = peer.capabilities,
-    activity_stale = not connected,
+    session_file = peer.session, activity_stale = not connected,
     observation_age_ms = age < math.huge and math.max(0, math.floor(age * 1000)) or nil}
   if args.include_activity ~= false then result.activity = peer.activity end
   if peer.activity then result.waiting_for_user = connected and peer.activity.phase == "waiting_user" end
@@ -444,19 +450,24 @@ end
 function M:agent_transcript(args)
   local peer = self:peer(args, true)
   assert(peer.capabilities and peer.capabilities.transcript, "Pi needs /reload to enable conversation reads")
-  assert(not (args.before and args.entry_id), "Use before or entry_id, not both")
+  local cursors = 0
+  for _, key in ipairs {"before", "after", "from_start", "entry_id"} do
+    if args[key] then cursors = cursors + 1 end
+  end
+  assert(cursors <= 1, "Use one of before, after, from_start or entry_id")
   assert(args.offset == nil or args.entry_id, "An offset needs entry_id")
   local count = 0
   for _ in pairs(peer.transcripts) do count = count + 1 end
   assert(count < 16, "Too many pending conversation reads")
   local options = {}
-  for _, key in ipairs {"limit", "before", "entry_id", "offset", "max_chars", "include_tools", "include_summaries", "include_partial"} do
+  for _, key in ipairs {"overview", "limit", "before", "after", "from_start", "query", "entry_id", "offset",
+      "max_chars", "tool_chars", "include_tools", "include_thinking", "include_summaries", "include_partial", "format"} do
     options[key] = args[key]
   end
-  local query = {id = net.random_token(), terminal = args.terminal, instance = args.instance,
-    options = options, deadline = system.get_time() + 10}
+  local query = {id = net.random_token(), terminal = args.terminal, instance = peer.instance,
+    named = args.instance ~= nil, options = options, deadline = system.get_time() + 10}
   peer.transcripts[query.id] = query
-  core.log_quiet("Control: conversation read Terminal=%s instance=%s", args.terminal, args.instance)
+  core.log_quiet("Control: conversation read Terminal=%s instance=%s", args.terminal, peer.instance)
   return query
 end
 
@@ -469,6 +480,10 @@ function M:transcript_read(query)
   self:peer(query, true)
   if query.error then error(query.error, 0) end
   if query.result then
+    -- Text results go to the model unescaped. Name the conversation when the caller did not.
+    if type(query.result.text) == "string" then
+      return (query.named and "" or "instance " .. query.instance .. "\n") .. query.result.text
+    end
     query.result.terminal, query.result.instance = query.terminal, query.instance
     return query.result
   end

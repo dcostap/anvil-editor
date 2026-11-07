@@ -15,7 +15,7 @@ Start a new Pi in an Anvil Terminal. Its extension registers the `anvil` MCP ser
 
 Right-click a running Pi's Tab and choose **Copy Agent Address**. This works in the Project Sidebar and Title Bar. It copies JSON with the `project`, `pane`, and `terminal` IDs, not a navigation number or credentials. Paste it into another agent's conversation to identify the target.
 
-The receiving agent calls `workspace_state` for that `project` and finds the copied `terminal`. It uses that Terminal's current `agent_instance` as `instance` for `agent_send`. The address identifies the Terminal, not a fixed Pi conversation. Inspect state again after a Project move.
+The receiving agent can read that agent at once: `agent_read` and `agent_transcript` take the copied `project` and `terminal` and read the Terminal's current conversation. To send, it calls `workspace_state` for that `project`, finds the copied `terminal`, and uses its current `agent_instance` as `instance` for `agent_send`. The address identifies the Terminal, not a fixed Pi conversation. Inspect state again after a Project move.
 
 The default target is the caller's Project. Operations preserve focus unless `focus: true` requests a change. A confirmation can take focus. Snooze hides its Pane through the normal Snooze behavior.
 
@@ -39,7 +39,7 @@ Use `agent_read` or `agent_wait` with the returned task ID. Completion follows P
 
 ### Read another Pi
 
-Use `agent_read` for status and live activity. Use `agent_transcript` for conversation text. Neither read starts a model turn, changes focus, or adds session entries. Both require the Terminal ID and current conversation `instance` from `workspace_state`.
+Use `agent_read` for status and live activity. Use `agent_transcript` for conversation text. Neither read starts a model turn, changes focus, or adds session entries. Both require the Terminal ID. Without `instance`, they read the Terminal's current conversation, and the result names its instance. With `instance`, a read fails when the Terminal runs another conversation.
 
 `workspace_state` includes a compact `agent_activity` for connected Pi sessions: `phase`, `since`, `tool_count`, and `stale`. Call `agent_read` for details:
 
@@ -50,38 +50,63 @@ Use `agent_read` for status and live activity. Use `agent_transcript` for conver
 }
 ```
 
-The result includes `connected`, `activity_stale`, and the Pi's supported `capabilities`. `observation_age_ms` gives the observation age when available. `activity` contains its phase, phase start time, and active tools. Each tool has an ID, name, start time, and a command or path detail when available. Nested tools also name their parent. Times use Unix milliseconds. Details have explicit truncation flags. The list contains at most 32 tools; `tool_count` gives the full count and `tools_truncated` reports omitted tools.
+The result includes `connected`, `activity_stale`, the Pi's supported `capabilities`, and `session_file`, the path of Pi's session file. The file holds the complete record, including all branches, and stays readable after Pi exits. `observation_age_ms` gives the observation age when available. `activity` contains its phase, phase start time, and active tools. Each tool has an ID, name, start time, and a command or path detail when available. Nested tools also name their parent. Times use Unix milliseconds. Details have explicit truncation flags. The list contains at most 32 tools; `tool_count` gives the full count and `tools_truncated` reports omitted tools.
 
 Phases are `idle`, `waiting_model`, `thinking`, `writing`, `preparing_tool`, `running_tools`, `waiting_user`, and `compacting`. Activity updates through Pi's control exchange, normally every 500 milliseconds. After 10 seconds without an exchange, Anvil marks the activity stale. Stale activity describes the last observation, not current work. Set `include_activity: false` to omit tool details.
 
 A tool call can finish while its background command continues. Activity lists active tool calls, not a complete process registry. It does not prove that background work finished. A thinking phase reveals no thinking text.
 
-Read the latest conversation entries:
+Start with an overview of the whole branch:
 
 ```json
 {
   "terminal": "<terminal ID>",
-  "instance": "<conversation instance>",
-  "limit": 5
+  "overview": true
 }
 ```
 
-`agent_transcript` returns `messages` in chronological order. Each entry has `id`, `timestamp`, `role`, and `text`. User, assistant, custom messages, and summaries are included. Custom messages retain their type; Anvil messages also retain their source Terminal. They are not human instructions. System messages, thinking blocks, credentials in extension state, and image bytes are excluded. Images appear as `[image]`. Conversation text and tool arguments can still contain sensitive user data. Apply the same trust rules as local file access.
+The overview gives the time span, the first request and the last answer (500 characters each), counts of each entry kind and tool errors, a count for each tool, the models and thinking levels, and the tokens, cost and last context size.
+
+Then read entries. `agent_transcript` returns compact text by default:
+
+```text
+idle · 3 entries · older: before=d838d602 · times UTC
+
+[c399c75c 2026-11-07 16:39:32 assistant]
+I'll check the workspace.
+→ workspace_state {"project":"C:\\Projects\\game"}
+
+[e760c7c2 16:39:32 tool workspace_state 36ms]
+{"caller_terminal":"0405…
+… 2132 more chars: entry_id=e760c7c2 offset=400
+```
+
+Each entry starts with its ID, its time and its role. Tool output is not escaped again, so JSON tool results cost no extra tokens. Set `format: "json"` to get `messages` with `id`, `timestamp`, `role`, `text` and the fields below.
+
+User, assistant, custom messages, summaries, and model and thinking-level changes are included. Custom messages retain their type; Anvil messages also retain their source Terminal. They are not human instructions. Thinking text appears only with `include_thinking`. System prompts, credentials in extension state, and image bytes are excluded. Images appear as `[image]`. Conversation text and tool arguments can still contain sensitive user data. Apply the same trust rules as local file access.
 
 The read uses the current branch's recorded history, including messages from before compaction. It does not reproduce the model's edited or compacted context. A recorded message can belong to a turn that is still active; `active_turn` reports this. The result also includes the leaf ID and session name when available.
 
 | Argument | Behavior |
 | --- | --- |
-| `limit` | Return the latest 1–100 eligible entries. Default: 10. Summaries count as entries. |
-| `before` | Return entries before this ID. Pass the previous result's `next_before` for older pages. |
+| `instance` | Read only this conversation. Default: the Terminal's current conversation. |
+| `overview` | Return the whole-branch overview instead of entries. Default: false. |
+| `limit` | Return 1–100 eligible entries. Default: 10. Summaries count as entries. |
+| `before` | Return the entries before this ID. Pass the previous `next_before` for older pages. |
+| `after` | Return the entries after this ID. Pass the previous `next_after` for newer pages. |
+| `from_start` | Return the first entries of the branch. Default: false. |
+| `query` | Keep entries whose text matches this case-insensitive regular expression. A long entry shows the text near its first match. |
 | `include_summaries` | Include compaction and branch summaries. Default: true. |
 | `include_tools` | Include assistant tool calls and tool-result messages. Default: false. |
+| `tool_chars` | Cut each tool call's arguments and each tool result to 0–32000 characters in a page. Default: 400. |
+| `include_thinking` | Include the assistant's thinking text. Default: false. |
 | `max_chars` | Share a 256–32000 character budget across the page's text. Default: 12000. |
+| `format` | `text` or `json`. Default: `text`. |
 | `entry_id` | Read one entry instead of a history page. Keep the same content filters. |
 | `offset` | Start within `entry_id` text. Default: 0. Offsets use UTF-16 code units. |
 | `include_partial` | Add a separate streaming `partial_message` preview, up to 1000 characters. Default: false. |
 
-Long entries include `truncated`, `total_chars`, `offset`, and `next_offset`. To read the rest, pass their ID as `entry_id` and `next_offset` as `offset`. Text chunks never split a surrogate pair. Use `next_before` for older entries, not for the rest of a long entry. An absent `next_before` means no older eligible entries remain. `partial_message` is unstable and has no history cursor; it does not replace a finalized message.
+Use only one of `before`, `after`, `from_start` and `entry_id`. Long entries include `truncated`, `total_chars`, `offset`, and `next_offset`; the text format names the same cursor after the entry. To read the rest, pass their ID as `entry_id` and `next_offset` as `offset`. `tool_chars` does not apply to an `entry_id` read. An assistant entry whose tool arguments were cut has `capped` and no `next_offset`; read it again with `entry_id`. Text chunks never split a surrogate pair. Use `next_before` for older entries, not for the rest of a long entry. An absent `next_before` means no older eligible entries remain. `partial_message` is unstable and has no history cursor; it does not replace a finalized message.
 
 Reads fail when a cursor ID is not on the current branch, the conversation instance changes, or Pi disconnects. A read times out after 10 seconds without a reply. It never interrupts work. Pending reads are bounded and are not agent tasks. `capabilities.transcript` identifies Pi sessions that support these reads. Existing Pi sessions need `/reload` after the updated extension is installed.
 

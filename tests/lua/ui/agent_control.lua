@@ -295,7 +295,7 @@ test.describe("Agent editor control", function()
 
   test.it("returns observed activity without treating stale commands as live work", function()
     control:exchange("terminal-b", {instance = "pi-one", busy = true, receipts = {}, tasks = {},
-      capabilities = {transcript = true, activity = true},
+      session = "C:/sessions/pi-one.jsonl", capabilities = {transcript = true, activity = true},
       activity = {phase = "running_tools", since = 1767225600000, tool_count = 1, tools_truncated = false,
         tools = {{id = "call-a", name = "bash", detail = "npm test", started_at = 1767225600000, detail_truncated = false}}}})
     local result = control:call("agent_read", {terminal = "terminal-b", instance = "pi-one"}, "terminal-a")
@@ -306,6 +306,10 @@ test.describe("Agent editor control", function()
     test.ok(result.capabilities.transcript)
     result = control:call("agent_read", {terminal = "terminal-b", instance = "pi-one", include_activity = false}, "terminal-a")
     test.is_nil(result.activity)
+    -- A copied agent address names only the Terminal. A read then uses its current conversation.
+    result = control:call("agent_read", {terminal = "terminal-b"}, "terminal-a")
+    test.equal(result.instance, "pi-one")
+    test.equal(result.session_file, "C:/sessions/pi-one.jsonl")
     -- A replaced conversation must not inherit the old one's tools or capabilities.
     control:exchange("terminal-b", {instance = "pi-two", busy = false, receipts = {}, tasks = {}})
     result = control:call("agent_read", {terminal = "terminal-b", instance = "pi-two"}, "terminal-a")

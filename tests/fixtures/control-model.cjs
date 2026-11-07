@@ -25,7 +25,9 @@ const server = http.createServer(async (req, res) => {
     } else {
       const last = messages.filter(m => m.role === "tool").at(-1);
       const call = last && messages.flatMap(m => m.tool_calls || []).find(c => c.id === last.tool_call_id);
-      let data = last && JSON.parse(text(last.content));
+      // A conversation read returns plain text. Other tools return JSON.
+      let data = last && text(last.content);
+      if (!call?.function.name.endsWith("agent_transcript")) data = data && JSON.parse(data);
       if (data?.structuredContent) data = data.structuredContent;
       if (!last) { name = "workspace_state"; args = {}; }
       else if (call.function.name.endsWith("workspace_state")) {
@@ -39,11 +41,11 @@ const server = http.createServer(async (req, res) => {
         if (data.status === "failed" || data.status === "interrupted") throw new Error(JSON.stringify(data));
         name = "agent_wait"; args = {terminal: data.terminal, instance: data.instance, task: data.task, timeout_ms: 10000};
       } else if (data.status === "completed" && data.result === "ANVIL_CHILD_RESULT") {
-        name = "agent_transcript"; args = {terminal: data.terminal, instance: data.instance, limit: 2};
+        // A copied agent address names only the Terminal.
+        name = "agent_transcript"; args = {terminal: data.terminal, limit: 2};
       } else if (call.function.name.endsWith("agent_transcript")) {
-        if (!Array.isArray(data.messages) || !data.messages.some(m => m.role === "assistant" && m.text === "ANVIL_CHILD_RESULT")
-            || !data.messages.some(m => m.role === "custom" && m.custom_type === "anvil-task")) {
-          throw new Error("Pi did not receive the child's conversation: " + JSON.stringify(data));
+        if (!/ assistant\]\nANVIL_CHILD_RESULT/.test(data) || !/ anvil-task from [^\]]+\]\n/.test(data)) {
+          throw new Error("Pi did not receive the child's conversation: " + data);
         }
         answer = "ANVIL_PARENT_RESULT";
       }

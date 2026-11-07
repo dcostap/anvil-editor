@@ -95,6 +95,10 @@ function M:dispatch(client, body)
   elseif request.method == "tools/list" then return result {tools = Control.tools}
   elseif request.method == "tools/call" then
     local function tool_result(success, data)
+      -- A text result is for the model. JSON would escape it again, so it has no structured copy.
+      if success and type(data) == "string" then
+        return result {isError = false, content = {{type = "text", text = data}}}
+      end
       result {isError = not success, content = {{type = "text", text = success and json.encode(data) or tostring(data)}},
         structuredContent = success and data or {error = tostring(data)}}
     end

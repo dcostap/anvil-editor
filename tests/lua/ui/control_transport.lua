@@ -65,7 +65,7 @@ test.describe("Anvil MCP", function()
     local focused = core.active_view
     local ok, err = pcall(function()
       exchange()
-      local request = read {terminal = "reader-target", instance = "pi-one", limit = 2, include_tools = true}
+      local request = read {terminal = "reader-target", instance = "pi-one", limit = 2, include_tools = true, format = "json"}
       local queries
       local deadline = system.get_time() + 15
       repeat queries = exchange().transcript_requests until queries and #queries > 0 or system.get_time() > deadline
@@ -85,6 +85,15 @@ test.describe("Anvil MCP", function()
       test.equal(result.structuredContent.instance, "pi-one")
       test.equal(result.structuredContent.next_before, "message-a")
       test.equal(core.active_view, focused)
+      -- Text goes to the model without JSON escaping. A read without an instance names the conversation.
+      local text_request = read {terminal = "reader-target"}
+      deadline = system.get_time() + 15
+      repeat queries = exchange().transcript_requests until #queries > 0 or system.get_time() > deadline
+      test.ok(#queries > 0, "Pi did not receive the text conversation read")
+      exchange {transcripts = {{id = queries[1].id, result = {text = '[a 00:00:00 user]\n{"x":1}'}}}}
+      result = wait(text_request).result
+      test.equal(result.content[1].text, 'instance pi-one\n[a 00:00:00 user]\n{"x":1}')
+      test.is_nil(result.structuredContent)
       local invalid = wait(read {terminal = "reader-target", instance = "pi-one", offset = 4})
       test.ok(invalid.result.isError, "An offset needs an entry ID")
       local oversized = read {terminal = "reader-target", instance = "pi-one"}
