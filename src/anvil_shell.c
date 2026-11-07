@@ -16,6 +16,7 @@
 #include "shell_compose_shader.h"
 #include "alt_navigation.h"
 #include "display_scale.h"
+#include "prepared_projects.h"
 
 #include <windowsx.h>
 #include <commctrl.h>
@@ -218,6 +219,7 @@ typedef struct ShellProject {
   /* Startup can finish without a frame: an unselected Project does not render.
    * `state` keeps the first-frame guards; the Sidebar reports runtime readiness separately. */
   bool runtime_ready;
+  uint32_t preparation_eligible, preparation_allowed;
   bool sidebar;
   /* The Project's latest Pane report, or NULL before its first one. */
   char *panes;
@@ -423,6 +425,7 @@ typedef struct {
   Uint32 restore_active;
   Uint64 restore_active_since;
   uint64_t activation;
+  AnvilPreparedProjects prepared_projects;
   UINT_PTR retire_timer;
   AnvilSidebarModel sidebar;
   /* The Color Theme is global. The latest colours from any Project or the Sidebar draw what no Project covers. */
@@ -1257,6 +1260,9 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
   }
   case ANVIL_SURFACE_MSG_TEXT_INPUT:
     return size == sizeof(AnvilSurfaceTextInput);
+  case ANVIL_SURFACE_MSG_TERMINAL_PREPARATION:
+    return size == sizeof(AnvilSurfaceInt) &&
+      !(((const AnvilSurfaceInt *)payload)->value & ~ANVIL_PREPARED_ALL);
   case ANVIL_SURFACE_MSG_CLEAR_IME:
     return size == sizeof(uint64_t);
   case ANVIL_SURFACE_MSG_HIT_TEST:
@@ -1713,6 +1719,7 @@ static void send_configure(ShellProject *project) {
   config.content_x = SDL_min(project->sidebar ? window->sidebar_full_w : project_x, SDL_max(0, config.pixel_w - 1));
   /* A Window without a Project has no process to draw its wallpaper, so its Sidebar draws it. */
   config.backdrop = project->sidebar && window->selected == window->empty;
+  config.terminal_preparation = project->preparation_allowed;
   config.refresh_hz = current_refresh_rate(window);
   typedef UINT(WINAPI * DpiForWindow)(HWND);
   typedef int(WINAPI * MetricForDpi)(int, UINT);
@@ -1757,6 +1764,24 @@ static void send_configure(ShellProject *project) {
   if (!config.render_enabled && project->sidebar)
     set_surface_busy(window, &window->sidebar_presentation, false);
   shell_send(project, ANVIL_SURFACE_MSG_CONFIGURE, &config, sizeof(config), NULL, 0);
+}
+
+static void update_preparation_grants(void) {
+  for (ShellProject *item = shell.projects; item; item = item->next) {
+    uint32_t allowed = anvil_prepared_projects_contains(&shell.prepared_projects, item->id)
+      ? item->preparation_eligible : 0;
+    if (allowed == item->preparation_allowed) continue;
+    item->preparation_allowed = allowed;
+    SDL_Log("Shell Terminal preparation: Project=%u eligible=%u allowed=%u", item->id,
+            item->preparation_eligible, allowed);
+    send_configure(item);
+  }
+}
+
+static void visit_prepared_project(ShellProject *project) {
+  if (!project->preparation_eligible || project->sidebar || project->unloading) return;
+  anvil_prepared_projects_visit(&shell.prepared_projects, project->id);
+  update_preparation_grants();
 }
 
 /* ------------------------------------------------------------------------ */
@@ -4361,6 +4386,16 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     }
   }
   switch (message->type) {
+  case ANVIL_SURFACE_MSG_TERMINAL_PREPARATION:
+    if (!project->sidebar) {
+      project->preparation_eligible = ((const AnvilSurfaceInt *)message->payload)->value;
+      if (!project->preparation_eligible)
+        anvil_prepared_projects_remove(&shell.prepared_projects, project->id);
+      else if (window->selected == project)
+        anvil_prepared_projects_visit(&shell.prepared_projects, project->id);
+      update_preparation_grants();
+    }
+    break;
   case ANVIL_SURFACE_MSG_SIDEBAR_FOCUS:
     if (!window->closing && (project->sidebar || project == window->selected))
       focus_sidebar(window, value != 0);
@@ -5811,6 +5846,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
       cancel_input(window);
     else {
       window->activated = ++shell.activation;
+      visit_prepared_project(project);
       windows_changed();
     }
     if (project->connected && !anvil_latency_probe_enabled()) {
@@ -6820,6 +6856,8 @@ static bool start_project(ShellProject *project, int argc, char **argv) {
           project->id, project->connection, project->window_id, project->sidebar, project->launch_attempt,
           (unsigned long)project->adopt_pid, project->project_path ? project->project_path : "Sidebar");
   project->runtime_ready = false;
+  project->preparation_eligible = project->preparation_allowed = 0;
+  anvil_prepared_projects_remove(&shell.prepared_projects, project->id);
   set_state(project, SHELL_STARTING);
   window->ui_dirty = true;
   project->failed_close = false;
@@ -6887,6 +6925,7 @@ static void select_project(ShellProject *project, bool keep_sidebar_focus) {
   clear_window_notice(window);
   if (project->unresponsive) show_unresponsive_notice(window);
   if (project == window->selected) {
+    visit_prepared_project(project);
     if (!keep_sidebar_focus) focus_sidebar(window, false);
     else if (!takes_keyboard(project)) focus_sidebar(window, true);
     return;
@@ -6918,6 +6957,7 @@ static void select_project(ShellProject *project, bool keep_sidebar_focus) {
     content->have_surface = false;
   }
   window->selected = project;
+  visit_prepared_project(project);
   /* The new selection decides who keeps the keyboard. */
   if (!keep_sidebar_focus || !takes_keyboard(project)) focus_sidebar(window, !takes_keyboard(project));
   window->resize_wait_disabled = false;
@@ -7529,6 +7569,7 @@ static void select_after_close(ShellProject *project) {
 }
 
 static void complete_unload(ShellProject *project) {
+  anvil_prepared_projects_remove(&shell.prepared_projects, project->id);
   ShellWindow *window = window_for_id(project->window_id);
   if (!window) return;
   forget_peek(project);
@@ -7569,6 +7610,7 @@ static void complete_unload(ShellProject *project) {
 }
 
 static void retire_failed_placeholder(ShellProject *project) {
+  anvil_prepared_projects_remove(&shell.prepared_projects, project->id);
   ShellWindow *window = window_for_id(project->window_id);
   forget_peek(project);
   if (window && window->selected == project) select_project(window->empty, false);

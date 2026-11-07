@@ -2187,18 +2187,23 @@ static int f_terminal_stats(lua_State *L) {
 
 static int f_terminal_activate(lua_State *L) {
   TerminalSession *session = check_session(L, 1);
+  /* The launch job owns an immutable environment until the UI accepts its result. */
+  bool starting = session->state == TERMINAL_STATE_RECONNECTING && session->reconnect &&
+    session->reconnect->userdir && session->reconnect->prepared;
+  const wchar_t *environment = starting ? session->reconnect->environment : session->prepared_environment;
   wchar_t *current = terminal_launch_environment();
-  bool same_environment = current && session->prepared_environment;
+  bool same_environment = current && environment;
   if (same_environment) {
-    const wchar_t *a = current, *b = session->prepared_environment;
+    const wchar_t *a = current, *b = environment;
     while (*a || *b) {
       if (wcscmp(a, b)) { same_environment = false; break; }
       a += wcslen(a) + 1; b += wcslen(b) + 1;
     }
   }
   if (current) HeapFree(GetProcessHeap(), 0, current);
-  bool ok = session->prepared && session->state == TERMINAL_STATE_RUNNING && session->replay_finished &&
-    same_environment && !session->transport_released && enqueue_record(session, ANVIL_TERMINAL_ACTIVATE, NULL, 0);
+  bool ok = session->prepared && same_environment && (starting ||
+    (session->state == TERMINAL_STATE_RUNNING && !session->transport_released &&
+     enqueue_record(session, ANVIL_TERMINAL_ACTIVATE, NULL, 0)));
   if (ok) {
     session->prepared = false;
     session->activated_prepared = true;

@@ -25,6 +25,7 @@
 #include "../session_end.h"
 #include "../win32_single_instance.h"
 #include "../hosted_surface.h"
+#include "../prepared_projects.h"
 #include "../d3d11_backend.h"
 #include "../cli_args.h"
 #include "../window_backend.h"
@@ -778,6 +779,15 @@ static int f_set_window_size(lua_State *L) {
 static int f_window_has_focus(lua_State *L) {
   RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   lua_pushboolean(L, anvil_window_focus(ren)); return 1;
+}
+
+static int f_terminal_preparation(lua_State *L) {
+  uint32_t eligible = (lua_toboolean(L, 1) ? ANVIL_PREPARED_SHELL : 0) |
+    (lua_toboolean(L, 2) ? ANVIL_PREPARED_PI : 0);
+  uint32_t allowed = anvil_hosted_surface_terminal_preparation(eligible);
+  lua_pushboolean(L, allowed & ANVIL_PREPARED_SHELL);
+  lua_pushboolean(L, allowed & ANVIL_PREPARED_PI);
+  return 2;
 }
 
 static int f_window_should_render(lua_State *L) {
@@ -3189,6 +3199,7 @@ static const luaL_Reg lib[] = {
   { "clear_ime",             f_clear_ime             },
   { "window_has_focus",      f_window_has_focus      },
   { "window_should_render",  f_window_should_render  },
+  { "terminal_preparation",  f_terminal_preparation  },
   { "window_focus_diagnostics", f_window_focus_diagnostics },
   { "raise_window",          f_raise_window          },
   { "allow_process_foreground", f_allow_process_foreground },

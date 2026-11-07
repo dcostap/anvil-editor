@@ -35,6 +35,7 @@ static void SDLCALL capture_loss(void *data, int category, SDL_LogPriority prior
 static SDL_AtomicInt pong;
 static SDL_AtomicInt dialogs_checked;
 static SDL_AtomicInt pane_checked;
+static SDL_AtomicInt preparation_checked;
 static struct { int status, filter, count; char paths[2][128]; } dialog_results[3];
 static void SDLCALL dialog_result(void *userdata, const char *const *paths, int filter) {
   int index = (int)(intptr_t)userdata;
@@ -141,6 +142,9 @@ static int SDLCALL server(void *data) {
   }
   do {
     if (!anvil_ipc_pipe_read(&pipe, &header, bytes, sizeof(bytes))) return 1;
+    if (header.type == ANVIL_SURFACE_MSG_TERMINAL_PREPARATION)
+      SDL_SetAtomicInt(&preparation_checked, header.size == sizeof(AnvilSurfaceInt) &&
+        ((const AnvilSurfaceInt *)bytes)->value == 3 ? 1 : -1);
   } while (header.type != ANVIL_SURFACE_MSG_PANE_REQUEST);
   const AnvilSurfacePaneRequest *pane = (const void *)bytes;
   const char expected[] = "C:/Project{action=\"focus\",pane=\"pane-2\"}";
@@ -167,6 +171,7 @@ static int SDLCALL server(void *data) {
   config.configuration++;
   config.display_scale = 1.5f;
   config.refresh_hz = 60;
+  config.terminal_preparation = 1;
   config.origin_x = 48;
   config.origin_y = 24;
   anvil_ipc_pipe_write(&pipe, ANVIL_SURFACE_MSG_CONFIGURE, &config, sizeof(config), NULL, 0);
@@ -393,9 +398,11 @@ int main(int test_argc, char **test_argv) {
     SDL_DestroyProperties(props);
   }
   if (loss_invalid || loss_disconnect) SDL_SetLogOutputFunction(capture_loss, NULL);
-  if (!dialogs && !ping && !motion_stall && !loss_invalid && !loss_disconnect)
+  if (!dialogs && !ping && !motion_stall && !loss_invalid && !loss_disconnect) {
+    CHECK(anvil_hosted_surface_terminal_preparation(3) == 0);
     CHECK(anvil_hosted_surface_pane_request(ANVIL_SURFACE_PANE_ROUTE_DIRECT, "C:/Project",
                                            "{action=\"focus\",pane=\"pane-2\"}", 0, 0));
+  }
   SetEvent(ready);
   CHECK(WaitForSingleObject(sent, 5000) == WAIT_OBJECT_0);
   if (loss_invalid || loss_disconnect) {
@@ -551,6 +558,8 @@ int main(int test_argc, char **test_argv) {
   }
   CHECK(rejected_input && queued_text && polled_text);
   CHECK(SDL_GetAtomicInt(&pane_checked) == 1 && pane_delivered);
+  CHECK(SDL_GetAtomicInt(&preparation_checked) == 1);
+  CHECK(anvil_hosted_surface_terminal_preparation(3) == 1);
   CHECK(display_changes == 1 && display_rate == 60);
   CHECK(anvil_hosted_surface_display_scale() == 1.5f);
   SDL_Surface *surface = SDL_CreateSurface(320, 240, SDL_PIXELFORMAT_BGRA32);

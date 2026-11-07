@@ -70,21 +70,25 @@ A new host answers only after its shell starts, so a launch waits up to 30 secon
 A failed launch ends its host and deletes the record that the host wrote, so the Sidebar shows no lost copy.
 Run `ui/terminal_startup.lua` after startup changes. Tests that need a live Terminal View use `tests/fixtures/terminal_ready.lua`.
 
-The visible Selected Project prepares one unused Terminal Session after a short delay.
-Opening a matching terminal uses that shell, then prepares a replacement. Other launches use normal background startup.
+Terminal and Pi preparation share one retention list: the last four eligible Projects visited, across Windows.
+Opening a new Terminal makes its loaded Project eligible for a Terminal spare. Opening a new Pi makes it eligible for a Pi spare. Each type has its own eligibility and setting. Eligibility ends when the Project unloads; it is not saved.
+The visible Selected Project prepares each eligible spare after a short delay. A hidden Project keeps its spares while it stays in the list. Revisiting an eligible Project starts preparation again if its spare is missing.
+Opening a matching terminal uses that shell, even while startup is in progress, then prepares a replacement. Other launches use normal background startup.
 The shell command, starting directory, Project, scrollback limit, and environment must match.
-Unused prepared shells have no session record or saved screen. They close when their Project becomes hidden or closes.
+Unused prepared shells have no session record or saved screen. They close when their Project leaves the retention list, unloads, or disables preparation. Eviction never closes a session that a Pane has taken.
 They also close when their client disconnects. An activated shell keeps the normal detach and revival behavior.
 `config.plugins.terminal.prepare_session` controls preparation. It defaults to true and has a Terminal setting.
 Preparation uses extra memory and runs the shell profile early.
-Run `runtime/terminal_prepared.lua` and `ui/terminal_prepared.lua` after changes.
+The shell owns the retention list and sends each Project its allowed spare types. Lua uses one lifecycle for both types.
+Run `anvil:prepared-projects`, `anvil:hosted-routing`, `runtime/terminal_prepared.lua` and `ui/terminal_prepared.lua` after changes.
 New shells get their PATH from the Windows registry (system PATH, then user PATH), not from the Anvil process. A PATH change then reaches new Terminal Sessions without a restart. A prepared shell with an older PATH is not used. Running shells keep their PATH. Run `runtime/terminal_path_environment.lua` after changes.
 
 Copy View on a Pi Terminal opens a plain Terminal with the same directory and shell. It does not start Pi.
 `terminal:open_pi` starts `pi` in a new Terminal at the Project's folder, with a fresh conversation and Pi's normal defaults.
-The visible Selected Project also prepares one Pi with the same launch: the Project's folder and the configured shell.
+An eligible Project prepares one Pi with the same launch: the Project's folder and the configured shell.
 A new Pi uses the prepared Pi only when its directory, shell, Project, scrollback limit and launch environment match. Other new Pis start normally. Normal Terminals never take a prepared Pi.
-The prepared Pi has no Terminal record or saved screen until a Pane takes it. It closes when its Project becomes hidden or preparation is disabled. Startup must report Pi idle within 30 seconds. A failed preparation does not retry until its launch settings change or the Project becomes visible again.
+The prepared Pi has no Terminal record or saved screen until a Pane takes it. Opening Pi takes its spare even while the shell or Pi starts. It does not send the Pi command twice. Pi and plain Terminals never take each other's spares.
+An unused Pi must report idle within 30 seconds. A failed preparation does not retry until its launch settings change or the Project becomes visible again.
 `config.plugins.terminal.prepare_pi` defaults to true and has a separate Terminal setting. It uses extra memory and runs Pi startup, including extensions, early.
 Run `ui/terminal_pi_prepared.lua`, `ui/terminal_prepared.lua` and `runtime/terminal_prepared.lua` after changes.
 

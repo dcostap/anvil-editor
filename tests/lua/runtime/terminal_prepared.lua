@@ -11,6 +11,26 @@ local function wait_for(session, predicate)
 end
 
 test.describe("Prepared Terminal Session", function()
+  test.it("accepts a prepared shell before startup finishes", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local native = require "terminal_native"
+    local session = assert(native.new { cwd = system.getcwd(), shell = "cmd.exe /D /Q", prepared = true })
+    local ok, err = pcall(function()
+      test.ok(session:activate(), "starting spare was rejected")
+      test.ok(wait_for(session, function(status)
+        return status.kind == "running" and not status.replaying
+          and native.read_session_record(session:stats().session_id) ~= nil
+      end), "accepted spare did not publish its session")
+      test.ok(session:write("echo STARTING_SPARE_INPUT\r"))
+      test.ok(wait_for(session, function()
+        return session:text_capture().text:find("STARTING_SPARE_INPUT", 1, true)
+      end))
+    end)
+    session:close()
+    native.finish_close_commands()
+    test.ok(ok, err)
+  end)
+
   test.it("keeps a prepared shell private until a view takes it", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local native = require "terminal_native"
@@ -36,23 +56,27 @@ test.describe("Prepared Terminal Session", function()
     test.ok(ok, err)
   end)
 
-  test.it("rejects a prepared shell after its launch environment changes", function()
-    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
-    local native = require "terminal_native"
-    local key = "ANVIL_PREPARED_ENV_TEST"
-    local previous = os.getenv(key) or ""
-    system.setenv(key, "before")
-    local session = assert(native.new { cwd = system.getcwd(), shell = "cmd.exe /D /Q", prepared = true })
-    local ok, err = pcall(function()
-      test.ok(wait_for(session, function(status) return status.kind == "running" and not status.replaying end))
-      system.setenv(key, "after")
-      test.not_ok(session:activate(), "a shell with stale environment was accepted")
+  for _, starting in ipairs {true, false} do
+    test.it("rejects a " .. (starting and "starting" or "ready") .. " spare after its launch environment changes", function()
+      test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+      local native = require "terminal_native"
+      local key = "ANVIL_PREPARED_ENV_TEST"
+      local previous = os.getenv(key) or ""
+      system.setenv(key, "before")
+      local session = assert(native.new { cwd = system.getcwd(), shell = "cmd.exe /D /Q", prepared = true })
+      local ok, err = pcall(function()
+        if not starting then
+          test.ok(wait_for(session, function(status) return status.kind == "running" and not status.replaying end))
+        end
+        system.setenv(key, "after")
+        test.not_ok(session:activate(), "a shell with stale environment was accepted")
+      end)
+      system.setenv(key, previous)
+      session:close()
+      native.finish_close_commands()
+      test.ok(ok, err)
     end)
-    system.setenv(key, previous)
-    session:close()
-    native.finish_close_commands()
-    test.ok(ok, err)
-  end)
+  end
 
   test.it("keeps an activated shell when detach interrupts its transport", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")

@@ -366,6 +366,13 @@ display_scale_test = executable('display_scale_test',
 )
 test('display-scale', display_scale_test, env: anvil_test_env, suite: 'anvil')
 
+prepared_projects_test = executable('prepared_projects_test',
+    ['../tests/native/prepared_projects_test.c'],
+    include_directories: anvil_includes,
+    c_args: anvil_cargs,
+)
+test('prepared-projects', prepared_projects_test, env: anvil_test_env, suite: 'anvil')
+
 drop_events_test = executable('drop_events_test',
     ['../tests/native/drop_events_test.c', 'system_events.c', 'resize_diagnostics.c', 'input_latency_probe.c'],
     include_directories: anvil_includes,

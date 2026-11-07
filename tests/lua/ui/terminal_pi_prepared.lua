@@ -25,7 +25,7 @@ local function service(view)
   return view.state == "running" and view.agent_app == "pi" and text(view):find("PREPARED_PI_READY", 1, true)
 end
 
-local dir, shell_command, views, previous_log, previous_config, previous_root
+local dir, shell_command, views, previous_log, previous_config, previous_root, previous_ready_file
 local function track(view)
   views[#views + 1] = view
   return view
@@ -91,6 +91,8 @@ test.describe("Prepared Pi", function()
     file:close()
     shell_command = 'cmd.exe /D /Q /K ""' .. (dir .. "/shell.cmd"):gsub("/", "\\") .. '""'
     previous_log = os.getenv("ANVIL_TEST_PI_LOG")
+    previous_ready_file = os.getenv("ANVIL_TEST_PI_READY_FILE")
+    system.setenv("ANVIL_TEST_PI_READY_FILE", "")
     system.setenv("ANVIL_TEST_PI_LOG", dir)
     local terminal_config = config.plugins.terminal
     previous_config = {terminal_config.prepare_session, terminal_config.prepare_pi, terminal_config.shell}
@@ -111,6 +113,7 @@ test.describe("Prepared Pi", function()
     terminal_config.prepare_session, terminal_config.prepare_pi, terminal_config.shell = table.unpack(previous_config)
     core.root_project = previous_root
     system.setenv("ANVIL_TEST_PI_LOG", previous_log or "")
+    system.setenv("ANVIL_TEST_PI_READY_FILE", previous_ready_file or "")
     if dir then test.ok(test.remove_tree(dir)) end
   end)
 
@@ -133,6 +136,7 @@ test.describe("Prepared Pi", function()
 
   test.it("gives a new Pi the prepared Pi and never gives it to a normal Terminal", function()
     local prepared = watch_preparation()
+    open_pi()
     test.ok(wait_for(function() return terminal.prepare_pi_session() end), "Pi preparation did not finish")
     local id = prepared.session:stats().session_id
     test.is_nil(native.read_session_record(id), "unused Pi appeared in the Sidebar's session records")
@@ -148,7 +152,86 @@ test.describe("Prepared Pi", function()
     test.not_equal(prepared.session:stats().session_id, id, "preparation reused an accepted Pi")
   end)
 
+  test.it("enables each spare type only after that type opens", function()
+    config.plugins.terminal.prepare_session = true
+    local deadline = system.get_time() + 2
+    repeat
+      test.not_ok(terminal.prepare_session())
+      test.not_ok(terminal.prepare_pi_session())
+      coroutine.yield(0.01)
+    until system.get_time() >= deadline
+    local pi = open_pi()
+    test.ok(wait_for(function() return service(pi) end))
+    test.ok(wait_for(function() return terminal.prepare_pi_session() end))
+    test.not_ok(terminal.prepare_session(), "opening Pi also enabled plain shell preparation")
+    open_shell()
+    test.ok(wait_for(function() return terminal.prepare_session() end))
+  end)
+
+  test.it("keeps both hidden spares until eviction and prepares them again on a revisit", function()
+    config.plugins.terminal.prepare_session = true
+    local watched = watch_preparation()
+    local pi, shell = open_pi(), open_shell()
+    test.ok(wait_for(function() return service(pi) end))
+    test.ok(wait_for(function() return terminal.prepare_pi_session() end))
+    local pi_spare = watched.session
+    test.ok(wait_for(function() return terminal.prepare_session() end))
+    local shell_spare = watched.session
+    terminal.update_prepared_sessions(false)
+    test.equal(select(2, pi_spare:update()).kind, "running")
+    test.equal(select(2, shell_spare:update()).kind, "running")
+
+    -- The shell's retention grant is the external cross-Project boundary.
+    local permissions = system.terminal_preparation
+    local retained = false
+    system.terminal_preparation = function(want_shell, want_pi)
+      return retained and want_shell, retained and want_pi
+    end
+    local ok, err = pcall(function()
+      terminal.update_prepared_sessions(false)
+      test.equal(select(2, pi_spare:update()).kind, "closed")
+      test.equal(select(2, shell_spare:update()).kind, "closed")
+      test.ok(service(pi), "eviction closed an opened Pi")
+      shell:service_session(true)
+      test.equal(shell.state, "running", "eviction closed an opened Terminal")
+      retained = true
+      test.ok(wait_for(function()
+        terminal.update_prepared_sessions(true)
+        return terminal.prepare_session() and terminal.prepare_pi_session()
+      end))
+      local next_pi, next_shell = open_pi(), open_shell()
+      test.ok(wait_for(function() return service(next_pi) end))
+      test.not_equal(next_pi.session, pi_spare)
+      test.not_equal(next_shell.session, shell_spare)
+    end)
+    system.terminal_preparation = permissions
+    test.ok(ok, err)
+  end)
+
+  test.it("takes the same Pi while its startup is still in progress", function()
+    local prepared = watch_preparation()
+    local first = open_pi()
+    test.ok(wait_for(function() return service(first) end))
+    system.setenv("ANVIL_TEST_PI_READY_FILE", dir .. "/ready")
+    test.ok(wait_for(function()
+      terminal.prepare_pi_session()
+      return prepared.session and #launches() == 2
+    end), "spare Pi did not start")
+    local pi = open_pi()
+    test.equal(pi.session, prepared.session, "opening discarded the starting Pi")
+    local file = assert(io.open(dir .. "/ready", "wb"))
+    file:close()
+    test.ok(wait_for(function() return service(pi) end), "starting spare never became ready")
+    test.equal(#launches(), 2, "taking the spare launched another Pi")
+    test.ok(pi:write_input("ONE_PI_ONLY\r"))
+    test.ok(wait_for(function()
+      pi:service_session(true)
+      return text(pi):find("PI_INPUT .-:ONE_PI_ONLY")
+    end), "input did not reach the accepted Pi")
+  end)
+
   test.it("does not use a prepared Pi from another directory", function()
+    open_pi()
     test.ok(wait_for(function() return terminal.prepare_pi_session() end))
     local other_dir = dir .. "/other"
     test.ok(system.mkdir(other_dir))
@@ -165,6 +248,7 @@ test.describe("Prepared Pi", function()
   for _, action in ipairs { "disable", "discard" } do
     test.it("closes the unused Pi on " .. action, function()
       local prepared = watch_preparation()
+      open_pi()
       test.ok(wait_for(function() return terminal.prepare_pi_session() end))
       local id = prepared.session:stats().session_id
       if action == "disable" then
@@ -181,6 +265,7 @@ test.describe("Prepared Pi", function()
 
   test.it("starts normally if the prepared Pi has exited", function()
     local prepared = watch_preparation()
+    open_pi()
     test.ok(wait_for(function() return terminal.prepare_pi_session() end))
     local id = prepared.session:stats().session_id
     test.ok(prepared.session:write("exit\r"))

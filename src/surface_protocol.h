@@ -13,7 +13,7 @@
 #include <string.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 44u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 45u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -139,6 +139,8 @@ typedef enum {
   /* The Sidebar's keyboard cursor shows its row in the Project area, or an activation keeps that row's frame.
    * Payload: AnvilSurfacePeek. */
   ANVIL_SURFACE_MSG_SIDEBAR_PEEK = 115,
+  /* Eligible spare types in this loaded Project. Payload: AnvilSurfaceInt, ANVIL_PREPARED_* mask. */
+  ANVIL_SURFACE_MSG_TERMINAL_PREPARATION = 120,
 } AnvilSurfaceMessageType;
 
 typedef enum {
@@ -248,6 +250,7 @@ typedef struct {
   /* A Peek: the Project draws the Pane Group of its Pane `pane-<peek_pane>` in place of its visible one, without a
    * change to its state. Zero draws the Project as it is. */
   uint32_t peek_pane;
+  uint32_t terminal_preparation;     /* spare types retained by the shell */
 } AnvilSurfaceConfigure;
 
 typedef struct {

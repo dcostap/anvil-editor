@@ -92,6 +92,7 @@ bool anvil_hosted_surface_load_project(const char *path);
 bool anvil_hosted_surface_set_panes(const char *panes);
 /* Reports successful Lua startup, including Workspace restore. Replayed after adoption. */
 void anvil_hosted_surface_runtime_ready(void);
+uint32_t anvil_hosted_surface_terminal_preparation(uint32_t eligible);
 /* The Sidebar asks the shell to select a Project and act on one of its Panes. */
 bool anvil_hosted_surface_pane_request(uint32_t route, const char *path, const char *text, int x, int y);
 void anvil_hosted_surface_complete_pane_request(uint64_t request);

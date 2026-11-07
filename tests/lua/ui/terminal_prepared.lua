@@ -3,6 +3,20 @@ local terminal = require "plugins.terminal"
 local config = require "core.config"
 
 test.describe("Prepared Terminal View", function()
+  test.it("does not prepare shells before the first Terminal opens", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    terminal._set_native_for_tests(nil)
+    local ok, err = pcall(function()
+      local deadline = system.get_time() + 2
+      repeat
+        test.not_ok(terminal.prepare_session(), "a Project with no opened Terminal prepared a shell")
+        coroutine.yield(0.01)
+      until system.get_time() >= deadline
+    end)
+    terminal._set_native_for_tests(nil)
+    test.ok(ok, err)
+  end)
+
   test.it("opens the prepared shell and prepares another only after it is used", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local previous = config.plugins.terminal.shell
@@ -17,8 +31,9 @@ test.describe("Prepared Terminal View", function()
         return session, err, code
       end,
     }
-    local view, second
+    local view, second, first
     local ok, err = pcall(function()
+      first = terminal.open()
       local deadline = system.get_time() + 30
       local ready
       repeat
@@ -45,6 +60,7 @@ test.describe("Prepared Terminal View", function()
     end)
     if view then view:on_close() end
     if second then second:on_close() end
+    if first then first:on_close() end
     terminal.discard_prepared_session()
     terminal._set_native_for_tests(nil)
     config.plugins.terminal.shell = previous
@@ -57,6 +73,7 @@ test.describe("Prepared Terminal View", function()
     config.plugins.terminal.shell = "cmd.exe /D /Q"
     local views = {}
     local ok, err = pcall(function()
+      views[4] = terminal.open()
       local deadline = system.get_time() + 30
       while not terminal.prepare_session() and system.get_time() < deadline do coroutine.yield(0.01) end
       views[1] = terminal.open { shell = "powershell.exe -NoLogo -NoProfile" }
@@ -66,7 +83,7 @@ test.describe("Prepared Terminal View", function()
       views[3] = terminal.open()
       test.equal(views[3].state, "running", "the matching request lost its prepared shell")
     end)
-    for _, view in ipairs(views) do view:on_close() end
+    for _, view in pairs(views) do view:on_close() end
     terminal.discard_prepared_session()
     config.plugins.terminal.shell = previous
     test.ok(ok, err)
@@ -77,8 +94,9 @@ test.describe("Prepared Terminal View", function()
     local settings = config.plugins.terminal
     local previous_shell, previous_prepare = settings.shell, settings.prepare_session
     settings.shell, settings.prepare_session = "cmd.exe /D /Q", true
-    local view
+    local view, first
     local ok, err = pcall(function()
+      first = terminal.open()
       local deadline = system.get_time() + 30
       while not terminal.prepare_session() and system.get_time() < deadline do coroutine.yield(0.01) end
       settings.prepare_session = false
@@ -87,6 +105,7 @@ test.describe("Prepared Terminal View", function()
       test.equal(view.state, "reconnecting", "disabled preparation still supplied a shell")
     end)
     if view then view:on_close() end
+    if first then first:on_close() end
     terminal.discard_prepared_session()
     settings.shell, settings.prepare_session = previous_shell, previous_prepare
     test.ok(ok, err)

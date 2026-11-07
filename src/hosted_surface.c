@@ -1,4 +1,5 @@
 #include "hosted_surface.h"
+#include "prepared_projects.h"
 #include "custom_events.h"
 #include "input_latency_probe.h"
 #include "system_events.h"
@@ -69,6 +70,7 @@ static struct {
   bool active;
   bool valid, restarted, sidebar, sidebar_query_needed;
   bool runtime_ready;
+  uint32_t terminal_preparation;
   DWORD shell_pid;
   HANDLE shell_process, loss_signal, exit_sent;
   /* Set for each inbound shell message, so an idle UI thread wakes for a resize or input at once. */
@@ -514,6 +516,7 @@ static const char *configure_problem(const AnvilSurfaceConfigure *config) {
   if (config->window_w <= 0 || config->window_h <= 0) return "window size";
   if (config->window_mode < 0 || config->window_mode > ANVIL_SURFACE_WINDOW_FULLSCREEN) return "window mode";
   if (config->render_enabled != 0 && config->render_enabled != 1) return "render_enabled";
+  if (config->terminal_preparation & ~ANVIL_PREPARED_ALL) return "terminal_preparation";
   if (!(config->display_scale > 0 && config->display_scale <= 16)) return "display scale";
   if (!(config->refresh_hz >= 0 && config->refresh_hz <= 1000)) return "refresh rate";
   if (config->controls_x < 0 || config->controls_y < 0 || config->controls_w < 0 || config->controls_h < 0 ||
@@ -779,6 +782,10 @@ void anvil_hosted_surface_finish_adoption(void) {
   if (hosted.bordered >= 0) anvil_hosted_surface_set_bordered(hosted.bordered);
   if (hosted.visible >= 0) anvil_hosted_surface_set_visible(hosted.visible);
   if (hosted.runtime_ready) anvil_hosted_surface_runtime_ready();
+  if (hosted.terminal_preparation) {
+    AnvilSurfaceInt eligible = {(int32_t)hosted.terminal_preparation};
+    send_message(ANVIL_SURFACE_MSG_TERMINAL_PREPARATION, &eligible, sizeof(eligible));
+  }
   SDL_SetAtomicInt(&hosted.adopting, 0);
   push_window_event(SDL_EVENT_WINDOW_EXPOSED);
   anvil_hosted_surface_poll();
@@ -1175,6 +1182,17 @@ void anvil_hosted_surface_runtime_ready(void) {
   if (!hosted.active || hosted.sidebar) return;
   hosted.runtime_ready = true;
   send_message(ANVIL_SURFACE_MSG_RUNTIME_READY, NULL, 0);
+}
+
+uint32_t anvil_hosted_surface_terminal_preparation(uint32_t eligible) {
+  if (!hosted.active) return eligible; /* Direct mode has only this Project. */
+  if (hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return 0;
+  if (eligible != hosted.terminal_preparation) {
+    hosted.terminal_preparation = eligible;
+    AnvilSurfaceInt request = {(int32_t)eligible};
+    send_message(ANVIL_SURFACE_MSG_TERMINAL_PREPARATION, &request, sizeof(request));
+  }
+  return view->config.terminal_preparation & eligible;
 }
 
 bool anvil_hosted_surface_set_panes(const char *panes) {
@@ -1839,6 +1857,7 @@ bool anvil_hosted_surface_peek(uint32_t project_id, uint32_t pane, int direction
 uint32_t anvil_hosted_surface_peek_pane(void) { return 0; }
 bool anvil_hosted_surface_set_panes(const char *panes) { (void)panes; return false; }
 void anvil_hosted_surface_runtime_ready(void) {}
+uint32_t anvil_hosted_surface_terminal_preparation(uint32_t eligible) { return eligible; }
 void anvil_hosted_surface_complete_pane_request(uint64_t request) { (void)request; }
 bool anvil_hosted_surface_pane_request(uint32_t route, const char *path, const char *text, int x, int y) {
   (void)route; (void)path; (void)text; (void)x; (void)y; return false;

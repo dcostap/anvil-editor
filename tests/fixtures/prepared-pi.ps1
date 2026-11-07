@@ -3,6 +3,9 @@ $ErrorActionPreference = 'Stop'
 $id = [guid]::NewGuid().ToString('N')
 $launch = @{ id = $id; cwd = (Get-Location).Path; args = @($args) }
 $launch | ConvertTo-Json -Compress | Set-Content -Encoding UTF8 (Join-Path $env:ANVIL_TEST_PI_LOG "$id.json")
+if ($env:ANVIL_TEST_PI_READY_FILE) {
+    while (-not (Test-Path $env:ANVIL_TEST_PI_READY_FILE)) { Start-Sleep -Milliseconds 20 }
+}
 $esc = [char]27
 [Console]::Write("${esc}]7501;state=idle:app=pi${esc}\")
 [Console]::WriteLine("PREPARED_PI_READY $id")

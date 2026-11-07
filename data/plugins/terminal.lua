@@ -47,14 +47,14 @@ terminal_config.config_spec = {
   name = "Terminal",
   {
     label = "Prepare a Terminal",
-    description = "Keep one unused shell ready. Uses extra memory and runs the shell profile early.",
+    description = "Keep a spare after first use, in up to four recent Projects. Uses extra memory and runs the shell profile early.",
     path = "prepare_session",
     type = "toggle",
     default = terminal_config.prepare_session,
   },
   {
     label = "Prepare Pi",
-    description = "Keep one unused Pi ready at the visible Project. Uses extra memory and runs Pi startup early.",
+    description = "Keep a spare after first use, in up to four recent Projects. Uses extra memory and runs Pi startup early.",
     path = "prepare_pi",
     type = "toggle",
     default = terminal_config.prepare_pi,
@@ -414,11 +414,12 @@ function TerminalView:new(options)
       core.log_quiet("Terminal Session %s record rejected: %s", tostring(options.session_id), tostring(record_error))
     end
   end
-  local session, pi_ready
+  local session, pi_command_sent
   if not options.session_id and not fs.machine then
-    session, pi_ready = take_prepared_session(native_options, options.pi)
+    session, pi_command_sent = take_prepared_session(native_options, options.pi)
   end
-  if pi_ready then self.start_pi = nil end
+  local used_spare = session ~= nil
+  if pi_command_sent then self.start_pi = nil end
   local start_error, transport_error
   if fs.machine then
     session, start_error = self:new_remote_session(native_options, options.session_id, options.restore)
@@ -460,8 +461,9 @@ function TerminalView:new(options)
   self.activity = record and tonumber(record.activity) or os.time()
   local attaching = session:stats().attach_count == 0
   if not attaching then self:log_session_attach() end
-  self.session_cell_width = self.native_cell_width
-  self.session_cell_height = self.cell_height
+  -- A starting spare can have captured older font metrics. Apply this View's size after attachment.
+  self.session_cell_width = used_spare and 0 or self.native_cell_width
+  self.session_cell_height = used_spare and 0 or self.cell_height
   self.snapshot = session:snapshot()
   self.theme_generation = core.color_theme_generation or 0
   self.state = attaching and "reconnecting" or "running"
@@ -2894,6 +2896,7 @@ end
 
 local prepared_shell = { name = "Terminal" }
 local prepared_pi = { name = "Pi", pi = true }
+local preparation_visible = false
 
 local function same_launch(a, b)
   return (a.shell or "") == (b.shell or "")
@@ -2908,6 +2911,7 @@ local function discard_prepared(slot)
     core.log_quiet("Prepared %s discarded", slot.name)
   end
   slot.session, slot.options, slot.after, slot.failed, slot.started, slot.command_sent = nil, nil, nil, nil, nil, nil
+  slot.ready = nil
 end
 
 function M.discard_prepared_session()
@@ -2920,8 +2924,9 @@ local function prepared_ready(slot, status)
     and (not slot.pi or (status.agent_app == "pi" and status.agent_state == "idle"))
 end
 
-local function prepare(slot, options)
+local function prepare(slot, options, visible)
   if slot.options and not same_launch(slot.options, options) then discard_prepared(slot) end
+  if not slot.session and not visible then return false end
   if not slot.options then slot.options, slot.after = options, system.get_time() + 1 end
   if slot.failed or system.get_time() < slot.after then return false end
   if not slot.session then
@@ -2946,8 +2951,9 @@ local function prepare(slot, options)
   if slot.pi and not slot.command_sent and status.kind == "running" and not status.replaying then
     slot.command_sent = slot.session:write("pi\r")
   end
-  if prepared_ready(slot, status) then return true end
+  if prepared_ready(slot, status) then slot.ready = true; return true end
   if status.kind == "failed" or status.kind == "exited" or status.kind == "closed"
+      or (slot.pi and slot.ready and status.agent_app ~= "pi")
       or (slot.pi and system.get_time() - slot.started >= 30) then
     slot.session:close()
     slot.session, slot.failed = nil, true
@@ -2958,65 +2964,82 @@ local function prepare(slot, options)
   return false
 end
 
--- The idle scheduler calls these only for the selected, visible Project.
-function M.prepare_session()
-  if system.is_session_ending() then return false end
-  if not terminal_config.prepare_session or PLATFORM ~= "Windows" or fs.machine then
-    discard_prepared(prepared_shell)
-    return false
-  end
-  return prepare(prepared_shell, {
-    shell = terminal_config.shell,
-    cwd = start_directory(terminal_config.cwd_mode),
-    project_path = project_path("project"),
-    scrollback_lines = terminal_config.scrollback_lines,
-  })
+local function preparation_permissions()
+  local enabled = PLATFORM == "Windows" and not fs.machine
+  return system.terminal_preparation(
+    enabled and prepared_shell.opened and terminal_config.prepare_session or false,
+    enabled and prepared_pi.opened and terminal_config.prepare_pi or false)
 end
 
--- The prepared Pi matches the launch of terminal:open_pi.
-function M.prepare_pi_session()
+local function prepare_slot(slot, allowed, visible)
   if system.is_session_ending() then return false end
-  if not terminal_config.prepare_pi or PLATFORM ~= "Windows" or fs.machine then
-    discard_prepared(prepared_pi)
+  if not allowed then
+    discard_prepared(slot)
     return false
   end
-  return prepare(prepared_pi, {
+  return prepare(slot, {
     shell = terminal_config.shell,
-    cwd = start_directory("project"),
+    cwd = start_directory(slot.pi and "project" or terminal_config.cwd_mode),
     project_path = project_path("project"),
     scrollback_lines = terminal_config.scrollback_lines,
-  })
+  }, visible)
+end
+
+function M.prepare_session()
+  local allowed = preparation_permissions()
+  return prepare_slot(prepared_shell, allowed, true)
+end
+
+function M.prepare_pi_session()
+  local _, allowed = preparation_permissions()
+  return prepare_slot(prepared_pi, allowed, true)
+end
+
+function M.update_prepared_sessions(visible)
+  if visible and not preparation_visible then
+    if prepared_shell.failed then discard_prepared(prepared_shell) end
+    if prepared_pi.failed then discard_prepared(prepared_pi) end
+  end
+  preparation_visible = visible
+  local shell_allowed, pi_allowed = preparation_permissions()
+  prepare_slot(prepared_shell, shell_allowed, visible)
+  prepare_slot(prepared_pi, pi_allowed, visible)
 end
 
 local function take_prepared(slot, options)
   if not slot.session or not same_launch(slot.options, options) then return end
   local session = slot.session
   local _, status = session:update()
-  if not prepared_ready(slot, status) then return end
-  if not session:set_colors(options) or not session:resize(
-      options.cols, options.rows, options.cell_width, options.cell_height) or not session:activate() then
+  if (status.kind ~= "running" and status.kind ~= "reconnecting")
+      or (slot.pi and slot.ready and status.agent_app ~= "pi") then
+    discard_prepared(slot)
+    return
+  end
+  -- Geometry follows normal View startup once the transport is ready.
+  if not session:set_colors(options) or not session:activate() then
     discard_prepared(slot)
     core.log_quiet("Prepared %s rejected; start normally", slot.name)
     return
   end
+  local command_sent = slot.command_sent
   slot.session = nil
   discard_prepared(slot)
   core.log_quiet("Prepared %s used: id=%s", slot.name, session:stats().session_id)
-  return session
+  return session, command_sent
 end
 
 take_prepared_session = function(options, pi)
-  if not terminal_config.prepare_pi then discard_prepared(prepared_pi) end
-  if not terminal_config.prepare_session then discard_prepared(prepared_shell) end
-  if pi and terminal_config.prepare_pi then
-    local session = take_prepared(prepared_pi, options)
-    if session then return session, true end
+  local slot = pi and prepared_pi or prepared_shell
+  slot.opened = true
+  if pi and terminal_config.prepare_pi or not pi and terminal_config.prepare_session then
+    return take_prepared(slot, options)
   end
-  if terminal_config.prepare_session then return take_prepared(prepared_shell, options) end
+  discard_prepared(slot)
 end
 
 function M._set_native_for_tests(native)
   M.discard_prepared_session()
+  prepared_shell.opened, prepared_pi.opened, preparation_visible = nil, nil, false
   native_override = native
 end
 
@@ -3495,10 +3518,7 @@ core.add_background_thread(function()
   while true do
     local mode = require("core.cli").last_command
     if not system.is_sidebar_surface() and (mode == "default" or mode == "edit") then
-      if system.window_should_render(core.window) then
-        M.prepare_session()
-        M.prepare_pi_session()
-      else M.discard_prepared_session() end
+      M.update_prepared_sessions(system.window_should_render(core.window))
     end
     coroutine.yield(0.25)
   end
