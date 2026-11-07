@@ -112,6 +112,9 @@ function pane_history.timeline(projects, window_id)
     local index = entry.to and index_of[entry.to]
     if index then
       current, moved = index, entry.at
+    elseif current and key(list[current].path, list[current].id) == key(entry.path, entry.id) then
+      -- Returning from another Window keeps this Window's history position.
+      moved = entry.at
     else
       if current then add(list[current].path, list[current].id, moved) end
       current = nil

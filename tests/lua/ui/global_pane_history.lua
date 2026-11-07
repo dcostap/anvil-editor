@@ -211,4 +211,26 @@ test.describe("Pane History", function()
     move("back")
     test.equal(panes.active(), two)
   end)
+
+  test.it("keeps its Forward position when another Window takes focus and gives it back", function()
+    local one = panes.create {factory = factory("one")}
+    local two = panes.create {factory = factory("two")}
+    local three = panes.create {factory = factory("three")}
+    visit(one)
+    visit(two)
+    visit(three)
+    move("back")
+    test.equal(panes.active().id, two.id)
+    focused = false
+    stay()
+    core.project_sidebar = {{path = "C:/Elsewhere", window_id = 2, panes = {
+      {id = "far"}, history = {{id = "far", at = math.floor(now * 1000)}},
+    }}}
+    focused = true
+    stay()
+    test.ok(require("core.pane_history").move("forward"), "Returning to the Window lost its Forward position")
+    stay()
+    test.equal(panes.active().id, three.id)
+    test.same(requests, {})
+  end)
 end)

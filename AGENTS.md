@@ -90,6 +90,7 @@ Run `ui/terminal_pi_prepared.lua`, `ui/terminal_prepared.lua` and `runtime/termi
 
 Pane History is the order of the Panes that the user visited across Projects in one Window. Each Window has its own history. `pane:history_back` and `pane:history_forward` move through it; `pane:history_oldest` and `pane:history_newest` go to its ends.
 Each observed Pane focus counts as a visit. A history move adds no visit. When the user leaves a Pane that a move showed, that Pane goes again at the end, so no visit is lost.
+Returning to the same Pane after another Window had focus keeps the history position, including its Forward entries.
 The combined history compresses repeated consecutive Pane sequences, such as A → B → A → B, into their later copy. It preserves the current position. Pane identity includes its Project, so equal IDs in different Projects stay distinct.
 Each Project keeps its last 40 visits (`core.pane_history`) and sends them as `history` in its Pane report. Each entry has the Pane ID and the time in milliseconds. A move entry also names the entry that it showed (`to`). A move to another Project sends that name in its `focus` Pane request.
 Moves skip closed, Snoozed and Dormant Panes. Visits are not saved across restarts. Run `ui/global_pane_history.lua`, `ui/recent_panes.lua` and `ui/pane_requests.lua` after changes.
