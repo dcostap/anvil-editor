@@ -92,7 +92,7 @@ end
 
 function projects.query_chip_width(project, max_width)
   local bold, name = chip_name(project, max_width, style.font)
-  return style.font:get_height() + style.padding.x / 2 + bold:get_width(name) + style.padding.x * 0.6
+  return style.font:get_height() + style.padding.x / 2 + bold:get_width(name) + style.padding.x * 0.3
     + chevron_width()
 end
 
@@ -115,7 +115,7 @@ function projects.draw_query_chip(project, x, text_y, text_font, max_width)
   look.draw_badge(project, x, math.floor(cap_middle - size / 2 + 0.5), size, bold, style.card)
   local name_x = x + size + style.padding.x / 2
   renderer.draw_text(bold, name, name_x, math.floor(baseline - bold_baseline + 0.5), style.text)
-  local cx = name_x + bold:get_width(name) + style.padding.x * 0.6
+  local cx = name_x + bold:get_width(name) + style.padding.x * 0.3
   local w, h = chevron_width(), cap * 0.4
   local t = math.max(SCALE, w * 0.3)
   local dim = style.dim
