@@ -221,7 +221,10 @@ test("Pi exposes paged conversation text and live parallel tools without startin
     assert.equal(summary.context_tokens, 115);
     assert.match((await read({format: "text", overview: true})).text, /first request \[user\]: Check this/);
     await assert.rejects(read({from_start: true, before: "agent"}), /one of/);
-    await assert.rejects(read({query: "("}), /regular expression/);
+    // A query is literal text. This pattern would backtrack for minutes as a regular expression.
+    entries[5].message.content.push({type: "text", text: "a".repeat(40) + "b"});
+    assert.deepEqual((await read({query: "(a+)+$", include_tools: true})).messages, []);
+    assert.deepEqual((await read({query: "Checking\n→ BASH", include_tools: true})).messages.map(m => m.id), ["assistant"]);
     await assert.rejects(read({before: "missing"}), /branch/);
     await assert.rejects(read({entry_id: "long", offset: 1}), /offset/);
     // Navigation changes the active branch. Reads must not return abandoned messages.

@@ -95,7 +95,7 @@ The read uses the current branch's recorded history, including messages from bef
 | `before` | Return the entries before this ID. Pass the previous `next_before` for older pages. |
 | `after` | Return the entries after this ID. Pass the previous `next_after` for newer pages. |
 | `from_start` | Return the first entries of the branch. Default: false. |
-| `query` | Keep entries whose text matches this case-insensitive regular expression. A long entry shows the text near its first match. |
+| `query` | Keep entries whose text contains this text, ignoring case. Characters such as `*` and `(` match themselves. A long entry shows the text near its first match. For regular expressions, search `session_file` with your own tools. |
 | `include_summaries` | Include compaction and branch summaries. Default: true. |
 | `include_tools` | Include assistant tool calls and tool-result messages. Default: false. |
 | `tool_chars` | Cut each tool call's arguments and each tool result to 0–32000 characters in a page. Default: 400. |

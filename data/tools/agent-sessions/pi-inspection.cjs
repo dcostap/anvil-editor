@@ -189,7 +189,8 @@ function readTranscript(ctx, options = {}, partial) {
   if (options.offset !== undefined && !options.entry_id) throw new Error("An offset needs entry_id");
   let query;
   if (options.query !== undefined) {
-    try { query = new RegExp(String(options.query).slice(0, 512), "i"); } catch { throw new Error("Invalid query regular expression"); }
+    // Literal text only. A user pattern could backtrack for minutes and freeze this Pi's only thread.
+    query = new RegExp(String(options.query).slice(0, 512).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
   }
   const branch = ctx.sessionManager.getBranch();
   const base = {active_turn: !ctx.isIdle(), leaf_id: ctx.sessionManager.getLeafId?.(),
