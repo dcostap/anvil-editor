@@ -57,6 +57,7 @@ end
 
 test.describe("Keyboard Map", function()
   local bindings = {
+    ["f8"] = "sample:action",
     ["ctrl+f9"] = "keyboard_map_test:on_ctrl_f9",
     ["alt+j"] = "keyboard_map_test:hidden_by_alt_navigation",
   }
@@ -105,6 +106,23 @@ test.describe("Keyboard Map", function()
     test.equal(view:current_layer(), 3)
     click_key(view, "right ctrl")
     test.equal(view:current_layer(), 2)
+  end)
+
+  test.it("includes the command prefix in a key's label", function()
+    local view = open()
+    local texts = {}
+    local draw_text = renderer.draw_text
+    renderer.draw_text = function(font, text, x, y, color)
+      texts[#texts + 1] = text
+      return x + font:get_width(text)
+    end
+    renderer.begin_frame(core.window)
+    local ok, err = pcall(view.draw_key, view, spec("f8"), view:current_layer())
+    renderer.end_frame()
+    renderer.draw_text = draw_text
+    test.ok(ok, err)
+    test.ok(table.concat(texts, " "):find("sample: action", 1, true),
+      "key label must include the command prefix and action")
   end)
 
   test.it("shows a selectable navigation block", function()

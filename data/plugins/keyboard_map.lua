@@ -579,7 +579,8 @@ local function key_lines(key, font, width, max_lines)
   if key.lines_width == width and key.lines_max == max_lines and key.lines_size == size then return key.lines end
   key.lines_width, key.lines_max, key.lines_size, key.lines = width, max_lines, size, {}
   if not key.main then return key.lines end
-  local _, words = KeyboardMap.command_parts(key.main)
+  local namespace, words = KeyboardMap.command_parts(key.main)
+  if namespace ~= "" then words = namespace .. ": " .. words end
   local line = ""
   for word in words:gmatch("%S+") do
     local next_line = line == "" and word or line .. " " .. word
