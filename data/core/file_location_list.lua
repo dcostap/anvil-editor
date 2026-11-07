@@ -96,6 +96,22 @@ function list.at(data, line, col)
   end
 end
 
+-- The locations that start on one line, in column order.
+function list.points_on_line(data, line)
+  local points = {}
+  if not data then return points end
+  local first, last = 1, #data.lines
+  while first <= last do
+    local middle = math.floor((first + last) / 2)
+    if data.lines[middle] < line then first = middle + 1 else last = middle - 1 end
+  end
+  for index = first, #data.lines do
+    if data.lines[index] ~= line then break end
+    points[#points + 1] = list.point(data, index)
+  end
+  return points
+end
+
 function list.next(data, direction, line, col)
   if not data or #data.lines == 0 then return nil, "empty" end
   local first, last = 1, #data.lines

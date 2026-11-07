@@ -635,6 +635,75 @@ test.describe("Terminal View", function()
     navigate("core:next_remote_point_of_interest", "second.txt", 3, 1)
   end)
 
+  test.it("opens Terminal Text Capture links with a click or Point of Interest Activation", function(context)
+    local poi = require "core.poi"
+    local root = USERDIR .. PATHSEP .. "terminal-capture-links"
+    context.link_cwd = system.getcwd()
+    context.link_folder = root
+    test.ok(common.mkdirp(root))
+    local file = assert(io.open(root .. PATHSEP .. "notes.txt", "wb"))
+    file:write("one\ntwo\n")
+    file:close()
+    local previous_open = system.open_in_system
+    local opened = {}
+    system.open_in_system = function(uri) opened[#opened + 1] = uri; return true end
+    local source = terminal.open { cwd = root }
+    context.sessions[1].capture = {
+      text = "see label here\nvisit https://example.test/b. now\nnotes.txt:2:1",
+      cursor_line = 1, cursor_col = 1, viewport_line = 1,
+      links = { [1] = { { col1 = 5, col2 = 10, uri = "https://example.test/a" } } },
+    }
+    test.ok(source:open_text_capture())
+    local capture = panes.active().current_view
+    core.root_panel:update()
+
+    capture.buffer:set_selection(1, 7)
+    test.ok(command.perform("core:activate_point_of_interest"))
+    test.same(opened, { "https://example.test/a" })
+
+    local x, y = capture:get_line_screen_position(2, 9)
+    local end_x = capture:get_line_screen_position(2, 30)
+    y = y + 1
+    capture:on_mouse_moved(x, y, 0, 0)
+    test.equal(capture.cursor, "hand")
+    local hover_drawn = false
+    local previous_rect, previous_text = renderer.draw_rect, renderer.draw_text
+    renderer.draw_rect = function(_, _, _, _, color)
+      hover_drawn = hover_drawn or color == style.interactive_hover_background
+    end
+    renderer.draw_text = function(font, text, text_x) return text_x + font:get_width(text) end
+    local drawn, draw_error = pcall(function()
+      capture:prepare_line_body_draw_cache(2, 2)
+      capture:draw_line_body(2, capture:get_line_screen_position(2))
+    end)
+    renderer.draw_rect, renderer.draw_text = previous_rect, previous_text
+    test.ok(drawn, draw_error)
+    test.ok(hover_drawn, "A hovered link drew no hover background")
+    capture:on_mouse_pressed("left", x, y, 1)
+    capture:on_mouse_moved(end_x, y, end_x - x, 0)
+    capture:on_mouse_released("left", end_x, y)
+    test.equal(#opened, 1)
+    capture:on_mouse_pressed("left", x, y, 1)
+    capture:on_mouse_released("left", x, y)
+    test.same(opened, { "https://example.test/a", "https://example.test/b" })
+
+    capture.buffer:set_selection(3, 3)
+    local deadline = system.get_time() + 15
+    while system.get_time() < deadline
+        and not poi.point_at_caret(capture, { activatable = true }) do
+      coroutine.yield(0.01)
+    end
+    capture.buffer:set_selection(1, 1)
+    for _, expected in ipairs({ { 1, 5 }, { 2, 7 }, { 3, 1 } }) do
+      test.ok(command.perform("core:next_point_of_interest"))
+      test.same({ capture.buffer:get_selection() }, { expected[1], expected[2], expected[1], expected[2] })
+    end
+    test.ok(command.perform("core:activate_point_of_interest"))
+    system.open_in_system = previous_open
+    test.ok(common.path_equals(core.active_view.buffer.abs_filename, root .. PATHSEP .. "notes.txt"))
+    test.equal(core.active_view.buffer:get_selection(), 2)
+  end)
+
   test.it("returns directly to the terminal after navigating and searching captured text", function(context)
     local source = terminal.open()
     local pane = panes.active()

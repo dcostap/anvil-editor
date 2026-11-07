@@ -13,6 +13,7 @@ local panes = require "core.panes"
 local blocks = require "plugins.terminal.blocks"
 local TerminalFind = require "plugins.terminal.find"
 local style = require "core.style"
+local location_list = require "core.file_location_list"
 local text_capture = require "core.text_capture"
 local text_poi_locations = require "core.text_poi_locations"
 local theme_edits = require "core.theme_edits"
@@ -503,32 +504,54 @@ end
 
 local terminal_capture_style_provider = {}
 
+local function terminal_capture_fragment(view, span, text, col1, col2, link)
+  return {
+    source_col1 = col1,
+    source_col2 = col2,
+    text = text:sub(col1, col2 - 1),
+    color = rgb(
+      view, span.fg, view.terminal_foreground or style.text,
+      span.alpha or (span.faint and 140 or 255)
+    ),
+    background = span.background and rgb(
+      view, span.background, view.terminal_background or style.background
+    ) or nil,
+    background_full_height = span.background ~= nil,
+    font = terminal_capture_font(view, span),
+    underline = span.underline and span.underline ~= 0,
+    strikethrough = span.strikethrough == true,
+    -- A link gets the hand cursor and the hover background of other clickable text.
+    cursor = link and "hand" or nil,
+    hover_group = link and link.hover_group or nil,
+    capture_link = link,
+  }
+end
+
 function terminal_capture_style_provider:render_line(view, line, context)
+  local text = context.source_text
   local spans = view.terminal_capture_styles[line]
-  if type(spans) ~= "table" or #spans == 0 then return nil end
+  local links = view:line_links(line)
+  if type(spans) ~= "table" or #spans == 0 then
+    if #links == 0 then return nil end
+    spans = { { col1 = 1, col2 = #text + 1 } }
+  end
   local fragments = {}
+  local link_index = 1
   for _, span in ipairs(spans) do
-    local col1 = common.clamp(math.floor(span.col1 or 1), 1, #context.source_text + 1)
-    local col2 = common.clamp(
-      math.floor(span.col2 or col1), col1, #context.source_text + 1
-    )
-    if col2 > col1 then
-      fragments[#fragments + 1] = {
-        source_col1 = col1,
-        source_col2 = col2,
-        text = context.source_text:sub(col1, col2 - 1),
-        color = rgb(
-          view, span.fg, view.terminal_foreground or style.text,
-          span.alpha or (span.faint and 140 or 255)
-        ),
-        background = span.background and rgb(
-          view, span.background, view.terminal_background or style.background
-        ) or nil,
-        background_full_height = span.background ~= nil,
-        font = terminal_capture_font(view, span),
-        underline = span.underline and span.underline ~= 0,
-        strikethrough = span.strikethrough == true,
-      }
+    local col1 = common.clamp(math.floor(span.col1 or 1), 1, #text + 1)
+    local col2 = common.clamp(math.floor(span.col2 or col1), col1, #text + 1)
+    -- Links split the style runs, so each fragment is all link or no link.
+    while col1 < col2 do
+      while links[link_index] and links[link_index].col2 <= col1 do link_index = link_index + 1 end
+      local link = links[link_index]
+      local stop, current = col2, nil
+      if link and link.col <= col1 then
+        stop, current = math.min(col2, link.col2), link
+      elseif link and link.col < col2 then
+        stop = link.col
+      end
+      fragments[#fragments + 1] = terminal_capture_fragment(view, span, text, col1, stop, current)
+      col1 = stop
     end
   end
   return #fragments > 0 and { fragments = fragments } or nil
@@ -546,6 +569,7 @@ function TerminalTextCaptureView:new(source, capture)
     foreground = capture.foreground,
     background = capture.background,
     styles = capture.styles or {},
+    links = capture.links or {},
     title = terminal_title,
     root = capture.root or source and source:get_cwd(),
   }
@@ -569,6 +593,7 @@ function TerminalTextCaptureView:new(source, capture)
   self.terminal_foreground = rgb(self, capture.foreground, style.text)
   self.terminal_background = rgb(self, capture.background, style.background)
   self.terminal_capture_styles = capture.styles or {}
+  self.capture_links = {}
   self.gutter_padding = PADDING
   self:add_line_render_provider(
     "terminal-text-capture-styles", terminal_capture_style_provider
@@ -585,20 +610,30 @@ function TerminalTextCaptureView:new(source, capture)
     "Terminal text capture opened: lines=%d cursor=%d:%d viewport=%d",
     #self.buffer.lines, line, col, viewport_line
   )
+  -- File locations are links too, so find them at once.
+  self:prepare_points_of_interest()
 end
 
 function TerminalTextCaptureView:use_remote_poi_source()
   return require("core.poi").set_remote_source(self)
 end
 
+-- Without `on_ready`, the scan only makes the file locations into links, so a failure is quiet.
 function TerminalTextCaptureView:prepare_points_of_interest(on_ready)
-  if self.text_capture_data.file_locations then on_ready(true) return end
-  if self.poi_scan then self.poi_scan.on_ready = on_ready return end
+  if self.text_capture_data.file_locations then
+    if on_ready then on_ready(true) end
+    return
+  end
+  if self.poi_scan then self.poi_scan.on_ready = on_ready or self.poi_scan.on_ready return end
   local request = { on_ready = on_ready, pool = require("core.worker_pool").system() }
   self.poi_scan = request
   local function failed(reason)
     if self.poi_scan ~= request then return end
     self.poi_scan = nil
+    if not request.on_ready then
+      core.log_quiet("Terminal file location scan failed: %s", tostring(reason))
+      return
+    end
     core.warn("Could not read Terminal file locations: %s", tostring(reason))
     request.on_ready(false)
   end
@@ -617,7 +652,7 @@ function TerminalTextCaptureView:prepare_points_of_interest(on_ready)
       self:set_file_locations(points)
       core.log_quiet("Terminal file locations ready: lines=%d locations=%d",
         #self.buffer.lines, locations.count(points))
-      request.on_ready(true)
+      if request.on_ready then request.on_ready(true) end
     end,
     on_error = function(message) failed(message.error) end,
     on_cancelled = function() if self.poi_scan == request then self.poi_scan = nil end end,
@@ -677,6 +712,7 @@ function TerminalTextCaptureView:duplicate()
     foreground = self.terminal_capture.foreground,
     background = self.terminal_capture.background,
     styles = self.terminal_capture.styles,
+    links = self.terminal_capture.links,
     title = self.terminal_title,
     root = self.terminal_capture.root,
   }
@@ -1249,6 +1285,30 @@ function TerminalView:apply_selection_drag()
   self:refresh_snapshot()
 end
 
+-- A link's target shows after the pointer rests on the link.
+local function update_link_tooltip(view)
+  local tooltip = view.link_tooltip
+  if tooltip and not tooltip.visible and system.get_time() - tooltip.started >= LINK_TOOLTIP_DELAY then
+    tooltip.visible = true
+    core.redraw = true
+  end
+end
+
+-- The text of a link's target: its URI, or its path and line.
+local function link_target_text(point)
+  return point and not point.image and (point.uri or (point.target_line
+    and string.format("%s:%d", point.path, point.target_line) or point.path))
+end
+
+local function set_link_tooltip(view, point)
+  local target = link_target_text(point)
+  if not target then
+    view.link_tooltip = nil
+  elseif not view.link_tooltip or view.link_tooltip.text ~= target then
+    view.link_tooltip = { text = target, started = system.get_time() }
+  end
+end
+
 function TerminalView:update()
   TerminalView.super.update(self)
   if not self.session then return end
@@ -1281,11 +1341,7 @@ function TerminalView:update()
   self:service_session(true)
   if not self.session then return end
 
-  local tooltip = self.link_tooltip
-  if tooltip and not tooltip.visible and system.get_time() - tooltip.started >= LINK_TOOLTIP_DELAY then
-    tooltip.visible = true
-    core.redraw = true
-  end
+  update_link_tooltip(self)
 
   if self.find.visible then self.find:update() end
 end
@@ -2039,6 +2095,41 @@ function TerminalView:activate_uri(uri)
   return false
 end
 
+-- The target of an OSC 8 link: a URI to open, or a local file or folder. `cwd(view)` gives the
+-- folder for a link without a URI scheme. Only such a link reads it.
+local function hyperlink_point(view, uri, cwd)
+  local scheme = supported_uri_scheme(uri)
+  if scheme == "file" then
+    local path = local_path_from_uri(uri)
+    if path then return { kind = "terminal-location", path = path } end
+  elseif scheme then
+    return { kind = "uri", uri = uri }
+  elseif type(uri) == "string" and uri ~= "" and #uri <= 32768 and not uri:find("[%z%c]") then
+    -- Markdown links can name a local file without a URI scheme. Resolve the hidden target,
+    -- not its visible label, from the Terminal Session's directory.
+    local target = unescape_link_path(uri)
+    local path = target and text_poi_locations.resolve_path(target, cwd(view), { dirs = true })
+    if path then return { kind = "terminal-location", path = path } end
+  end
+end
+
+local PLAIN_URI_PATTERNS = {
+  "[Hh][Tt][Tt][Pp]://[^%s<>]+",
+  "[Hh][Tt][Tt][Pp][Ss]://[^%s<>]+",
+  "[Mm][Aa][Ii][Ll][Tt][Oo]:[^%s<>]+",
+}
+
+-- Calls `fn(first, last, uri)` for each URI in plain text. `last` is the byte after the match;
+-- the URI leaves out punctuation that ends a sentence.
+local function each_plain_uri(text, fn)
+  for _, pattern in ipairs(PLAIN_URI_PATTERNS) do
+    for first, value, last in text:gmatch("()(" .. pattern .. ")()") do
+      local result = fn(first, last, (value:gsub("[%),%.%;]+$", "")))
+      if result ~= nil then return result end
+    end
+  end
+end
+
 -- An OSC 8 link is the run of cells around a cell that have its URI, in reading order.
 -- A label that wraps continues on the next row. A program that wraps the label itself, such as Pi,
 -- ends the link at each row end and starts it again on the next row. Blank cells, such as box
@@ -2096,20 +2187,7 @@ end
 
 function TerminalView:point_of_interest_at(col, row, explicit_only)
   local uri = self.session:hyperlink(col, row)
-  local scheme = supported_uri_scheme(uri)
-  local point
-  if scheme == "file" then
-    local path = local_path_from_uri(uri)
-    if path then point = { kind = "terminal-location", path = path } end
-  elseif scheme then
-    point = { kind = "uri", uri = uri }
-  elseif type(uri) == "string" and uri ~= "" and #uri <= 32768 and not uri:find("[%z%c]") then
-    -- Markdown links can name a local file without a URI scheme. Resolve the hidden target,
-    -- not its visible label, from the Terminal Session's directory.
-    local target = unescape_link_path(uri)
-    local path = target and text_poi_locations.resolve_path(target, self:get_cwd(), { dirs = true })
-    if path then point = { kind = "terminal-location", path = path } end
-  end
+  local point = hyperlink_point(self, uri, self.get_cwd)
   if point then return common.merge(point, self:hyperlink_extent(col, row, uri)) end
   if explicit_only then return nil end
   if not self.session.row_text then return nil end
@@ -2122,21 +2200,16 @@ function TerminalView:point_of_interest_at(col, row, explicit_only)
     return first_col and last_col and col >= first_col and col <= last_col,
       first_col, last_col
   end
-  for _, pattern in ipairs({
-    "[Hh][Tt][Tt][Pp]://[^%s<>]+",
-    "[Hh][Tt][Tt][Pp][Ss]://[^%s<>]+",
-    "[Mm][Aa][Ii][Ll][Tt][Oo]:[^%s<>]+",
-  }) do
-    for first, value, last in data.text:gmatch("()(" .. pattern .. ")()") do
-      local hit, first_col, last_col = covers(first, last)
-      if hit then
-        return {
-          kind = "uri", uri = value:gsub("[%),%.%;]+$", ""),
-          col = first_col, end_col = last_col, row = row, generation = data.generation,
-        }
-      end
+  local uri_point = each_plain_uri(data.text, function(first, last, value)
+    local hit, first_col, last_col = covers(first, last)
+    if hit then
+      return {
+        kind = "uri", uri = value,
+        col = first_col, end_col = last_col, row = row, generation = data.generation,
+      }
     end
-  end
+  end)
+  if uri_point then return uri_point end
   for _, candidate in ipairs(text_poi_locations.extract_candidates(data.text, 128)) do
     local point = text_poi_locations.resolve_candidate(
       candidate, self:get_cwd(), "terminal-location"
@@ -2206,14 +2279,7 @@ function TerminalView:hover_point_at(col, row)
   self.hover_point = self.hover_x and self:mouse_point_at(self.hover_x, self.hover_y)
     or self:point_of_interest_at(col, row, not keymap.modkeys.ctrl)
   self.cursor = self.hover_point and "hand" or "arrow"
-  local point = self.hover_point
-  local target = point and not point.image and (point.uri or (point.target_line
-    and string.format("%s:%d", point.path, point.target_line) or point.path))
-  if not target then
-    self.link_tooltip = nil
-  elseif not self.link_tooltip or self.link_tooltip.text ~= target then
-    self.link_tooltip = { text = target, started = system.get_time() }
-  end
+  set_link_tooltip(self, self.hover_point)
   core.redraw = true
 end
 
@@ -2242,6 +2308,33 @@ function TerminalView:contains_terminal_cell(x, y)
     and y < top + self.rows * self.cell_height
 end
 
+-- Opens a folder in a File Tree, an image in the Image Overlay, or a file at its line.
+local function open_location(view, point, opts)
+  if not point.path then return false end
+  opts = opts or {}
+  local pane = opts.pane or panes.pane_for_view(view)
+  local info = system.get_file_info(point.path)
+  if info and info.type == "dir" then
+    core.log_quiet("Terminal folder link: opening a File Tree at %s", point.path)
+    return require("plugins.filetree").open_path(point.path, {
+      source_pane = pane,
+      placement = opts.placement or "current",
+      reason = "terminal-folder-link",
+    }) ~= nil
+  end
+  if image_formats.is_supported(point.path) then
+    core.log_quiet("Terminal image link: opening Image Overlay for %s", point.path)
+    return require("core.image_overlay").open(point.path)
+  end
+  return core.open_file(point.path, {
+    pane = pane,
+    placement = opts.placement or "current",
+    focus = opts.preserve_focus ~= true,
+    line = point.target_line or 1,
+    col = point.target_col or 1,
+  }) ~= nil
+end
+
 function TerminalView:activate_point_of_interest(point, opts)
   if not point then return false end
   if point.image then
@@ -2254,29 +2347,7 @@ function TerminalView:activate_point_of_interest(point, opts)
     })
   end
   if point.uri then return self:activate_uri(point.uri) end
-  if point.path then
-    local info = system.get_file_info(point.path)
-    if info and info.type == "dir" then
-      core.log_quiet("Terminal folder link: opening a File Tree at %s", point.path)
-      return require("plugins.filetree").open_path(point.path, {
-        source_pane = panes.pane_for_view(self),
-        placement = opts and opts.placement or "current",
-        reason = "terminal-folder-link",
-      }) ~= nil
-    end
-    if image_formats.is_supported(point.path) then
-      core.log_quiet("Terminal image link: opening Image Overlay for %s", point.path)
-      return require("core.image_overlay").open(point.path)
-    end
-    return core.open_file(point.path, {
-      pane = panes.pane_for_view(self),
-      placement = opts and opts.placement or "current",
-      focus = true,
-      line = point.target_line or 1,
-      col = point.target_col or 1,
-    }) ~= nil
-  end
-  return false
+  return open_location(self, point, opts)
 end
 
 require("core.poi").add_activation_provider("terminal-cursor", {
@@ -2289,6 +2360,166 @@ require("core.poi").add_activation_provider("terminal-cursor", {
     return point
   end,
 })
+
+-- Terminal Text Capture links: the capture's OSC 8 links, then the plain URIs and file locations
+-- outside them. Each link is a Point of Interest.
+
+local function capture_root(view)
+  return view.terminal_capture.root
+end
+
+local function blank(text)
+  return not text:find("%S")
+end
+
+-- The links of one line, in column order. Links do not overlap.
+function TerminalTextCaptureView:line_links(line)
+  local links = self.capture_links[line]
+  if links then return links end
+  links = {}
+  local text = (self.buffer.lines[line] or ""):gsub("\n$", "")
+  local function add(col1, col2, point)
+    if col2 <= col1 then return end
+    for _, link in ipairs(links) do
+      if col1 < link.col2 and col2 > link.col then return end
+    end
+    point.line, point.col, point.line2, point.col2 = line, col1, line, col2
+    point.text_bounds = true
+    point.hover_group = {}
+    links[#links + 1] = point
+  end
+  for _, link in ipairs(self.terminal_capture.links[line] or {}) do
+    add(link.col1, link.col2, { kind = "uri", uri = link.uri, hyperlink = true })
+  end
+  each_plain_uri(text, function(first, _, uri)
+    add(first, first + #uri, { kind = "uri", uri = uri })
+  end)
+  for _, point in ipairs(location_list.points_on_line(self.text_capture_data.file_locations, line)) do
+    if point.line2 == line then add(point.col, point.col2, point) end
+  end
+  table.sort(links, function(a, b) return a.col < b.col end)
+  -- A program that wraps a link label itself, such as Pi, ends the link at the row end and starts
+  -- it again on the next row. The two parts are one link.
+  local first = links[1]
+  if first and first.hyperlink and line > 1 and blank(text:sub(1, first.col - 1)) then
+    local above = self:line_links(line - 1)
+    local previous = above[#above]
+    if previous and previous.hyperlink and previous.uri == first.uri
+        and blank(self.buffer.lines[line - 1]:sub(previous.col2)) then
+      first.hover_group = previous.hover_group
+    end
+  end
+  self.capture_links[line] = links
+  return links
+end
+
+function TerminalTextCaptureView:set_file_locations(data)
+  self.text_capture_data.file_locations = data
+  self.capture_links = {}
+  self:invalidate_line_render("terminal-text-capture-styles")
+end
+
+-- Remote navigation goes through file locations only. Local navigation goes through all links.
+function TerminalTextCaptureView:first_point_of_interest(direction)
+  local data = self.text_capture_data.file_locations
+  local point = location_list.point(data, direction > 0 and 1 or location_list.count(data))
+  return point, not point and "empty" or nil
+end
+
+function TerminalTextCaptureView:next_point_of_interest(direction, opts)
+  local line, col = self.buffer:get_selection()
+  if opts and opts.remote then
+    return location_list.next(self.text_capture_data.file_locations, direction, line, col)
+  end
+  local last = direction > 0 and #self.buffer.lines or 1
+  for row = line, last, direction do
+    local links = self:line_links(row)
+    local first, stop = 1, #links
+    if direction < 0 then first, stop = #links, 1 end
+    for index = first, stop, direction do
+      local link = links[index]
+      if row ~= line or (direction > 0 and link.col > col) or (direction < 0 and link.col < col) then
+        return link
+      end
+    end
+  end
+  -- Tell "no more links" from "no links".
+  for row = 1, #self.buffer.lines do
+    if #self:line_links(row) > 0 then return nil, "boundary" end
+  end
+  return nil, "empty"
+end
+
+function TerminalTextCaptureView:get_point_of_interest_at(line, col)
+  for _, link in ipairs(self:line_links(line)) do
+    if col >= link.col and col < link.col2 then return link, true end
+  end
+  return nil, true
+end
+
+function TerminalTextCaptureView:activate_point_of_interest(point, opts)
+  if point.uri then
+    local target = hyperlink_point(self, point.uri, capture_root)
+    if not target then
+      core.warn("Could not open the link: %s", point.uri)
+      return false
+    end
+    if target.uri then return common.open_in_system(target.uri) end
+    point = target
+  end
+  return open_location(self, point, opts)
+end
+
+function TerminalTextCaptureView:link_at_position(x, y)
+  local hit = self:get_render_fragment_at_position(x, y)
+  return hit and hit.fragment.capture_link
+end
+
+function TerminalTextCaptureView:on_mouse_moved(x, y, ...)
+  local handled = TerminalTextCaptureView.super.on_mouse_moved(self, x, y, ...)
+  local fragment = self.hovered_render_fragment
+  self.hover_x, self.hover_y = x, y
+  set_link_tooltip(self, fragment and fragment.capture_link)
+  return handled
+end
+
+function TerminalTextCaptureView:on_mouse_left()
+  self.link_tooltip = nil
+  return TerminalTextCaptureView.super.on_mouse_left(self)
+end
+
+-- A click opens a link. A drag from a link selects text, as in the Terminal View.
+function TerminalTextCaptureView:on_mouse_pressed(button, x, y, clicks)
+  local mods = keymap.modkeys
+  self.link_press = button == "left" and clicks == 1 and not (mods.ctrl or mods.shift or mods.alt)
+    and self:link_at_position(x, y) or nil
+  return TerminalTextCaptureView.super.on_mouse_pressed(self, button, x, y, clicks)
+end
+
+function TerminalTextCaptureView:on_mouse_released(button, x, y, ...)
+  local link = self.link_press
+  self.link_press = nil
+  local handled = TerminalTextCaptureView.super.on_mouse_released(self, button, x, y, ...)
+  if link and button == "left" and not self.buffer:has_selection()
+      and self:link_at_position(x, y) == link then
+    local opened = self:activate_point_of_interest(link)
+    core.log_quiet("Terminal Text Capture link %s: %s", opened and "opened" or "failed",
+      link_target_text(link))
+  end
+  return handled
+end
+
+function TerminalTextCaptureView:update()
+  TerminalTextCaptureView.super.update(self)
+  update_link_tooltip(self)
+end
+
+function TerminalTextCaptureView:draw()
+  TerminalTextCaptureView.super.draw(self)
+  if self.link_tooltip and self.link_tooltip.visible then
+    core.root_panel:defer_draw(TerminalView.draw_link_tooltip, self)
+  end
+end
 
 function TerminalView:refresh_snapshot()
   if not self.session then return end

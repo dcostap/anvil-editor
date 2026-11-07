@@ -604,6 +604,32 @@ test.describe("Native terminal session", function()
     test.ok(colored, "Captured terminal color and bold style were missing")
   end)
 
+  test.it("captures OSC 8 links with their text columns", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 4, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $e=[char]27; $s=$e+'\'; [Console]::Write('ANVIL_LINK '+[char]0x754c+' '+$e+']8;;https://example.test/a'+$s+'label'+$e+']8;;'+$s+' tail'); Start-Sleep -Seconds 1"]],
+    })
+    test.ok(session, start_error)
+    local text = wait_for_text(session, "label tail")
+    test.ok(text:find("label tail", 1, true), text)
+
+    local capture, capture_error = session:text_capture()
+    session:close()
+
+    test.ok(capture, capture_error)
+    local found
+    for line, links in pairs(capture.links or {}) do
+      for _, link in ipairs(links) do found = { line = line, link = link } end
+    end
+    test.ok(found, "Captured terminal link was missing")
+    local line = capture.text:match("[^\n]*ANVIL_LINK[^\n]*")
+    test.equal(line:sub(found.link.col1, found.link.col2 - 1), "label")
+    test.equal(found.link.uri, "https://example.test/a")
+  end)
+
   test.it("retains output within a configured larger scrollback limit", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"

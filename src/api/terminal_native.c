@@ -2993,13 +2993,60 @@ static void flush_capture_style(
   run->active = false;
 }
 
-static void push_capture_styles(
+/* An OSC 8 link run on one capture line, in byte offsets of the line. */
+typedef struct {
+  uint8_t *uri;
+  size_t uri_length;
+  size_t start_offset;
+  size_t end_offset;
+} TerminalCaptureLinkRun;
+
+static void flush_capture_link(
+  lua_State *L, int links_index, size_t row, int *line_links_index,
+  int *link_count, TerminalCaptureLinkRun *run
+) {
+  if (run->uri_length == 0 || run->end_offset <= run->start_offset) {
+    run->uri_length = 0;
+    return;
+  }
+  if (*line_links_index == 0) {
+    lua_createtable(L, 1, 0);
+    lua_pushvalue(L, -1);
+    lua_rawseti(L, links_index, (lua_Integer)row + 1);
+    *line_links_index = lua_absindex(L, -1);
+  }
+  lua_createtable(L, 0, 3);
+  set_integer_field(L, "col1", (lua_Integer)run->start_offset + 1);
+  set_integer_field(L, "col2", (lua_Integer)run->end_offset + 1);
+  lua_pushlstring(L, (const char *)run->uri, run->uri_length);
+  lua_setfield(L, -2, "uri");
+  lua_rawseti(L, *line_links_index, ++*link_count);
+  run->uri_length = 0;
+}
+
+/* Reads the cell's OSC 8 URI into `buffer`. Returns its length, or 0 for a cell without a link. */
+static size_t read_capture_link(const GhosttyGridRef *ref, uint8_t *buffer) {
+  size_t length = 0;
+  if (ghostty_grid_ref_hyperlink_uri(ref, NULL, 0, &length) != GHOSTTY_OUT_OF_SPACE ||
+      length == 0 || length > TERMINAL_HYPERLINK_MAX_BYTES) return 0;
+  if (ghostty_grid_ref_hyperlink_uri(ref, buffer, length, &length) != GHOSTTY_SUCCESS) return 0;
+  return length;
+}
+
+/* Fills the style runs and the OSC 8 links of each capture line. */
+static bool push_capture_styles(
   lua_State *L, TerminalSession *session,
   const GhosttyRenderStateColors *colors,
-  const uint8_t *text, size_t length, size_t total_rows
+  const uint8_t *text, size_t length, size_t total_rows,
+  int styles_index, int links_index
 ) {
-  lua_createtable(L, 0, 0);
-  int styles_index = lua_absindex(L, -1);
+  uint8_t *link_uri = (uint8_t *)HeapAlloc(GetProcessHeap(), 0, TERMINAL_HYPERLINK_MAX_BYTES);
+  uint8_t *cell_uri = (uint8_t *)HeapAlloc(GetProcessHeap(), 0, TERMINAL_HYPERLINK_MAX_BYTES);
+  if (!link_uri || !cell_uri) {
+    if (link_uri) HeapFree(GetProcessHeap(), 0, link_uri);
+    if (cell_uri) HeapFree(GetProcessHeap(), 0, cell_uri);
+    return false;
+  }
   size_t text_offset = 0;
 
   for (size_t row = 0; row < total_rows; row++) {
@@ -3016,6 +3063,9 @@ static void push_capture_styles(
     int line_styles_index = lua_absindex(L, -1);
     TerminalCaptureStyleRun active = {0};
     int run_count = 0;
+    TerminalCaptureLinkRun link = { .uri = link_uri };
+    int line_links_index = 0;
+    int link_count = 0;
     size_t byte_offset = 0;
 
     for (uint16_t col = 0;
@@ -3067,11 +3117,30 @@ static void push_capture_styles(
       } else {
         active.end_offset = current.end_offset;
       }
+      size_t uri_length = read_capture_link(&ref, cell_uri);
+      if (uri_length > 0 && link.uri_length == uri_length &&
+          link.end_offset == byte_offset &&
+          memcmp(link.uri, cell_uri, uri_length) == 0) {
+        link.end_offset = byte_offset + cell_length;
+      } else {
+        flush_capture_link(L, links_index, row, &line_links_index, &link_count, &link);
+        if (uri_length > 0) {
+          memcpy(link.uri, cell_uri, uri_length);
+          link.uri_length = uri_length;
+          link.start_offset = byte_offset;
+          link.end_offset = byte_offset + cell_length;
+        }
+      }
       byte_offset += cell_length;
     }
     flush_capture_style(L, line_styles_index, &run_count, &active);
+    flush_capture_link(L, links_index, row, &line_links_index, &link_count, &link);
+    if (line_links_index != 0) lua_pop(L, 1);
     lua_rawseti(L, styles_index, (lua_Integer)row + 1);
   }
+  HeapFree(GetProcessHeap(), 0, link_uri);
+  HeapFree(GetProcessHeap(), 0, cell_uri);
+  return true;
 }
 
 static int f_terminal_text_capture(lua_State *L) {
@@ -3145,12 +3214,18 @@ static int f_terminal_text_capture(lua_State *L) {
   set_integer_field(L, "columns", session->cols);
   set_integer_field(L, "rows", session->rows);
   set_integer_field(L, "total_rows", (lua_Integer)total_rows);
-  push_capture_styles(
+  lua_createtable(L, 0, 0);
+  int styles_index = lua_absindex(L, -1);
+  lua_createtable(L, 0, 0);
+  int links_index = lua_absindex(L, -1);
+  bool styled = push_capture_styles(
     L, session, &colors, text ? text : (const uint8_t *)"", length,
-    total_rows
+    total_rows, styles_index, links_index
   );
-  lua_setfield(L, capture_index, "styles");
   free(text);
+  if (!styled) return luaL_error(L, "Could not allocate terminal capture links");
+  lua_setfield(L, capture_index, "links");
+  lua_setfield(L, capture_index, "styles");
   return 1;
 }
 

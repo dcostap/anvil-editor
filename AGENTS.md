@@ -59,6 +59,10 @@ Middle-click scrolling uses Terminal history when the active screen has history.
 
 Use Remote Point of Interest Source on a Terminal opens a frozen Terminal Text Capture as the Project's source. The command also accepts an existing Terminal Text Capture. Remote POI Navigation opens its file locations in the current Pane, without focusing the capture. A worker finds paths and checks files. Relative paths use the Terminal's directory at capture time. Plain paths open at line 1; diagnostic locations keep their line and column. Paths with spaces need quotes or backticks. New output does not change the capture. Run the source command on the live Terminal again to refresh it. Run `ui/terminal.lua` after changes.
 
+A Terminal Text Capture keeps the Terminal's OSC 8 links (`links` in `session:text_capture()`, one list for each line). Its links are these OSC 8 links, plain URLs, and the file locations that the worker finds when the capture opens. They do not overlap, in that order of priority.
+A link shows the hand cursor, the hover background and its target, as in the Terminal View. A click opens it; a drag from it selects text. Point of Interest Activation opens the link at the caret, and Point of Interest navigation moves through all links. Remote POI Navigation uses only the file locations.
+Run `ui/terminal.lua` and `runtime/terminal_native.lua` after changes.
+
 New Terminal Sessions start their host and shell on a background thread.
 They return in the reconnecting state, like restored sessions. Wait for running before sending input or reading the host ID.
 Startup copies the launch options and environment. Closing an unaccepted new session ends its shell, including during editor shutdown.
