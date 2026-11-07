@@ -87,7 +87,7 @@ local function placement(extra)
   for key, value in pairs(extra or {}) do fields[key] = value end
   return fields
 end
-tool("open_file", "Open a file at a line in a new Pane or an explicit split. Keep the user's focus unless requested.",
+tool("open_file", "Open a file at a line in a new Pane or a split. Keep the user's focus unless requested.",
   placement {path = string_schema(32768), line = {type = "integer"}, col = {type = "integer"}}, {"path", "request_id"}, false)
 tool("terminal_start", "Open a Terminal Session, optionally running an executable with literal arguments. Structured program launch uses PowerShell on Windows. Returns an operation ID; query operation_read for readiness.",
   placement {cwd = string_schema(32768), executable = string_schema(4096), args = {type = "array", items = string_schema(4096), maxItems = 64}},
