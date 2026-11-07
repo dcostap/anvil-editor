@@ -10,7 +10,7 @@ function FocusFeedback:update(target, now, kind)
   local changed = target ~= self.target
   if changed or (target and kind == "numbered") then
     self.target = target
-    self.started = target and (now + (kind == "numbered" and 0.25 or 0)) or nil
+    self.started = target and (now + (kind == "numbered" and 0.15 or 0)) or nil
     self.strength = kind == "pointer" and 0.35 or 1
   end
   local active = self:active(now)
