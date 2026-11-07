@@ -108,6 +108,48 @@ test.describe("Pane History", function()
     test.equal(panes.active(), three, "The new visit removed the later history")
   end)
 
+  test.it("moves through repeated Pane sequences only once", function()
+    local one = panes.create { factory = factory("one") }
+    local two = panes.create { factory = factory("two") }
+    local three = panes.create { factory = factory("three") }
+    visit(one)
+    visit(two)
+    visit(one)
+    visit(two)
+    visit(one)
+    visit(two)
+    visit(three)
+    move("back")
+    test.equal(panes.active(), two)
+    move("back")
+    test.equal(panes.active(), one)
+    test.not_ok(require("core.pane_history").move("back"), "Back repeated an earlier sequence")
+    move("forward")
+    test.equal(panes.active(), two)
+    move("forward")
+    test.equal(panes.active(), three)
+    test.not_ok(require("core.pane_history").move("forward"))
+  end)
+
+  test.it("keeps the later cross-Project sequence and maps a history move to it", function()
+    local list, current = require("core.pane_history").timeline({
+      {path = "C:/Here", panes = {history = {
+        {id = "one", at = 1000}, {id = "two", at = 3000},
+        {id = "one", at = 4000}, {id = "two", at = 6000},
+        {id = "one", at = 7000, to = 1000},
+      }}},
+      {path = "C:/Other", panes = {history = {
+        {id = "one", at = 2000}, {id = "one", at = 5000},
+      }}},
+    })
+    test.same(list, {
+      {path = "C:/Here", id = "one", at = 4000},
+      {path = "C:/Other", id = "one", at = 5000},
+      {path = "C:/Here", id = "two", at = 6000},
+    })
+    test.equal(current, 1)
+  end)
+
   test.it("crosses Projects in both directions", function()
     local one = panes.create { factory = factory("one") }
     local two = panes.create { factory = factory("two") }

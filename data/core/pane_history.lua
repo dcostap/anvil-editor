@@ -41,6 +41,37 @@ function pane_history.entries()
   return log
 end
 
+local function find_repeated_panes(keys)
+  for length = 1, math.floor(#keys / 2) do
+    for start = 1, #keys - 2 * length + 1 do
+      local matches = true
+      for offset = 0, length - 1 do
+        if keys[start + offset] ~= keys[start + length + offset] then
+          matches = false
+          break
+        end
+      end
+      if matches then return start, length end
+    end
+  end
+end
+
+local function compress_repetitions(list, current)
+  local keys = {}
+  for index, entry in ipairs(list) do keys[index] = key(entry.path, entry.id) end
+  while true do
+    local start, length = find_repeated_panes(keys)
+    if not start then return list, current end
+    -- Keep the later copy. A position in the earlier copy moves to the same Pane there.
+    if current >= start and current < start + length then current = current + length end
+    if current >= start + length then current = current - length end
+    for _ = 1, length do
+      table.remove(list, start)
+      table.remove(keys, start)
+    end
+  end
+end
+
 -- The Pane History in the Project Sidebar model `projects`, oldest first, as {path, id, at}, and the position of the
 -- current entry. When the user leaves a Pane that a move showed, that Pane goes again at the end, so no visit is lost.
 function pane_history.timeline(projects)
@@ -71,7 +102,8 @@ function pane_history.timeline(projects)
       add(entry.path, entry.id, entry.at)
     end
   end
-  return list, current or #list
+  -- Replay moves before compression, so their original visit times still resolve.
+  return compress_repetitions(list, current or #list)
 end
 
 -- This Project's view of all Projects: the last fetched Project Sidebar model, with this Project's live Panes and
