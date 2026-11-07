@@ -457,6 +457,10 @@ static void apply_configure(const AnvilSurfaceConfigure *config) {
   }
   bool layout_changed = !had_config || previous.configuration != config->configuration;
   if (had_config && layout_changed) push_window_event(hosted.geometry_event);
+  if (had_config && previous.peek_pane != config->peek_pane) {
+    SDL_Log("Project Peek: Pane=%u", config->peek_pane);
+    push_window_event(SDL_EVENT_WINDOW_EXPOSED);
+  }
   /* A new epoch with the same layout asks for a complete frame, for example after the shell rebuilt its GPU
    * device. The shell accepts only frames of the current epoch. */
   if (had_config && layout_changed && !anvil_surface_layout_changed(&previous, config))
@@ -1256,6 +1260,26 @@ bool anvil_hosted_surface_focus_sidebar(bool focused) {
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
+bool anvil_hosted_surface_peek(uint32_t project_id, uint32_t pane, int direction, int row_top, int row_bottom,
+                               bool commit) {
+  if (!hosted.active || !hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
+  AnvilSurfacePeek peek = {0};
+  peek.commit = commit;
+  if (!commit) {
+    peek.project_id = project_id;
+    peek.pane = pane;
+    peek.direction = SDL_clamp(direction, -1, 1);
+    peek.row_top = row_top;
+    peek.row_bottom = row_bottom;
+  }
+  send_message(ANVIL_SURFACE_MSG_SIDEBAR_PEEK, &peek, sizeof(peek));
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
+uint32_t anvil_hosted_surface_peek_pane(void) {
+  return hosted.active && !hosted.sidebar ? view->config.peek_pane : 0;
+}
+
 bool anvil_hosted_surface_color_theme_saved(void) {
   if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
   send_message(ANVIL_SURFACE_MSG_COLOR_THEME_SAVED, NULL, 0);
@@ -1801,6 +1825,11 @@ bool anvil_hosted_surface_toggle_alt_navigation(void) { return false; }
 bool anvil_hosted_surface_close_all_windows(void) { return false; }
 bool anvil_hosted_surface_reopen_closed_window(void) { return false; }
 bool anvil_hosted_surface_focus_sidebar(bool focused) { (void)focused; return false; }
+bool anvil_hosted_surface_peek(uint32_t project_id, uint32_t pane, int direction, int row_top, int row_bottom,
+                               bool commit) {
+  (void)project_id; (void)pane; (void)direction; (void)row_top; (void)row_bottom; (void)commit; return false;
+}
+uint32_t anvil_hosted_surface_peek_pane(void) { return 0; }
 bool anvil_hosted_surface_set_panes(const char *panes) { (void)panes; return false; }
 void anvil_hosted_surface_runtime_ready(void) {}
 void anvil_hosted_surface_complete_pane_request(uint64_t request) { (void)request; }

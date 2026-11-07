@@ -13,7 +13,7 @@
 #include <string.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 42u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 43u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -136,6 +136,9 @@ typedef enum {
   ANVIL_SURFACE_MSG_LOAD_PROJECT = 113,
   /* The Sidebar places a Project before or after another Project. Payload: AnvilSurfaceReorderProject. */
   ANVIL_SURFACE_MSG_REORDER_PROJECT = 114,
+  /* The Sidebar's keyboard cursor shows its row in the Project area, or an activation keeps that row's frame.
+   * Payload: AnvilSurfacePeek. */
+  ANVIL_SURFACE_MSG_SIDEBAR_PEEK = 115,
 } AnvilSurfaceMessageType;
 
 typedef enum {
@@ -160,6 +163,15 @@ typedef struct {
 typedef struct { uint32_t project_id, target_window_id; } AnvilSurfaceMoveProject;
 /* Project Sidebar row ids. `after` is 1 to place the Project after its anchor, or 0 to place it before. */
 typedef struct { uint32_t row_id, anchor_row_id, after; } AnvilSurfaceReorderProject;
+/* A Peek of a Project (`project_id`), or of its Pane `pane-<pane>`. A zero `project_id` shows the Selected Project.
+ * Another id that has no loaded Project in this Window shows a row without content. `direction` is -1 or 1 when the
+ * cursor moved up or down. `row_top` and `row_bottom` give the cursor row in Sidebar surface pixels. `commit` 1
+ * keeps the shown frame for the selection that follows; the other fields are then zero. */
+typedef struct {
+  uint32_t project_id, pane;
+  int32_t direction, commit;
+  int32_t row_top, row_bottom;
+} AnvilSurfacePeek;
 /* The Zoom as ratios over the base scale. The message carries it, so receivers never read a file that a
  * Project replaces during a fast Zoom. */
 typedef struct { double interface_zoom, code_zoom; } AnvilSurfaceZoom;
@@ -233,6 +245,9 @@ typedef struct {
   /* The Sidebar draws the Window's wallpaper across its whole surface, because no Project frame covers the
    * Window. */
   int32_t backdrop;
+  /* A Peek: the Project draws the Pane Group of its Pane `pane-<peek_pane>` in place of its visible one, without a
+   * change to its state. Zero draws the Project as it is. */
+  uint32_t peek_pane;
 } AnvilSurfaceConfigure;
 
 typedef struct {

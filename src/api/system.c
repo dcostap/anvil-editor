@@ -2339,6 +2339,30 @@ static int f_focus_project_sidebar(lua_State *L) {
   return 1;
 }
 
+/* Sidebar only. peek_project(project_id, pane_number, direction, row_top, row_bottom) shows a row's content in the
+ * Project area; a nil project_id shows the Selected Project. commit_peek() keeps the shown frame for the selection
+ * that follows. */
+static int f_peek_project(lua_State *L) {
+  lua_Integer project = luaL_optinteger(L, 1, 0), pane = luaL_optinteger(L, 2, 0);
+  luaL_argcheck(L, project >= 0 && project <= UINT32_MAX, 1, "invalid Project id");
+  luaL_argcheck(L, pane >= 0 && pane <= UINT32_MAX, 2, "invalid Pane number");
+  lua_pushboolean(L, anvil_hosted_surface_peek((uint32_t)project, (uint32_t)pane, (int)luaL_optinteger(L, 3, 0),
+                                               (int)luaL_optnumber(L, 4, 0), (int)luaL_optnumber(L, 5, 0), false));
+  return 1;
+}
+
+static int f_commit_peek(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_peek(0, 0, 0, 0, 0, true));
+  return 1;
+}
+
+/* The Pane number that a Peek shows in this Project, or nil. */
+static int f_get_peek_pane(lua_State *L) {
+  uint32_t pane = anvil_hosted_surface_peek_pane();
+  if (pane) lua_pushinteger(L, pane); else lua_pushnil(L);
+  return 1;
+}
+
 static int f_select_terminal(lua_State *L) {
   size_t path_size = 0, id_size = 0;
   const char *path = luaL_checklstring(L, 1, &path_size);
@@ -3190,6 +3214,9 @@ static const luaL_Reg lib[] = {
   { "close_all_windows",     f_close_all_windows     },
   { "reopen_closed_window",  f_reopen_closed_window  },
   { "focus_project_sidebar", f_focus_project_sidebar },
+  { "peek_project",          f_peek_project          },
+  { "commit_peek",           f_commit_peek           },
+  { "get_peek_pane",         f_get_peek_pane         },
   { "new_anvil_window",      f_new_anvil_window      },
   { "color_theme_saved",     f_color_theme_saved     },
   { "zoom_saved",            f_zoom_saved            },

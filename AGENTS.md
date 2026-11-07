@@ -290,6 +290,14 @@ A Move of the Selected Project to another Window keeps the source Window's focus
 Run the `windows-move` and `windows-move-close` shell probes after changes to these rules.
 Run `ui/sidebar_view.lua` and `ui/sidebar_navigation.lua` after changes.
 
+A Peek shows the Sidebar cursor row's content in the Project area while the Sidebar has the keyboard (`SIDEBAR_PEEK`). Cursor moves closer together than 90 ms show only the row where the cursor stops.
+The Sidebar sends the Project ID, the Pane number (0 for a Project row) and its cursor highlight's place in each frame of its glide. A Dormant Project, or a Project in another Window, gets `0xffffffff`: the shell dims the current frame.
+The shell configures the target with `render_enabled` and `peek_pane`. The target draws the Peek Pane's group (`panes.shown_group`) and changes no state: no focus, Current View, Pane History, focus stamp, seen time, Workspace save or Terminal resize. A Terminal does not resize while its Pane is hidden.
+The shell keeps the target's frames in `peek_presentation`, so the Selected Project's frame stays ready and the end of a Peek is immediate. It draws a dim (`veil`) for a row without content, or for a target that has not drawn in 250 ms. It also draws a crossfade with a drift against the cursor's direction, an accent lens around the Project area, and a bead that joins the lens to the cursor highlight. The Sidebar extends the highlight to its edge.
+The pointer does not reach a Peek. A press ends it and gives the keyboard to the Selected Project. Losing the keyboard or a selection ends the Peek.
+Enter on the peeked row sends a commit first. The selection then keeps the peeked frame as its held frame, so no other frame shows. The Sidebar sends no further Peek message for that row, because one would cancel the commit. Without a selection in 1.5 s, the Peek ends.
+Run `ui/sidebar_view.lua` and the `peek`, `select-hold`, `select-terminal-hold` and `navigate-sidebar` shell probes after changes.
+
 Path Search lists Projects from the Project Sidebar model: Scratch, loaded Projects, then Dormant Projects by age.
 `core.project_look` draws a Project's name, badge and note for both, so a Project looks the same in each.
 Run `ui/fuzzy_searcher_path_search.lua` and `ui/sidebar_view.lua` after changes.

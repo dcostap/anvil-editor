@@ -40,6 +40,10 @@ _Avoid_: Active Project, Current Project, hosted app
 The application sidebar listing recent Projects. A loaded Project shows its Tabs and the Terminal Sessions that no Pane shows. A Terminal Session in a Pane's Navigation History shows only when it has an Unread Result or an agent that waits for an answer. A collapsed loaded Project still shows the Terminals with an Unread Result or an agent that waits for an answer. Dormant Projects are grouped by age below the loaded ones; each one shows how many of its Terminal Sessions run. Each Anvil Window lists its own Projects at the top. Projects shown in other Windows sit at the bottom, above the age groups. Selecting a Project shown in another Anvil Window brings that window to the front. The Scratch Project is the exception: it moves to the Anvil Window where the user selects it.
 _Avoid_: Project panel, app switcher, side panel
 
+**Peek**:
+The content of the Project Sidebar's cursor row, shown in the Project area while the Project Sidebar has the keyboard. A Peek changes nothing: the Selected Project, the keyboard, Pane History, Pane numbers, Unread Results and Terminal sizes stay as they are. A Tab row shows its Project with that Tab's Pane Group. A Dormant Project or a Project in another Anvil Window has no content to show. Activating the row selects it as usual.
+_Avoid_: Preview, hover preview, quick look
+
 **Dormant Project**:
 A Project listed in an Anvil Window that is not currently loaded for editing. Selecting it loads it with its saved Workspace.
 _Avoid_: unopened Project, closed Project, inactive Project

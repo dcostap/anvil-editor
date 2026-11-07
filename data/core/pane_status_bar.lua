@@ -142,11 +142,11 @@ function PaneStatusBar:get_view()
   return self.pane.current_view
 end
 
----Whether this bar belongs to the focused Pane.
+---Whether this bar belongs to the focused Pane, or to the Pane that a Peek shows.
 ---@return boolean
 function PaneStatusBar:is_focused()
   local panes = core.panes or require "core.panes"
-  return panes.active() == self.pane
+  return (panes.peek_pane() or panes.active()) == self.pane
 end
 
 ---Whether this bar shows the current message. A message stays in the Pane

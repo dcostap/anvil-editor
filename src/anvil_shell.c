@@ -55,6 +55,15 @@
  * the shell stops showing the old Project. A Project that is not loaded yet usually presents within a second. */
 #define SHELL_SELECTION_HOLD_MS 1500
 #define SHELL_SELECTION_HOLD_TIMER 0x8100u
+/* Peek transitions. A new target that does not present in SHELL_PEEK_WAIT_MS shows as a row without content. An
+ * activation that does not select within SHELL_PEEK_COMMIT_MS ends the Peek. */
+#define SHELL_PEEK_FADE_MS 190
+#define SHELL_PEEK_LENS_MS 220
+#define SHELL_PEEK_DRIFT_POINTS 22
+#define SHELL_PEEK_WAIT_MS 250
+#define SHELL_PEEK_COMMIT_MS 1500
+#define SHELL_PEEK_WAIT_TIMER 0x8106u
+#define SHELL_PEEK_COMMIT_TIMER 0x8107u
 #define SHELL_NOTICE_MS 5000
 #define SHELL_NOTICE_TIMER 0x8103u
 /* Forwarded input carries a ping. A Project whose UI thread has not answered after this time is not responding:
@@ -215,7 +224,16 @@ typedef struct ShellProject {
   PendingPane *pending_panes;
   uint64_t pane_request;
   uint64_t sidebar_pane_request;
+  /* The Pane number that a Peek shows, sent in each configuration. */
+  uint32_t peek_pane;
 } ShellProject;
+
+/* A value that eases from `from` to `to` over `ms` from `start`. */
+typedef struct {
+  float from, to;
+  Uint64 start;
+  Uint32 ms;
+} ShellTween;
 
 typedef struct {
   ID3D11Texture2D *surface, *shared;
@@ -275,6 +293,30 @@ struct ShellWindow {
   unsigned resolve_revision;
   uint64_t close_generation;
   ShellPresentation project_presentation, sidebar_presentation;
+  /* Peek: the Sidebar's keyboard cursor shows its row in the Project area. `peek` renders like a Selected Project,
+   * but gets no input or focus, and its frames go to peek_presentation. Its `peek_pane` shows that Pane's group.
+   * project_presentation keeps the Selected Project's frame, so the Peek ends at once. A row without content, such
+   * as a Dormant Project, dims the Selected Project's frame (`peek_blank`). */
+  ShellProject *peek;
+  bool peek_blank;
+  bool peek_shown;      /* the Project area shows peek_presentation, drawn with peek_config */
+  bool peek_waiting;    /* the new target has not presented yet */
+  bool peek_stalled;    /* ... and did not present in SHELL_PEEK_WAIT_MS */
+  bool peek_committing; /* the Sidebar activates a row: the next selection keeps the shown frame */
+  int peek_direction;
+  ShellPresentation peek_presentation;
+  AnvilSurfaceConfigure peek_config;
+  /* Peek transitions. fade_last copies each composed Project area; a change fades fade_from out over the new
+   * content, with a short drift against the cursor's move. The lens frames the Project area, and the bead joins
+   * it to the cursor row. */
+  ID3D11Texture2D *fade_last, *fade_from;
+  ID3D11ShaderResourceView *fade_view;
+  int fade_w, fade_h;
+  bool fade_ready;
+  int fade_direction;
+  Uint64 fade_start;
+  ShellTween lens, veil;
+  float bead_top, bead_bottom;
   SDL_Window *window;
   HWND hwnd;
   WNDPROC sdl_wndproc;
@@ -459,12 +501,15 @@ static void shell_send(ShellProject *project, uint16_t type, const void *payload
 static void check_transport_failure(ShellProject *project);
 static void check_gpu_failure(ShellWindow *window);
 static void close_memory_frame(ShellPresentation *surface);
+static void release_presentation(ShellPresentation *surface);
+static void release_fade(ShellWindow *window);
 static bool select_project_path(ShellWindow *window, const char *path);
 static bool select_terminal_path(ShellWindow *window, const char *path, const char *id);
 static bool select_pane_path(ShellWindow *window, const char *path, const char *text, uint32_t size);
 static void select_project(ShellProject *project, bool keep_sidebar_focus);
 static void select_after_close(ShellProject *project);
 static bool is_scratch(const ShellProject *project);
+static void forget_peek(ShellProject *project);
 
 /* A Dormant, failed or absent Project has no process to take keys. */
 static bool takes_keyboard(const ShellProject *project) {
@@ -829,7 +874,8 @@ static void set_frame_busy(ShellWindow *window, bool busy) {
 }
 static void set_surface_busy(ShellWindow *window, ShellPresentation *surface, bool busy) {
   surface->busy = busy;
-  set_frame_busy(window, window->project_presentation.busy || window->sidebar_presentation.busy);
+  set_frame_busy(window, window->project_presentation.busy || window->sidebar_presentation.busy ||
+                         window->peek_presentation.busy);
 }
 
 static void deliver_pending_panes(ShellProject *project) {
@@ -852,6 +898,7 @@ static void set_state(ShellProject *project, ShellState state) {
   if (project->state == state)
     return;
   project->state = state;
+  if (state != SHELL_READY && state != SHELL_STARTING) forget_peek(project);
   if (!project->sidebar) {
     /* A new runtime reports its own Panes. A failed one drops a focus request it cannot serve. */
     if (state == SHELL_STARTING) {
@@ -1141,7 +1188,7 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     case ANVIL_SURFACE_MSG_FRAME: case ANVIL_SURFACE_MSG_CURSOR: case ANVIL_SURFACE_MSG_HIT_TEST:
     case ANVIL_SURFACE_MSG_SELECT_PROJECT: case ANVIL_SURFACE_MSG_UNLOAD_PROJECT:
     case ANVIL_SURFACE_MSG_MOVE_PROJECT: case ANVIL_SURFACE_MSG_SELECT_TERMINAL: case ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW:
-    case ANVIL_SURFACE_MSG_REORDER_PROJECT:
+    case ANVIL_SURFACE_MSG_REORDER_PROJECT: case ANVIL_SURFACE_MSG_SIDEBAR_PEEK:
     case ANVIL_SURFACE_MSG_PANE_REQUEST: case ANVIL_SURFACE_MSG_SIDEBAR_QUERY: case ANVIL_SURFACE_MSG_SIDEBAR_REFRESH:
     case ANVIL_SURFACE_MSG_TEXT_INPUT: case ANVIL_SURFACE_MSG_TITLE: case ANVIL_SURFACE_MSG_SIDEBAR_FOCUS:
     case ANVIL_SURFACE_MSG_VISIBLE: case ANVIL_SURFACE_MSG_SET_BOUNDS: case ANVIL_SURFACE_MSG_BORDERED:
@@ -1184,6 +1231,11 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     return size == sizeof(AnvilSurfaceMoveProject) && ((const AnvilSurfaceMoveProject *)payload)->project_id;
   case ANVIL_SURFACE_MSG_REORDER_PROJECT:
     return size == sizeof(AnvilSurfaceReorderProject) && ((const AnvilSurfaceReorderProject *)payload)->after <= 1;
+  case ANVIL_SURFACE_MSG_SIDEBAR_PEEK: {
+    const AnvilSurfacePeek *peek = payload;
+    return size == sizeof(AnvilSurfacePeek) && (peek->commit == 0 || peek->commit == 1) && peek->direction >= -1 &&
+           peek->direction <= 1;
+  }
   case ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW:
     return size > sizeof(uint32_t) + 1 && size < 32768 && *(const uint32_t *)payload &&
            ((const char *)payload)[size - 1] == 0 &&
@@ -1610,6 +1662,8 @@ static void send_configure(ShellProject *project) {
   if (!window) return;
   if (window->sidebar_client && project == window->selected && shell.sidebar_process)
     send_configure(window->sidebar_client);
+  /* The Peek's target follows the Selected Project's geometry. */
+  if (project == window->selected && window->peek && window->peek != project) send_configure(window->peek);
   if (!project->connected)
     return;
   AnvilSurfaceConfigure config = project->last_config;
@@ -1617,8 +1671,10 @@ static void send_configure(ShellProject *project) {
   config.window_id = window->id;
   config.window_mode = current_window_mode(window);
   config.live_resize = window->live_resize;
-  config.render_enabled = (project == window->selected || (project->sidebar && window->sidebar_w > 0)) &&
+  config.render_enabled = (project == window->selected || project == window->peek ||
+                           (project->sidebar && window->sidebar_w > 0)) &&
                           IsWindowVisible(window->hwnd) && !IsIconic(window->hwnd);
+  config.peek_pane = project->sidebar ? 0 : project->peek_pane;
   if (config.window_mode != ANVIL_SURFACE_WINDOW_MINIMIZED) {
     /* A minimized window keeps the last surface size. */
     int pixel_w = 0, pixel_h = 0;
@@ -1695,6 +1751,8 @@ static void send_configure(ShellProject *project) {
   project->last_config = config;
   if (!config.render_enabled && project == window->selected)
     set_surface_busy(window, &window->project_presentation, false);
+  if (!config.render_enabled && project == window->peek)
+    set_surface_busy(window, &window->peek_presentation, false);
   if (!config.render_enabled && project->sidebar)
     set_surface_busy(window, &window->sidebar_presentation, false);
   shell_send(project, ANVIL_SURFACE_MSG_CONFIGURE, &config, sizeof(config), NULL, 0);
@@ -1824,6 +1882,9 @@ static void release_d3d11(ShellWindow *window) {
   close_memory_frame(&window->sidebar_presentation);
   window->sidebar_presentation.have_surface = false;
   window->project_presentation.busy = window->sidebar_presentation.busy = false;
+  release_presentation(&window->peek_presentation);
+  window->peek_shown = false;
+  release_fade(window);
   set_frame_busy(window, false);
 }
 
@@ -2756,8 +2817,11 @@ static void update_ui(ShellWindow *window) {
 
 typedef struct {
   float dst[4], src[4], color[4];
-  float viewport[2], solid, pad;
+  float viewport[2], mode, opacity;
+  float lens[4];
 } ShellComposeConstants;
+
+enum { COMPOSE_LAYER, COMPOSE_SOLID, COMPOSE_FADE, COMPOSE_LENS, COMPOSE_PILL };
 
 static bool compose_ready(ShellWindow *window) {
   if (window->compose_vs) return true;
@@ -2801,9 +2865,10 @@ static bool compose_ready(ShellWindow *window) {
   return true;
 }
 
-/* Blends a premultiplied layer, or a solid premultiplied colour when view is NULL, into dst. */
-static void compose_rect(ShellWindow *window, ID3D11ShaderResourceView *view, RECT dst, int src_x, int src_y,
-                         const float color[4]) {
+/* Draws one rect into dst: a premultiplied layer, a solid premultiplied colour, a layer as opaque at `opacity`,
+ * or the Peek lens with `lens` = {inner radius, frame width, glow depth, glow strength} in `color`. */
+static void compose_draw(ShellWindow *window, int mode, ID3D11ShaderResourceView *view, RECT dst, int src_x,
+                         int src_y, const float color[4], float opacity, const float lens[4]) {
   dst.right = SDL_min(dst.right, window->buffer_w);
   dst.bottom = SDL_min(dst.bottom, window->buffer_h);
   if (dst.right <= dst.left || dst.bottom <= dst.top || !compose_ready(window)) return;
@@ -2813,8 +2878,9 @@ static void compose_rect(ShellWindow *window, ID3D11ShaderResourceView *view, RE
       {(float)src_x, (float)src_y, 0, 0},
       {color ? color[0] : 0, color ? color[1] : 0, color ? color[2] : 0, color ? color[3] : 0},
       {(float)window->buffer_w, (float)window->buffer_h},
-      view ? 0.0f : 1.0f,
-      0};
+      (float)mode,
+      opacity,
+      {lens ? lens[0] : 0, lens ? lens[1] : 0, lens ? lens[2] : 0, lens ? lens[3] : 0}};
   context->lpVtbl->UpdateSubresource(context, (ID3D11Resource *)window->compose_constants, 0, NULL, &constants, 0,
                                      0);
   D3D11_VIEWPORT viewport = {0, 0, (float)window->buffer_w, (float)window->buffer_h, 0, 1};
@@ -2832,6 +2898,12 @@ static void compose_rect(ShellWindow *window, ID3D11ShaderResourceView *view, RE
   context->lpVtbl->Draw(context, 4, 0);
   ID3D11ShaderResourceView *none = NULL;
   context->lpVtbl->PSSetShaderResources(context, 0, 1, &none);
+}
+
+/* Blends a premultiplied layer, or a solid premultiplied colour when view is NULL, into dst. */
+static void compose_rect(ShellWindow *window, ID3D11ShaderResourceView *view, RECT dst, int src_x, int src_y,
+                         const float color[4]) {
+  compose_draw(window, view ? COMPOSE_LAYER : COMPOSE_SOLID, view, dst, src_x, src_y, color, 1.0f, NULL);
 }
 
 static ID3D11ShaderResourceView *presentation_view(ShellWindow *window, ShellPresentation *surface) {
@@ -2915,6 +2987,164 @@ static VOID CALLBACK presentation_ready(void *context, BOOLEAN timed_out) {
   SDL_PushEvent(&event);
 }
 
+static float ease_out(float t) {
+  t = 1.0f - t;
+  return 1.0f - t * t * t;
+}
+
+static float tween_value(const ShellTween *tween, Uint64 now) {
+  if (!tween->start) return tween->to;
+  float t = (float)(now - tween->start) / ((float)tween->ms * SDL_NS_PER_MS);
+  return t >= 1.0f ? tween->to : tween->from + (tween->to - tween->from) * ease_out(SDL_max(0.0f, t));
+}
+
+static bool tween_running(const ShellTween *tween, Uint64 now) {
+  return tween->start && now - tween->start < (Uint64)tween->ms * SDL_NS_PER_MS;
+}
+
+static void tween_to(ShellTween *tween, float to, Uint32 ms) {
+  if (tween->to == to) return;
+  Uint64 now = SDL_GetTicksNS();
+  tween->from = tween_value(tween, now);
+  tween->to = to;
+  tween->start = now;
+  tween->ms = ms;
+}
+
+static bool peek_active(const ShellWindow *window) {
+  return window->peek || window->peek_blank;
+}
+
+static bool peek_animating(ShellWindow *window) {
+  Uint64 now = SDL_GetTicksNS();
+  return window->fade_start || tween_running(&window->lens, now) || tween_running(&window->veil, now);
+}
+
+/* The Project area that the user sees: right of the Sidebar. */
+static RECT peek_area(ShellWindow *window) {
+  return (RECT){window->sidebar_w, 0, window->buffer_w, window->buffer_h};
+}
+
+static void release_fade(ShellWindow *window) {
+  SAFE_RELEASE(window->fade_view);
+  SAFE_RELEASE(window->fade_from);
+  SAFE_RELEASE(window->fade_last);
+  window->fade_w = window->fade_h = 0;
+  window->fade_ready = false;
+  window->fade_start = 0;
+}
+
+static bool ensure_fade(ShellWindow *window) {
+  if (window->fade_last && window->fade_w == window->buffer_w && window->fade_h == window->buffer_h) return true;
+  release_fade(window);
+  if (window->buffer_w <= 0 || window->buffer_h <= 0) return false;
+  D3D11_TEXTURE2D_DESC desc = {0};
+  desc.Width = (UINT)window->buffer_w;
+  desc.Height = (UINT)window->buffer_h;
+  desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+  desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+  desc.Usage = D3D11_USAGE_DEFAULT;
+  desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+  ID3D11Device *device = window->device;
+  HRESULT hr = device->lpVtbl->CreateTexture2D(device, &desc, NULL, &window->fade_last);
+  if (SUCCEEDED(hr)) hr = device->lpVtbl->CreateTexture2D(device, &desc, NULL, &window->fade_from);
+  if (SUCCEEDED(hr))
+    hr = device->lpVtbl->CreateShaderResourceView(device, (ID3D11Resource *)window->fade_from, NULL,
+                                                  &window->fade_view);
+  if (FAILED(hr)) {
+    SDL_Log("Shell Peek transitions unavailable: 0x%08lx", (unsigned long)hr);
+    release_fade(window);
+    return false;
+  }
+  window->fade_w = window->buffer_w;
+  window->fade_h = window->buffer_h;
+  return true;
+}
+
+/* Keeps the composed Project area while a Peek can start or shows, so the next change fades from it. */
+static void keep_peek_frame(ShellWindow *window) {
+  if (!window->sidebar_focused && !peek_active(window) && !window->fade_start) {
+    window->fade_ready = false;
+    return;
+  }
+  if (!ensure_fade(window)) return;
+  RECT area = peek_area(window);
+  if (area.right <= area.left || area.bottom <= area.top) return;
+  D3D11_BOX box = {(UINT)area.left, (UINT)area.top, 0, (UINT)area.right, (UINT)area.bottom, 1};
+  window->context->lpVtbl->CopySubresourceRegion(window->context, (ID3D11Resource *)window->fade_last, 0,
+                                                 (UINT)area.left, (UINT)area.top, 0,
+                                                 (ID3D11Resource *)window->backbuffer, 0, &box);
+  window->fade_ready = true;
+}
+
+static void continue_slide(ShellWindow *window);
+
+/* Fades the last composed Project area out over the next content. It drifts against the cursor's move, so the
+ * new row's content seems to come from where the cursor went. */
+static void start_peek_fade(ShellWindow *window, int direction) {
+  window->frame_present_pending = true;
+  if (window->shown && !window->render_failed) continue_slide(window);
+  if (!window->fade_ready || !window->fade_from || window->render_failed) return;
+  window->context->lpVtbl->CopyResource(window->context, (ID3D11Resource *)window->fade_from,
+                                        (ID3D11Resource *)window->fade_last);
+  window->fade_direction = direction;
+  window->fade_start = SDL_GetTicksNS();
+}
+
+static float color_channel(uint32_t c, int shift, float alpha) {
+  return (float)(c >> shift & 0xff) / 255.0f * alpha;
+}
+
+/* The Peek's layers over the Project area: the dim of a row without content, the fading previous content, the lens
+ * and the bead. The lens is an accent frame with a glow that tells the user that the area shows a Peek. The bead
+ * joins it to the Sidebar's cursor row, and follows the cursor. */
+static void compose_peek(ShellWindow *window) {
+  Uint64 now = SDL_GetTicksNS();
+  RECT area = peek_area(window);
+  if (area.right <= area.left || area.bottom <= area.top) return;
+  float veil = tween_value(&window->veil, now) * 0.62f;
+  if (veil > 0.0f) {
+    uint32_t c = window->background;
+    float dim[4] = {color_channel(c, 0, veil), color_channel(c, 8, veil), color_channel(c, 16, veil), veil};
+    compose_rect(window, NULL, area, 0, 0, dim);
+  }
+  if (window->fade_start) {
+    float t = (float)(now - window->fade_start) / ((float)SHELL_PEEK_FADE_MS * SDL_NS_PER_MS);
+    if (t >= 1.0f) {
+      window->fade_start = 0;
+    } else {
+      float eased = ease_out(t);
+      int drift = (int)(-window->fade_direction * SHELL_PEEK_DRIFT_POINTS * window->scale * eased);
+      RECT dst = area;
+      int src_y = area.top;
+      if (drift < 0) {
+        dst.bottom += drift;
+        src_y -= drift;
+      } else {
+        dst.top += drift;
+      }
+      compose_draw(window, COMPOSE_FADE, window->fade_view, dst, area.left, src_y, NULL, 1.0f - eased, NULL);
+    }
+  }
+  keep_peek_frame(window);
+  float lens = tween_value(&window->lens, now);
+  if (lens <= 0.0f) return;
+  uint32_t c = window->ui_colors.accent;
+  float a = lens * (c >> 24) / 255.0f;
+  float color[4] = {color_channel(c, 0, a), color_channel(c, 8, a), color_channel(c, 16, a), a};
+  float scale = window->scale;
+  float frame = SDL_max(1.0f, SDL_floorf(2.0f * scale + 0.5f));
+  /* The glow grows in from the edges as the lens appears. */
+  float shape[4] = {14.0f * scale, frame, 72.0f * scale * lens, 0.22f};
+  compose_draw(window, COMPOSE_LENS, NULL, area, 0, 0, color, 1.0f, shape);
+  float top = window->bead_top, bottom = window->bead_bottom;
+  if (bottom - top < 2.0f * scale) return;
+  float glow = 6.0f * scale, width = 2.0f * frame;
+  RECT bead = {area.left - (LONG)glow, (LONG)(top - glow), area.left + (LONG)(width + glow), (LONG)(bottom + glow)};
+  float pill[4] = {width * 0.5f, glow, 0, 0.5f};
+  compose_draw(window, COMPOSE_PILL, NULL, bead, 0, 0, color, 1.0f, pill);
+}
+
 static void composite_and_present(ShellWindow *window) {
   ShellProject *project = window->selected;
   if (window->render_failed) { InvalidateRect(window->hwnd, NULL, FALSE); return; }
@@ -2940,12 +3170,15 @@ static void composite_and_present(ShellWindow *window) {
   const FLOAT clear[4] = {(background & 0xff) / 255.0f, (background >> 8 & 0xff) / 255.0f,
                           (background >> 16 & 0xff) / 255.0f, 1.0f};
   window->context->lpVtbl->ClearRenderTargetView(window->context, window->rtv, clear);
-  ShellPresentation *content = &window->project_presentation;
+  /* A Peek shows its target's frame in place of the Selected Project's frame. */
+  bool peeking = window->peek_shown && window->peek_presentation.have_surface;
+  ShellPresentation *content = peeking ? &window->peek_presentation : &window->project_presentation;
   /* Where the Project's frame lies in the backbuffer, and the backbuffer area it covers. */
   POINT content_at = {0, 0};
   RECT content_area = {0, 0, 0, 0};
   if (content->have_surface) {
-    const AnvilSurfaceConfigure *config = content->held ? &content->held_config : &project->last_config;
+    const AnvilSurfaceConfigure *config = peeking ? &window->peek_config
+                                          : content->held ? &content->held_config : &project->last_config;
     /* A frame of the current size anchors the content. While a live resize waits for one, the old frame keeps
      * its screen position and the Project background fills the rest. */
     POINT origin = {config->origin_x, config->origin_y};
@@ -3007,6 +3240,7 @@ static void composite_and_present(ShellWindow *window) {
   } else {
     copy_ui(window, (RECT){0, window->controls.bottom, window->sidebar_w, window->buffer_h});
   }
+  compose_peek(window);
   if (overlay_covers_sidebar(window)) {
     uint32_t c = window->overlay;
     float a = (c >> 24) / 255.0f;
@@ -3015,7 +3249,7 @@ static void composite_and_present(ShellWindow *window) {
     /* Modal UI that extends over the Sidebar, such as a popup and a warning bar, shows above it and its dim. The
      * Project draws each area's own dim. A held frame belongs to the previous Project, so its areas do not apply. */
     RECT sidebar_area = {0, 0, window->sidebar_w, window->buffer_h};
-    for (int i = 0; i < ANVIL_SURFACE_RAISED_MAX && !content->held; i++) {
+    for (int i = 0; i < ANVIL_SURFACE_RAISED_MAX && !content->held && !peeking; i++) {
       RECT raised = {content->raised[i].left + content_at.x, content->raised[i].top + content_at.y,
                      content->raised[i].right + content_at.x, content->raised[i].bottom + content_at.y}, shown;
       if (!IntersectRect(&shown, &raised, &sidebar_area) || !IntersectRect(&shown, &shown, &content_area)) continue;
@@ -3030,7 +3264,7 @@ static void composite_and_present(ShellWindow *window) {
     copy_ui(window, sidebar_restart_rect(window));
   else
     blend_ui(window, (RECT){0, 0, window->sidebar_w, window->controls.bottom});
-  if (lifecycle_titlebar(window) && !sidebar_backdrop)
+  if (lifecycle_titlebar(window) && !sidebar_backdrop && !peeking)
     copy_ui(window, (RECT){window->sidebar_w, 0, window->controls.left, window->controls.bottom});
   int hot = window->pressed_control >= 0 ? window->pressed_control : window->hovered_control;
   if (hot >= 0 && hot < 3) {
@@ -3042,7 +3276,8 @@ static void composite_and_present(ShellWindow *window) {
     compose_rect(window, NULL, control_rect(window, hot), 0, 0, fill);
   }
   blend_ui(window, window->controls);
-  if (project_area_covered(window))
+  if (peeking) {
+  } else if (project_area_covered(window))
     copy_ui(window, (RECT){window->sidebar_w, window->controls.bottom, window->buffer_w, window->buffer_h});
   else if (project->state == SHELL_FAILED)
     blend_ui(window, window->lifecycle_card);
@@ -3254,8 +3489,13 @@ static void resize_step(ShellWindow *window) {
             waited, (double)(SDL_GetTicksNS() - started) / SDL_NS_PER_MS);
 }
 
+static void handle_peek_frame(ShellWindow *window);
+
 static void handle_frame(ShellWindow *window) {
   ShellProject *project = window->selected;
+  /* The Selected Project's frames show its Peek while it draws one. */
+  if (window->peek_presentation.busy || window->peek == project) handle_peek_frame(window);
+  if (window->peek == project) return;
   AnvilSurfaceFrame frame;
   if (!load_pending_frame(window->selected, &window->project_presentation, &frame))
     return;
@@ -3272,6 +3512,179 @@ static void handle_frame(ShellWindow *window) {
   if (project->state == SHELL_READY && !project->close_requested_ns)
     anvil_latency_probe_start(window->window, finish_latency_probe);
 }
+/* ------------------------------------------------------------------------ */
+/* Peek                                                                     */
+
+static void release_presentation(ShellPresentation *surface) {
+  SAFE_RELEASE(surface->view);
+  SAFE_RELEASE(surface->shared_mutex);
+  SAFE_RELEASE(surface->shared);
+  SAFE_RELEASE(surface->surface);
+  close_memory_frame(surface);
+  memset(surface, 0, sizeof(*surface));
+}
+
+static void animate_peek(ShellWindow *window) {
+  window->frame_present_pending = true;
+  if (window->shown && !window->render_failed && window->rtv && window->present_ready_event) continue_slide(window);
+}
+
+static void update_peek_tweens(ShellWindow *window) {
+  tween_to(&window->lens, peek_active(window) ? 1.0f : 0.0f, SHELL_PEEK_LENS_MS);
+  tween_to(&window->veil, window->peek_blank || window->peek_stalled ? 1.0f : 0.0f, SHELL_PEEK_FADE_MS);
+  animate_peek(window);
+}
+
+/* Stops the Peek's target. A Project that the Window does not select stops rendering. */
+static void release_peek_target(ShellWindow *window) {
+  ShellProject *target = window->peek;
+  window->peek = NULL;
+  window->peek_waiting = window->peek_stalled = false;
+  KillTimer(window->hwnd, SHELL_PEEK_WAIT_TIMER);
+  if (!target) return;
+  target->peek_pane = 0;
+  set_surface_busy(window, &window->peek_presentation, false);
+  send_configure(target);
+}
+
+/* The Project area shows the Selected Project again. */
+static void end_peek(ShellWindow *window, const char *reason) {
+  if (window->peek_committing) KillTimer(window->hwnd, SHELL_PEEK_COMMIT_TIMER);
+  window->peek_committing = false;
+  if (!peek_active(window) && !window->peek_shown) return;
+  SDL_Log("Shell Peek ended: Window=%u reason=%s", window->id, reason);
+  start_peek_fade(window, 0);
+  release_peek_target(window);
+  window->peek_blank = window->peek_shown = false;
+  update_peek_tweens(window);
+}
+
+/* A Project that closes, fails, unloads or moves cannot show a Peek. */
+static void forget_peek(ShellProject *project) {
+  for (ShellWindow *window = shell.windows; window; window = window->next)
+    if (window->peek == project) end_peek(window, "the Project is unavailable");
+}
+
+static bool can_peek(ShellWindow *window, ShellProject *project) {
+  return project && project->window_id == window->id && project != window->empty && !project->sidebar &&
+         project->connected && !project->unloading && !project->close_requested_ns && !project->exit_announced &&
+         (project->state == SHELL_READY || (project->state == SHELL_STARTING && project->runtime_ready));
+}
+
+/* The Sidebar sends its cursor highlight's place in each frame of its glide, so the bead moves with it. */
+static void move_bead(ShellWindow *window, const AnvilSurfacePeek *request) {
+  window->bead_top = (float)request->row_top;
+  window->bead_bottom = (float)SDL_max(request->row_top, request->row_bottom);
+}
+
+static void show_peek(ShellWindow *window, const AnvilSurfacePeek *request) {
+  if (request->commit) {
+    /* Only a shown frame can stay. A row without content selects as usual. */
+    if (!window->peek_shown || window->peek_waiting) {
+      end_peek(window, "activation");
+      return;
+    }
+    window->peek_committing = true;
+    SetTimer(window->hwnd, SHELL_PEEK_COMMIT_TIMER, SHELL_PEEK_COMMIT_MS, NULL);
+    return;
+  }
+  if (window->peek_committing) {
+    KillTimer(window->hwnd, SHELL_PEEK_COMMIT_TIMER);
+    window->peek_committing = false;
+  }
+  ShellProject *target = NULL;
+  bool blank = false;
+  uint32_t pane = request->pane;
+  bool selected = !request->project_id || (request->project_id == window->selected->id && !pane);
+  if (window->sidebar_focused && !selected) {
+    for (ShellProject *item = shell.projects; item; item = item->next)
+      if (item->id == request->project_id) { target = item; break; }
+    if (!can_peek(window, target)) {
+      target = NULL;
+      blank = true;
+    }
+  }
+  if (!target && !blank) {
+    end_peek(window, "the cursor shows the Selected Project");
+    return;
+  }
+  move_bead(window, request);
+  if (target == window->peek && blank == window->peek_blank && (!target || target->peek_pane == pane)) {
+    animate_peek(window);
+    return;
+  }
+  window->peek_direction = request->direction;
+  if (window->peek != target) release_peek_target(window);
+  window->peek_blank = blank;
+  if (blank) {
+    start_peek_fade(window, request->direction);
+    window->peek_shown = false;
+  } else {
+    window->peek = target;
+    target->peek_pane = pane;
+    window->peek_waiting = true;
+    window->peek_stalled = false;
+    SetTimer(window->hwnd, SHELL_PEEK_WAIT_TIMER, SHELL_PEEK_WAIT_MS, NULL);
+    send_configure(target);
+  }
+  SDL_Log("Shell Peek: Window=%u Project=%u Pane=%u blank=%d", window->id, target ? target->id : 0, pane, blank);
+  update_peek_tweens(window);
+}
+
+/* The target did not present soon. The previous content stays under the dim until it does. */
+static void stall_peek(ShellWindow *window) {
+  KillTimer(window->hwnd, SHELL_PEEK_WAIT_TIMER);
+  if (!window->peek_waiting) return;
+  window->peek_stalled = true;
+  SDL_Log("Shell Peek waits for its first frame: Window=%u Project=%u", window->id,
+          window->peek ? window->peek->id : 0);
+  update_peek_tweens(window);
+}
+
+static void handle_peek_frame(ShellWindow *window) {
+  ShellProject *target = window->peek;
+  if (!target) return;
+  AnvilSurfaceFrame frame;
+  if (!load_pending_frame(target, &window->peek_presentation, &frame)) return;
+  window->peek_config = target->last_config;
+  if (window->peek_waiting) {
+    start_peek_fade(window, window->peek_direction);
+    window->peek_waiting = window->peek_stalled = false;
+    KillTimer(window->hwnd, SHELL_PEEK_WAIT_TIMER);
+    SDL_Log("Shell Peek shown: Window=%u Project=%u", window->id, target->id);
+    window->peek_shown = true;
+    update_peek_tweens(window);
+  }
+  window->frame_present_pending = true;
+}
+
+/* An activation of the peeked row keeps its frame until the selection presents, as a selection keeps the previous
+ * Project's frame. The Peek then ends without a transition. */
+static void commit_peek(ShellWindow *window, ShellProject *project) {
+  if (!window->peek_committing) return;
+  KillTimer(window->hwnd, SHELL_PEEK_COMMIT_TIMER);
+  window->peek_committing = false;
+  if (window->peek != project || window->selected != project || !window->peek_shown ||
+      !window->peek_presentation.have_surface) {
+    end_peek(window, "another selection");
+    return;
+  }
+  ShellPresentation *content = &window->project_presentation;
+  ShellPresentation previous = *content;
+  *content = window->peek_presentation;
+  window->peek_presentation = previous;
+  release_presentation(&window->peek_presentation);
+  content->held = true;
+  content->held_since = SDL_GetTicksNS();
+  content->held_config = window->peek_config;
+  SetTimer(window->hwnd, SHELL_SELECTION_HOLD_TIMER, SHELL_SELECTION_HOLD_MS, NULL);
+  window->peek_shown = window->peek_blank = false;
+  window->fade_start = 0;
+  release_peek_target(window);
+  SDL_Log("Shell Peek committed: Window=%u Project=%u", window->id, project->id);
+  update_peek_tweens(window);
+}
+
 static void handle_sidebar_frame(ShellWindow *window) {
   ShellProject *project = window->sidebar_client;
   if (!project)
@@ -3897,6 +4310,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
       message->type != ANVIL_SURFACE_MSG_UNLOAD_PROJECT &&
       message->type != ANVIL_SURFACE_MSG_MOVE_PROJECT &&
       message->type != ANVIL_SURFACE_MSG_REORDER_PROJECT &&
+      message->type != ANVIL_SURFACE_MSG_SIDEBAR_PEEK &&
       message->type != ANVIL_SURFACE_MSG_SELECT_TERMINAL &&
       message->type != ANVIL_SURFACE_MSG_PANE_REQUEST &&
       message->type != ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW &&
@@ -3933,6 +4347,9 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
   }
   case ANVIL_SURFACE_MSG_REORDER_PROJECT:
     if (project->sidebar) reorder_project(payload);
+    break;
+  case ANVIL_SURFACE_MSG_SIDEBAR_PEEK:
+    if (project->sidebar && !window->closing) show_peek(window, payload);
     break;
   case ANVIL_SURFACE_MSG_TIMING_CAPTURE: {
     const char *base = payload;
@@ -4348,11 +4765,6 @@ static void restore_project_activity(void) {
 static void leave_surface(ShellWindow *window);
 static void clear_composition(ShellWindow *window);
 
-static float ease_out(float t) {
-  t = 1.0f - t;
-  return 1.0f - t * t * t;
-}
-
 /* Shows the Window's new Sidebar width: the Project and the Sidebar get their new sizes, and the Window composes. */
 static void apply_sidebar_layout(ShellWindow *window) {
   if (!layout_sidebar(window)) return;
@@ -4704,6 +5116,8 @@ static void focus_sidebar(ShellWindow *window, bool focused) {
     return;
   }
   if (window->sidebar_focused == focused) return;
+  /* A Peek needs the keyboard in the Sidebar. An activation keeps it until the selection. */
+  if (!focused && !window->peek_committing) end_peek(window, "the Sidebar lost the keyboard");
   clear_composition(window);
   bool shown = sidebar_shown(window);
   window->sidebar_focused = focused;
@@ -4849,6 +5263,12 @@ static void route_motion(ShellWindow *window, SDL_Event *event) {
     return;
   }
   bool inside = surface_contains(window, event->motion.x, event->motion.y) && control < 0;
+  /* A Peek shows content that the Selected Project does not show, so the pointer does not reach the Project. */
+  if (peek_active(window) && !window->surface_buttons) {
+    leave_surface(window);
+    if (inside) apply_cursor(ANVIL_SURFACE_CURSOR_ARROW);
+    return;
+  }
   if (!inside)
     leave_surface(window);
   if (window->surface_buttons || inside) {
@@ -4934,6 +5354,13 @@ static void route_button(ShellWindow *window, SDL_Event *event) {
       clear_composition(window);
       return;
     }
+    /* A press on a Peek ends it and gives the Project the keyboard. The press does not act on content that the
+     * user did not see. */
+    if (!window->surface_buttons && peek_active(window)) {
+      end_peek(window, "pointer press");
+      focus_sidebar(window, false);
+      return;
+    }
     focus_sidebar(window, false);
     window->surface_buttons |= mask;
     capture_surface_pointer(window);
@@ -4954,6 +5381,7 @@ static void route_button(ShellWindow *window, SDL_Event *event) {
 static void request_close(ShellProject *project) {
   ShellWindow *window = window_for_id(project->window_id);
   if (!window) return;
+  forget_peek(project);
   if (project == window->selected && !project->unloading)
     begin_window_close(window);
   if (project->resolving) {
@@ -5145,6 +5573,8 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
       }
       if (project == window->selected)
         handle_frame(window);
+      else if (project == window->peek)
+        handle_peek_frame(window);
       else {
         SDL_LockMutex(project->lock);
         project->frame_pending = false;
@@ -5422,7 +5852,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
       } else {
         send_sidebar_input(window, event);
       }
-    } else if (surface_contains(window, event->wheel.mouse_x, event->wheel.mouse_y) &&
+    } else if (surface_contains(window, event->wheel.mouse_x, event->wheel.mouse_y) && !peek_active(window) &&
         control_at(window, event->wheel.mouse_x, event->wheel.mouse_y) < 0 &&
         (project->state == SHELL_READY || project->state == SHELL_CLOSING)) {
       anvil_surface_translate_input(&project->last_config, event);
@@ -5592,6 +6022,14 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
   if (msg == WM_TIMER && wparam == SHELL_SELECTION_HOLD_TIMER) {
     KillTimer(hwnd, SHELL_SELECTION_HOLD_TIMER);
     end_selection_hold(window);
+    return 0;
+  }
+  if (msg == WM_TIMER && wparam == SHELL_PEEK_WAIT_TIMER) {
+    stall_peek(window);
+    return 0;
+  }
+  if (msg == WM_TIMER && wparam == SHELL_PEEK_COMMIT_TIMER) {
+    end_peek(window, "the activation did not select");
     return 0;
   }
   if (msg == WM_TIMER) {
@@ -6429,6 +6867,7 @@ static void select_project(ShellProject *project, bool keep_sidebar_focus) {
     return;
   }
   ShellProject *previous = window->selected;
+  if (!window->peek_committing) end_peek(window, "selection");
   windows_changed();
   note_project_activity(project);
   cancel_input(window);
@@ -6523,6 +6962,7 @@ static bool move_project(ShellWindow *requester, uint32_t project_id, uint32_t t
     }
   }
   retain_project(project);
+  forget_peek(project);
   /* Revoke the old surface before changing ownership. Keep the Project retained during native callbacks. A focused
    * Sidebar in the source Window keeps the keyboard, as after an unload. */
   if (source->selected == project) {
@@ -6616,6 +7056,7 @@ static void begin_unload(ShellProject *project) {
   if (!window) return;
   if (project->unloading)
     return;
+  forget_peek(project);
   if (!project->identity || !project->project_path) {
     begin_window_close(window);
     request_close(project);
@@ -6983,8 +7424,10 @@ static void finish_resolutions(void) {
         if (job->background) {
           SDL_Log("Shell background load: Project=%u Window=%u", project->id, window->id);
           windows_changed();
-        } else if (!job->restored || window->selected == project)
+        } else if (!job->restored || window->selected == project) {
           select_project(project, pending && !job->launched);
+          commit_peek(window, project);
+        }
         if (job->launched) {
           /* Windows decides whether the raise takes the foreground. Without the launcher's grant it may only flash. */
           SDL_Log("Shell external launch raise: Project=%u foreground grant=%d", project->id,
@@ -7063,6 +7506,7 @@ static void select_after_close(ShellProject *project) {
 static void complete_unload(ShellProject *project) {
   ShellWindow *window = window_for_id(project->window_id);
   if (!window) return;
+  forget_peek(project);
   select_after_close(project);
   DormantProject *dormant = project->dormant;
   project->dormant = NULL;
@@ -7101,6 +7545,7 @@ static void complete_unload(ShellProject *project) {
 
 static void retire_failed_placeholder(ShellProject *project) {
   ShellWindow *window = window_for_id(project->window_id);
+  forget_peek(project);
   if (window && window->selected == project) select_project(window->empty, false);
   ShellProject **link = &shell.projects;
   while (*link != project) link = &(*link)->next;
@@ -8287,7 +8732,7 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
       composite_and_present(window);
       reveal_when_ready(window);
     }
-    if (window->sidebar_sliding) continue_slide(window);
+    if (window->sidebar_sliding || (window->shown && peek_animating(window))) continue_slide(window);
   }
   anvil_timing_note("shell-step-end", 0, 0, 0);
   return shell.windows ? SDL_APP_CONTINUE : SDL_APP_SUCCESS;

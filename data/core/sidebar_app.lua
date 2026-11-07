@@ -361,6 +361,16 @@ local function add_surface(id, window)
         tostring(after), tostring(sent))
       return sent
     end
+    if action == "peek" then
+      local pane, direction, top, bottom = target, ...
+      system.peek_project(row_id, pane, direction, top, bottom)
+      return
+    end
+    if action == "peek_commit" then
+      local sent = system.commit_peek()
+      core.log_quiet("Sidebar Peek kept for the selection: Window=%d sent=%s", id, tostring(sent))
+      return
+    end
     if action == "focus" then
       local sent = system.focus_project_sidebar(true)
       core.log_quiet("Sidebar takes the keyboard: Window=%d sent=%s", id, tostring(sent))
@@ -738,6 +748,9 @@ function core.run_step()
         if menu_moves then delay = math.min(delay or math.huge, 1 / core.fps) end
         surface.spin_at = delay and now + delay
       end
+      -- A new Peek moves the cursor's highlight, so the next frame draws at once.
+      if visible and surface.view:update_peek(now) then core.redraw, surface.spin_at = true, now end
+      if surface.view.peek_due then surface.spin_at = math.min(surface.spin_at or math.huge, surface.view.peek_due) end
       if not visible then surface.spin_at = nil end
       if surface.spin_at then spin_at = math.min(spin_at or math.huge, surface.spin_at) end
       if surface.view.next_snooze then

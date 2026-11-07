@@ -1021,6 +1021,9 @@ function TerminalView:sync_geometry()
   then
     return false
   end
+  -- A Peek only looks: the session keeps its size until the user shows its Pane.
+  local pane = panes.pane_for_view(self)
+  if pane and not panes.is_visible(pane) then return false end
   if not self.session:resize(
       cols, rows, self.native_cell_width, self.cell_height
     )
@@ -1033,8 +1036,7 @@ function TerminalView:sync_geometry()
   core.log_quiet("Terminal session %d resized: cols=%d rows=%d",
     self.log_id, cols, rows)
   self:clear_point_hover()
-  local pane = panes.pane_for_view(self)
-  local include_rows = pane ~= nil and pane.current_view == self and panes.is_visible(pane)
+  local include_rows = pane ~= nil and pane.current_view == self and panes.is_shown(pane)
   self.snapshot = self.session:snapshot(self.snapshot, include_rows)
   if include_rows then core.redraw = true else self.rows_dirty = true end
   return true

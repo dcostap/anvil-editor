@@ -47,6 +47,11 @@ local PENDING_MOVE, PENDING_TRANSFER = 1.5, 4
 local CHOICE_TIMEOUT = 5
 -- Left on a collapsed loaded Project asks "Unload?" for this long. A second Left unloads it.
 local UNLOAD_TIMEOUT = 3
+-- Cursor moves closer together than this show only the row where the cursor rests, so a held key does not load each
+-- row it passes.
+local PEEK_DELAY = 0.09
+-- A Project id that names no loaded Project: the shell shows a row without content.
+local PEEK_NO_CONTENT = 0xffffffff
 -- Animated values approach their targets at these rates per second. A change is 95% done after 3 / rate seconds.
 local MOVE_RATE, FADE_RATE, SCROLL_RATE = 20, 14, 22
 -- Highlights glide and fade at these base rates, times their speed. The hover highlight follows the pointer fastest.
@@ -176,6 +181,8 @@ end
 
 function SidebarView:on_focus(focused, refresh_pending)
   self.focused, self.unload_ask = focused, nil
+  -- The shell ends a Peek when the Sidebar loses the keyboard.
+  self.peek_wanted, self.peek_sent = nil, nil
   -- A hidden Sidebar can still hold the previous Pane report when it gets the keyboard.
   self.focus_pending = focused and refresh_pending or nil
   -- The hours field asks for the keyboard and waits for it. It closes when the Sidebar loses the keyboard.
@@ -437,9 +444,17 @@ function SidebarView:choose(row, jump)
   self:rebuild_rows()
 end
 
--- A row activated from the keyboard takes the highlight at once. The user already moved the cursor there.
+-- A row activated from the keyboard takes the highlight at once. The user already moved the cursor there. When the
+-- Project area shows the row's Peek, the Peek stays until the selection draws, so the switch shows no other frame.
 function SidebarView:activate_row(row, from_keyboard)
   if not row then return end
+  local sent, wanted = self.peek_sent, self.peek_wanted
+  if from_keyboard and sent and sent.id ~= 0 and wanted and wanted.key == sent.key and row == self:get_cursor()
+    and (row.kind == "project" or row.kind == "tab" or row.kind == "terminal") then
+    -- The shell keeps the Peek until the selection follows. A new message for the same row would end that wait.
+    self.action("peek_commit")
+    sent.committed = true
+  end
   if row.kind == "project" or row.kind == "tab" or row.kind == "terminal" then self:choose(row, from_keyboard) end
   if row.kind == "project" then
     if row.project.state == "ready" and not row.key and not in_other_window(row.project, self.window_id) then
@@ -450,6 +465,64 @@ function SidebarView:activate_row(row, from_keyboard)
   elseif row.kind == "tab" then self.action("request", "select", row.project.path, {action = "focus", pane = row.tab.id})
   elseif row.kind == "terminal" then self.action("select_terminal", row.project.row_id, row.terminal.id)
   elseif row.key then self:toggle(row.key, row.collapsed) end
+end
+
+-- The Peek of the cursor row: a Project id and a Pane number. Zero shows the Selected Project as it is.
+function SidebarView:peek_target()
+  if not self.focused or self.hours or self.drag or self.reorder then return 0, 0 end
+  local row = self:get_cursor()
+  local project = row and row.project
+  if not project then return 0, 0 end
+  if project.state == "dormant" or (project.id or 0) == 0 then return PEEK_NO_CONTENT, 0 end
+  local pane = row.kind == "tab" and tonumber(tostring(row.tab.id):match("^pane%-(%d+)$")) or 0
+  local selected = self:selected_project()
+  if selected and selected.id == project.id
+    and (pane == 0 or row.tab.group == (project.panes or {}).visible and not row.tab.snoozed) then
+    return 0, 0
+  end
+  return project.id, pane
+end
+
+-- Where the cursor's highlight shows, from top to bottom, in surface pixels. The shell draws its bead there.
+function SidebarView:peek_rect()
+  local mark = self.marks.cursor
+  if not mark or mark.alpha <= 0.01 then return 0, 0 end
+  local y = self:shown_origin(mark.area) + mark.y + 1
+  local top, bottom = self:shown_list_top(), self:main_bottom(self.shown.bottom_h)
+  if mark.area == "bottom" then top, bottom = self:bottom_area(self.shown.bottom_h), self.view_h end
+  return math.floor(math.max(top, y) + 0.5), math.floor(math.min(bottom, y + mark.h - 2) + 0.5)
+end
+
+-- Peek: while the Sidebar has the keyboard, the Project area shows the cursor row's content. The shell shows it and
+-- draws a bead beside the cursor's highlight. Returns true when the shown row changed.
+function SidebarView:update_peek(now)
+  local id, pane = self:peek_target()
+  local key = id .. ":" .. pane
+  local wanted = self.peek_wanted
+  if not wanted or wanted.key ~= key then
+    local rested = not wanted or now - wanted.at >= PEEK_DELAY
+    wanted = {key = key, id = id, pane = pane, at = now, due = rested and now or now + PEEK_DELAY}
+    self.peek_wanted = wanted
+  end
+  local sent = self.peek_sent or {key = "0:0", id = 0, pane = 0}
+  local shown = now >= wanted.due and wanted or sent
+  self.peek_due = shown ~= wanted and wanted.due or nil
+  local top, bottom = self:peek_rect()
+  if shown.key == sent.key and (shown.id == 0 or sent.committed or top == sent.top and bottom == sent.bottom) then
+    return false
+  end
+  local changed = shown.key ~= sent.key
+  local direction = 0
+  if changed and self.peek_index and self.cursor then
+    direction = self.cursor > self.peek_index and 1 or self.cursor < self.peek_index and -1 or 0
+  end
+  if changed then
+    self.peek_index = self.cursor
+    core.log_quiet("Sidebar Peek: Project=%d Pane=%d direction=%d", shown.id, shown.pane, direction)
+  end
+  self.peek_sent = {key = shown.key, id = shown.id, pane = shown.pane, top = top, bottom = bottom}
+  self.action("peek", shown.id, shown.pane, direction, top, bottom)
+  return changed
 end
 
 function SidebarView:selected_project()
@@ -2007,6 +2080,9 @@ function SidebarView:step(dt)
   mark("active", active, SELECTION_SPEED, self.jump_selection)
   self.jump_selection = nil
   mark("cursor", self.focused and self:get_cursor() or nil, SELECTION_SPEED)
+  -- While the Project area shows a Peek, the cursor's highlight reaches the Sidebar's edge and joins the shell's bead.
+  local peeking = self.peek_sent ~= nil and self.peek_sent.id ~= 0
+  self.peek_join = ease(self.peek_join or 0, peeking and 1 or 0, FADE_RATE, 0.01)
   mark("hover", self.hover, HOVER_SPEED, false, true)
   -- The drop target's mark: a line between rows that grows into a box around a target row.
   local drop = self.marks.drop
@@ -2542,7 +2618,8 @@ function SidebarView:draw_containers(area, width, lifted)
   end
 end
 
-function SidebarView:draw_mark(name, area, width, color, lifted)
+-- `reach` from 0 to 1 extends the highlight to the right edge, where the clip squares its corners.
+function SidebarView:draw_mark(name, area, width, color, lifted, reach)
   local mark = self.marks[name]
   if not mark or mark.area ~= area or mark.alpha <= 0.01 then return end
   local visual = self.visuals[mark.key]
@@ -2552,7 +2629,8 @@ function SidebarView:draw_mark(name, area, width, color, lifted)
   local h = mark.h - 2
   if visual and visual.clip_bottom then h = math.min(h, self:shown_origin(area) + visual.clip_bottom - y - 1) end
   if h > 0 then
-    renderer.draw_rounded_rect(mark.x, y + 1, width - m.pad - mark.x, h, m.radius, fade(color, mark.alpha))
+    local right = width - m.pad + (m.pad + m.radius) * (reach or 0)
+    renderer.draw_rounded_rect(mark.x, y + 1, right - mark.x, h, m.radius, fade(color, mark.alpha))
   end
 end
 
@@ -2750,7 +2828,7 @@ function SidebarView:draw(width, height)
     self:draw_containers(name, width, false)
     self:draw_mark("hover", name, width, style.sidebar_hover, false)
     self:draw_mark("active", name, width, active_color, false)
-    self:draw_mark("cursor", name, width, style.sidebar_cursor, false)
+    self:draw_mark("cursor", name, width, style.sidebar_cursor, false, self.peek_join)
     self:draw_drop(name, false)
     local origin = self:shown_origin(name)
     for _, item in ipairs(self.leaving) do

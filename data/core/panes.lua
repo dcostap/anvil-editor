@@ -252,6 +252,23 @@ function M.is_visible(pane)
   return M.contains(pane) and pane.group == M.visible_group_value
 end
 
+---The Pane that a Peek from the Project Sidebar shows, or nil. The Project draws its group in place of the visible
+---group. A Peek changes no state: the visible group, the active Pane and focus stay.
+function M.peek_pane()
+  local number = system.get_peek_pane()
+  return number and M.panes_by_id["pane-" .. number] or nil
+end
+
+---The Pane Group that the Project draws.
+function M.shown_group()
+  local pane = M.peek_pane()
+  return pane and pane.group or M.visible_group_value
+end
+
+function M.is_shown(pane)
+  return M.contains(pane) and pane.group == M.shown_group()
+end
+
 function M.owner_for_view(view)
   if not view then return nil end
   return M.focus_owners[view] or view.__pane_owner and view or nil

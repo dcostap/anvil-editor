@@ -104,6 +104,13 @@ bool anvil_hosted_surface_close_all_windows(void);
 /* Asks the shell to open the Window that closed last. */
 bool anvil_hosted_surface_reopen_closed_window(void);
 bool anvil_hosted_surface_focus_sidebar(bool focused);
+/* Sidebar only: shows a Project or its Pane `pane-<pane>` in the Project area without a selection. A zero
+ * project_id shows the Selected Project. The cursor row lies from row_top to row_bottom. `commit` keeps the shown
+ * frame for the selection that follows. */
+bool anvil_hosted_surface_peek(uint32_t project_id, uint32_t pane, int direction, int row_top, int row_bottom,
+                               bool commit);
+/* The Pane number that a Peek shows in this Project, or 0. */
+uint32_t anvil_hosted_surface_peek_pane(void);
 /* Tells the shell that this Project saved a Color Theme, so other processes reload it. */
 bool anvil_hosted_surface_color_theme_saved(void);
 /* Sends the Zoom that this Project saved to the shell, so other Projects and the Sidebar apply it. */

@@ -1550,6 +1550,81 @@ test.describe("Sidebar Snoozes", function()
   end)
 end)
 
+test.describe("Sidebar Peek", function()
+  local function sidebar()
+    local actions, action = recorder()
+    local view = SidebarView(action, {["group:week"]=false})
+    view:set_model({
+      {row_id=1,id=31,path="C:/A",state="ready",window_id=5,terminals={},panes={active=1,visible=1,
+        {id="pane-1",name="shown.lua",group=1},{id="pane-2",name="hidden.lua",group=2}}},
+      {row_id=2,id=32,path="C:/B",state="ready",window_id=5,terminals={},panes={active=1,visible=1,
+        {id="pane-3",name="other.lua",group=1}}},
+      {row_id=3,path="C:/C",state="dormant",activity=os.time(),terminals={}},
+      windows={{id=5,selected_project=31}}}, 5)
+    view:on_focus(true)
+    return view, actions
+  end
+  -- Moves the cursor to the row, then returns the Peeks that the Sidebar asks for at `now`.
+  local function move(view, actions, now, predicate)
+    if predicate then view.cursor = row_index(view, predicate) end
+    local first = #actions + 1
+    view:update_peek(now)
+    local peeks = {}
+    for index = first, #actions do
+      if actions[index][1] == "peek" then peeks[#peeks + 1] = {actions[index][2], actions[index][3]} end
+    end
+    return peeks
+  end
+  local function tab(id) return function(row) return row.kind == "tab" and row.tab.id == id end end
+  local function project(path) return function(row) return row.kind == "project" and row.project.path == path end end
+
+  test.it("shows the cursor row's Project and Pane, and nothing for what the Selected Project shows", function()
+    local view, actions = sidebar()
+    test.same(move(view, actions, 10, project("C:/A")), {})
+    test.same(move(view, actions, 11, tab("pane-1")), {})
+    test.same(move(view, actions, 12, tab("pane-2")), {{31, 2}})
+    test.same(move(view, actions, 13, project("C:/B")), {{32, 0}})
+    test.same(move(view, actions, 14, tab("pane-3")), {{32, 3}})
+    test.same(move(view, actions, 15, project("C:/C")), {{0xffffffff, 0}}, "A Dormant Project shows content")
+    test.same(move(view, actions, 16, tab("pane-1")), {{0, 0}})
+    view:on_focus(false)
+    test.same(move(view, actions, 17, tab("pane-3")), {}, "A Sidebar without the keyboard asks for a Peek")
+  end)
+
+  test.it("shows only the row where fast cursor moves stop", function()
+    local view, actions = sidebar()
+    test.same(move(view, actions, 10, project("C:/B")), {{32, 0}})
+    test.same(move(view, actions, 10.02, tab("pane-3")), {})
+    test.same(move(view, actions, 10.04, project("C:/C")), {})
+    test.same(move(view, actions, 10.5), {{0xffffffff, 0}})
+  end)
+
+  test.it("keeps the Peek for the selection that Enter starts, also while the cursor's highlight glides", function()
+    local config = require "core.config"
+    local get_time, transitions, time = system.get_time, config.transitions, 100
+    system.get_time, config.transitions = function() return time end, true
+    local ok, err = pcall(function()
+      local view, actions = sidebar()
+      local function frame(seconds)
+        time = time + seconds
+        with_renderer({}, function() view:draw(400, 800) end)
+      end
+      frame(0); frame(1)
+      test.same(move(view, actions, time, tab("pane-3")), {{32, 3}})
+      frame(1 / 60)
+      test.same(move(view, actions, time), {{32, 3}}, "The bead does not follow the gliding highlight")
+      local first = #actions + 1
+      view:on_key_pressed("return")
+      test.same(actions[first], {"peek_commit"})
+      test.same(actions[first + 1], {"request", "select", "C:/B", {action = "focus", pane = "pane-3"}})
+      frame(1 / 60)
+      test.same(move(view, actions, time), {}, "A new Peek message would end the kept Peek")
+    end)
+    system.get_time, config.transitions = get_time, transitions
+    if not ok then error(err, 0) end
+  end)
+end)
+
 test.describe("Sidebar search field", function()
   local style = require "core.style"
   test.it("shows the search field only while a query is typed", function()

@@ -431,7 +431,7 @@ function RootPanel:shell_views()
 end
 
 function RootPanel:pane_views()
-  local group = panes().visible_group()
+  local group = panes().shown_group()
   if not group then return {} end
   local result = {}
   for _, pane in ipairs(layout.leaves(group.root)) do
@@ -440,9 +440,9 @@ function RootPanel:pane_views()
   return result
 end
 
----The Pane Status Bars of the visible Pane Group.
+---The Pane Status Bars of the shown Pane Group.
 function RootPanel:pane_status_bars()
-  local group = panes().visible_group()
+  local group = panes().shown_group()
   if not group or not core.status_bar then return {} end
   local result = {}
   for _, pane in ipairs(layout.leaves(group.root)) do
@@ -621,7 +621,7 @@ function RootPanel:update_layout()
   -- The prompt's card floats over the Panes, near the top of the window or of its Pane.
   if prompt and not pane_prompt then prompt:place(x, content_y, w, content_h) end
   self.content_rect = { x = x, y = content_y, w = w, h = content_h }
-  local group = panes().visible_group()
+  local group = panes().shown_group()
   if group then
     layout.update_rects(group.root, self.content_rect)
     -- Each Pane's Status Bar takes the bottom of the Pane; the View gets the rest.
@@ -1158,7 +1158,7 @@ function RootPanel:draw()
   local pane_views = self:pane_views()
   self.above_sidebar = {}
   self:draw_wallpaper(#pane_views > 0)
-  local group = panes().visible_group()
+  local group = panes().shown_group()
   if not core.fuzzy_searcher_active_view and next(covered) then
     for view in pairs(covered) do covered[view] = nil end
   end
