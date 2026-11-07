@@ -424,6 +424,13 @@ function RootPanel:publish_surface_overlay()
     system.set_surface_overlay(core.window, color[1], color[2], color[3], color[4],
       #self.above_sidebar > 0 and self.above_sidebar or nil)
   end
+  -- The shell marks the Peek Pane when its group has other Panes.
+  local pane = panes().peek_pane()
+  if pane and #layout.leaves(pane.group.root) > 1 then
+    system.set_surface_peek(core.window, pane.position.x, pane.position.y, pane.size.x, pane.size.y)
+  else
+    system.set_surface_peek(core.window)
+  end
 end
 
 function RootPanel:shell_views()

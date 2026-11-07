@@ -13,7 +13,7 @@
 #include <string.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 43u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 44u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -302,6 +302,9 @@ typedef struct {
    * areas, such as a modal popup and a warning bar, show above the Sidebar while the overlay is shown. A Sidebar's
    * areas are its popup, such as a menu, which shows above the Project and takes all pointer input. */
   AnvilSurfaceArea raised[ANVIL_SURFACE_RAISED_MAX];
+  /* The Peek Pane in a frame drawn for a Peek, in surface pixels. The shell marks it. Empty when the Peek shows a
+   * whole Project, or a Pane Group with only that Pane. */
+  AnvilSurfaceArea peek;
   char name[ANVIL_SURFACE_NAME_MAX];
 } AnvilSurfaceFrame;
 

@@ -306,6 +306,7 @@ struct ShellWindow {
   int peek_direction;
   ShellPresentation peek_presentation;
   AnvilSurfaceConfigure peek_config;
+  AnvilSurfaceArea peek_pane_area; /* the Peek Pane in peek_presentation's frame; empty for the whole frame */
   /* Peek transitions. fade_last copies each composed Project area; a change fades fade_from out over the new
    * content, with a short drift against the cursor's move. The lens frames the Project area, and the bead joins
    * it to the cursor row. */
@@ -3098,7 +3099,7 @@ static float color_channel(uint32_t c, int shift, float alpha) {
 /* The Peek's layers over the Project area: the dim of a row without content, the fading previous content, the lens
  * and the bead. The lens is an accent frame with a glow that tells the user that the area shows a Peek. The bead
  * joins it to the Sidebar's cursor row, and follows the cursor. */
-static void compose_peek(ShellWindow *window) {
+static void compose_peek(ShellWindow *window, POINT content_at) {
   Uint64 now = SDL_GetTicksNS();
   RECT area = peek_area(window);
   if (area.right <= area.left || area.bottom <= area.top) return;
@@ -3134,9 +3135,31 @@ static void compose_peek(ShellWindow *window) {
   float color[4] = {color_channel(c, 0, a), color_channel(c, 8, a), color_channel(c, 16, a), a};
   float scale = window->scale;
   float frame = SDL_max(1.0f, SDL_floorf(2.0f * scale + 0.5f));
+  /* The lens frames the Peek Pane when the frame names one, and the group's other Panes dim. The bead stays at the
+   * Sidebar's edge, beside the cursor row. */
+  RECT lens_area = area;
+  AnvilSurfaceArea pane = window->peek_pane_area;
+  if (pane.w > 0 && pane.h > 0) {
+    RECT mark = {content_at.x + pane.x, content_at.y + pane.y, content_at.x + pane.x + pane.w,
+                 content_at.y + pane.y + pane.h};
+    if (!IntersectRect(&lens_area, &area, &mark)) lens_area = area;
+  }
+  if (!EqualRect(&lens_area, &area)) {
+    uint32_t back = window->background;
+    float alpha = 0.4f * lens;
+    float dim[4] = {color_channel(back, 0, alpha), color_channel(back, 8, alpha), color_channel(back, 16, alpha),
+                    alpha};
+    RECT around[4] = {{area.left, area.top, area.right, lens_area.top},
+                      {area.left, lens_area.bottom, area.right, area.bottom},
+                      {area.left, lens_area.top, lens_area.left, lens_area.bottom},
+                      {lens_area.right, lens_area.top, area.right, lens_area.bottom}};
+    for (int k = 0; k < 4; k++)
+      if (around[k].right > around[k].left && around[k].bottom > around[k].top)
+        compose_rect(window, NULL, around[k], 0, 0, dim);
+  }
   /* The glow grows in from the edges as the lens appears. */
   float shape[4] = {14.0f * scale, frame, 72.0f * scale * lens, 0.22f};
-  compose_draw(window, COMPOSE_LENS, NULL, area, 0, 0, color, 1.0f, shape);
+  compose_draw(window, COMPOSE_LENS, NULL, lens_area, 0, 0, color, 1.0f, shape);
   float top = window->bead_top, bottom = window->bead_bottom;
   if (bottom - top < 2.0f * scale) return;
   float glow = 6.0f * scale, width = 2.0f * frame;
@@ -3240,7 +3263,7 @@ static void composite_and_present(ShellWindow *window) {
   } else {
     copy_ui(window, (RECT){0, window->controls.bottom, window->sidebar_w, window->buffer_h});
   }
-  compose_peek(window);
+  compose_peek(window, content_at);
   if (overlay_covers_sidebar(window)) {
     uint32_t c = window->overlay;
     float a = (c >> 24) / 255.0f;
@@ -3617,6 +3640,7 @@ static void show_peek(ShellWindow *window, const AnvilSurfacePeek *request) {
   if (window->peek != target) release_peek_target(window);
   window->peek_blank = blank;
   if (blank) {
+    window->peek_pane_area = (AnvilSurfaceArea){0};
     start_peek_fade(window, request->direction);
     window->peek_shown = false;
   } else {
@@ -3647,6 +3671,7 @@ static void handle_peek_frame(ShellWindow *window) {
   AnvilSurfaceFrame frame;
   if (!load_pending_frame(target, &window->peek_presentation, &frame)) return;
   window->peek_config = target->last_config;
+  window->peek_pane_area = frame.peek;
   if (window->peek_waiting) {
     start_peek_fade(window, window->peek_direction);
     window->peek_waiting = window->peek_stalled = false;

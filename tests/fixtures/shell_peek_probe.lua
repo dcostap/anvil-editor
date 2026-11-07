@@ -143,6 +143,23 @@ if path:match("/driver$") then
    assert(not (edge[2] > 130 and edge[1] < 70), "the Peek showed no lens at the Project area's edge")
    assert(count(trace(), "Shell selected loaded Project") == selected, "the Peek selected Project B")
    assert(not trace():find("Shell Sidebar focus: Window=%d+ focused=0"), "the Peek took the keyboard from the Sidebar")
+   -- A Tab row's Peek marks only its Pane: the other Pane of its group dims.
+   local right = wait(function() return load("b-right") end, 10, "Project B did not split")
+   local reached = false
+   for _, key in ipairs {DOWN, DOWN, DOWN, DOWN, UP, UP, UP, UP, UP, UP} do
+    local mark = #trace() + 1
+    press(key)
+    reached = pcall(wait, function()
+     local at = trace():find("Shell Peek: Window=%d+ Project=%d+ Pane=" .. right .. " ", mark)
+     return at and trace():find("Shell Peek shown", at, true)
+    end, .6)
+    if reached then break end
+   end
+   assert(reached, "no cursor row peeked B's right split")
+   coroutine.yield(.5)
+   frame = capture()
+   local other, peeked = frame.pixel(frame.width * .3, frame.height * .5), frame.pixel(frame.width * .75, frame.height * .5)
+   assert(other[2] < peeked[2] * .8, string.format("the Peek did not dim the other Pane (%d against %d)", other[2], peeked[2]))
    save("peeked", true)
    local effects = wait(function() return load("b-effects") end, 10, "Project B did not report its state")
    assert(effects.ok, effects.error)
@@ -200,6 +217,12 @@ elseif path:match("/Replacement$") then
  core.add_background_thread(function()
   local pane_history, recent_panes = require "core.pane_history", require "core.recent_panes"
   local pane = color_pane(GREEN)
+  local View = require "core.view"
+  local SplitView = View:extend()
+  function SplitView:get_name() return "Peek probe split" end
+  function SplitView:draw() renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, GREEN) end
+  local right = assert(require("core.panes").split(pane, "right", {factory = function() return SplitView() end}))
+  save("b-right", tonumber(right.id:match("%d+")))
   local visits, stamp = #pane_history.entries(), recent_panes.focused_at(pane)
   save("b-ready", {pid = tonumber(kernel.GetCurrentProcessId())})
   wait(function() return load("peeked") end, 60)

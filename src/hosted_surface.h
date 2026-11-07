@@ -68,6 +68,8 @@ void anvil_hosted_surface_set_background(SDL_Window *window, uint32_t background
  * shown above the Sidebar. */
 void anvil_hosted_surface_set_overlay(SDL_Window *window, uint32_t overlay, const AnvilSurfaceArea *raised,
                                       int count);
+/* Records the Peek Pane's area in the frame being published; an empty area for none. */
+void anvil_hosted_surface_set_peek_area(SDL_Window *window, AnvilSurfaceArea area);
 /* The left edge of the Project UI inside the full-window surface; zero when not hosted. */
 int anvil_hosted_surface_content_x(void);
 bool anvil_hosted_surface_backdrop(void);

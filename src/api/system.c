@@ -2219,6 +2219,19 @@ static int f_set_surface_overlay(lua_State *L) {
   anvil_hosted_surface_set_overlay(ren->cache.window, overlay, raised, count);
   return 0;
 }
+/* set_surface_peek(window, x, y, w, h) names the Peek Pane's area in the published frame; no area names none. */
+static int f_set_surface_peek(lua_State *L) {
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  AnvilSurfaceArea area = {0};
+  if (!lua_isnoneornil(L, 2)) {
+    area.x = (int32_t)luaL_checknumber(L, 2);
+    area.y = (int32_t)luaL_checknumber(L, 3);
+    area.w = (int32_t)luaL_checknumber(L, 4);
+    area.h = (int32_t)luaL_checknumber(L, 5);
+  }
+  anvil_hosted_surface_set_peek_area(ren->cache.window, area);
+  return 0;
+}
 /* A D3D11 Sidebar surface is drawn on a transparent clear and blended by the shell. */
 static int f_is_surface_transparent(lua_State *L) {
   lua_pushboolean(L, anvil_hosted_surface_sidebar() && anvil_d3d11_enabled());
@@ -3239,6 +3252,7 @@ static const luaL_Reg lib[] = {
   { "get_window_content_x",  f_get_window_content_x },
   { "draws_window_backdrop", f_draws_window_backdrop },
   { "set_surface_overlay",   f_set_surface_overlay },
+  { "set_surface_peek",      f_set_surface_peek },
   { "is_surface_transparent", f_is_surface_transparent },
   { "get_startup_path_arguments", f_get_startup_path_arguments },
   { "hand_off_project",      f_hand_off_project      },

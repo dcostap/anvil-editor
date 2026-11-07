@@ -56,6 +56,7 @@ typedef struct HostedView {
   Uint64 resize_configured_ns; /* when the latest live-resize size arrived; zero once published */
   uint32_t background, overlay;
   AnvilSurfaceArea raised[ANVIL_SURFACE_RAISED_MAX];
+  AnvilSurfaceArea peek_area;
   SharedMemoryFrame memory;
 } HostedView;
 static HostedView first_view = {.last_cursor = -1};
@@ -1496,6 +1497,9 @@ void anvil_hosted_surface_set_overlay(SDL_Window *window, uint32_t overlay, cons
   count = SDL_clamp(count, 0, ANVIL_SURFACE_RAISED_MAX);
   if (count) memcpy(view->raised, raised, (size_t)count * sizeof(*raised));
 }
+void anvil_hosted_surface_set_peek_area(SDL_Window *window, AnvilSurfaceArea area) {
+  if (anvil_hosted_surface_is_window(window)) view->peek_area = area;
+}
 int anvil_hosted_surface_content_x(void) { return hosted.active ? view->config.content_x : 0; }
 bool anvil_hosted_surface_backdrop(void) { return hosted.active && view->config.backdrop; }
 
@@ -1514,6 +1518,7 @@ void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, in
   frame.background = view->background;
   frame.overlay = view->overlay;
   memcpy(frame.raised, view->raised, sizeof(frame.raised));
+  frame.peek = view->peek_area;
   frame.input_seq = anvil_latency_probe_consumed_seq();
   anvil_timing_note("frame-publish", frame.generation, frame.configuration, frame.kind);
   anvil_latency_probe_stage("frame-published");
@@ -1624,6 +1629,7 @@ bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surf
   frame.background = view->background;
   frame.overlay = view->overlay;
   memcpy(frame.raised, view->raised, sizeof(frame.raised));
+  frame.peek = view->peek_area;
   frame.input_seq = anvil_latency_probe_consumed_seq();
   anvil_timing_note("frame-publish", frame.generation, frame.configuration, frame.kind);
   anvil_latency_probe_stage("frame-published");
@@ -1806,6 +1812,7 @@ void anvil_hosted_surface_set_overlay(SDL_Window *window, uint32_t overlay, cons
                                       int count) {
   (void)window; (void)overlay; (void)raised; (void)count;
 }
+void anvil_hosted_surface_set_peek_area(SDL_Window *window, AnvilSurfaceArea area) { (void)window; (void)area; }
 int anvil_hosted_surface_content_x(void) { return 0; }
 bool anvil_hosted_surface_backdrop(void) { return false; }
 bool anvil_hosted_surface_open_project_window(const char *path) { (void)path; return false; }
