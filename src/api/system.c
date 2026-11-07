@@ -817,11 +817,12 @@ static int f_window_focus_diagnostics(lua_State *L) {
   }
 
   snprintf(buf, sizeof(buf),
-    "sdl_flags=0x%x input=%s mouse=%s hidden=%s shown=%s minimized=%s maximized=%s "
+    "window_role=%s sdl_flags=0x%x input=%s mouse=%s hidden=%s shown=%s minimized=%s maximized=%s "
     "hwnd=%p hwnd_thread=%lu hwnd_pid=%lu current_thread=%lu current_pid=%lu "
     "foreground=%p foreground_is_anvil=%s foreground_thread=%lu foreground_pid=%lu foreground_title='%s' foreground_class='%s' "
     "active=%p active_is_anvil=%s active_thread=%lu active_pid=%lu "
-    "focus=%p focus_is_anvil=%s focus_thread=%lu focus_pid=%lu last_error=%lu",
+    "focus=%p focus_is_anvil=%s focus_thread=%lu focus_pid=%lu",
+    anvil_hosted_surface_active() ? "hosted-hidden" : "direct",
     flags,
     (flags & SDL_WINDOW_INPUT_FOCUS) ? "true" : "false",
     (flags & SDL_WINDOW_MOUSE_FOCUS) ? "true" : "false",
@@ -837,8 +838,7 @@ static int f_window_focus_diagnostics(lua_State *L) {
     (void*) active, active == hwnd ? "true" : "false",
     (unsigned long) active_thread, (unsigned long) active_process,
     (void*) focus, focus == hwnd ? "true" : "false",
-    (unsigned long) focus_thread, (unsigned long) focus_process,
-    (unsigned long) GetLastError()
+    (unsigned long) focus_thread, (unsigned long) focus_process
   );
 #else
   snprintf(buf, sizeof(buf),

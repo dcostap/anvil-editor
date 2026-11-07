@@ -689,6 +689,14 @@ static void dispatch_message(HostedMessage *message) {
                         ((AnvilSurfaceInput *)payload)->event.type, view->config.window_id);
       if (((AnvilSurfaceInput *)payload)->configuration == view->config.configuration)
         push_input((AnvilSurfaceInput *)payload, (char *)payload + sizeof(AnvilSurfaceInput));
+      else if (((AnvilSurfaceInput *)payload)->event.type != SDL_EVENT_MOUSE_MOTION)
+        system_input_trace("hosted input rejected reason=configuration received=%llu current=%llu "
+          "window=%u event=%u timestamp_ns=%llu bytes=%u",
+          (unsigned long long)((AnvilSurfaceInput *)payload)->configuration,
+          (unsigned long long)view->config.configuration, view->config.window_id,
+          ((AnvilSurfaceInput *)payload)->event.type,
+          (unsigned long long)((AnvilSurfaceInput *)payload)->event.common.timestamp,
+          ((AnvilSurfaceInput *)payload)->text_len);
       break;
     case ANVIL_SURFACE_MSG_FOCUS:
       SDL_SetAtomicInt(&view->focused, ((AnvilSurfaceInt *)payload)->value != 0);

@@ -333,6 +333,9 @@ struct ShellWindow {
   bool pointer_in_surface;
   bool pointer_in_sidebar; /* the Sidebar surface received motion and needs a leave */
   bool sidebar_focused;
+  /* Cumulative input counts. Native callbacks count only; snapshots run during SDL event handling. */
+  Uint64 native_keys, native_chars, input_keys, input_texts;
+  bool traced_key, traced_text;
   Uint64 sidebar_input_ns;  /* first Sidebar input since its last frame, for the input-to-frame diagnostic */
   bool shown;
   /* DWM does not draw the shown Window until its content is ready. It stays visible to Windows and its Projects. */
@@ -1547,6 +1550,9 @@ static void shell_send(ShellProject *project, uint16_t type, const void *payload
 }
 
 static void shell_send_int(ShellProject *project, uint16_t type, int value) {
+  if (type == ANVIL_SURFACE_MSG_FOCUS)
+    SDL_Log("Shell focus send: Window=%u Project=%u Sidebar=%d connection=%u connected=%d focused=%d",
+            project->window_id, project->id, project->sidebar, project->connection, project->connected, value);
   AnvilSurfaceInt message = { value };
   shell_send(project, type, &message, sizeof(message), NULL, 0);
 }
@@ -2524,6 +2530,35 @@ static void end_selection_hold(ShellWindow *window) {
 
 static bool window_focused(ShellWindow *window) {
   return window->window && (SDL_GetWindowFlags(window->window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+}
+
+static void log_input_state(ShellWindow *window, const char *reason, const SDL_Event *event) {
+  ShellProject *project = window->selected;
+  bool popup = sidebar_popup_shown(window);
+  SDL_Log("Shell input state: reason=%s Window=%u Project=%u connection=%u state=%d connected=%d "
+          "sidebar=%d popup=%d foreground=%d native_focus=%d sdl_focus=%d text_requested=%d text_active=%d "
+          "native_keys=%llu native_chars=%llu sdl_keys=%llu sdl_texts=%llu "
+          "ctrl=%d shift=%d alt=%d sdl_mod=0x%x event=%u event_ns=%llu event_mod=0x%x",
+          reason, window->id, project->id, project->connection, project->state, project->connected,
+          window->sidebar_focused, popup, GetForegroundWindow() == window->hwnd, GetFocus() == window->hwnd,
+          window_focused(window), project->text_active, SDL_TextInputActive(window->window),
+          (unsigned long long)window->native_keys, (unsigned long long)window->native_chars,
+          (unsigned long long)window->input_keys, (unsigned long long)window->input_texts,
+          (GetKeyState(VK_CONTROL) & 0x8000) != 0, (GetKeyState(VK_SHIFT) & 0x8000) != 0,
+          (GetKeyState(VK_MENU) & 0x8000) != 0, SDL_GetModState(), event ? event->type : 0,
+          (unsigned long long)(event ? event->common.timestamp : 0),
+          event && (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) ? event->key.mod : 0);
+}
+
+static void set_text_input(ShellWindow *window, bool active, const char *reason) {
+  bool before = SDL_TextInputActive(window->window);
+  bool ok = active ? SDL_StartTextInput(window->window) : SDL_StopTextInput(window->window);
+  bool after = SDL_TextInputActive(window->window);
+  if (!ok || before != after) {
+    SDL_Log("Shell text input: Window=%u Project=%u reason=%s requested=%d before=%d after=%d ok=%d error=%s",
+            window->id, window->selected->id, reason, active, before, after, ok, ok ? "none" : SDL_GetError());
+    window->traced_key = window->traced_text = false;
+  }
 }
 
 /* GDI draws white coverage on black. This turns a rect of it into the premultiplied colour. */
@@ -3580,7 +3615,7 @@ static void finish_dialog(ShellProject *project, ShellDialog *dialog) {
               result->filter);
       shell_send(project, ANVIL_SURFACE_MSG_DIALOG_RESULT, result, dialog->size, NULL, 0);
       if (project == window->selected && project->text_active)
-        SDL_StartTextInput(window->window);
+        set_text_input(window, true, "dialog-finished");
     }
   }
   free_dialog(dialog);
@@ -4139,17 +4174,22 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     if (message->size != sizeof(AnvilSurfaceTextInput))
       break;
     const AnvilSurfaceTextInput *input = payload;
-    if (input->configuration != project->last_config.configuration)
+    if (input->configuration != project->last_config.configuration) {
+      if (input->active >= 0)
+        SDL_Log("Shell text input rejected: Window=%u Project=%u reason=configuration received=%llu current=%llu",
+                window->id, project->id, (unsigned long long)input->configuration,
+                (unsigned long long)project->last_config.configuration);
       break;
+    }
     if (input->active >= 0) {
       project->text_active = input->active != 0;
       if (project != window->selected || window->sidebar_focused)
         break;
       if (project->text_active)
-        SDL_StartTextInput(window->window);
+        set_text_input(window, true, "project-request");
       else {
         SDL_ClearComposition(window->window);
-        SDL_StopTextInput(window->window);
+        set_text_input(window, false, "project-request");
       }
     } else {
       if (project != window->selected || window->sidebar_focused)
@@ -4605,8 +4645,14 @@ static void send_sidebar_input(ShellWindow *window, const SDL_Event *event) {
  * native menu does, without the Project's keyboard focus. */
 static void route_keyboard(ShellWindow *window, const SDL_Event *event, const char *text) {
   ShellProject *project = window->selected;
-  if (window->sidebar_focused || sidebar_popup_shown(window)) send_sidebar_input(window, event);
-  else if (project->state == SHELL_READY || project->state == SHELL_CLOSING) forward_event(window, event, text);
+  if (window->sidebar_focused || sidebar_popup_shown(window)) {
+    if (!window->sidebar_client || !shell.sidebar_process || !shell.sidebar_process->connected)
+      log_input_state(window, "drop-sidebar-disconnected", event);
+    send_sidebar_input(window, event);
+  } else if (project->state == SHELL_READY || project->state == SHELL_CLOSING) {
+    if (!project->connected) log_input_state(window, "drop-project-disconnected", event);
+    forward_event(window, event, text);
+  } else log_input_state(window, "drop-project-not-ready", event);
 }
 
 /* Alt Navigation sends the replacement keys of an Alt chord. Returns true when it handled the key event. */
@@ -4666,13 +4712,13 @@ static void focus_sidebar(ShellWindow *window, bool focused) {
     shell_send_int(window->selected, ANVIL_SURFACE_MSG_FOCUS, !focused && window_focused(window));
   if (window->sidebar_client && shell.sidebar_process && shell.sidebar_process->connected)
     shell_send_int(window->sidebar_client, ANVIL_SURFACE_MSG_FOCUS, focused);
-  if (focused || window->selected->text_active) SDL_StartTextInput(window->window);
-  else SDL_StopTextInput(window->window);
+  set_text_input(window, focused || window->selected->text_active, "sidebar-focus");
   if (focused) {
     SDL_Rect rect = {8, 8, SDL_max(1, (int)(window->sidebar_full_w / window->scale) - 16), 24};
     SDL_SetTextInputArea(window->window, &rect, 0);
   }
   SDL_Log("Shell Sidebar focus: Window=%u focused=%d", window->id, focused);
+  log_input_state(window, "sidebar-focus", NULL);
 }
 
 static void leave_sidebar(ShellWindow *window) {
@@ -5304,6 +5350,8 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     break;
   case SDL_EVENT_WINDOW_FOCUS_GAINED:
   case SDL_EVENT_WINDOW_FOCUS_LOST:
+    log_input_state(window, event->type == SDL_EVENT_WINDOW_FOCUS_GAINED ? "focus-gained" : "focus-lost", event);
+    window->traced_key = window->traced_text = false;
     if (event->type == SDL_EVENT_WINDOW_FOCUS_LOST)
       cancel_input(window);
     else {
@@ -5332,10 +5380,22 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     break;
   case SDL_EVENT_KEY_DOWN:
   case SDL_EVENT_KEY_UP:
+    if (event->type == SDL_EVENT_KEY_DOWN) {
+      window->input_keys++;
+      if (!window->traced_key) {
+        log_input_state(window, "first-key", event);
+        window->traced_key = true;
+      }
+    }
     anvil_latency_probe_note_event(event);
     if (!route_alt_navigation(window, event)) route_keyboard(window, event, NULL);
     break;
   case SDL_EVENT_TEXT_INPUT:
+    window->input_texts++;
+    if (!window->traced_text) {
+      log_input_state(window, "first-text", event);
+      window->traced_text = true;
+    }
     route_keyboard(window, event, event->text.text);
     break;
   case SDL_EVENT_TEXT_EDITING:
@@ -5347,6 +5407,10 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
   case SDL_EVENT_MOUSE_BUTTON_DOWN:
   case SDL_EVENT_MOUSE_BUTTON_UP:
     route_button(window, event);
+    if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+      log_input_state(window, "click", event);
+      window->traced_key = window->traced_text = false;
+    }
     break;
   case SDL_EVENT_MOUSE_WHEEL:
     if (sidebar_takes_pointer(window, event->wheel.mouse_x)) {
@@ -5595,6 +5659,14 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
   }
   if (anvil_routing_probe_message(window->window, msg, wparam, lparam)) return 0;
   switch (msg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+      window->native_keys++;
+      break;
+    case WM_CHAR:
+    case WM_SYSCHAR:
+      window->native_chars++;
+      break;
     case WM_NCDESTROY:
       RemovePropW(hwnd, L"AnvilShellWindow");
       break;
@@ -6230,7 +6302,7 @@ static bool start_project(ShellProject *project, int argc, char **argv) {
       project->writer || project->pipe.handle) {
     if (project == window->selected) {
       cancel_input(window);
-      SDL_StopTextInput(window->window);
+      set_text_input(window, false, "project-restart");
     }
     project->text_active = false;
     project->connected = false;
@@ -6363,7 +6435,7 @@ static void select_project(ShellProject *project, bool keep_sidebar_focus) {
   if (previous->connected)
     shell_send_int(previous, ANVIL_SURFACE_MSG_FOCUS, 0);
   SDL_ClearComposition(window->window);
-  SDL_StopTextInput(window->window);
+  set_text_input(window, false, "project-selection");
   set_surface_busy(window, &window->project_presentation, false);
   SAFE_RELEASE(window->project_presentation.shared_mutex);
   SAFE_RELEASE(window->project_presentation.shared);
@@ -6397,7 +6469,7 @@ static void select_project(ShellProject *project, bool keep_sidebar_focus) {
         (anvil_latency_probe_enabled() || (SDL_GetWindowFlags(window->window) & SDL_WINDOW_INPUT_FOCUS) != 0));
   if ((window->sidebar_focused || project->text_active) && !IsIconic(window->hwnd) &&
       (SDL_GetWindowFlags(window->window) & SDL_WINDOW_INPUT_FOCUS))
-    SDL_StartTextInput(window->window);
+    set_text_input(window, true, "project-selection");
   apply_cursor(window->pointer_in_sidebar || window->sidebar_buttons ?
                window->sidebar_client->child_cursor : project->child_cursor);
   present_deferred_dialogs(project);

@@ -65,6 +65,12 @@ static void trace_input_event(const SDL_Event *event, const char *stage, int dep
       (unsigned long long)event->key.timestamp, event->key.windowID, event->key.which,
       (unsigned)event->key.scancode, (unsigned)event->key.key, event->key.mod,
       event->key.repeat, depth);
+  } else if (event->type == SDL_EVENT_TEXT_INPUT || event->type == SDL_EVENT_TEXT_EDITING) {
+    const char *text = event->type == SDL_EVENT_TEXT_INPUT ? event->text.text : event->edit.text;
+    system_input_trace("sdl stage=%s event=%s timestamp_ns=%llu window=%u bytes=%llu queue=%d",
+      stage, event->type == SDL_EVENT_TEXT_INPUT ? "textinput" : "textediting",
+      (unsigned long long)event->common.timestamp, event->text.windowID,
+      (unsigned long long)(text ? SDL_strlen(text) : 0), depth);
   } else if (event->type == SDL_EVENT_WINDOW_FOCUS_GAINED || event->type == SDL_EVENT_WINDOW_FOCUS_LOST) {
     system_input_trace("sdl stage=%s event=%s timestamp_ns=%llu window=%u queue=%d",
       stage, event->type == SDL_EVENT_WINDOW_FOCUS_GAINED ? "focusgained" : "focuslost",

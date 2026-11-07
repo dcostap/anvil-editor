@@ -537,6 +537,19 @@ int main(int test_argc, char **test_argv) {
     }
   }
   CHECK(text_count == 4);
+  /* Diagnostics explain rejected input without copying its text into the log. */
+  bool rejected_input = false, queued_text = false, polled_text = false;
+  char trace[SYSTEM_INPUT_TRACE_LINE_SIZE];
+  while (system_input_trace_read(trace)) {
+    CHECK(!strstr(trace, "first\r\n") && !strstr(trace, "中λ🙂") && !strstr(trace, "stale"));
+    if (strstr(trace, "hosted input rejected") && strstr(trace, "reason=configuration") &&
+        strstr(trace, "received=7 current=8")) rejected_input = true;
+    if (strstr(trace, "event=textinput") && strstr(trace, "bytes=9")) {
+      if (strstr(trace, "stage=queued")) queued_text = true;
+      if (strstr(trace, "stage=polled")) polled_text = true;
+    }
+  }
+  CHECK(rejected_input && queued_text && polled_text);
   CHECK(SDL_GetAtomicInt(&pane_checked) == 1 && pane_delivered);
   CHECK(display_changes == 1 && display_rate == 60);
   CHECK(anvil_hosted_surface_display_scale() == 1.5f);
