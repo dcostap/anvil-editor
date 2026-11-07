@@ -359,6 +359,20 @@ test.describe("Autosave save failures", function()
     test.not_ok(nag.visible)
   end)
 
+  test.it("does not autosave a binary Buffer", function(context)
+    test.ok(canvas.new(64, 64, { 40, 100, 180, 255 }, true):save_image(context.path))
+    local bytes = read_file(context.path)
+    local buffer = Buffer(context.path, context.path, false)
+    test.ok(buffer.binary, "expected Anvil to read the image as binary")
+    context.buffer = buffer
+    context.view = Editor(buffer)
+    buffer:insert(1, 1, "x")
+
+    test.equal(autosave_fast.save_all_dirty("binary"), 0)
+    test.equal(read_file(context.path), bytes)
+    test.ok(context.view:get_name():find("*", 1, true), "expected a visible unsaved mark")
+  end)
+
   test.it("does not reopen a dismissed conflict during later Autosave attempts", function(context)
     local buffer = Buffer(context.path, context.path, false)
     context.buffer = buffer

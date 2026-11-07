@@ -79,6 +79,12 @@ test.describe("Binary file open", function()
     test.equal(panes.active().current_view.buffer.abs_filename, system.absolute_path(path))
   end)
 
+  test.it("does not open a missing image as a new text file", function()
+    local path = dir .. PATHSEP .. "missing.png"
+    test.not_ok(core.open_file(path))
+    test.equal(panes.count(), 0)
+  end)
+
   test.it("opens UTF-16 text without asking", function()
     local path = dir .. PATHSEP .. "notes.txt"
     write_file(path, "\255\254h\0i\0\n\0")

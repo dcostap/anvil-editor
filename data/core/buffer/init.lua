@@ -570,6 +570,7 @@ function Buffer:reload()
   if fs.machine_file(self.abs_filename) then return reload_from_machine(self) end
   if self:is_loading() or self.load_error or self.binary then
     self:load(self.abs_filename)
+    self.new_file = false
     self:clean()
     sanitize_registered_selection_states(self)
     return
@@ -583,6 +584,8 @@ function Buffer:reload()
     self.crlf = crlf
     core.log_quiet("Reloaded %s as %d edits", self:get_name(), #tx.edits)
   end
+  -- The text now comes from the file, so a new-file Buffer has a file now.
+  self.new_file = false
   self:clean()
 end
 

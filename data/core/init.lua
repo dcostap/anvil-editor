@@ -2225,6 +2225,13 @@ function core.open_file(filename, opts)
     file_open_fail("directory")
     return nil, "cannot open a directory as a file"
   end
+  -- A new image cannot start as text. Opening the path before its file exists is an error.
+  if not info and ImageView.is_supported(abs_filename) then
+    core.error("Image file not found: %s", abs_filename)
+    file_open_stage_end(total_stage)
+    file_open_fail("missing_image")
+    return nil, "image file not found"
+  end
   if info and ImageView.is_supported(abs_filename) then
     core.log_quiet("Opening image in Image View: %s", abs_filename)
     local view = core.open_image(abs_filename, opts)

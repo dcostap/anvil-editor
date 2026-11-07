@@ -394,10 +394,12 @@ local function show_conflict_prompt(buffer)
   )
 end
 
+-- A binary Buffer does not keep its bytes exactly, so only an explicit save writes it.
 local function should_autosave_buffer(buffer)
   return autosave_fast.enabled
     and buffer
     and buffer.filename
+    and not buffer.binary
     and not has_invalid_save_path(buffer)
     and not is_protected_buffer(buffer)
     and buffer.is_dirty
@@ -409,6 +411,7 @@ local function should_hide_dirty_marker(buffer)
     and autosave_fast.hide_dirty_markers ~= false
     and buffer
     and buffer.filename
+    and not buffer.binary
     and not has_invalid_save_path(buffer)
     and not is_protected_buffer(buffer)
     and not save_failures[buffer]

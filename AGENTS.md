@@ -894,6 +894,8 @@ Run `ui/markdown_heading_outline.lua` after changes. Check the `markdown-heading
 `core.open_file` asks how to open a binary file: with the default app, as text, or not at all. It returns `false` while the dialog asks.
 `common.is_binary` uses Git's rule: a NUL byte in the first 8000 bytes. Text with a UTF-16 or UTF-32 BOM is not binary.
 The File Search preview uses the same rule. `opts.as_text` skips the dialog.
+A binary Buffer does not keep its bytes exactly, so Autosave does not save it. Only an explicit save writes it.
+`core.open_file` refuses a missing image path. A new image cannot start as text.
 Run `ui/binary_file_open.lua` after changes.
 
 ## Table images

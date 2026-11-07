@@ -123,6 +123,18 @@ test.describe("Reload from disk", function()
     test.ok(buffer:is_dirty())
   end)
 
+  test.it("leaves a new-file Buffer clean when its file appeared before the reload", function(context)
+    local view = assert(core.open_file(context.path, { placement = "new" }))
+    local buffer = view.buffer
+    test.ok(buffer:is_dirty())
+
+    write_file(context.path, "from disk\n")
+    buffer:reload()
+
+    test.equal(buffer.lines[1], "from disk\n")
+    test.not_ok(buffer:is_dirty())
+  end)
+
   test.it("tells the user when undo or redo applies a reload", function(context)
     local _, buffer = open(context, "one\n")
     write_file(context.path, "one\ntwo\n")
