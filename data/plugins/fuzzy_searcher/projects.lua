@@ -85,9 +85,41 @@ local function chip_name(project, max_width, font)
   return bold, tab.fit(bold, look.name(project), max_width - font:get_height() - style.padding.x / 2)
 end
 
-function projects.chip_width(project, max_width)
+-- The query's chip ends with a chevron, as a shell prompt does, so the typed text after it stands apart.
+local function chevron_width()
+  return math.floor(style.font:get_height() * 0.36 + 0.5)
+end
+
+function projects.query_chip_width(project, max_width)
   local bold, name = chip_name(project, max_width, style.font)
-  return style.font:get_height() + style.padding.x / 2 + bold:get_width(name)
+  return style.font:get_height() + style.padding.x / 2 + bold:get_width(name) + style.padding.x * 0.75
+    + chevron_width()
+end
+
+-- The middle of a capital and the baseline of text that `font` draws at `y`.
+local function cap_line(font, y)
+  local top, bottom = font:get_ink_extent("H")
+  if not top then return y + font:get_height() / 2, y + font:get_height() * 0.8 end
+  return y + (top + bottom) / 2, y + bottom, bottom - top
+end
+
+-- Draws the query's chip on the baseline of the query text, which `text_font` draws at `text_y`. The query and
+-- the chip use different fonts, so centring their line boxes would not put their letters on one line.
+function projects.draw_query_chip(project, x, text_y, text_font, max_width)
+  local bold, name = chip_name(project, max_width, style.font)
+  local size = style.font:get_height()
+  local middle, baseline, cap = cap_line(text_font, text_y)
+  local _, bold_baseline = cap_line(bold, 0)
+  look.draw_badge(project, x, math.floor(middle - size / 2 + 0.5), size, bold, style.card)
+  local name_x = x + size + style.padding.x / 2
+  renderer.draw_text(bold, name, name_x, math.floor(baseline - bold_baseline + 0.5), style.text)
+  local cx = name_x + bold:get_width(name) + style.padding.x * 0.75
+  local w, h = chevron_width(), (cap or size * 0.7) * 0.55
+  local t = math.max(1.5 * SCALE, w * 0.4)
+  renderer.draw_poly({
+    {cx, middle - h}, {cx + t, middle - h}, {cx + w, middle},
+    {cx + t, middle + h}, {cx, middle + h}, {cx + w - t, middle},
+  }, style.dim)
 end
 
 function projects.draw_chip(project, x, y, max_width, font, color)

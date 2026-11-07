@@ -3969,7 +3969,7 @@ function FSView:layout()
   -- searches. The status takes the right end of its row.
   local pad = style.padding.x
   local project = self:chip_project()
-  local chip_w = project and fuzzy_searcher.projects.chip_width(project, self.size.x * 0.25) + pad or 0
+  local chip_w = project and fuzzy_searcher.projects.query_chip_width(project, self.size.x * 0.25) + pad or 0
   local input_x = pad + chip_w - style.padding.x / 2
   local status_w = self:status_layout(style.view_text_font, self.size.x * 0.45).width
   self.input:set_position(input_x, fuzzy_searcher.card_inset())
@@ -8820,8 +8820,10 @@ function FSView:draw_open_content()
 
   local project = self:chip_project()
   if project then
-    fuzzy_searcher.projects.draw_chip(project, x + pad,
-      self.input.position.y + math.floor((self.input.size.y - style.font:get_height()) / 2), self.size.x * 0.25)
+    local textview = self.input.textview
+    local _, line_y = textview:get_line_screen_position(1)
+    fuzzy_searcher.projects.draw_query_chip(project, x + pad, line_y + textview:get_line_text_y_offset(),
+      textview:get_font(), self.size.x * 0.25)
   end
   local status_font = style.view_text_font
   self:draw_status(status_font, x + w - pad,
