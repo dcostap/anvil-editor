@@ -469,7 +469,7 @@ end
 
 -- The Peek of the cursor row: a Project id and a Pane number. Zero shows the Selected Project as it is.
 function SidebarView:peek_target()
-  if not self.focused or self.hours or self.drag or self.reorder then return 0, 0 end
+  if not config.sidebar_peek or not self.focused or self.hours or self.drag or self.reorder then return 0, 0 end
   local row = self:get_cursor()
   local project = row and row.project
   if not project then return 0, 0 end

@@ -1551,6 +1551,9 @@ test.describe("Sidebar Snoozes", function()
 end)
 
 test.describe("Sidebar Peek", function()
+  local config, enabled = require "core.config"
+  test.before_each(function() enabled = config.sidebar_peek; config.sidebar_peek = true end)
+  test.after_each(function() config.sidebar_peek = enabled end)
   local function sidebar()
     local actions, action = recorder()
     local view = SidebarView(action, {["group:week"]=false})

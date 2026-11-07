@@ -461,6 +461,9 @@ function core.init()
   local ok, settings = pcall(dofile, USERDIR .. "/user_settings.lua")
   local saved_config = ok and type(settings) == "table" and settings.config
   local custom = type(saved_config) == "table" and saved_config.custom_keybindings
+  if type(saved_config) == "table" and type(saved_config.sidebar_peek) == "boolean" then
+    require("core.config").sidebar_peek = saved_config.sidebar_peek
+  end
   -- Keep the editor's bindings after the Sidebar replaces the active keymap below.
   local editor_bindings = keymap.reverse_map
   local function bindings_for(name)

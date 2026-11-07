@@ -284,6 +284,9 @@ def main() -> int:
                     if action in ("theme-global", "reveal"):
                         (case_dir / "user/user_settings.lua").write_text(
                             'return {["config"]={["theme"]="light"}}', encoding="utf-8")
+                    if action == "peek":
+                        (case_dir / "user/user_settings.lua").write_text(
+                            'return {["config"]={["sidebar_peek"]=true}}', encoding="utf-8")
                     if action == "theme-empty":
                         (case_dir / "user/user_settings.lua").write_text(
                             'return {["config"]={["theme"]="light",["wallpaper"]="none"}}', encoding="utf-8")

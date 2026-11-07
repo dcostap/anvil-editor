@@ -217,6 +217,12 @@ config.line_endings = PLATFORM == "Windows" and "crlf" or "lf"
 ---@type number
 config.line_limit = 80
 
+---Shows the Sidebar cursor row's content in the Project area while the Project Sidebar has the keyboard (Peek).
+---
+---Defaults to false.
+---@type boolean
+config.sidebar_peek = false
+
 ---Enables/disables all transitions.
 ---
 ---Defaults to true.
