@@ -3,12 +3,13 @@ local common = require "core.common"
 local command = require "core.command"
 local keymap = require "core.keymap"
 local style = require "core.style"
-local card = require "core.card"
+local look = require "core.project_look"
 local ui = require "core.ui"
 
--- The Project Launcher: the tiles that the Project area shows while no Pane Group shows. Each tile opens one of
--- the Project's main Views in a new Pane, or its folder in File Explorer. The Root Panel draws it over the
--- wallpaper and sends it pointer and keyboard input. Keys use the bindings of Dialogs and of caret moves.
+-- The Project Launcher: what the Project area shows while no Pane Group shows. It shows the Project's badge and name,
+-- and a row of buttons. Each button opens one of the Project's main Views in a new Pane, or its folder in File
+-- Explorer. The Root Panel draws it over the wallpaper and sends it pointer and keyboard input. Keys use the
+-- bindings of Dialogs and of caret moves.
 local launcher = {}
 
 local function open_folder()
@@ -16,8 +17,8 @@ local function open_folder()
   if not common.open_in_system(path) then core.error("Could not open %s in File Explorer", path) end
 end
 
--- `folder` tiles act on the Project's folder, so the Scratch Project, whose folder holds no work, has none.
--- `local_folder` tiles need a folder on this PC.
+-- `folder` buttons act on the Project's folder, so the Scratch Project, whose folder holds no work, has none.
+-- `local_folder` buttons need a folder on this PC.
 local ITEMS = {
   { label = "File Tree", icon = "\u{F0645}", command = "filetree:open_at_project_root", folder = true },
   { label = "Terminal", icon = "\u{F018D}", command = "terminal:open_at_project_root" },
@@ -34,7 +35,7 @@ function launcher.shown()
   return core.root_project() ~= nil and panes().shown_group() == nil
 end
 
--- The tiles that this Project shows, in order.
+-- The buttons that this Project shows, in order.
 local function project_items()
   local project = core.root_project()
   local path = project and project.path
@@ -55,40 +56,60 @@ local function metrics()
   local font = ui.font()
   return {
     font = font,
-    icon_size = math.floor(30 * SCALE + 0.5),
-    pad_x = math.floor(18 * SCALE + 0.5),
-    pad_top = math.floor(20 * SCALE + 0.5),
-    pad_bottom = math.floor(16 * SCALE + 0.5),
-    label_gap = math.floor(12 * SCALE + 0.5),
-    gap = math.floor(14 * SCALE + 0.5),
-    min_w = math.floor(116 * SCALE + 0.5),
-    radius = math.floor(10 * SCALE + 0.5),
+    title_font = style.get_scaled_font(style.prose_heading_font, math.floor(30 * SCALE + 0.5)),
+    badge_font = style.get_scaled_font(style.view_text_font, math.floor(20 * SCALE + 0.5), "bold"),
+    badge = math.floor(44 * SCALE + 0.5),
+    title_gap = math.floor(16 * SCALE + 0.5),
+    heading_gap = math.floor(28 * SCALE + 0.5),
+    button_h = math.floor(36 * SCALE + 0.5),
+    pad_x = math.floor(14 * SCALE + 0.5),
+    icon_size = math.floor(17 * SCALE + 0.5),
+    icon_gap = math.floor(8 * SCALE + 0.5),
+    gap = math.floor(6 * SCALE + 0.5),
+    radius = math.floor(8 * SCALE + 0.5),
   }
 end
 
--- Places the tiles in the middle of the content area. They wrap to more rows when the area is narrow.
+-- The Project as the Project Sidebar shows it, for its badge and name.
+local function project_record()
+  local path = core.root_project().path
+  return { path = path, scratch = core.is_scratch_project(path), state = "ready", exists = true }
+end
+
+-- Places the heading and the buttons in the middle of the content area, a little above its center. The buttons wrap
+-- to more rows when the area is narrow. Returns the buttons, the number in the first row, and the heading's top.
 local function layout(m)
   local items = project_items()
   local rect = core.root_panel.content_rect
-  local w = m.min_w
-  for _, item in ipairs(items) do w = math.max(w, m.font:get_width(item.label) + 2 * m.pad_x) end
-  local h = m.pad_top + m.icon_size + m.label_gap + m.font:get_height() + m.pad_bottom
-  local cols = common.clamp(math.floor((rect.w - 2 * m.gap + m.gap) / (w + m.gap)), 1, math.max(1, #items))
-  local rows = math.ceil(#items / cols)
-  local total_h = rows * h + (rows - 1) * m.gap
-  -- Slightly above the middle looks centered.
-  local top = math.floor(rect.y + math.max(0, rect.h - total_h) * 0.45)
-  for index, item in ipairs(items) do
-    local row, col = math.floor((index - 1) / cols), (index - 1) % cols
-    local in_row = math.min(cols, #items - row * cols)
-    local left = rect.x + (rect.w - (in_row * w + (in_row - 1) * m.gap)) / 2
-    item.x, item.y = math.floor(left + col * (w + m.gap)), top + row * (h + m.gap)
-    item.w, item.h = w, h
+  local rows, row = {}, nil
+  local max_w = math.max(1, rect.w - 2 * m.pad_x)
+  for _, item in ipairs(items) do
+    item.w = m.font:get_width(item.label) + m.icon_size + m.icon_gap + 2 * m.pad_x
+    item.h = m.button_h
+    if not row or row.w + m.gap + item.w > max_w then
+      row = { w = item.w }
+      rows[#rows + 1] = row
+    else
+      row.w = row.w + m.gap + item.w
+    end
+    row[#row + 1] = item
   end
-  return items, cols
+  local buttons_h = #rows * m.button_h + math.max(0, #rows - 1) * m.gap
+  local total_h = m.badge + m.heading_gap + buttons_h
+  local top = math.floor(rect.y + math.max(0, rect.h - total_h) * 0.45)
+  local y = top + m.badge + m.heading_gap
+  for _, r in ipairs(rows) do
+    local x = math.floor(rect.x + (rect.w - r.w) / 2)
+    for _, item in ipairs(r) do
+      item.x, item.y = x, y
+      x = x + item.w + m.gap
+    end
+    y = y + m.button_h + m.gap
+  end
+  return items, rows[1] and #rows[1] or 1, top
 end
 
----The tiles that this Project shows, in order. Each has its `label` and its rect `x`, `y`, `w`, `h`.
+---The buttons that this Project shows, in order. Each has its `label` and its rect `x`, `y`, `w`, `h`.
 function launcher.items()
   return (layout(metrics()))
 end
@@ -119,31 +140,40 @@ end
 
 function launcher.draw()
   local m = metrics()
-  local items = layout(m)
+  local items, _, top = layout(m)
+  local rect = core.root_panel.content_rect
+  local project = project_record()
+  local name = ui.fit_text(m.title_font, look.name(project), math.max(0, rect.w - m.badge - m.title_gap))
+  local heading_w = m.badge + m.title_gap + m.title_font:get_width(name)
+  local hx = math.floor(rect.x + (rect.w - heading_w) / 2)
+  look.draw_badge(project, hx, top, m.badge, m.badge_font, style.background)
+  common.draw_text(m.title_font, style.text, name, "left", hx + m.badge + m.title_gap, top, 0, m.badge)
   local focused = has_keyboard()
   for index, item in ipairs(items) do
     local x, y, w, h, r = item.x, item.y, item.w, item.h, m.radius
     local hover = ui.approach(item, "hover_amount", item == state.hovered and 1 or 0, 30)
     local selected = focused and index == state.selected
-    card.draw(x, y, w, h, r)
-    if selected then ui.draw_focus_ring(x, y, w, h, r) end
+    if selected then
+      ui.draw_focus_ring(x, y, w, h, r)
+      renderer.draw_rounded_rect(x, y, w, h, r, style.card)
+    end
     if item == state.pressed and item == state.hovered then
       renderer.draw_rounded_rect(x, y, w, h, r, style.button_pressed)
     elseif hover > 0 then
-      renderer.draw_rounded_rect(x, y, w, h, r, ui.fade(style.button_hover, hover))
+      renderer.draw_rounded_rect(x, y, w, h, r, ui.fade(style.button, hover))
     end
     local color = ui.mix(style.card_text, style.text, selected and 1 or hover)
-    local icon_y = y + m.pad_top
+    local icon_x = x + m.pad_x
+    local cy = y + h / 2
     if item.agent then
       -- The mark fills its square, so it draws smaller than the glyphs, which leave a margin in their cell.
       local size = math.floor(m.icon_size * 0.8)
-      require("core.agent_icons").draw_mark(item.agent, x + (w - size) / 2, icon_y + (m.icon_size - size) / 2, size)
+      require("core.agent_icons").draw_mark(item.agent, icon_x + (m.icon_size - size) / 2, cy - size / 2, size)
     else
-      local font = style.get_scaled_font(style.menu_icon_font, math.floor(style.menu_icon_font:get_size() * 2.2))
-      common.draw_text(font, color, item.icon, "center", x, icon_y, w, m.icon_size)
+      local font = style.get_scaled_font(style.menu_icon_font, math.floor(m.icon_size * 1.7))
+      common.draw_text(font, color, item.icon, "center", icon_x - m.icon_size / 2, y, m.icon_size * 2, h)
     end
-    common.draw_text(m.font, color, item.label, "center", x, icon_y + m.icon_size + m.label_gap, w,
-      m.font:get_height())
+    common.draw_text(m.font, color, item.label, "left", icon_x + m.icon_size + m.icon_gap, y, 0, h)
   end
 end
 
@@ -184,7 +214,7 @@ function launcher.on_mouse_released(button, x, y)
   return true
 end
 
--- Moves the selection by `delta` tiles. Tab wraps; caret moves stop at the ends.
+-- Moves the selection by `delta` buttons. Tab wraps; caret moves stop at the ends.
 local function move(delta, wrap)
   local count = #project_items()
   if count == 0 then return false end

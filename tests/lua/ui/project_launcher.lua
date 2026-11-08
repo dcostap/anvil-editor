@@ -65,7 +65,7 @@ test.describe("Project Launcher", function()
     test.ok(not launcher.shown())
   end)
 
-  test.it("moves its selection with Tab and opens the clicked tile in a new Pane", function(context)
+  test.it("moves its selection with Tab and opens the clicked button in a new Pane", function(context)
     open_project(context.project_path)
     core.on_event("keypressed", "tab", {})
     core.on_event("keypressed", "return", {})
@@ -76,7 +76,7 @@ test.describe("Project Launcher", function()
     test.same(context.ran, { { "terminal:open_at_project_root", "new" }, { "terminal:open_pi", "new" } })
   end)
 
-  test.it("shows no folder tiles in the Scratch Project", function()
+  test.it("shows no folder buttons in the Scratch Project", function()
     local scratch = USERDIR .. PATHSEP .. "scratch"
     test.ok(common.mkdirp(scratch))
     open_project(scratch)

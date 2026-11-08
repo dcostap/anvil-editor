@@ -752,7 +752,7 @@ A named set of colors for Anvil's interface and language text. The chosen Color 
 _Avoid_: Color scheme
 
 **Project Launcher**:
-The tiles that a Project shows in place of its Panes while no Pane Group shows: File Tree, Terminal, Pi and File Explorer. Each tile opens its View in a new Pane, or the Project's folder in File Explorer. A new Project starts with it.
+What a Project shows in place of its Panes while no Pane Group shows: its badge and name, and buttons for File Tree, Terminal, Pi and File Explorer. Each button opens its View in a new Pane, or the Project's folder in File Explorer. A new Project starts with it.
 _Avoid_: start page, welcome screen, empty state
 
 **Wallpaper**:
