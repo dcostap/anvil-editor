@@ -152,17 +152,15 @@ function launcher.draw()
   for index, item in ipairs(items) do
     local x, y, w, h, r = item.x, item.y, item.w, item.h, m.radius
     local hover = ui.approach(item, "hover_amount", item == state.hovered and 1 or 0, 30)
-    local selected = focused and index == state.selected
-    if selected then
-      ui.draw_focus_ring(x, y, w, h, r)
-      renderer.draw_rounded_rect(x, y, w, h, r, style.card)
-    end
+    -- The keyboard selection is a soft accent tint. It fades as it moves, so it stays quiet.
+    local selected = ui.approach(item, "selected_amount", focused and index == state.selected and 1 or 0, 30)
+    if selected > 0 then renderer.draw_rounded_rect(x, y, w, h, r, ui.fade(style.accent, 0.16 * selected)) end
     if item == state.pressed and item == state.hovered then
       renderer.draw_rounded_rect(x, y, w, h, r, style.button_pressed)
     elseif hover > 0 then
       renderer.draw_rounded_rect(x, y, w, h, r, ui.fade(style.button, hover))
     end
-    local color = ui.mix(style.card_text, style.text, selected and 1 or hover)
+    local color = ui.mix(style.card_text, style.text, math.max(selected, hover))
     local icon_x = x + m.pad_x
     local cy = y + h / 2
     if item.agent then
