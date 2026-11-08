@@ -1200,6 +1200,14 @@ local function scenario_is_ready()
     updater.open()
     return false
   end
+  if benchmark.scenario == "project-launcher" then
+    -- The Project Launcher of an empty Project.
+    local panes = require "core.panes"
+    if panes.count() == 0 then return true end
+    config.transitions = false
+    for _, pane in ipairs(panes.ordered()) do panes.close(pane, { force = true }) end
+    return false
+  end
   if benchmark.scenario == "keyboard-map" then
     -- The Keyboard Map on the Alt layer, where Alt Navigation chords show the keys that they type.
     local KeyboardMap = require "plugins.keyboard_map"

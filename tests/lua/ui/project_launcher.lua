@@ -1,0 +1,85 @@
+local core = require "core"
+local common = require "core.common"
+local command = require "core.command"
+local panes = require "core.panes"
+local storage = require "core.storage"
+local launcher = require "core.project_launcher"
+local test = require "core.test"
+require "plugins.workspace"
+
+local function open_project(path)
+  core.set_project(path)
+  local deadline = system.get_time() + 30
+  while not core.workspace_restored and system.get_time() < deadline do coroutine.yield(0.01) end
+  test.ok(core.workspace_restored)
+end
+
+local function labels()
+  local result = {}
+  for _, item in ipairs(launcher.items()) do result[#result + 1] = item.label end
+  return result
+end
+
+test.describe("Project Launcher", function()
+  test.before_each(function(context)
+    panes.reset_for_tests()
+    -- An earlier test's View would take the keys.
+    core.clear_active_view()
+    context.cwd = system.getcwd()
+    context.recent_projects = core.recent_projects
+    context.root = USERDIR .. PATHSEP .. "project-launcher-" .. math.floor(system.get_time() * 1000000)
+    context.project_path = context.root .. PATHSEP .. "project"
+    test.ok(common.mkdirp(context.project_path))
+    storage.clear("ws")
+    -- Terminals start real shells, so these commands record their launch instead.
+    context.ran, context.saved_commands = {}, {}
+    for _, name in ipairs { "terminal:open_at_project_root", "terminal:open_pi" } do
+      context.saved_commands[name] = command.map[name]
+      command.add(nil, { [name] = function()
+        context.ran[#context.ran + 1] = { name, command.get_invocation_context().placement }
+      end })
+    end
+  end)
+
+  test.after_each(function(context)
+    for name, saved in pairs(context.saved_commands) do command.map[name] = saved end
+    panes.reset_for_tests()
+    core.set_project(context.cwd)
+    core.recent_projects = context.recent_projects
+    storage.clear("ws")
+    test.ok(test.remove_tree(context.root, 30))
+  end)
+
+  test.it("shows in a new Project, and Enter opens a focused File Tree at its root", function(context)
+    open_project(context.project_path)
+    test.equal(panes.count(), 0)
+    test.ok(launcher.shown())
+    test.same(labels(), { "File Tree", "Terminal", "Pi", "File Explorer" })
+
+    core.on_event("keypressed", "return", {})
+    test.equal(panes.count(), 1)
+    local view = panes.active().current_view
+    test.equal(view:get_module(), "plugins.filetree")
+    test.equal(core.active_view, view)
+    test.ok(common.path_equals(view:get_state().root, context.project_path))
+    test.ok(not launcher.shown())
+  end)
+
+  test.it("moves its selection with Tab and opens the clicked tile in a new Pane", function(context)
+    open_project(context.project_path)
+    core.on_event("keypressed", "tab", {})
+    core.on_event("keypressed", "return", {})
+    local pi = launcher.items()[3]
+    local x, y = pi.x + pi.w / 2, pi.y + pi.h / 2
+    core.on_event("mousepressed", "left", x, y, 1)
+    core.on_event("mousereleased", "left", x, y)
+    test.same(context.ran, { { "terminal:open_at_project_root", "new" }, { "terminal:open_pi", "new" } })
+  end)
+
+  test.it("shows no folder tiles in the Scratch Project", function()
+    local scratch = USERDIR .. PATHSEP .. "scratch"
+    test.ok(common.mkdirp(scratch))
+    open_project(scratch)
+    test.same(labels(), { "Terminal", "Pi" })
+  end)
+end)

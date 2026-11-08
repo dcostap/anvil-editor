@@ -151,6 +151,7 @@ SCENARIOS["machines-dialog"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["machines-dialog-others"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["update-dialog"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["keyboard-map"] = dict(SCENARIOS["image-viewer"])
+SCENARIOS["project-launcher"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["terminal-images"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["glyph-cache-growth"] = {
     "start_line": 1,

@@ -41,4 +41,10 @@ function agent_icons.draw(app, x, y, row_height, model)
   if mark then renderer.draw_canvas(mark, math.floor(x), top) end
 end
 
+---Draws the mark of `app` as a square of `size` pixels at (x, y).
+function agent_icons.draw_mark(app, x, y, size)
+  local mark = image(app, math.floor(size))
+  if mark then renderer.draw_canvas(mark, math.floor(x), math.floor(y)) end
+end
+
 return agent_icons

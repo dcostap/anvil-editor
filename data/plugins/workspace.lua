@@ -261,27 +261,6 @@ function core.refresh_project_path_consumers(reason)
   return refresh_project_path_consumers(reason)
 end
 
-function core.ensure_initial_filetree_pane()
-  if panes.count() > 0 then return false end
-  local ok, filetree = pcall(require, "plugins.filetree")
-  if not ok or not filetree or not filetree.open then
-    core.log_quiet("Workspace: initial File Tree is unavailable: %s", tostring(filetree))
-    return false
-  end
-  local view, err = filetree.open(nil, {
-    placement = "new",
-    focus = true,
-    reason = "initial-project",
-  })
-  if not view then
-    core.log_quiet("Workspace: initial File Tree failed: %s", tostring(err))
-    return false
-  end
-  core.log_quiet("Workspace: opened initial File Tree Pane for empty Project state")
-  return true
-end
-
-
 -- A save during use writes on a worker, so a slow disk cannot stop the UI. The save thread
 -- waits for it. A save at a Project switch or at exit writes at once, after that write ends.
 local background_write
@@ -450,7 +429,6 @@ local function load_workspace()
         diffview.load_workspace_state(nil)
         language_mode.load_workspace_state(nil)
         project_paths.load_workspace_state(nil)
-        core.ensure_initial_filetree_pane()
         core.log_quiet("Workspace: skipped restore for an empty Anvil window")
         return
       end
@@ -479,7 +457,6 @@ local function load_workspace()
         panes.restore_workspace_state(workspace.pane_state, load_view)
       end
       untitled_recovery.restore_project(machine_project.root_key(core.root_project().path))
-      core.ensure_initial_filetree_pane()
     end
 
     restore_workspace_state()

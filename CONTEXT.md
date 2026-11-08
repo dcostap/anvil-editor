@@ -751,6 +751,10 @@ _Avoid_: popup, modal, detached panel
 A named set of colors for Anvil's interface and language text. The chosen Color Theme is global: every Project and the Project Sidebar show the same one, and a change in one Project reaches all of them.
 _Avoid_: Color scheme
 
+**Project Launcher**:
+The tiles that a Project shows in place of its Panes while no Pane Group shows: File Tree, Terminal, Pi and File Explorer. Each tile opens its View in a new Pane, or the Project's folder in File Explorer. A new Project starts with it.
+_Avoid_: start page, welcome screen, empty state
+
 **Wallpaper**:
 An optional image behind the content of an Anvil Window. None shows the window without an image.
 _Avoid_: background image

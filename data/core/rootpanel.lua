@@ -19,6 +19,10 @@ local function panes()
   return core.panes or require "core.panes"
 end
 
+local function launcher()
+  return require "core.project_launcher"
+end
+
 local function file_open_begin(path, source)
   local perf = package.loaded["core.perf"]
   return perf and perf.file_open_begin and perf.file_open_begin(path, source)
@@ -824,6 +828,7 @@ function RootPanel:on_mouse_pressed(button, x, y, clicks)
       return true
     end
   end
+  if not view and launcher().on_mouse_pressed(button, x, y) then return true end
   self.overlapping_view = view
   local pane = panes().pane_for_view(view) or (view and view.status_bar_pane)
   -- A click on the overlay beside the UI, such as over a hosted Sidebar, dismisses like one over a Pane.
@@ -843,6 +848,7 @@ function RootPanel:on_mouse_released(button, x, y, ...)
     self.dragged_divider = nil
     return true
   end
+  if launcher().on_mouse_released(button, x, y) then return true end
   local grabbed_view = self.grab and self.grab.view
   local view = grabbed_view or self:view_at(x, y)
   local result = call_view(view, "on_mouse_released", button, x, y, ...)
@@ -875,6 +881,11 @@ function RootPanel:on_mouse_moved(x, y, dx, dy)
   end
   local result = call_view(view, "on_mouse_moved", x, y, dx, dy)
   if view then request_view_cursor(view, x, y) end
+  if not view and launcher().shown() then
+    launcher().on_mouse_moved(x, y)
+  else
+    launcher().on_mouse_left()
+  end
   local group = panes().visible_group()
   local divider = group and layout.divider_at(
     group.root, x, y, DIVIDER_TOLERANCE * SCALE)
@@ -890,6 +901,7 @@ function RootPanel:on_mouse_left()
   -- Keep layout updates from restoring hover at the last position inside the surface.
   self.mouse.x, self.mouse.y = -math.huge, -math.huge
   if core.title_bar and core.title_bar ~= view then core.title_bar:on_mouse_left() end
+  launcher().on_mouse_left()
   return call_view(view, "on_mouse_left")
 end
 
@@ -910,7 +922,9 @@ function RootPanel:on_text_input(...)
 end
 
 function RootPanel:on_key_pressed(...)
-  return call_view(self:keyboard_target(), "on_key_pressed", ...)
+  local target = self:keyboard_target()
+  if not target then return launcher().on_key_pressed(...) end
+  return call_view(target, "on_key_pressed", ...)
 end
 
 function RootPanel:on_key_released(...)
@@ -1166,6 +1180,7 @@ function RootPanel:draw()
   self.above_sidebar = {}
   self:draw_wallpaper(#pane_views > 0)
   local group = panes().shown_group()
+  if not group and launcher().shown() then launcher().draw() end
   if not core.fuzzy_searcher_active_view and next(covered) then
     for view in pairs(covered) do covered[view] = nil end
   end

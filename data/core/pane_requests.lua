@@ -184,10 +184,8 @@ end
 
 local function execute(request, x, y)
   local action = request.action
-  if action == "open_project" then
-    core.ensure_initial_filetree_pane()
-    return true
-  end
+  -- The Sidebar selects an empty Project with this request, so the Project takes the keyboard for its Launcher.
+  if action == "open_project" then return true end
   if action == "drag" then
     -- A Tab of another Project has the same Pane IDs, so the source Project must be this one. The Sidebar names a
     -- Project on a Machine by its key.
