@@ -25,6 +25,29 @@ local function click_result(picker, index, modifier)
   if modifier then keymap.modkeys[modifier] = false end
 end
 
+local function row_point(picker, index)
+  local metrics = picker:list_metrics()
+  return metrics.x + 20, metrics.results_top + (index - picker.viewport_offset + 0.5) * metrics.lh
+end
+
+local function drag_result(picker, index)
+  local x, y = row_point(picker, index)
+  picker:on_mouse_pressed("left", x, y, 1)
+  picker:on_mouse_moved(x + 1, y + 1, 1, 1)
+  local before = #picker.test_drags
+  picker:on_mouse_moved(x + 40 * SCALE, y + 40 * SCALE, 40 * SCALE, 40 * SCALE)
+  picker:on_mouse_released("left", x + 40 * SCALE, y + 40 * SCALE)
+  return #picker.test_drags > before and picker.test_drags[#picker.test_drags] or nil
+end
+
+local function file_results(count)
+  local list = {}
+  for i = 1, count do
+    list[i] = { kind = "file", file = "drag-" .. i .. ".txt", abs_path = common.normalize_path(USERDIR .. PATHSEP .. "drag-" .. i .. ".txt") }
+  end
+  return list
+end
+
 test.describe("Fuzzy Searcher result selection", function()
   test.before_each(function(context)
     context.transitions = config.transitions
@@ -34,6 +57,7 @@ test.describe("Fuzzy Searcher result selection", function()
       keymap.modkeys[key] = false
     end
     config.transitions = false
+    context.drag_files = system.drag_files
   end)
 
   test.after_each(function(context)
@@ -41,6 +65,7 @@ test.describe("Fuzzy Searcher result selection", function()
     for key in pairs(keymap.modkeys) do keymap.modkeys[key] = nil end
     for key, value in pairs(context.modkeys) do keymap.modkeys[key] = value end
     config.transitions = context.transitions
+    system.drag_files = context.drag_files
     if context.file then
       for _, pane in ipairs(panes.ordered()) do
         for _, view in ipairs(panes.views(pane)) do
@@ -72,6 +97,47 @@ test.describe("Fuzzy Searcher result selection", function()
     test.ok(command.perform("fuzzy:toggle_result_marks"))
     command.perform("fuzzy:next")
     test.same(picker:get_selected_result_indices(), { 2, 5, 6 })
+  end)
+
+  test.it("drags the pressed file row out of the editor after the pointer moves", function()
+    local picker = fuzzy.open_static_results("Results", file_results(3))
+    picker.test_drags = {}
+    system.drag_files = function(window, paths)
+      test.equal(window, core.window)
+      picker.test_drags[#picker.test_drags + 1] = paths
+      return true
+    end
+
+    local x, y = row_point(picker, 2)
+    picker:on_mouse_pressed("left", x, y, 1)
+    picker:on_mouse_moved(x + 1, y, 1, 0)
+    picker:on_mouse_released("left", x + 1, y)
+    test.same(picker.test_drags, {}, "a click with a small move does not drag")
+
+    test.same(drag_result(picker, 3), { file_results(3)[3].abs_path })
+    test.same(picker:get_selected_result_indices(), { 3 })
+    test.ok(picker:is_visible(), "the picker stays open after a drag")
+  end)
+
+  test.it("drags all selected rows when the drag starts on one of them", function()
+    local picker = fuzzy.open_static_results("Results", file_results(4))
+    picker.test_drags = {}
+    system.drag_files = function(_, paths)
+      picker.test_drags[#picker.test_drags + 1] = paths
+      return true
+    end
+    click_result(picker, 1)
+    click_result(picker, 3, "ctrl")
+
+    local rows = file_results(4)
+    test.same(drag_result(picker, 3), { rows[1].abs_path, rows[3].abs_path })
+    test.same(picker:get_selected_result_indices(), { 1, 3 })
+    test.same(drag_result(picker, 2), { rows[2].abs_path }, "a drag from another row takes only that row")
+
+    click_result(picker, 1, "ctrl")
+    click_result(picker, 4, "ctrl")
+    click_result(picker, 4)
+    test.same(picker:get_selected_result_indices(), { 4 }, "a click on a selected row selects only it")
   end)
 
   test.it("scrolls the list without moving focus and returns to focus on keyboard movement", function()

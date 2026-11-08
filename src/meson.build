@@ -55,6 +55,7 @@ anvil_sources = [
     'window_backend.c',
     'input_latency_probe.c',
     'anvil_shell.c',
+    'file_drag.c',
     'alt_navigation.c',
     'shell_launch.c',
     'shell_state.c',
@@ -223,6 +224,7 @@ if host_machine.system() == 'windows'
     anvil_deps += cc.find_library('dxguid', required: true)
     anvil_deps += cc.find_library('shell32', required: true)
     anvil_deps += cc.find_library('ole32', required: true)
+    anvil_deps += cc.find_library('uuid', required: true)
     anvil_deps += cc.find_library('crypt32', required: true)
     anvil_deps += cc.find_library('odbc32', required: true)
     anvil_rc += windows.compile_resources('../resources/icons/icon.rc',
@@ -396,6 +398,18 @@ alt_navigation_test = executable('alt_navigation_test',
     c_args: anvil_cargs,
 )
 test('alt-navigation', alt_navigation_test, env: anvil_test_env, suite: 'anvil')
+
+file_drag_test_deps = [sdl_dep]
+if host_machine.system() == 'windows'
+    file_drag_test_deps += [cc.find_library('shell32'), cc.find_library('ole32'), cc.find_library('uuid')]
+endif
+file_drag_test = executable('file_drag_test',
+    ['../tests/native/file_drag_test.c', 'file_drag.c'],
+    include_directories: anvil_includes,
+    dependencies: file_drag_test_deps,
+    c_args: anvil_cargs,
+)
+test('file-drag', file_drag_test, env: anvil_test_env, suite: 'anvil')
 
 launch_mode_test = executable('launch_mode_test',
     ['../tests/native/launch_mode_test.c'],

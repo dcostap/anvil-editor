@@ -3,6 +3,7 @@
 #include "hosted_surface.h"
 #include "win32_frame.h"
 #include "display_scale.h"
+#include "file_drag.h"
 #include <SDL3_image/SDL_image.h>
 #include <string.h>
 
@@ -148,6 +149,36 @@ void anvil_window_clear_ime(RenWindow *ren) {
 }
 void anvil_window_capture(RenWindow *ren, bool active) {
   if (!anvil_window_hosted(ren)) SDL_CaptureMouse(active);
+}
+
+bool anvil_window_file_drag(RenWindow *ren, const char *list, size_t size) {
+  if (!anvil_file_drag_list_valid(list, size) || size > ANVIL_SURFACE_MAX_PAYLOAD) return false;
+  if (anvil_window_hosted(ren)) {
+    anvil_hosted_surface_file_drag(list, size);
+    return true;
+  }
+#ifdef _WIN32
+  SDL_Window *window = ren->cache.window;
+  float x, y;
+  if (!(SDL_GetGlobalMouseState(&x, &y) & SDL_BUTTON_LMASK)) return false;
+  HWND hwnd = SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+  SDL_CaptureMouse(false);
+  bool started = anvil_file_drag_run(hwnd, list, size);
+  /* The drag loop takes the button release, so the editor gets one here, as the shell sends one. */
+  int window_x = 0, window_y = 0;
+  SDL_GetGlobalMouseState(&x, &y);
+  SDL_GetWindowPosition(window, &window_x, &window_y);
+  SDL_Event release = {0};
+  release.type = SDL_EVENT_MOUSE_BUTTON_UP;
+  release.button.windowID = SDL_GetWindowID(window);
+  release.button.button = SDL_BUTTON_LEFT;
+  release.button.x = x - window_x;
+  release.button.y = y - window_y;
+  SDL_PushEvent(&release);
+  return started;
+#else
+  return false;
+#endif
 }
 
 static SDL_HitTestResult SDLCALL hit_test(SDL_Window *window, const SDL_Point *pt, void *data) {

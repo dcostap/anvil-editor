@@ -138,6 +138,7 @@ void anvil_hosted_surface_set_bordered(bool bordered);
 void anvil_hosted_surface_set_bounds(int x, int y, int w, int h);
 void anvil_hosted_surface_raise(void);
 void anvil_hosted_surface_flash(int operation);
+void anvil_hosted_surface_file_drag(const char *list, size_t size);
 void anvil_hosted_surface_set_visible(bool visible);
 bool anvil_hosted_surface_set_opacity(float opacity);
 bool anvil_hosted_surface_frame_metrics(int *button, int *title, int *border);

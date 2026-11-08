@@ -142,6 +142,9 @@ typedef enum {
   ANVIL_SURFACE_MSG_SIDEBAR_PEEK = 115,
   /* Eligible spare types in this loaded Project. Payload: AnvilSurfaceInt, ANVIL_PREPARED_* mask. */
   ANVIL_SURFACE_MSG_TERMINAL_PREPARATION = 120,
+  /* Drag these files out to other programs while the left button stays down on the Project. Payload: a file
+   * drag list (file_drag.h). The shell sends the button release when the drag starts. */
+  ANVIL_SURFACE_MSG_FILE_DRAG = 121,
 } AnvilSurfaceMessageType;
 
 typedef enum {

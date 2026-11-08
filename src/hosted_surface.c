@@ -1757,6 +1757,10 @@ void anvil_hosted_surface_flash(int operation) {
   send_int(ANVIL_SURFACE_MSG_FLASH, operation);
 }
 
+void anvil_hosted_surface_file_drag(const char *list, size_t size) {
+  send_message(ANVIL_SURFACE_MSG_FILE_DRAG, list, (uint32_t)size);
+}
+
 void anvil_hosted_surface_set_visible(bool visible) {
   hosted.visible = visible;
   send_int(ANVIL_SURFACE_MSG_VISIBLE, visible);

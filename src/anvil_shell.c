@@ -17,6 +17,7 @@
 #include "alt_navigation.h"
 #include "display_scale.h"
 #include "prepared_projects.h"
+#include "file_drag.h"
 
 #include <windowsx.h>
 #include <commctrl.h>
@@ -91,6 +92,9 @@
 #define SHELL_PICKER_MESSAGE (WM_APP + 0x50)
 /* Probe only: save the next composed frame as ANVIL_SHELL_CAPTURE_DIR/capture-<wparam>.bmp. */
 #define SHELL_CAPTURE_MESSAGE (WM_APP + 0x52)
+/* Starts the queued file drag outside the shell's event callbacks. */
+#define SHELL_FILE_DRAG_MESSAGE (WM_APP + 0x53)
+#define SHELL_FILE_DRAG_TIMER 0x8008u
 #define SHELL_MENU_NEW_WINDOW 0xe010
 #define SHELL_MENU_OPEN_PROJECT 0xe020
 enum {
@@ -465,6 +469,10 @@ typedef struct {
   ShellWindow *windows;
   Uint32 next_window, sidebar_window_id;
   HWND service_hwnd;
+  /* A Project's file drag waits for the service window, then runs the Windows drag loop. */
+  Uint32 file_drag_window;
+  char *file_drag_list;
+  size_t file_drag_size;
   bool shutting_down;
   bool updating;
   /* Close All Windows closes one Window at a time, front first, so one Cancel keeps the other Windows.
@@ -1224,6 +1232,8 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     return size == sizeof(AnvilSurfaceInt);
   case ANVIL_SURFACE_MSG_TERMINAL_QUIT_QUERY:
     return size == 0;
+  case ANVIL_SURFACE_MSG_FILE_DRAG:
+    return anvil_file_drag_list_valid(payload, size);
   case ANVIL_SURFACE_MSG_TERMINAL_QUIT_CHOICE:
     return size == sizeof(AnvilSurfaceInt) &&
       (((const AnvilSurfaceInt *)payload)->value == ANVIL_SURFACE_TERMINAL_QUIT_KEEP ||
@@ -4300,6 +4310,26 @@ static void apply_shell_colors(ShellProject *project, const AnvilSurfaceShellCol
   }
 }
 
+/* A file drag starts only while the left button that pressed on the selected Project is still down. */
+static bool file_drag_button_down(ShellWindow *window) {
+  int button = GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON;
+  return (window->surface_buttons & SDL_BUTTON_LMASK) && (GetAsyncKeyState(button) & 0x8000);
+}
+
+static void queue_file_drag(ShellWindow *window, ShellProject *project, const void *list, uint32_t size) {
+  if (project != window->selected || shell.file_drag_list || !file_drag_button_down(window)) {
+    SDL_Log("Shell ignored a file drag: Window=%u Project=%u selected=%d busy=%d", window->id, project->id,
+            project == window->selected, shell.file_drag_list != NULL);
+    return;
+  }
+  shell.file_drag_list = malloc(size);
+  if (!shell.file_drag_list) return;
+  memcpy(shell.file_drag_list, list, size);
+  shell.file_drag_size = size;
+  shell.file_drag_window = window->id;
+  PostMessageW(shell.service_hwnd, SHELL_FILE_DRAG_MESSAGE, 0, 0);
+}
+
 static void handle_message(ShellProject *project, ShellMessage *message) {
   if (message->type == ANVIL_SURFACE_MSG_SIDEBAR_SURFACE) {
     AnvilSidebarSurfacePacket packet = *(AnvilSidebarSurfacePacket *)message->payload;
@@ -4737,6 +4767,9 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
   case ANVIL_SURFACE_MSG_FLASH:
     SDL_FlashWindow(window->window, (SDL_FlashOperation)value);
     break;
+  case ANVIL_SURFACE_MSG_FILE_DRAG:
+    queue_file_drag(window, project, payload, message->size);
+    break;
   case ANVIL_SURFACE_MSG_SET_BOUNDS: {
     if (message->size != sizeof(AnvilSurfaceBounds))
       break;
@@ -5067,6 +5100,35 @@ static void cancel_input(ShellWindow *window) {
   leave.type = SDL_EVENT_WINDOW_MOUSE_LEAVE;
   forward_event(window, &leave, NULL);
   apply_cursor(ANVIL_SURFACE_CURSOR_ARROW);
+}
+
+/* The Windows drag loop runs its own message loop. A timer runs the shell's events and steps meanwhile, so each
+ * Window keeps drawing and each Project keeps its connection, as SDL does during a live resize. A step can only
+ * report the end of the last Window, which the next normal step reports again. */
+static void file_drag_step(void) {
+  SDL_Event events[16];
+  int count;
+  while ((count = SDL_PeepEvents(events, SDL_arraysize(events), SDL_GETEVENT, SDL_EVENT_FIRST, SDL_EVENT_LAST)) > 0)
+    for (int i = 0; i < count; i++) anvil_shell_event(NULL, &events[i]);
+  anvil_shell_iterate(NULL);
+}
+
+static void run_file_drag(void) {
+  char *list = shell.file_drag_list;
+  size_t size = shell.file_drag_size;
+  ShellWindow *window = window_for_id(shell.file_drag_window);
+  if (!list) return;
+  if (window && file_drag_button_down(window)) {
+    /* The drag loop takes the pointer and its release, so the Project gets its release now. */
+    cancel_input(window);
+    SetTimer(shell.service_hwnd, SHELL_FILE_DRAG_TIMER, USER_TIMER_MINIMUM, NULL);
+    anvil_file_drag_run(window->hwnd, list, size);
+    KillTimer(shell.service_hwnd, SHELL_FILE_DRAG_TIMER);
+  } else {
+    SDL_Log("Shell file drag did not start: the button is up or the Window closed");
+  }
+  free(list);
+  shell.file_drag_list = NULL;
 }
 
 static void leave_surface(ShellWindow *window) {
@@ -5985,6 +6047,14 @@ static LRESULT CALLBACK shell_service_wndproc(HWND hwnd, UINT msg, WPARAM wparam
     return 0;
   }
   if (msg == WM_APP + 0x51) { check_picker_failures(); return 0; }
+  if (msg == SHELL_FILE_DRAG_MESSAGE) {
+    run_file_drag();
+    return 0;
+  }
+  if (msg == WM_TIMER && wparam == SHELL_FILE_DRAG_TIMER) {
+    file_drag_step();
+    return 0;
+  }
   if (msg == SHELL_PICKER_MESSAGE) {
     probe_project_picker(wparam, lparam);
     return 0;

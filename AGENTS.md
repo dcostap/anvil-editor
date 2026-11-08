@@ -342,6 +342,10 @@ Each typed character makes a new path, which a worker reads. While the top row i
 Each query makes new rows. A row's size and edited time come from a worker, which remembers the last answer for each path (`fuzzy_searcher.file_infos`). A new row of the same file shows that answer at once, and the worker reads the file again.
 Run `ui/fuzzy_searcher_scrolling.lua` after changes.
 
+A Fuzzy Searcher row with a file or folder drags out to other programs, as from Windows Explorer. The drag starts when the pointer moves 6 px from the press. It takes the selected rows when it starts on one of them, or else only its row. A click on a row of a multi-row selection selects only that row at the release. The picker stays open. Files on another Machine stay out.
+`system.drag_files` starts it. In the shell, the Project sends `ANVIL_SURFACE_MSG_FILE_DRAG`. The shell checks that the left button is still down on the Selected Project, sends the Project its release, and runs the Windows drag loop from its service window (`src/file_drag.c`). A timer runs the shell's events and steps during that loop, so all Windows stay live. Direct mode runs the drag loop in the editor and then sends itself the release.
+A test cannot press the real mouse, so check a real drop by hand after native changes. Run `ui/fuzzy_searcher_multi_selection.lua` and `anvil:file-drag` after changes.
+
 Text Search also searches the Terminal Sessions of this Project. Other Projects search their own Terminals.
 A Terminal that this Project shows gives its live text. Other Terminals give the screen that their host saved last.
 That screen can be up to about 20 seconds old. A worker reads it (`terminal_snapshot_text`).

@@ -890,6 +890,31 @@ static int f_flash_window(lua_State *L) {
 }
 
 
+/* Drags files out to other programs. A path that does not fit in one message is left out. */
+static int f_drag_files(lua_State *L) {
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  luaL_checktype(L, 2, LUA_TTABLE);
+  char *list = malloc(ANVIL_SURFACE_MAX_PAYLOAD);
+  if (!list) return luaL_error(L, "out of memory");
+  size_t size = 0;
+  int count = (int)lua_rawlen(L, 2);
+  for (int i = 1; i <= count; i++) {
+    lua_rawgeti(L, 2, i);
+    size_t length = 0;
+    const char *path = lua_tolstring(L, -1, &length);
+    if (path && length && !memchr(path, 0, length) && size + length + 1 <= ANVIL_SURFACE_MAX_PAYLOAD) {
+      memcpy(list + size, path, length + 1);
+      size += length + 1;
+    }
+    lua_pop(L, 1);
+  }
+  bool started = size && anvil_window_file_drag(ren, list, size);
+  free(list);
+  lua_pushboolean(L, started);
+  return 1;
+}
+
+
 static int f_clear_ime(lua_State *L) {
   RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   anvil_window_clear_ime(ren); return 0;
@@ -3198,6 +3223,7 @@ static const luaL_Reg lib[] = {
   { "set_window_visible",    f_set_window_visible    },
   { "set_text_input_rect",   f_set_text_input_rect   },
   { "flash_window",         f_flash_window          },
+  { "drag_files",            f_drag_files            },
   { "clear_ime",             f_clear_ime             },
   { "window_has_focus",      f_window_has_focus      },
   { "window_should_render",  f_window_should_render  },

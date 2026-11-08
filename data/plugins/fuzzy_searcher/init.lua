@@ -5207,6 +5207,7 @@ function FSView:on_mouse_pressed(button, x, y, clicks)
   self.pressed_result = nil
   self.pressed_clicks = clicks or 1
   self.forward_mouse_to_child = false
+  self.drag_press, self.file_dragging, self.pressed_keeps_selection = nil, nil, nil
 
   fuzzy_focus_log("mouse-pressed", self, string.format("button=%s clicks=%s input_hit=%s preview_hit=%s", tostring(button), tostring(clicks), tostring(self.input and self.input:mouse_on_top(x, y)), tostring(self:preview_contains(x, y))))
 
@@ -5256,9 +5257,16 @@ function FSView:on_mouse_pressed(button, x, y, clicks)
     self:scroll_results(self:list_metrics().result_rows)
   elseif button == "left" and type(hit) == "number" and self.results[hit] and not self.results[hit].header then
     local modified = keymap.modkeys.ctrl or keymap.modkeys.cmd or keymap.modkeys.shift
-    self:select_result(hit, keymap.modkeys.shift, keymap.modkeys.ctrl or keymap.modkeys.cmd)
+    -- A press on a row of a multi-row selection keeps the selection, so a drag can take all its rows.
+    -- The release selects only the row.
+    if not modified and #self:drag_file_paths(hit) > 1 then
+      self.pressed_keeps_selection = true
+    else
+      self:select_result(hit, keymap.modkeys.shift, keymap.modkeys.ctrl or keymap.modkeys.cmd)
+    end
     self.pressed_result = hit
     self.pressed_modified = modified
+    self.drag_press = { x = x, y = y }
   end
 
   if self:is_preview_focused() then
@@ -5291,11 +5299,15 @@ function FSView:on_mouse_released(button, x, y)
   end
 
   local hit = self:result_at_point(x, y)
-  if button == "left" and type(hit) == "number" and hit == self.pressed_result then
+  if self.file_dragging then
+    self.file_dragging = nil
+  elseif button == "left" and type(hit) == "number" and hit == self.pressed_result then
+    if self.pressed_keeps_selection then self:select_result(hit) end
     if (self.pressed_clicks or 1) >= 2 and not self.pressed_modified then self:confirm() end
   end
 
   self.pressed_result = nil
+  self.drag_press, self.pressed_keeps_selection = nil, nil
   self.pressed_clicks = 0
   self.pressed_modified = nil
   -- A double-click can open another View and start the close transition
@@ -5314,6 +5326,13 @@ end
 function FSView:on_mouse_moved(x, y, dx, dy)
   if self.closing then return false end
   self.mouse.x, self.mouse.y = x, y
+
+  local press = self.drag_press
+  -- The pointer moves 6 px from a press on a row before the row drags out, as Sidebar rows do.
+  if press and math.max(math.abs(x - press.x), math.abs(y - press.y)) >= 6 * SCALE then
+    self:start_file_drag()
+  end
+  if self.file_dragging then return true end
 
   if self.forward_mouse_to_child or (self.input and self.input.mouse_is_pressed) or (self.input and self.input:mouse_on_top(x, y)) then
     local handled = FSView.super.on_mouse_moved(self, x, y, dx, dy)
@@ -7990,7 +8009,10 @@ function FSView:toggle_ignored_files()
 end
 
 function FSView:selected_file_path()
-  local r = self:selected_result()
+  return self:result_file_path(self:selected_result())
+end
+
+function FSView:result_file_path(r)
   if not r or r.revision or r.terminal then return end
 
   if r.file or r.abs_path then
@@ -8014,6 +8036,35 @@ function FSView:reveal_selected_in_explorer()
 
   self:close()
   command.perform("editor:reveal_active_file_in_explorer", path)
+end
+
+-- A drag takes the selected rows when it starts on one of them, or else only its own row. Files on another
+-- Machine have no path on this PC, so they stay out.
+function FSView:drag_file_paths(index)
+  local indices = self:get_selected_result_indices()
+  local selected = false
+  for _, i in ipairs(indices) do selected = selected or i == index end
+  if not selected then indices = { index } end
+  local paths, seen = {}, {}
+  for _, i in ipairs(indices) do
+    local r = self.results[i]
+    local path = self:result_file_path(r)
+    local key = path and common.path_compare_key(path)
+    if path and not seen[key] and not require("core.fs").on_machine(path)
+      and not (r.other_project and require("core.machine_project").is_key(r.other_project)) then
+      seen[key] = true
+      paths[#paths + 1] = path
+    end
+  end
+  return paths
+end
+
+function FSView:start_file_drag()
+  local paths = self:drag_file_paths(self.pressed_result)
+  self.drag_press = nil
+  if #paths == 0 then return end
+  self.file_dragging = system.drag_files(core.window, paths)
+  core.log_quiet("Fuzzy Searcher: file drag files=%d started=%s", #paths, tostring(self.file_dragging))
 end
 
 function FSView:open_selected_in_filetree()

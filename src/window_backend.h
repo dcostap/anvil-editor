@@ -26,6 +26,7 @@ void anvil_window_text_input(RenWindow *ren, bool active);
 void anvil_window_text_area(RenWindow *ren, const SDL_Rect *rect);
 void anvil_window_clear_ime(RenWindow *ren);
 void anvil_window_capture(RenWindow *ren, bool active);
+bool anvil_window_file_drag(RenWindow *ren, const char *list, size_t size);
 void anvil_window_cursor(AnvilSurfaceCursor cursor);
 void anvil_window_hit_test(RenWindow *ren, const AnvilSurfaceHitTest *hit);
 bool anvil_window_native_frame(RenWindow *ren, bool enable);
