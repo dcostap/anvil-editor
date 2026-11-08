@@ -67,6 +67,7 @@ local function metrics()
     icon_gap = math.floor(8 * SCALE + 0.5),
     gap = math.floor(6 * SCALE + 0.5),
     radius = math.floor(8 * SCALE + 0.5),
+    outline = math.max(1, math.floor(SCALE + 0.5)),
   }
 end
 
@@ -152,9 +153,11 @@ function launcher.draw()
   for index, item in ipairs(items) do
     local x, y, w, h, r = item.x, item.y, item.w, item.h, m.radius
     local hover = ui.approach(item, "hover_amount", item == state.hovered and 1 or 0, 30)
-    -- The keyboard selection is a soft accent tint. It fades as it moves, so it stays quiet.
+    -- The keyboard selection is a thin, faint accent outline. It fades as it moves, so it stays quiet.
     local selected = ui.approach(item, "selected_amount", focused and index == state.selected and 1 or 0, 30)
-    if selected > 0 then renderer.draw_rounded_rect(x, y, w, h, r, ui.fade(style.accent, 0.16 * selected)) end
+    if selected > 0 then
+      ui.draw_rounded_outline(x, y, w, h, r, m.outline, ui.fade(style.accent, 0.5 * selected))
+    end
     if item == state.pressed and item == state.hovered then
       renderer.draw_rounded_rect(x, y, w, h, r, style.button_pressed)
     elseif hover > 0 then
