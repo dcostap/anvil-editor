@@ -50,12 +50,17 @@ test.describe("Project Launcher", function()
     test.ok(test.remove_tree(context.root, 30))
   end)
 
-  test.it("shows in a new Project, and Enter opens a focused File Tree at its root", function(context)
+  test.it("shows in a new Project with no selection, and a move then Enter opens a File Tree at its root",
+    function(context)
     open_project(context.project_path)
     test.equal(panes.count(), 0)
     test.ok(launcher.shown())
     test.same(labels(), { "File Tree", "Terminal", "Pi", "File Explorer" })
 
+    core.on_event("keypressed", "return", {})
+    test.equal(panes.count(), 0, "Enter without a selection opens nothing")
+    -- The first move selects the first button, whatever its direction.
+    core.on_event("keypressed", "left", {})
     core.on_event("keypressed", "return", {})
     test.equal(panes.count(), 1)
     local view = panes.active().current_view
@@ -67,6 +72,7 @@ test.describe("Project Launcher", function()
 
   test.it("moves its selection with Tab and opens the clicked button in a new Pane", function(context)
     open_project(context.project_path)
+    core.on_event("keypressed", "tab", {})
     core.on_event("keypressed", "tab", {})
     core.on_event("keypressed", "return", {})
     local pi = launcher.items()[3]

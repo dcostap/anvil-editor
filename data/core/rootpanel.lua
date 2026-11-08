@@ -1180,7 +1180,7 @@ function RootPanel:draw()
   self.above_sidebar = {}
   self:draw_wallpaper(#pane_views > 0)
   local group = panes().shown_group()
-  if not group and launcher().shown() then launcher().draw() end
+  if not group and launcher().shown() then launcher().draw() else launcher().hide() end
   if not core.fuzzy_searcher_active_view and next(covered) then
     for view in pairs(covered) do covered[view] = nil end
   end

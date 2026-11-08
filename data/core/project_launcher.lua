@@ -26,7 +26,8 @@ local ITEMS = {
   { label = "File Explorer", icon = ui.icons.reveal, run = open_folder, folder = true, local_folder = true },
 }
 
-local state = { selected = 1, items = {}, path = nil }
+-- `selected` is the keyboard selection. The Launcher shows with none; the first move key selects the first button.
+local state = { selected = nil, items = {}, path = nil }
 
 local function panes() return core.panes or require "core.panes" end
 
@@ -40,7 +41,7 @@ local function project_items()
   local project = core.root_project()
   local path = project and project.path
   if state.path ~= path then
-    state.path, state.items, state.selected = path, {}, 1
+    state.path, state.items, state.selected = path, {}, nil
     local scratch = path and core.is_scratch_project(path)
     local machine = path and require("core.fs").on_machine(path)
     for _, item in ipairs(ITEMS) do
@@ -199,9 +200,6 @@ function launcher.on_mouse_pressed(button, x, y)
   local item = button == "left" and item_at(x, y)
   if not item then return false end
   state.pressed = item
-  for index, other in ipairs(state.items) do
-    if other == item then state.selected = index end
-  end
   core.redraw = true
   return true
 end
@@ -215,15 +213,26 @@ function launcher.on_mouse_released(button, x, y)
   return true
 end
 
--- Moves the selection by `delta` buttons. Tab wraps; caret moves stop at the ends.
+-- Moves the selection by `delta` buttons. Tab wraps; caret moves stop at the ends. Without a selection, any move
+-- selects the first button.
 local function move(delta, wrap)
   local count = #project_items()
   if count == 0 then return false end
+  if not state.selected then
+    state.selected = 1
+    core.redraw = true
+    return true
+  end
   local index = state.selected + delta
   if wrap then index = (index - 1) % count + 1 else index = common.clamp(index, 1, count) end
   state.selected = index
   core.redraw = true
   return true
+end
+
+---Forgets the selection, hover and press while the Launcher does not show, so it shows again with none.
+function launcher.hide()
+  state.selected, state.hovered, state.pressed = nil, nil, nil
 end
 
 function launcher.on_key_pressed(key, event)
@@ -232,8 +241,8 @@ function launcher.on_key_pressed(key, event)
   local items = state.items
   for _, name in ipairs(keymap.map[keymap.stroke_for_event(key, event)] or {}) do
     if name == "dialog:confirm" then
-      local item = items[state.selected]
-      return item ~= nil and activate(item)
+      local item = state.selected and items[state.selected]
+      return item and activate(item) or false
     end
     if name == "dialog:focus_next" then return move(1, true) end
     if name == "dialog:focus_previous" then return move(-1, true) end
