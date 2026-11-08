@@ -26,7 +26,7 @@ local ITEMS = {
   { label = "Open in OS File Explorer", icon = ui.icons.reveal, run = open_folder, folder = true, local_folder = true },
 }
 
--- `selected` is the keyboard selection. The Launcher shows with none; the first move key selects the first button.
+-- `selected` is the keyboard selection. The Launcher starts with none unless the keyboard explicitly enters it.
 local state = { selected = nil, items = {}, path = nil }
 
 local function panes() return core.panes or require "core.panes" end
@@ -233,6 +233,15 @@ end
 ---Forgets the selection, hover and press while the Launcher does not show, so it shows again with none.
 function launcher.hide()
   state.selected, state.hovered, state.pressed = nil, nil, nil
+end
+
+---Selects the first button when a keyboard action enters this Project without a Pane.
+function launcher.focus_from_keyboard()
+  if not launcher.shown() or #project_items() == 0 then return false end
+  state.selected = 1
+  core.redraw = true
+  core.log_quiet("Project Launcher: keyboard entry selected the first button")
+  return true
 end
 
 function launcher.on_key_pressed(key, event)

@@ -464,8 +464,9 @@ function SidebarView:activate_row(row, from_keyboard)
   end
   if row.kind == "project" or row.kind == "tab" or row.kind == "terminal" then self:choose(row, from_keyboard) end
   if row.kind == "project" then
-    if row.project.state == "ready" and not row.key and not in_other_window(row.project, self.window_id) then
-      self.action("request", "select", row.project.path, {action = "open_project"})
+    if from_keyboard
+      or row.project.state == "ready" and not row.key and not in_other_window(row.project, self.window_id) then
+      self.action("request", "select", row.project.path, {action = "open_project", keyboard = from_keyboard or nil})
     else
       self.action("select", row.project.row_id)
     end

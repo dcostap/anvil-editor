@@ -93,7 +93,7 @@ local schemas = {
   snooze = {pane = true}, unsnooze = {pane = true},
   open = {files = true, text = true, target = true},
   launch = {files = true},
-  open_project = {},
+  open_project = {keyboard = true},
   drop = {pane = true, files = true, text = true},
   export = {pane = true, to = true, target = true, transfer = true, focus = true},
   import = {snapshot = true, target = true, source = true, transfer = true},
@@ -115,6 +115,9 @@ local function validate(request)
   if request.action == "key" and (not identifier(request.stroke)
     or request.keep_sidebar ~= nil and request.keep_sidebar ~= true) then return nil, "invalid key" end
   if request.action == "perform" and not identifier(request.command) then return nil, "invalid command" end
+  if request.action == "open_project" and request.keyboard ~= nil and request.keyboard ~= true then
+    return nil, "invalid keyboard entry"
+  end
   -- A key or command without a Pane acts in the Project's active Pane.
   local optional = request.action == "key" or request.action == "perform"
   if schema.pane and (not optional or request.pane ~= nil) and not identifier(request.pane) then
@@ -184,8 +187,11 @@ end
 
 local function execute(request, x, y)
   local action = request.action
-  -- The Sidebar selects an empty Project with this request, so the Project takes the keyboard for its Launcher.
-  if action == "open_project" then return true end
+  -- The Sidebar enters a Project with this request. Keyboard entry selects its first Launcher button, if shown.
+  if action == "open_project" then
+    if request.keyboard then require("core.project_launcher").focus_from_keyboard() end
+    return true
+  end
   if action == "drag" then
     -- A Tab of another Project has the same Pane IDs, so the source Project must be this one. The Sidebar names a
     -- Project on a Machine by its key.
@@ -246,6 +252,7 @@ local function execute(request, x, y)
     -- answer needs the keyboard.
     local asks = core.active_view == core.nag_view or core.active_view == core.global_prompt_bar
     if request.keep_sidebar and asks then system.focus_project_sidebar(false) end
+    if not request.keep_sidebar then require("core.project_launcher").focus_from_keyboard() end
     core.log_quiet("Sidebar key: %s Pane=%s performed=%s keep_sidebar=%s asks=%s", request.stroke,
       tostring(request.pane), tostring(performed), tostring(request.keep_sidebar), tostring(asks))
     return true

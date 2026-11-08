@@ -44,6 +44,7 @@ test.describe("Project Launcher", function()
 
   test.after_each(function(context)
     keymap.unbind("launcher_confirm")
+    keymap.unbind("launcher_entry")
     for name, saved in pairs(context.saved_commands) do command.map[name] = saved end
     panes.reset_for_tests()
     core.set_project(context.cwd)
@@ -69,6 +70,35 @@ test.describe("Project Launcher", function()
     test.equal(core.active_view, view)
     test.ok(common.path_equals(view:get_state().root, context.project_path))
     test.ok(not launcher.shown())
+  end)
+
+  test.it("selects the first button when the Sidebar enters the Project with the keyboard", function(context)
+    open_project(context.project_path)
+    core.on_event("panerequest", common.serialize {action = "open_project", keyboard = true}, -1, -1, 0)
+    test.equal(panes.count(), 0, "Entering the Project must not activate a button")
+    core.on_event("keypressed", "return", {})
+    test.equal(panes.count(), 1)
+    test.equal(panes.active().current_view:get_module(), "plugins.filetree")
+  end)
+
+  test.it("keeps no selection when the Sidebar enters the Project with the mouse", function(context)
+    open_project(context.project_path)
+    core.on_event("panerequest", common.serialize {action = "open_project"}, -1, -1, 0)
+    core.on_event("keypressed", "return", {})
+    test.equal(panes.count(), 0)
+  end)
+
+  test.it("selects the first button after a Sidebar key gives the Project the keyboard", function(context)
+    open_project(context.project_path)
+    keymap.add_direct {launcher_entry = function() return true end}
+    core.on_event("panerequest", common.serialize {action = "key", stroke = "launcher_entry", keep_sidebar = true}, -1, -1, 0)
+    core.on_event("keypressed", "return", {})
+    test.equal(panes.count(), 0, "A key that keeps the Sidebar keyboard must not select a button")
+    core.on_event("panerequest", common.serialize {action = "key", stroke = "launcher_entry"}, -1, -1, 0)
+    keymap.unbind("launcher_entry")
+    core.on_event("keypressed", "return", {})
+    test.equal(panes.count(), 1)
+    test.equal(panes.active().current_view:get_module(), "plugins.filetree")
   end)
 
   for _, name in ipairs { "core:activate_point_of_interest", "core:submit_prompt" } do
