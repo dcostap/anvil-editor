@@ -1029,7 +1029,7 @@ function SidebarView:rebuild_rows()
       target.selected = true
     end
   end
-  -- A Snooze puts the cursor's Tab away like a close, so the cursor follows the Project's new active Tab.
+  -- A Snooze puts the cursor's Tab away like a close.
   local cursor
   for index, row in ipairs(rows) do
     if cursor_key and row_key(row) == cursor_key then
@@ -1038,20 +1038,42 @@ function SidebarView:rebuild_rows()
     end
   end
   if not cursor and cursor_row and cursor_row.kind == "tab" then
-    -- The Pane manager chooses the replacement. Follow its report, within the same Project.
-    local active_found = false
+    -- Follow the active Pane when there is one. With no selected Pane, keep keyboard navigation near the closed Tab.
+    local active, first_tab, replacement_found
+    local tabs = {}
     for index, row in ipairs(rows) do
       if row.project and row.project.path == cursor_row.project.path then
         local panes = row.project.panes or {}
-        local active = panes[panes.active or 0]
+        active = panes[panes.active or 0]
         if row.kind == "project" then cursor = index end
+        if row.kind == "tab" and not row.tab.snoozed then
+          tabs[row_key(row)] = index
+          first_tab = first_tab or index
+        end
         if row.kind == "tab" and active and row.tab.id == active.id then
-          cursor, active_found = index, true
+          cursor, replacement_found = index, true
           break
         end
       end
     end
-    if searching and not active_found then
+    if not active then
+      -- Prefer a surviving Tab below the old cursor, then one above it, within the same Project.
+      for index = self.cursor + 1, #self.rows do
+        local replacement = tabs[row_key(self.rows[index])]
+        if replacement then cursor, replacement_found = replacement, true; break end
+      end
+      if not replacement_found then
+        for index = self.cursor - 1, 1, -1 do
+          local replacement = tabs[row_key(self.rows[index])]
+          if replacement then cursor, replacement_found = replacement, true; break end
+        end
+      end
+      -- A cleared search or a new Tab can leave no surviving row from the old list.
+      if not replacement_found and first_tab then cursor, replacement_found = first_tab, true end
+      core.log_quiet("Sidebar close cursor: Project=%s row=%s", cursor_row.project.path,
+        cursor and rows[cursor].id_key or "none")
+    end
+    if searching and not replacement_found then
       self.input:set_text("")
       self.query = ""
       core.log_quiet("Sidebar close selection: cleared search to show Project=%s", cursor_row.project.path)
