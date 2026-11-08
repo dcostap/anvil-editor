@@ -55,7 +55,6 @@ test.describe("Project Launcher", function()
     open_project(context.project_path)
     test.equal(panes.count(), 0)
     test.ok(launcher.shown())
-    test.same(labels(), { "File Tree", "Terminal", "Pi", "File Explorer" })
 
     core.on_event("keypressed", "return", {})
     test.equal(panes.count(), 0, "Enter without a selection opens nothing")

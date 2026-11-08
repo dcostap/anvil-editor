@@ -23,7 +23,7 @@ local ITEMS = {
   { label = "File Tree", icon = "\u{F0645}", command = "filetree:open_at_project_root", folder = true },
   { label = "Terminal", icon = "\u{F018D}", command = "terminal:open_at_project_root" },
   { label = "Pi", agent = "pi", command = "terminal:open_pi" },
-  { label = "File Explorer", icon = ui.icons.reveal, run = open_folder, folder = true, local_folder = true },
+  { label = "Open in OS File Explorer", icon = ui.icons.reveal, run = open_folder, folder = true, local_folder = true },
 }
 
 -- `selected` is the keyboard selection. The Launcher shows with none; the first move key selects the first button.
