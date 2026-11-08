@@ -9,7 +9,7 @@ local ui = require "core.ui"
 -- The Project Launcher: what the Project area shows while no Pane Group shows. It shows the Project's badge and name,
 -- and a row of buttons. Each button opens one of the Project's main Views in a new Pane, or its folder in File
 -- Explorer. The Root Panel draws it over the wallpaper and sends it pointer and keyboard input. Keys use the
--- bindings of Dialogs and of caret moves.
+-- bindings of Dialogs, activation, prompt submission and caret moves.
 local launcher = {}
 
 local function open_folder()
@@ -240,7 +240,7 @@ function launcher.on_key_pressed(key, event)
   local _, cols = layout(metrics())
   local items = state.items
   for _, name in ipairs(keymap.map[keymap.stroke_for_event(key, event)] or {}) do
-    if name == "dialog:confirm" then
+    if name == "dialog:confirm" or name == "core:activate_point_of_interest" or name == "core:submit_prompt" then
       local item = state.selected and items[state.selected]
       return item and activate(item) or false
     end

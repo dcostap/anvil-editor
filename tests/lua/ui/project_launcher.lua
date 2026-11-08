@@ -1,6 +1,7 @@
 local core = require "core"
 local common = require "core.common"
 local command = require "core.command"
+local keymap = require "core.keymap"
 local panes = require "core.panes"
 local storage = require "core.storage"
 local launcher = require "core.project_launcher"
@@ -42,6 +43,7 @@ test.describe("Project Launcher", function()
   end)
 
   test.after_each(function(context)
+    keymap.unbind("launcher_confirm")
     for name, saved in pairs(context.saved_commands) do command.map[name] = saved end
     panes.reset_for_tests()
     core.set_project(context.cwd)
@@ -68,6 +70,22 @@ test.describe("Project Launcher", function()
     test.ok(common.path_equals(view:get_state().root, context.project_path))
     test.ok(not launcher.shown())
   end)
+
+  for _, name in ipairs { "core:activate_point_of_interest", "core:submit_prompt" } do
+    test.it("opens the keyboard-selected item through " .. name, function(context)
+      open_project(context.project_path)
+      keymap.add_direct { launcher_confirm = name }
+      core.on_event("keypressed", "launcher_confirm", {})
+      test.equal(panes.count(), 0, "Confirmation without a selection opens nothing")
+      core.on_event("keypressed", "left", {})
+      core.on_event("keypressed", "launcher_confirm", {})
+      test.equal(panes.count(), 1)
+      local view = panes.active().current_view
+      test.equal(view:get_module(), "plugins.filetree")
+      test.equal(core.active_view, view)
+      test.ok(common.path_equals(view:get_state().root, context.project_path))
+    end)
+  end
 
   test.it("moves its selection with Tab and opens the clicked button in a new Pane", function(context)
     open_project(context.project_path)
