@@ -705,6 +705,21 @@ test.describe("Fuzzy Searcher Path Search", function()
     }))
   end)
 
+  test.it("matches Scratch by its name, not by its folder", function(context)
+    core.project_sidebar = sidebar_model(context)
+    local scratch = common.normalize_path("C:/Data/anvil/user/scratch")
+    core.project_sidebar[3].path = scratch
+    local function lists_scratch(query)
+      fuzzy_searcher.open("@" .. query)
+      for _, path in ipairs(project_paths(core.fuzzy_searcher_active_view.results)) do
+        if path == scratch then return true end
+      end
+      return false
+    end
+    test.ok(lists_scratch("scra"))
+    test.ok(not lists_scratch("anvil"))
+  end)
+
   test.it("shows each Project's Sidebar name and state", function(context)
     core.project_sidebar = sidebar_model(context)
     fuzzy_searcher.open("@")
@@ -717,7 +732,7 @@ test.describe("Fuzzy Searcher Path Search", function()
     local drawn, draw_error = draw_without_window(function() picker:draw() end, texts)
     test.ok(drawn, draw_error)
     local shown = table.concat(texts, " | ")
-    for _, expected in ipairs {"6 Projects", "Scratch", "starting", "Window 2", "1mo", "2 terminals, 1 busy"} do
+    for _, expected in ipairs {"6 Projects", "SCRATCH", "starting", "Window 2", "1mo", "2 terminals, 1 busy"} do
       test.ok(shown:find(expected, 1, true), expected .. " is missing from: " .. shown)
     end
   end)

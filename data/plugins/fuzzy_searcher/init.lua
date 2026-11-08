@@ -2439,8 +2439,11 @@ local function draw_project_result_row(font, r, x, y, width)
   local bold = fuzzy_searcher.projects.bold(style.font)
   local small = style.get_small_font(font)
   local gap = style.padding.x
-  fuzzy_searcher.project_look.draw_badge(project, x, y, h, bold, style.card)
-  local cx = x + h + math.floor(gap / 2)
+  local cx = x
+  if not project.scratch then
+    fuzzy_searcher.project_look.draw_badge(project, x, y, h, bold, style.card)
+    cx = x + h + math.floor(gap / 2)
+  end
   local hint, note = fuzzy_searcher.projects.details(project, os.time())
   local details = hint and note and hint .. "  " .. note or hint or note or ""
   local right = x + width
@@ -2449,6 +2452,18 @@ local function draw_project_result_row(font, r, x, y, width)
     local details_w = small:get_width(details)
     renderer.draw_text(small, details, right - details_w, y + math.floor((h - small:get_height()) / 2), style.dim)
     right = right - details_w - gap
+  end
+  -- Scratch holds loose Tabs, not a folder, so it draws as the Sidebar draws it: a small uppercase label and a line.
+  if project.scratch then
+    local name = fuzzy_searcher.project_look.name(project)
+    local end_x = draw_highlighted_text(small, name:upper(), cx, y + math.floor((h - small:get_height()) / 2),
+      math.max(0, right - cx), style.dim, r.label == name and r.match_spans or {})
+    fuzzy_searcher.set_copy_span(r, cx, end_x)
+    if right > end_x + gap then
+      renderer.draw_rect(end_x + gap, y + math.floor(h / 2), right - end_x - gap, math.max(1, math.floor(SCALE)),
+        style.divider)
+    end
+    return
   end
   -- The match runs over the folder's path. Its last part is the name, unless the Sidebar names it otherwise.
   local label, name = r.label or "", fuzzy_searcher.project_look.name(project)
@@ -5905,7 +5920,11 @@ function path_search.recent_project_results(query, scope, limit, case_sensitive)
     end
   end
 
-  local matches = trim_query(query) == "" and nil or fuzzy_filter(candidates, query, limit + 1, display_root, case_sensitive)
+  -- Scratch is not a folder that the user knows, so only its name matches.
+  local function text(path)
+    return records[path].scratch and fuzzy_searcher.project_look.name(records[path]) or display_root(path)
+  end
+  local matches = trim_query(query) == "" and nil or fuzzy_filter(candidates, query, limit + 1, text, case_sensitive)
   local out = {}
   local hidden = false
   if matches then
@@ -5913,7 +5932,7 @@ function path_search.recent_project_results(query, scope, limit, case_sensitive)
       if i > limit then hidden = true break end
       local path = match.item
       out[#out+1] = {
-        kind = "project", label = display_root(path), project = path, path = path, sidebar = records[path],
+        kind = "project", label = match.text, project = path, path = path, sidebar = records[path],
         query = query, match_spans = match.spans, is_folder = true, path_search = true,
       }
     end
@@ -5921,7 +5940,7 @@ function path_search.recent_project_results(query, scope, limit, case_sensitive)
     for i, path in ipairs(candidates) do
       if i > limit then hidden = true break end
       out[#out+1] = {
-        kind = "project", label = display_root(path), project = path, path = path, sidebar = records[path],
+        kind = "project", label = text(path), project = path, path = path, sidebar = records[path],
         query = query, match_spans = {}, is_folder = true, path_search = true,
       }
     end
