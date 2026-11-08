@@ -19,6 +19,11 @@ test.describe("Terminal quit decision", function()
     test.equal(reason, "ask")
     test.same(terminal.quit_decision(statuses, "keep"), { "detach", "detach" })
     test.same(terminal.quit_decision(statuses, "end"), { "end", "end" })
+    decision, reason = terminal.quit_decision(statuses, nil, "project")
+    test.equal(decision, nil)
+    test.equal(reason, "ask")
+    test.same(terminal.quit_decision(statuses, "keep", "project"), { "detach", "detach" })
+    test.same(terminal.quit_decision(statuses, "end", "project"), { "end", "end" })
     decision, reason = terminal.quit_decision(statuses, "cancel")
     test.equal(decision, nil)
     test.equal(reason, "cancel")
@@ -180,6 +185,18 @@ test.describe("Terminal quit with Navigation History", function()
 end)
 
 test.describe("Idle Pi quit decisions", function()
+  test.it("unloads a Project with idle shells and idle or finished Pi without asking", function()
+    local statuses = {
+      { kind = "running", busy = false },
+      { kind = "running", busy = true, agent_app = "pi", agent_state = "idle" },
+      { kind = "running", busy = true, agent_app = "pi", agent_state = "done" },
+    }
+    test.same(terminal.quit_decision(statuses, nil, "project"), { "end", "end", "end" })
+    local actions, reason = terminal.quit_decision(statuses)
+    test.equal(actions, nil, "Window Close must still offer to keep sessions running")
+    test.equal(reason, "ask")
+  end)
+
   test.it("asks what to do with Pi after its turn finishes", function()
     local status = { kind = "running", busy = true, agent_app = "pi", agent_state = "done" }
     local actions, reason = terminal.quit_decision({ status })
@@ -217,6 +234,9 @@ test.describe("Idle Pi quit decisions", function()
       fields.kind = fields.kind or "running"
       fields.busy = true
       local actions, reason = terminal.quit_decision({ fields })
+      test.equal(actions, nil)
+      test.equal(reason, "ask")
+      actions, reason = terminal.quit_decision({ fields }, nil, "project")
       test.equal(actions, nil)
       test.equal(reason, "ask")
     end

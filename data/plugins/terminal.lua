@@ -2733,18 +2733,21 @@ function TerminalView:close_status()
   return status
 end
 
-function TerminalView:can_close(approve, caller)
-  if not self.session then approve(); return end
-  local status = self:close_status()
+local function needs_close_confirmation(status, self_close)
   local idle_pi = status.agent_app == "pi"
     and (status.agent_state == "idle" or status.agent_state == "done")
   -- Another device shows the session, so the close only detaches this View. The shell keeps running.
   local shared = (status.clients or 0) > 1
+  return status.kind == "reconnecting"
+    or (status.kind == "running" and status.busy ~= false and not idle_pi and not shared and not self_close)
+end
+
+function TerminalView:can_close(approve, caller)
+  if not self.session then approve(); return end
+  local status = self:close_status()
   -- The control server supplies this identity, not the tool's arguments. Approve only this session's busy check.
   local self_close = caller ~= nil and caller ~= "local" and caller == self.session_id
-  local busy = status.kind == "reconnecting"
-    or (status.kind == "running" and status.busy ~= false and not idle_pi and not shared and not self_close)
-  if not busy then
+  if not needs_close_confirmation(status, self_close) then
     core.log_quiet("Terminal session %d closed without confirmation: busy=%s app=%s agent=%s self_close=%s",
       self.log_id, tostring(status.busy), tostring(status.agent_app), tostring(status.agent_state), tostring(self_close))
     approve()
@@ -3314,18 +3317,22 @@ keymap.add({
   ["alt+shift+f"] = "terminal:open_pi_in_split",
 })
 
--- Quit chooses the lifetime of every live session, even an idle shell or Pi.
--- Pane close has its own busy check. An ended session revives on the next start.
-function M.quit_decision(statuses, answer)
+-- Project unload uses the Pane Close busy check. Window Close and direct mode offer a choice for every live session.
+-- An ended session revives on the next start.
+function M.quit_decision(statuses, answer, scope)
   local live = {}
   local count = 0
+  local ask = false
   for i, status in ipairs(statuses) do
     live[i] = status.kind == "reconnecting" or status.kind == "running" or status.kind == "starting"
-    if live[i] then count = count + 1 end
+    if live[i] then
+      count = count + 1
+      ask = ask or scope ~= "project" or needs_close_confirmation(status)
+    end
   end
   if count > 0 then
     if answer == "cancel" then return nil, "cancel", count end
-    if answer ~= "keep" and answer ~= "end" then return nil, "ask", count end
+    if ask and answer ~= "keep" and answer ~= "end" then return nil, "ask", count end
   end
   local actions = {}
   for i in ipairs(statuses) do actions[i] = live[i] and answer == "keep" and "detach" or "end" end
@@ -3354,11 +3361,12 @@ function M.confirm_quit(accept, cancel)
     end
   end
   local window_close = false
+  local quit_scope = "direct"
   local function apply(answer)
     for i, view in ipairs(views) do
       statuses[i] = view.session and view:close_status() or { kind = "closed" }
     end
-    local actions, reason = M.quit_decision(statuses, answer)
+    local actions, reason = M.quit_decision(statuses, answer, quit_scope)
     core.log_quiet("Terminal quit decision: answer=%s result=%s sessions=%d", tostring(answer), tostring(reason or "accepted"), #views)
     if not actions then
       if cancel then cancel() end
@@ -3378,9 +3386,10 @@ function M.confirm_quit(accept, cancel)
     accept(by_view)
   end
   local function choose(scope)
-    window_close = scope ~= "project"
+    quit_scope = scope
+    window_close = scope ~= "project" and scope ~= "direct"
     core.log_quiet("Terminal quit scope: scope=%s sessions=%d", scope, #views)
-    local actions, _, count = M.quit_decision(statuses, scope)
+    local actions, _, count = M.quit_decision(statuses, scope, quit_scope)
     if actions then apply(scope); return end
     core.wait_for_quit_choice()
     local options = {
@@ -3401,7 +3410,7 @@ function M.confirm_quit(accept, cancel)
     if system.request_terminal_quit() then return end
     pending_quit = nil
   end
-  choose("project")
+  choose(system.is_hosted_surface() and "project" or "direct")
 end
 
 local quit = core.quit

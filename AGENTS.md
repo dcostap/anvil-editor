@@ -140,7 +140,8 @@ Keep running detaches them. End all ends them but keeps their revival records. C
 An idle shell that only a Pane's Navigation History keeps does not count. An accepted quit closes it and removes its history entry and record, so it does not restore.
 A history shell that is busy, starting or reconnecting, or that runs a program such as Pi, still counts.
 The shell shares the choice across that Window's Projects, not other Windows. A later Window Close asks again.
-Project unload and direct mode ask each time.
+Project unload uses the Pane Close busy check. It ends idle shells, idle or finished Pi, and new shells without asking, and keeps revival records. Shared sessions detach and keep running. Busy or reconnecting sessions still require a choice for all the Project's sessions.
+Direct mode asks each time.
 An ended session is not closed. It revives in its Pane on the next start.
 The host gets `ANVIL_TERMINAL_END`. It stops the shell, but keeps the record, the screen and the Pi report.
 The session keeps its ID, so its Snooze, seen time and Pi session stay.

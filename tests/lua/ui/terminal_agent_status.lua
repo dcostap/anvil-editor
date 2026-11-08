@@ -28,10 +28,12 @@ end
 
 test.describe("Terminal agent status", function()
   for _, agent_state in ipairs { "idle", "done" } do
-    test.it("closes " .. agent_state .. " Pi without confirmation while its command still runs", function()
+    test.it("closes the Pane or unloads the Project without confirmation for " .. agent_state .. " Pi", function()
       test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
       terminal._set_native_for_tests(nil)
       local view = ready(terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" })
+      local core = require "core"
+      local hosted, request, pending = system.is_hosted_surface, system.request_terminal_quit, core.quit_pending
       local ok, err = pcall(function()
         test.ok(wait_for(view, function(value) return value.busy == false end, 20), "idle shell missing")
         test.ok(view.session:write(
@@ -49,7 +51,19 @@ test.describe("Terminal agent status", function()
         local approved = false
         view:can_close(function() approved = true end)
         test.ok(approved, agent_state .. " Pi still required confirmation")
+
+        -- The shell identifies this close as a Project unload, not a Window Close.
+        system.is_hosted_surface = function() return true end
+        system.request_terminal_quit = function() return true end
+        core.quit_pending = true
+        local actions
+        terminal.confirm_quit(function(value) actions = value end)
+        core.on_event("terminalquit", "project")
+        test.ok(actions, agent_state .. " Pi still required Project unload confirmation")
+        test.equal(actions[view], "end", "Project unload must retain the session for revival")
       end)
+      system.is_hosted_surface, system.request_terminal_quit, core.quit_pending = hosted, request, pending
+      if core.nag_view.visible then require("core.command").perform "core:select_dialog_no" end
       view:on_close()
       test.ok(ok, err)
     end)
