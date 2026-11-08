@@ -7,8 +7,8 @@ local look = require "core.project_look"
 local ui = require "core.ui"
 
 -- The Project Launcher: what the Project area shows while no Pane Group shows. It shows the Project's badge and name,
--- and a row of buttons. Each button opens one of the Project's main Views in a new Pane, or its folder in File
--- Explorer. The Root Panel draws it over the wallpaper and sends it pointer and keyboard input. Keys use the
+-- or only the name for Scratch, and a row of buttons. Each button opens one of the Project's main Views in a new
+-- Pane, or its folder in File Explorer. The Root Panel draws it over the wallpaper and sends it pointer and keyboard input. Keys use the
 -- bindings of Dialogs, activation, prompt submission and caret moves.
 local launcher = {}
 
@@ -145,11 +145,12 @@ function launcher.draw()
   local items, _, top = layout(m)
   local rect = core.root_panel.content_rect
   local project = project_record()
-  local name = ui.fit_text(m.title_font, look.name(project), math.max(0, rect.w - m.badge - m.title_gap))
-  local heading_w = m.badge + m.title_gap + m.title_font:get_width(name)
+  local badge_w = project.scratch and 0 or m.badge + m.title_gap
+  local name = ui.fit_text(m.title_font, look.name(project), math.max(0, rect.w - badge_w))
+  local heading_w = badge_w + m.title_font:get_width(name)
   local hx = math.floor(rect.x + (rect.w - heading_w) / 2)
-  look.draw_badge(project, hx, top, m.badge, m.badge_font, style.background)
-  common.draw_text(m.title_font, style.text, name, "left", hx + m.badge + m.title_gap, top, 0, m.badge)
+  if not project.scratch then look.draw_badge(project, hx, top, m.badge, m.badge_font, style.background) end
+  common.draw_text(m.title_font, style.text, name, "left", hx + badge_w, top, 0, m.badge)
   local focused = has_keyboard()
   for index, item in ipairs(items) do
     local x, y, w, h, r = item.x, item.y, item.w, item.h, m.radius

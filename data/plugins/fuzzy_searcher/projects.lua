@@ -78,11 +78,17 @@ function projects.bold(font)
   return style.get_scaled_font(font, font:get_size(), "bold")
 end
 
+-- The width of a chip's badge and the gap after it. Scratch is not a folder Project, so it has no badge, as in the
+-- Sidebar.
+local function badge_width(project, font)
+  return project.scratch and 0 or font:get_height() + style.padding.x / 2
+end
+
 -- A chip: the Project's badge and bold name in `font`, at most `max_width` wide. The query's chip uses the normal
 -- font. A group of Other Project Results has a smaller one in `color`.
 local function chip_name(project, max_width, font)
   local bold = projects.bold(font)
-  return bold, tab.fit(bold, look.name(project), max_width - font:get_height() - style.padding.x / 2)
+  return bold, tab.fit(bold, look.name(project), max_width - badge_width(project, font))
 end
 
 -- The query's chip ends with a small faint chevron, as a shell prompt does, so the typed text after it stands apart.
@@ -92,7 +98,7 @@ end
 
 function projects.query_chip_width(project, max_width)
   local bold, name = chip_name(project, max_width, style.font)
-  return style.font:get_height() + style.padding.x / 2 + bold:get_width(name) + style.padding.x * 0.3
+  return badge_width(project, style.font) + bold:get_width(name) + style.padding.x * 0.3
     + chevron_width()
 end
 
@@ -112,8 +118,10 @@ function projects.draw_query_chip(project, x, text_y, text_font, max_width)
   local cap_middle, baseline, cap = ink_line(text_font, "H", text_y)
   local x_middle = ink_line(text_font, "x", text_y)
   local _, bold_baseline = ink_line(bold, "H", 0)
-  look.draw_badge(project, x, math.floor(cap_middle - size / 2 + 0.5), size, bold, style.card)
-  local name_x = x + size + style.padding.x / 2
+  if not project.scratch then
+    look.draw_badge(project, x, math.floor(cap_middle - size / 2 + 0.5), size, bold, style.card)
+  end
+  local name_x = x + badge_width(project, style.font)
   renderer.draw_text(bold, name, name_x, math.floor(baseline - bold_baseline + 0.5), style.text)
   local cx = name_x + bold:get_width(name) + style.padding.x * 0.3
   local w, h = chevron_width(), cap * 0.4
@@ -129,8 +137,8 @@ function projects.draw_chip(project, x, y, max_width, font, color)
   font = font or style.font
   local bold, name = chip_name(project, max_width, font)
   local size = font:get_height()
-  look.draw_badge(project, x, y, size, bold, style.card)
-  renderer.draw_text(bold, name, x + size + style.padding.x / 2, y + math.floor((size - bold:get_height()) / 2),
+  if not project.scratch then look.draw_badge(project, x, y, size, bold, style.card) end
+  renderer.draw_text(bold, name, x + badge_width(project, font), y + math.floor((size - bold:get_height()) / 2),
     color or style.text)
 end
 
@@ -164,8 +172,8 @@ function projects.draw_preview(project, x, y, w, h)
   local bottom = y + h
   x, y, w = x + pad, y + pad, w - 2 * pad
   local size = math.floor(line + 3 * SCALE + 0.5)
-  look.draw_badge(project, x, y, size, bold, style.background)
-  local name_x, name_y = x + size + 8 * SCALE, y + math.floor((size - line) / 2)
+  if not project.scratch then look.draw_badge(project, x, y, size, bold, style.background) end
+  local name_x, name_y = project.scratch and x or x + size + 8 * SCALE, y + math.floor((size - line) / 2)
   local _, note = projects.details(project, now)
   local note_w = note and font:get_width(note) + pad or 0
   local name_color = project.state == "dormant" and not project.exists and style.dim or style.text
