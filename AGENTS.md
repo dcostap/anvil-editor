@@ -297,6 +297,7 @@ A row without a Project sends the key to the Selected Project. Do not add Sideba
 A sent key gives the keyboard to the Project. The keys of Close Pane, Close Others and Reopen Closed Pane keep it in the Sidebar.
 The Project takes it when such a key asks a question, such as a close of an unsaved file.
 A Snooze hours field opened from the focused Sidebar keeps the keyboard there when it closes.
+When only the Window loses focus, such as for Alt+Tab, the Sidebar keeps the keyboard. The shell sends `ANVIL_SURFACE_FOCUS_INACTIVE`, so the cursor, the search and the hours field stay. A new keyboard focus starts at the selected row with an empty search.
 A Move of the Selected Project to another Window keeps the source Window's focused Sidebar, as an unload does. A Close choice takes the keyboard from the Sidebar.
 Run the `windows-move` and `windows-move-close` shell probes after changes to these rules.
 Run `ui/sidebar_view.lua` and `ui/sidebar_navigation.lua` after changes.

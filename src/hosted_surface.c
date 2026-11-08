@@ -383,14 +383,17 @@ void anvil_hosted_surface_controls(int *x, int *y, int *w, int *h) {
   *w = view->config.controls_w; *h = view->config.controls_h;
 }
 
-static void push_window_event(Uint32 type) {
+static void push_window_event_data(Uint32 type, Sint32 data1) {
   if (!view->window_id) return;
   SDL_Event event;
   SDL_zero(event);
   event.type = type;
   event.window.windowID = view->window_id;
+  event.window.data1 = data1;
   if (!system_push_event(&event)) signal_loss("UI event queue overflow", 0, 0);
 }
+
+static void push_window_event(Uint32 type) { push_window_event_data(type, 0); }
 
 static void push_input(const AnvilSurfaceInput *input, const char *text) {
   if (!view->window_id) return;
@@ -706,11 +709,13 @@ static void dispatch_message(HostedMessage *message) {
           (unsigned long long)((AnvilSurfaceInput *)payload)->event.common.timestamp,
           ((AnvilSurfaceInput *)payload)->text_len);
       break;
-    case ANVIL_SURFACE_MSG_FOCUS:
-      SDL_SetAtomicInt(&view->focused, ((AnvilSurfaceInt *)payload)->value != 0);
-      push_window_event(((AnvilSurfaceInt *)payload)->value
-        ? SDL_EVENT_WINDOW_FOCUS_GAINED : SDL_EVENT_WINDOW_FOCUS_LOST);
+    case ANVIL_SURFACE_MSG_FOCUS: {
+      int32_t focus = ((AnvilSurfaceInt *)payload)->value;
+      SDL_SetAtomicInt(&view->focused, focus == ANVIL_SURFACE_FOCUS_GAINED);
+      push_window_event_data(focus == ANVIL_SURFACE_FOCUS_GAINED
+        ? SDL_EVENT_WINDOW_FOCUS_GAINED : SDL_EVENT_WINDOW_FOCUS_LOST, focus == ANVIL_SURFACE_FOCUS_INACTIVE);
       break;
+    }
     case ANVIL_SURFACE_MSG_CLOSE:
       push_window_event(SDL_EVENT_WINDOW_CLOSE_REQUESTED);
       break;

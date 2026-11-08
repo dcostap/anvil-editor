@@ -607,7 +607,7 @@ function core.on_event(name, ...)
     local model = core.project_sidebar
     local refresh_pending = current.query_needed or core.project_sidebar_request ~= nil
       or model and current.revision ~= model.revision
-    current.view:on_focus(name == "focusgained", refresh_pending)
+    current.view:on_focus(name == "focusgained", refresh_pending, name == "focuslost" and (...) == true)
     core.log_quiet("Sidebar keyboard focus: Window=%d focused=%s", current.id, tostring(current.view.focused))
     core.redraw = true
   elseif name == "keypressed" then

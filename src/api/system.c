@@ -318,7 +318,9 @@ top:
 
     case SDL_EVENT_WINDOW_FOCUS_LOST:
       lua_pushstring(L, "focuslost");
-      return 1;
+      /* A hosted Sidebar keeps the keyboard while only its Window is inactive. */
+      lua_pushboolean(L, e.window.data1 != 0);
+      return 2;
 
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
       lua_pushstring(L, "windowclose");

@@ -5853,11 +5853,14 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
       shell_send_int(project, ANVIL_SURFACE_MSG_FOCUS,
                      event->type == SDL_EVENT_WINDOW_FOCUS_GAINED && !window->sidebar_focused);
     }
-    /* A Sidebar popup closes when its Window loses focus, also while the Sidebar does not have the keyboard. */
+    /* A Sidebar popup closes when its Window loses focus, also while the Sidebar does not have the keyboard. A
+     * Sidebar with the keyboard keeps it, so its cursor stays. */
     if ((window->sidebar_focused || (event->type == SDL_EVENT_WINDOW_FOCUS_LOST && sidebar_popup_shown(window))) &&
         window->sidebar_client && shell.sidebar_process && shell.sidebar_process->connected)
       shell_send_int(window->sidebar_client, ANVIL_SURFACE_MSG_FOCUS,
-                     event->type == SDL_EVENT_WINDOW_FOCUS_GAINED);
+                     event->type == SDL_EVENT_WINDOW_FOCUS_GAINED ? ANVIL_SURFACE_FOCUS_GAINED
+                     : window->sidebar_focused                    ? ANVIL_SURFACE_FOCUS_INACTIVE
+                                                                  : ANVIL_SURFACE_FOCUS_LOST);
     /* Unfocused controls use the dim glyph colour. */
     if (window->shown) composite_and_present(window);
     break;

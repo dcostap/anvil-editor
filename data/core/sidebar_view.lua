@@ -179,8 +179,15 @@ function SidebarView:reset_cursor_to_selection()
   self:reveal_cursor()
 end
 
-function SidebarView:on_focus(focused, refresh_pending)
-  self.focused, self.unload_ask = focused, nil
+-- `inactive` tells that only the Window lost focus. The Sidebar keeps the keyboard, so its cursor, search and hours
+-- field stay until the Window is active again.
+function SidebarView:on_focus(focused, refresh_pending, inactive)
+  local resumed = focused and self.inactive
+  self.focused, self.inactive, self.unload_ask, self.selecting = focused, not focused and inactive or nil, nil, nil
+  if inactive or resumed then
+    self:rebuild_rows()
+    return
+  end
   -- The shell ends a Peek when the Sidebar loses the keyboard.
   self.peek_wanted, self.peek_sent = nil, nil
   -- A hidden Sidebar can still hold the previous Pane report when it gets the keyboard.
@@ -189,7 +196,7 @@ function SidebarView:on_focus(focused, refresh_pending)
   if not focused then self.hours = nil end
   self.focus_feedback:update(focused and self or nil)
   self.input:set_text("")
-  self.query, self.cursor, self.selecting = "", nil, nil
+  self.query, self.cursor = "", nil
   self:rebuild_rows()
   if focused then self:reset_cursor_to_selection() end
 end

@@ -35,6 +35,7 @@ typedef enum {
   /* Shell to surface process. */
   ANVIL_SURFACE_MSG_CONFIGURE = 1,
   ANVIL_SURFACE_MSG_INPUT = 2,
+  /* Payload: AnvilSurfaceInt, an AnvilSurfaceFocus. */
   ANVIL_SURFACE_MSG_FOCUS = 3,
   ANVIL_SURFACE_MSG_CLOSE = 4,
   ANVIL_SURFACE_MSG_DIALOG_RESULT = 5,
@@ -260,6 +261,13 @@ typedef struct {
 } AnvilSurfaceInput;
 
 typedef struct { int32_t value; } AnvilSurfaceInt;
+
+typedef enum {
+  ANVIL_SURFACE_FOCUS_LOST = 0,
+  ANVIL_SURFACE_FOCUS_GAINED = 1,
+  /* Only the Window lost focus. The Sidebar keeps the keyboard and gets FOCUS_GAINED when the Window is active. */
+  ANVIL_SURFACE_FOCUS_INACTIVE = 2,
+} AnvilSurfaceFocus;
 
 typedef enum {
   ANVIL_SURFACE_CLOSE_PENDING,
