@@ -276,7 +276,8 @@ local function execute(request, x, y)
     panes.focus(pane, request.feedback)
     return true
   end
-  if action == "close" then panes.close(pane); return true end
+  -- Sidebar mouse and menu closes keep the keyboard where it is. Keyboard closes use the key request instead.
+  if action == "close" then panes.close(pane, {focus_sidebar = false}); return true end
   if action == "snooze" then return require("core.snoozed_panes").snooze(pane) end
   if action == "unsnooze" then return require("core.snoozed_panes").wake(pane) end
   if action == "move" then

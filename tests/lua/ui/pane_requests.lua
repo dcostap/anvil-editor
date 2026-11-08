@@ -48,6 +48,25 @@ test.describe("Pane requests", function()
     test.same(panes.ordered(), {a})
   end)
 
+  test.it("keeps the Project keyboard focus when a Sidebar close leaves no selected Pane", function()
+    local a, b = create(), create()
+    panes.focus(a)
+    local has_focus, focus_sidebar = system.window_has_focus, system.focus_project_sidebar
+    local taken = {}
+    system.window_has_focus = function() return true end
+    system.focus_project_sidebar = function(focused) taken[#taken + 1] = focused; return true end
+
+    local ok, err = pcall(function()
+      request {action = "close", pane = a.id}
+      test.same(panes.ordered(), {b})
+      test.is_nil(panes.active())
+      test.is_nil(panes.visible_group())
+      test.same(taken, {})
+    end)
+    system.window_has_focus, system.focus_project_sidebar = has_focus, focus_sidebar
+    assert(ok, err)
+  end)
+
   test.it("runs a Sidebar key in the named Pane, or in the active Pane", function()
     local stroke, ran = "ctrl+alt+shift+f12", {}
     command.add(nil, {["test:sidebar_key"] = function() ran[#ran + 1] = panes.active() end})

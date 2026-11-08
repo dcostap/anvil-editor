@@ -1801,7 +1801,7 @@ function M.reopen_last_closed()
   return M.restore(snapshot)
 end
 
-local function commit_close(pane)
+local function commit_close(pane, opts)
   local ok, snapshot = pcall(save_closed_pane, pane)
   closed_panes[#closed_panes + 1] = ok and snapshot or { error = tostring(snapshot) }
   if #closed_panes > 20 then table.remove(closed_panes, 1) end
@@ -1827,7 +1827,7 @@ local function commit_close(pane)
     M.groups_by_id[group.id] = nil
   end
   -- The active Pane's group keeps the selection while it has Panes. Otherwise no Pane is selected, and a Project
-  -- that has the keyboard gives it to the Sidebar, whose cursor then shows this Project's row.
+  -- that has the keyboard gives it to the Sidebar unless the close request keeps it in the Project.
   if M.active_pane == pane then
     local next_pane = group.root and nearest_after_removal(layout.leaves(group.root), old_group_index)
     M.active_pane = next_pane
@@ -1836,7 +1836,8 @@ local function commit_close(pane)
       focus_view(next_pane)
     else
       if closed_active_view and core.clear_active_view then core.clear_active_view(core.active_view) end
-      if M.count() > 0 and core.window and system.window_has_focus(core.window) then
+      if (not opts or opts.focus_sidebar ~= false) and M.count() > 0 and core.window
+        and system.window_has_focus(core.window) then
         local sent = system.focus_project_sidebar(true)
         quiet("Pane close selects no Pane; Sidebar takes the keyboard: sent=%s", tostring(sent))
       end
@@ -1879,7 +1880,7 @@ function M.close(target, opts)
       end
       core.log_quiet("Pane close: discard requested for %s", pane.id)
     end
-    commit_close(pane)
+    commit_close(pane, opts)
   end
   authorize_close(pane, opts.force or opts.discard, close, opts.close_caller)
   return committed
@@ -1894,7 +1895,7 @@ function M.close_all(opts)
     index = index + 1
     if M.contains(pane) then
       authorize_close(pane, opts and opts.force, function()
-        commit_close(pane)
+        commit_close(pane, opts)
         close_next()
       end)
     else
