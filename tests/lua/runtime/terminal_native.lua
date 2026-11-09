@@ -148,6 +148,49 @@ test.describe("Native terminal session", function()
     session:close()
   end)
 
+  test.it("reports the current appearance after a subscribed program reconnects", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local native = require "terminal_native"
+    local session = assert(native.new {
+      cols = 100, rows = 8, cell_width = 8, cell_height = 16,
+      foreground = 0x080808, background = 0xffffff,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -File tests/fixtures/terminal_color_scheme_query.ps1 -Watch]],
+    })
+    local restored
+    local ok, err = pcall(function()
+      test.ok(wait_for_text(session, "ANVIL_WATCH_READY"):find("ANVIL_WATCH_READY", 1, true))
+      test.ok(session:set_colors { background = 0x101010 })
+      test.ok(wait_for_text(session, "ANVIL_CHANGED_1"):find("ANVIL_CHANGED_1", 1, true))
+      local id = session:stats().session_id
+      session:detach()
+      local deadline = system.get_time() + TIMEOUT
+      local record
+      repeat
+        local text = native.read_session_record(id)
+        record = text and assert(load(text, "record", "t", {}))()
+        if record and not record.attached then break end
+        coroutine.yield(0.01)
+      until system.get_time() >= deadline
+      test.ok(record and not record.attached, "Terminal Session did not detach")
+      restored = assert(native.new {
+        session_id = record.session_id, host_pid = record.host_pid,
+        host_creation_time = record.host_creation_time, pipe_name = record.pipe_name,
+        foreground = 0x080808, background = 0xffffff,
+      })
+      local text = wait_for_text(restored, "ANVIL_CHANGED_2")
+      test.ok(text:find("ANVIL_CHANGED_2", 1, true), "Missing light appearance after reconnect: " .. text)
+      test.ok(restored:write("!"))
+      test.ok(wait_for_text(restored, "ANVIL_WATCH_OFF"):find("ANVIL_WATCH_OFF", 1, true))
+      test.ok(restored:write("!"))
+      test.ok(wait_for_text(restored, "ANVIL_WATCH_DONE"):find("ANVIL_WATCH_DONE", 1, true))
+    end)
+    if restored then restored:close() end
+    session:close()
+    native.finish_close_commands()
+    test.ok(ok, err)
+  end)
+
   test.it("keeps app-positioned text around OSC 133 semantic markers", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"

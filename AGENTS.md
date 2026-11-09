@@ -1503,7 +1503,8 @@ Run `runtime/terminal_native.lua` and `ui/terminal.lua` after key input changes.
 
 A Terminal View reports light/dark appearance changes to programs that enable mode 2031.
 It sends the report after applying all new colors, so programs can query the new palette.
-Run `runtime/terminal_native.lua` after changes.
+After reconnecting, the Controller reports its current appearance once the saved screen and subscription are restored. The program can still have colors from before the disconnect.
+Run `runtime/terminal_native.lua` and `runtime/terminal_pi_appearance.lua` after changes. The Pi test uses a local scripted model and no inference. Set `ANVIL_TEST_PI` and `ANVIL_TEST_NODE` if Meson did not find them at configuration.
 
 Terminal Views display static Kitty graphics through Ghostty's image API.
 Only direct image transfers are enabled. File and shared-memory transfers remain disabled.

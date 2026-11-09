@@ -1429,6 +1429,19 @@ static TerminalColors read_terminal_colors(lua_State *L, int table_index) {
   return colors;
 }
 
+static void report_terminal_color_scheme(TerminalSession *session) {
+  if (session->viewer || !session->color_scheme_known) return;
+  GhosttyTerminalModeConfig mode = { .mode = GHOSTTY_MODE_COLOR_SCHEME_REPORT };
+  if (ghostty_terminal_get(session->terminal, GHOSTTY_TERMINAL_DATA_MODE, &mode)
+      != GHOSTTY_SUCCESS || !mode.value) return;
+  char report[32];
+  size_t length = 0;
+  if (ghostty_color_scheme_report_encode(session->color_scheme, report,
+      sizeof(report), &length) == GHOSTTY_SUCCESS) {
+    terminal_write_pty(session->terminal, session, (const uint8_t *)report, length);
+  }
+}
+
 static int f_terminal_set_colors(lua_State *L) {
   TerminalSession *session = check_session(L, 1);
   luaL_checktype(L, 2, LUA_TTABLE);
@@ -1442,16 +1455,7 @@ static int f_terminal_set_colors(lua_State *L) {
     ghostty_render_state_set(session->render_state, GHOSTTY_RENDER_STATE_OPTION_DIRTY, &dirty);
     /* Programs must query the complete new palette, not the previous theme's colors. */
     if (had_color_scheme && previous_scheme != session->color_scheme) {
-      GhosttyTerminalModeConfig mode = { .mode = GHOSTTY_MODE_COLOR_SCHEME_REPORT };
-      if (ghostty_terminal_get(session->terminal, GHOSTTY_TERMINAL_DATA_MODE, &mode)
-          == GHOSTTY_SUCCESS && mode.value) {
-        char report[32];
-        size_t length = 0;
-        if (ghostty_color_scheme_report_encode(session->color_scheme, report,
-            sizeof(report), &length) == GHOSTTY_SUCCESS) {
-          terminal_write_pty(session->terminal, session, (const uint8_t *)report, length);
-        }
-      }
+      report_terminal_color_scheme(session);
     }
   }
   lua_pushboolean(L, ok);
@@ -1904,6 +1908,9 @@ static bool service_replay(TerminalSession *session, bool *changed) {
       clear_replay(session); session->replay_finished = true;
       ghostty_terminal_resize(session->terminal, session->cols, session->rows,
         session->cell_width, session->cell_height);
+      /* The program kept running while detached. Its last appearance can differ from this Client's.
+         Wait for the restored subscription, palette and Controller role before sending the report. */
+      report_terminal_color_scheme(session);
       session->render_pending = true;
       return true;
     }
