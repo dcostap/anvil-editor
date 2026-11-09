@@ -495,50 +495,16 @@ test.describe("Pane manager", function()
     test.not_equal(panes.visible_group(), three.group)
   end)
 
-  test.it("selects no Pane and gives the Sidebar the keyboard after closing a group sole Pane", function()
+  test.it("switches Pane Groups after closing a group sole Pane", function()
     local one = panes.create { factory = factory("one") }
     local two = panes.create { factory = factory("two") }
     panes.focus(one)
-    core.active_view = one.current_view
-    local has_focus, focus_sidebar, clear_active_view =
-      system.window_has_focus, system.focus_project_sidebar, core.clear_active_view
-    local sidebar_requests = {}
-    system.window_has_focus = function() return true end
-    system.focus_project_sidebar = function(focused) sidebar_requests[#sidebar_requests + 1] = focused; return true end
-    core.clear_active_view = function(view)
-      if core.active_view == view then core.active_view = nil; return true end
-      return false
-    end
+    test.ok(panes.close(one))
 
-    local closed = panes.close(one)
-    system.window_has_focus, system.focus_project_sidebar, core.clear_active_view =
-      has_focus, focus_sidebar, clear_active_view
-
-    test.ok(closed)
-    test.is_nil(panes.active())
-    test.is_nil(panes.visible_group())
-    test.is_nil(core.active_view)
-    test.same(sidebar_requests, { true })
+    test.equal(panes.active(), two)
     test.same(names(panes.ordered()), { "two" })
     test.ok(panes.validate())
-    test.equal(panes.focus(two), two)
     test.equal(panes.visible_group(), two.group)
-  end)
-
-  test.it("keeps the keyboard when a Project without it closes a group sole Pane", function()
-    local one = panes.create { factory = factory("one") }
-    panes.create { factory = factory("two") }
-    panes.focus(one)
-    local has_focus, focus_sidebar = system.window_has_focus, system.focus_project_sidebar
-    local requested = false
-    system.window_has_focus = function() return false end
-    system.focus_project_sidebar = function() requested = true; return true end
-
-    panes.close(one)
-    system.window_has_focus, system.focus_project_sidebar = has_focus, focus_sidebar
-
-    test.is_nil(panes.active())
-    test.equal(requested, false)
   end)
 
   test.it("rejects duplicate Pane membership", function()

@@ -1801,11 +1801,12 @@ function M.reopen_last_closed()
   return M.restore(snapshot)
 end
 
-local function commit_close(pane, opts)
+local function commit_close(pane)
   local ok, snapshot = pcall(save_closed_pane, pane)
   closed_panes[#closed_panes + 1] = ok and snapshot or { error = tostring(snapshot) }
   if #closed_panes > 20 then table.remove(closed_panes, 1) end
   quiet("Pane close snapshot: %s (%s)", pane.id, ok and "saved" or tostring(snapshot))
+  local old_index = navigable_index(pane)
   local closed_active_view = M.pane_for_view(core.active_view) == pane
   local group = pane.group
   local old_group_order = layout.leaves(group.root)
@@ -1826,21 +1827,16 @@ local function commit_close(pane, opts)
     if index then table.remove(M.groups, index) end
     M.groups_by_id[group.id] = nil
   end
-  -- The active Pane's group keeps the selection while it has Panes. Otherwise no Pane is selected, and a Project
-  -- that has the keyboard gives it to the Sidebar unless the close request keeps it in the Project.
+  -- Keep selection in this group when possible, then select the nearest remaining Pane Group.
   if M.active_pane == pane then
-    local next_pane = group.root and nearest_after_removal(layout.leaves(group.root), old_group_index)
+    local next_pane = (group.root and nearest_after_removal(layout.leaves(group.root), old_group_index))
+      or nearest_after_removal(M.navigable(), old_index) or M.ordered()[1]
     M.active_pane = next_pane
     M.visible_group_value = next_pane and next_pane.group
     if next_pane then
       focus_view(next_pane)
     else
       if closed_active_view and core.clear_active_view then core.clear_active_view(core.active_view) end
-      if (not opts or opts.focus_sidebar ~= false) and M.count() > 0 and core.window
-        and system.window_has_focus(core.window) then
-        local sent = system.focus_project_sidebar(true)
-        quiet("Pane close selects no Pane; Sidebar takes the keyboard: sent=%s", tostring(sent))
-      end
     end
   end
   after_mutation("closed " .. pane.id)
@@ -1880,7 +1876,7 @@ function M.close(target, opts)
       end
       core.log_quiet("Pane close: discard requested for %s", pane.id)
     end
-    commit_close(pane, opts)
+    commit_close(pane)
   end
   authorize_close(pane, opts.force or opts.discard, close, opts.close_caller)
   return committed
@@ -1895,7 +1891,7 @@ function M.close_all(opts)
     index = index + 1
     if M.contains(pane) then
       authorize_close(pane, opts and opts.force, function()
-        commit_close(pane, opts)
+        commit_close(pane)
         close_next()
       end)
     else
@@ -1999,7 +1995,6 @@ function M.save_workspace_state(save_view)
   if M.active_pane and valid[M.active_pane] and saved_groups[M.active_pane.group] then
     state.focused_pane_id = M.active_pane.id
   end
-  state.unselected = not M.active_pane or nil
   return state
 end
 
@@ -2140,8 +2135,7 @@ function M.restore_workspace_state(state, load_view)
   end
 
   local first = M.navigable()[1]
-  local visible = not state.unselected
-    and (M.groups_by_id[state.visible_group_id] or first and first.group or M.groups[1]) or nil
+  local visible = M.groups_by_id[state.visible_group_id] or first and first.group or M.groups[1]
   local focused = M.panes_by_id[state.focused_pane_id]
   if not focused or not visible or focused.group ~= visible then
     focused = visible and layout.leaves(visible.root)[1] or nil
@@ -2245,10 +2239,10 @@ function M.validate()
     assert(seen_owned_views[owner], "focus target owner is not retained by a Pane")
     assert(owner.__pane_owner == seen_owned_views[owner], "focus target owner points to the wrong Pane")
   end
-  if not next(seen_panes) or not M.active_pane then
-    assert(M.active_pane == nil and M.visible_group_value == nil, "no active Pane requires no visible group")
+  if not next(seen_panes) then
+    assert(M.active_pane == nil and M.visible_group_value == nil, "zero Panes require no active Pane or visible group")
   else
-    assert(seen_panes[M.active_pane], "active Pane is invalid")
+    assert(M.active_pane and seen_panes[M.active_pane], "active Pane is invalid")
     assert(M.visible_group_value and M.groups_by_id[M.visible_group_value.id] == M.visible_group_value, "visible Pane Group is invalid")
     assert(M.active_pane.group == M.visible_group_value, "active Pane must belong to visible Pane Group")
   end

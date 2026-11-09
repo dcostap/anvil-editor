@@ -71,7 +71,7 @@ test.describe("Pane Workspace state", function()
     test.equal(panes.visible_group(), panes.active().group)
   end)
 
-  test.it("round-trips a Project that selects no Pane", function()
+  test.it("restores the Pane selected after closing its previous Pane Group", function()
     local one = panes.create { factory = factory("one") }
     panes.create { factory = factory("two") }
     panes.focus(one)
@@ -81,8 +81,8 @@ test.describe("Pane Workspace state", function()
     panes.reset_for_tests()
     test.ok(panes.restore_workspace_state(state, load_view))
     test.same(names(), { "two" })
-    test.is_nil(panes.active())
-    test.is_nil(panes.visible_group())
+    test.equal(panes.active().current_view.name, "two")
+    test.equal(panes.visible_group(), panes.active().group)
   end)
 
   test.it("round-trips one Editor through its View state protocol", function()
