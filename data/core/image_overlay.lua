@@ -435,6 +435,20 @@ local function draw_label_card(text, x, y)
   x = math.floor(common.clamp(x - w / 2, left + style.padding.x, left + width - style.padding.x - w))
   card.draw(x, y, w, h, h / 2)
   common.draw_text(font, style.text, text, "center", x, y, w, h)
+  return x, y, w, h
+end
+
+-- Keep the backdrop out of raised areas: the shell must keep the Sidebar beneath its dim.
+-- A tooltip or toast shares its control's area, within the surface protocol's four-area limit.
+local function raise_control(rect, x, y, w, h)
+  if not rect then return end
+  if x then
+    local right, bottom = math.max(rect.x + rect.w, x + w), math.max(rect.y + rect.h, y + h)
+    x, y = math.min(rect.x, x), math.min(rect.y, y)
+    core.root_panel:show_above_sidebar(x, y, right - x, bottom - y)
+  else
+    core.root_panel:show_above_sidebar(rect.x, rect.y, rect.w, rect.h)
+  end
 end
 
 local function draw_chrome(st)
@@ -447,6 +461,7 @@ local function draw_chrome(st)
     tx = common.draw_text(font, style.text, title.name, "left", tx, title.y, 0, title.h)
     common.draw_text(font, style.dim, title.detail, "left", tx + style.padding.x, title.y, 0, title.h)
     core.pop_clip_rect()
+    raise_control(title)
   end
   draw_pill(st.bar)
   local icons = icon_font()
@@ -469,7 +484,9 @@ local function draw_chrome(st)
   if st.hovered and st.tooltip_shown then
     local item, action = st.hovered.item, st.hovered.item.action
     local text = action.shortcut and (action.tooltip .. "  ·  " .. action.shortcut) or action.tooltip
-    draw_label_card(text, item.x + item.w / 2, st.bar.y + st.bar.h + style.padding.y)
+    raise_control(st.bar, draw_label_card(text, item.x + item.w / 2, st.bar.y + st.bar.h + style.padding.y))
+  else
+    raise_control(st.bar)
   end
   local toast = st.toast
   if toast then
@@ -479,8 +496,11 @@ local function draw_chrome(st)
     local label_y = (controls and controls.y or y + h) - label_h - style.padding.y
     local alpha = common.clamp((TOAST_DURATION - (now() - toast.started)) / 0.3, 0, 1)
     renderer.push_transform(x + w / 2, label_y + label_h / 2, 1, alpha)
-    draw_label_card(toast.text, x + w / 2, label_y)
+    local lx, ly, lw, lh = draw_label_card(toast.text, x + w / 2, label_y)
     renderer.pop_transform()
+    raise_control(controls, lx, ly, lw, lh)
+  else
+    raise_control(st.view:get_controls().rect)
   end
 end
 
@@ -492,8 +512,8 @@ function overlay.draw()
   local backdrop = with_alpha(style.image_overlay_background, p)
   renderer.draw_rect(x, y, w, h, backdrop)
   core.root_panel:dim_sidebar(backdrop)
-  -- Present the whole overlay above the shell's Sidebar, not only its dim.
-  core.root_panel:show_above_sidebar(x, y, w, h)
+  -- Only the image and controls replace Sidebar pixels. Its uncovered rows keep showing through the dim.
+  core.root_panel:show_above_sidebar(st.view:get_image_rect())
   core.push_clip_rect(x, y, w, h)
   -- Fade and scale in place. Do not move between the source and overlay positions.
   local fade = p < 0.999

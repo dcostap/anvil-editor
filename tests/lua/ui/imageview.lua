@@ -350,6 +350,11 @@ test.describe("Image View interaction", function()
           and my >= area[2] and my < area[2] + area[4])
       end
       test.ok(covered, "the shell must show the image above the Sidebar")
+      for _, area in ipairs(published or {}) do
+        test.not_ok(2 >= area[1] and 2 < area[1] + area[3]
+          and root.size.y / 2 >= area[2] and root.size.y / 2 < area[2] + area[4],
+          "the overlay backdrop must dim the Sidebar, not replace its contents")
+      end
       overlay.on_mouse_moved(mx, my, 0, 0)
       test.ok(overlay.on_mouse_wheel(1))
       local _, _, zoomed_width = view:get_image_rect()
