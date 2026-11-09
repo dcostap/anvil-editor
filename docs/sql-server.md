@@ -2,7 +2,7 @@
 
 ## Queries
 
-Use **SQL Server: Manage** in Command Search to open the Databases Dialog. Select Add Connection, enter its server and database, then select Connect. Connect checks access and loads metadata. Select Refresh to load metadata again. An empty Dialog shows only Add Connection. Windows authentication hides the user and password fields.
+Use **SQL Server: Manage** in Command Search to manage the current Project's connections. The Dialog title shows **Project Databases — <project name>**. Select Add Connection, enter its server and database, then select Connect. Connect checks access and loads metadata. Select Refresh to load metadata again. An empty Dialog shows only Add Connection. Windows authentication hides the user and password fields.
 
 New Query opens an Untitled SQL Query in a normal Editor. Use for Query assigns the selected connection to the current Editor. Queries use normal editing, Save As, completion, and symbol navigation. Navigation opens a read-only column summary; Back returns to the same query. The summary is not a CREATE script or complete DDL.
 
@@ -28,7 +28,7 @@ Batches are limited to 256 KiB. Each run holds at most 16 result records, 128 co
 
 ## Connections and persistence
 
-Connection settings belong to the current Project on this PC. Each open query remembers its connection. Workspace restore and Untitled recovery keep that identity. Save As keeps it while the query remains open or saved in the Workspace. Opening a saved SQL file without its Workspace state requires Use for Query again.
+Connection settings belong to the current Project on this PC. Scratch has its own saved connections; it does not share them with other Projects. Its Dialog title shows **Project Databases — Scratch**. Each open query remembers its connection. Workspace restore and Untitled recovery keep that identity. Save As keeps it while the query remains open or saved in the Workspace. Opening a saved SQL file without its Workspace state requires Use for Query again.
 
 Restoring a query does not connect. Select Connect to load metadata again. Explicitly closing an Untitled Query keeps the normal discard confirmation.
 

@@ -54,7 +54,8 @@ test.describe("SQL Queries", function()
     local sql = require "plugins.sql_server"
     test.ok(command.perform("sql_server:manage"))
     local open = test.not_nil(dialog.current())
-    test.equal(open.title, "Databases")
+    test.ok(open.title:find(require("core.common").basename(core.root_project().path), 1, true),
+      "The Dialog must identify the Project whose connections it manages")
     local deadline = system.get_time() + 10
     while not sql.ready() and system.get_time() < deadline do coroutine.yield(0.01) end
     test.ok(sql.ready())

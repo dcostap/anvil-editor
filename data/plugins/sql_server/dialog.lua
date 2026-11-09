@@ -7,11 +7,14 @@ local List = require "core.ui.list"
 local Button = require "core.ui.button"
 local TextField = require "core.ui.text_field"
 local Segmented = require "core.ui.segmented"
+local project_look = require "core.project_look"
 local sql = require "plugins.sql_server"
 local Databases = Dialog:extend()
 
 function Databases:new()
-  Databases.super.new(self, { title = "Databases", width = 660 })
+  local path = core.root_project().path
+  local name = project_look.name { path = path, scratch = core.is_scratch_project(path) }
+  Databases.super.new(self, { title = "Project Databases — " .. name, width = 660 })
   self.fields = {}
   self.list = self:add(List {
     row_height = ui.metrics().control_h,
@@ -109,7 +112,8 @@ function Databases:show_selected()
   self.password.visible = self.password.enabled
   if not self.password.visible then self.password:set_text("") end
   self.list.visible = c ~= nil
-  self.width = c and 660 or 360
+  local title_width = ui.bold_font():get_width(self.title) + 2 * self:metrics().pad + ui.metrics().control_h
+  self.width = c and 660 or math.min(660, math.max(360, title_width / SCALE))
   self.add_button.enabled = sql.ready()
   self.add_button.kind = c and "secondary" or "primary"
   self.remove_button.enabled = c ~= nil
