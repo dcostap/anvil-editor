@@ -3037,7 +3037,7 @@ local function open_clipboard_comparison(view, selection_only)
     preferred_focus_side = "left",
     user_data = { clipboard_comparison = true },
   })
-  DiffRequestController(chain)
+  DiffRequestController(chain, { placement = "new" })
   return true
 end
 
@@ -3174,7 +3174,7 @@ function DiffRequestController:reload(opts)
     })
     attached = true
   elseif not opts.noshow then
-    present_diff_view(view)
+    present_diff_view(view, opts.placement)
     attached = true
   end
   if old_view then
@@ -3311,11 +3311,11 @@ function diffview.open(request, noshow)
   return view
 end
 
----Present a Diff View in the active Pane.
+---Present a Diff View in the requested Pane placement.
 ---@param view plugins.diffview.view
-present_diff_view = function(view)
+present_diff_view = function(view, placement)
   panes.place(function() return view end, {
-    placement = "current",
+    placement = placement or "current",
     focus = true,
     reason = "diff-open",
   })

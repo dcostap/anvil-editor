@@ -424,8 +424,8 @@ test.describe("DiffView batch behavior", function()
     test.equal(col, 2)
   end)
 
-  test.it("compares clipboard text with an editable mapped Untitled selection", function(context)
-    local source = Buffer(nil, nil, true)
+  test.it("compares an Untitled selection in a new Pane and keeps its source editable", function(context)
+    local source = core.open_buffer()
     source:insert(1, 1, "before selected after")
     local editor = Editor(source)
     local source_pane = panes.create { factory = function() return editor end }
@@ -438,11 +438,13 @@ test.describe("DiffView batch behavior", function()
 
     test.ok(command.perform("diff:compare_selection_with_clipboard"))
     system.set_clipboard(old_clipboard or "")
+    test.is_nil(core.root_panel:modal_input_owner())
     local view = core.active_view.diff_view_parent
     test.ok(view)
-    test.equal(source_pane.current_view, view)
-    test.same(panes.views(source_pane), { view })
-    test.is_nil(core.root_panel:modal_input_owner())
+    test.equal(source_pane.current_view, editor)
+    test.same(panes.views(source_pane), { editor })
+    test.ok(panes.pane_for_view(view) ~= source_pane)
+    test.equal(text(source), "before selected after\n")
     track(context, "diffviews", view)
     test.equal(text(view.buffer_view_a.buffer), "clipboard text\n")
     test.equal(text(view.buffer_view_b.buffer), "selected\n")
@@ -458,29 +460,6 @@ test.describe("DiffView batch behavior", function()
     end)
     view.buffer_view_b:on_text_input("changed")
     test.equal(text(source), "before changed after\n")
-  end)
-
-  test.it("restores source focus after canceling a comparison replacement", function()
-    local source = Buffer(nil, nil, true)
-    source:insert(1, 1, "selected")
-    local editor = TextView(source)
-    function editor:can_suspend() return false end
-    function editor:can_close(approve)
-      core.nag_view:show("Close", "Discard changes?", {
-        { text = "Close", default_yes = true },
-        { text = "Cancel", default_no = true },
-      }, function(option)
-        if option.text == "Close" then approve() end
-      end)
-    end
-    local pane = panes.create { factory = function() return editor end }
-    editor:with_selection_state(function() source:set_selection(1, 1, 1, 9) end)
-    test.ok(command.perform("diff:compare_selection_with_clipboard"))
-    test.ok(core.nag_view.visible)
-    test.ok(command.perform("core:select_dialog_no"))
-    test.equal(pane.current_view, editor)
-    test.equal(core.active_view, editor)
-    test.is_nil(core.root_panel:modal_input_owner())
   end)
 
   test.it("gives generated Diff Sides their source Path Targets", function(context)
