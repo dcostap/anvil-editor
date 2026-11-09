@@ -51,7 +51,8 @@ bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
 bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor clear_color);
 void anvil_d3d11_set_transform(RenTransform transform);
 bool anvil_d3d11_push_rect(SDL_Window *window, RenRect rect, RenRect clip, RenColor color);
-bool anvil_d3d11_push_rounded_rect(SDL_Window *window, RenRect rect, float radius, RenRect clip, RenColor color);
+bool anvil_d3d11_push_rounded_rect(SDL_Window *window, RenRect rect, float radius, RenRect clip, RenColor color,
+                                   RenColor bottom, float softness);
 bool anvil_d3d11_push_rect_grid(SDL_Window *window, float x, float y, float step_x, float w, float h, int count, RenRect clip, RenColor color);
 bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
                                RenRect src_px, RenRect dst_px, RenRect clip_px,
@@ -113,8 +114,9 @@ static inline bool anvil_d3d11_push_rect(SDL_Window *window, RenRect rect, RenRe
   (void)window; (void)rect; (void)clip; (void)color;
   return false;
 }
-static inline bool anvil_d3d11_push_rounded_rect(SDL_Window *window, RenRect rect, float radius, RenRect clip, RenColor color) {
-  (void)window; (void)rect; (void)radius; (void)clip; (void)color;
+static inline bool anvil_d3d11_push_rounded_rect(SDL_Window *window, RenRect rect, float radius, RenRect clip, RenColor color,
+                                                 RenColor bottom, float softness) {
+  (void)window; (void)rect; (void)radius; (void)clip; (void)color; (void)bottom; (void)softness;
   return false;
 }
 static inline bool anvil_d3d11_push_rect_grid(SDL_Window *window, float x, float y, float step_x, float w, float h, int count, RenRect clip, RenColor color) {

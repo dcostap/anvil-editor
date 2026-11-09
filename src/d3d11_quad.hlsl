@@ -23,6 +23,7 @@ struct VSOut {
   float2 uv : TEXCOORD0;
   float4 color : COLOR0;
   float4 style : TEXCOORD1;
+  nointerpolation float4 bottom : COLOR1;
 };
 
 struct PSOut {
@@ -53,6 +54,14 @@ VSOut vs_main(VSIn input) {
   output.uv = uvs[vid];
   output.color = input.color;
   output.style = input.style;
+  output.bottom = float4(0.0f, 0.0f, 0.0f, 0.0f);
+  // A shape keeps its rect's origin in uvrect.xy, and its bottom color in uvrect.zw:
+  // red, green and blue as one 24-bit integer, then alpha.
+  if (input.style.x > 4.5f) {
+    output.uv = positions[vid] - input.uvrect.xy;
+    uint rgb = (uint)input.uvrect.z;
+    output.bottom = float4((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255, input.uvrect.w) / 255.0f;
+  }
   return output;
 }
 
@@ -80,6 +89,24 @@ float4 sample_image_texture(float slot, float2 uv) {
 
 PSOut ps_main(VSOut input) {
   PSOut output;
+  // A shape: a rounded rect with a vertical gradient. style.x is 5 plus the width of its soft edge.
+  if (input.style.x > 4.5f) {
+    float softness = input.style.x - 5.0f;
+    float radius = input.style.y;
+    float2 size = input.style.zw;
+    float2 centered = input.uv - size * 0.5f;
+    float2 q = abs(centered) - (size * 0.5f - radius);
+    float distance = length(max(q, 0.0f)) + min(max(q.x, q.y), 0.0f) - radius;
+    float edge = max(softness, 0.75f);
+    float coverage = 1.0f - smoothstep(-edge, edge, distance);
+    float t = saturate(input.uv.y / max(size.y, 1.0f));
+    float3 top = input.color.rgb * input.color.a;
+    float3 bottom = input.bottom.rgb * input.bottom.a;
+    float a = lerp(input.color.a, input.bottom.a, t) * coverage;
+    output.color = float4(lerp(top, bottom, t) * coverage, a);
+    output.coverage = float4(a, a, a, a);
+    return output;
+  }
   if (input.style.x > 3.5f) {
     float radius = input.style.y;
     float2 size = input.style.zw;

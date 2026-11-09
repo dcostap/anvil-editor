@@ -140,9 +140,13 @@ typedef struct {
 } DrawRectCommand;
 
 typedef struct {
+  /* The area that the command draws: the shape and its soft edge. */
   RenRect rect;
+  RenRect shape;
   RenColor color;
+  RenColor bottom;
   float radius;
+  float softness;
 } DrawRoundedRectCommand;
 
 typedef struct {
@@ -497,17 +501,24 @@ void rencache_draw_rect(RenCache *ren_cache, RenRect rect, RenColor color, bool 
   }
 }
 
-void rencache_draw_rounded_rect(RenCache *ren_cache, RenRect rect, float radius, RenColor color) {
-  if (rect.width <= 0 || rect.height <= 0 || color.a == 0 ||
-      !rects_overlap(ren_cache->last_clip_rect, rect)) {
+void rencache_draw_rounded_rect(RenCache *ren_cache, RenRect rect, float radius, RenColor color,
+                                RenColor bottom, float softness) {
+  if (!isfinite(softness) || softness < 0.0f) softness = 0.0f;
+  int reach = softness > 0.0f ? (int)ceilf(softness) + 1 : 0;
+  RenRect bounds = { rect.x - reach, rect.y - reach, rect.width + 2 * reach, rect.height + 2 * reach };
+  if (rect.width <= 0 || rect.height <= 0 || (color.a == 0 && bottom.a == 0) ||
+      !rects_overlap(ren_cache->last_clip_rect, bounds)) {
     return;
   }
   DrawRoundedRectCommand *cmd = push_command(ren_cache, DRAW_ROUNDED_RECT, sizeof(DrawRoundedRectCommand));
   if (cmd) {
     float max_radius = (float)(rect.width < rect.height ? rect.width : rect.height) * 0.5f;
-    cmd->rect = rect;
+    cmd->rect = bounds;
+    cmd->shape = rect;
     cmd->color = color;
+    cmd->bottom = bottom;
     cmd->radius = radius < 0.0f ? 0.0f : (radius > max_radius ? max_radius : radius);
+    cmd->softness = softness;
   }
 }
 
@@ -884,7 +895,8 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
       } break;
       case DRAW_ROUNDED_RECT: {
         DrawRoundedRectCommand *rcmd = (DrawRoundedRectCommand*)&cmd->command;
-        if (!anvil_d3d11_push_rounded_rect(ren_cache->window, rcmd->rect, rcmd->radius, clip, rcmd->color)) { fail_reason = "draw_rounded_rect"; goto fail; }
+        if (!anvil_d3d11_push_rounded_rect(ren_cache->window, rcmd->shape, rcmd->radius, clip, rcmd->color,
+                                           rcmd->bottom, rcmd->softness)) { fail_reason = "draw_rounded_rect"; goto fail; }
       } break;
       case DRAW_RECT_GRID: {
         DrawRectGridCommand *gcmd = (DrawRectGridCommand*)&cmd->command;
@@ -1100,9 +1112,11 @@ void rencache_end_frame(RenCache *ren_cache) {
           break;
         case DRAW_ROUNDED_RECT:
           ren_draw_rounded_rect(
-            &rs, transform_rect(rrcmd->rect, transform),
+            &rs, transform_rect(rrcmd->shape, transform),
             rrcmd->radius * transform.scale,
-            transform_color(rrcmd->color, transform)
+            transform_color(rrcmd->color, transform),
+            transform_color(rrcmd->bottom, transform),
+            rrcmd->softness * transform.scale
           );
           break;
         case DRAW_RECT_GRID:

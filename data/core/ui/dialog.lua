@@ -1,21 +1,25 @@
 local core = require "core"
 local command = require "core.command"
-local common = require "core.common"
 local config = require "core.config"
 local keymap = require "core.keymap"
 local style = require "core.style"
 local View = require "core.view"
 local card = require "core.card"
 local ui = require "core.ui"
+local layout = require "core.ui.layout"
+local surface = require "core.ui.surface"
 local Button = require "core.ui.button"
 
 -- A Dialog: a modal card over the Project with a title and controls. It dims the rest of the Window, including a
 -- hosted shell's Sidebar, and takes all input while it is open. One Dialog is open at a time.
 --
--- A subclass adds its controls with `add`, places them in `layout_content`, and draws its other content in
--- `draw_content`. Tab moves the keyboard focus through the controls. Enter activates the focused control,
--- Escape cancels its edit or closes the Dialog, and a click outside the card closes it.
--- Keys reach the focused control as the editor's commands, with the user's bindings: Up and Down are
+-- A Dialog's `body` is a layout node (core.ui.layout) with its controls, and its optional `footer` is a node
+-- below it, usually a Row of buttons. The body scrolls when the Window is too short for it. Tab visits the
+-- controls in layout order.
+-- An older Dialog adds its controls with `add`, places them in `layout_content`, and draws its other content in
+-- `draw_content`.
+-- Enter activates the focused control, Escape cancels its edit or closes the Dialog, and a click outside the card
+-- closes it. Keys reach the focused control as the editor's commands, with the user's bindings: Up and Down are
 -- "move_to_previous_line" and "move_to_next_line", for example. A subclass can take them first in `perform`.
 local dialog = {}
 
@@ -31,18 +35,25 @@ dialog.Dialog = Dialog
 
 function Dialog:__tostring() return "Dialog(" .. tostring(self.title) .. ")" end
 
----@param options { title: string, width: number? } `width` is the card's width at scale 1.
+---@param options { title: string, description: string?, width: number?, body: table?, footer: table? }
+---`width` is the card's width at scale 1.
 function Dialog:new(options)
   Dialog.super.new(self)
   options = options or {}
   self.title = options.title or ""
+  self.description = options.description
   self.width = options.width or 560
+  self.body, self.footer = options.body, options.footer
   self.controls = {}
+  -- The controls that show, from the last layout: the added controls, then the body's and the footer's.
+  self.live = {}
   self.progress = 0
   self.is_open = false
   self.rect = { x = 0, y = 0, w = 0, h = 0 }
+  self.title_text = layout.Text { role = "title" }
+  self.description_text = layout.Text { role = "description" }
   self.close_button = self:add(Button({
-    icon = ui.icons.close, kind = "ghost", focusable = false,
+    icon = ui.icons.close, kind = "ghost", size = "small", focusable = false,
     on_click = function() self:close() end,
   }))
 end
@@ -56,15 +67,28 @@ function Dialog:add(control)
   return control
 end
 
+---Replace the body.
+function Dialog:set_body(body)
+  self.body = body
+  core.redraw = true
+end
+
 ---Sizes in pixels at the current scale.
 function Dialog:metrics()
+  local um = ui.metrics()
   return {
-    pad = math.floor(20 * SCALE + 0.5),
+    pad = um.dialog_pad,
     side = math.floor(24 * SCALE + 0.5),
-    radius = math.floor(10 * SCALE + 0.5),
-    header_gap = math.floor(14 * SCALE + 0.5),
+    radius = um.dialog_radius,
+    header_gap = um.section_gap,
+    footer_gap = math.floor(20 * SCALE + 0.5),
     top = math.floor(72 * SCALE + 0.5),
   }
+end
+
+---Whether `control` has the keyboard focus of the open Dialog.
+function Dialog:is_focused(control)
+  return self.is_open and self.focused == control
 end
 
 ------------------------------------------------------------------------------------------------------------------
@@ -138,10 +162,17 @@ end
 
 function Dialog:focusables()
   local result = {}
-  for _, control in ipairs(self.controls) do
+  for _, control in ipairs(self.live) do
     if control:can_focus() then result[#result + 1] = control end
   end
   return result
+end
+
+local function shows(self, control)
+  for _, other in ipairs(self.live) do
+    if other == control then return true end
+  end
+  return false
 end
 
 ---Give `control` keyboard focus, or take focus from all controls with nil.
@@ -211,20 +242,19 @@ function Dialog:on_modal_key_released() return true end
 
 ---The control under a point, or nil.
 function Dialog:control_at(x, y)
-  for i = #self.controls, 1, -1 do
-    local control = self.controls[i]
+  for i = #self.live, 1, -1 do
+    local control = self.live[i]
     if control:contains(x, y) then return control end
   end
 end
 
 function Dialog:set_hovered(control)
-  for _, other in ipairs(self.controls) do
-    local hovered = other == control
-    if other.hovered ~= hovered then
-      other.hovered = hovered
-      core.redraw = true
-    end
-  end
+  local previous = self.hovered_control
+  if previous == control then return end
+  if previous then previous.hovered = false end
+  self.hovered_control = control
+  if control then control.hovered = true end
+  core.redraw = true
 end
 
 function Dialog:release_pointer()
@@ -280,8 +310,11 @@ function Dialog:on_modal_mouse_released(button, x, y)
 end
 
 function Dialog:on_modal_mouse_wheel(dy)
-  local control = self.mouse_x and self:control_at(self.mouse_x, self.mouse_y)
-  if control then control:on_mouse_wheel(dy) end
+  local x, y = self.mouse_x, self.mouse_y
+  if not x then return true end
+  local control = self:control_at(x, y)
+  if control and control:on_mouse_wheel(dy) then return true end
+  if self.body_scroll and inside(self.body_scroll, x, y) then self.body_scroll:on_wheel(x, y, dy) end
   return true
 end
 
@@ -297,17 +330,26 @@ end
 ---`max_h` is the most height that the card has room for. The default content is empty.
 function Dialog:layout_content(x, y, w, max_h) return 0 end
 
----Draw the content other than its controls, then the controls. The default draws only the controls.
+---Draw the content other than its controls, then the controls. The default draws the added controls, the
+---body and the footer.
 function Dialog:draw_content()
   for _, control in ipairs(self.controls) do
     if control ~= self.close_button and control.visible then
       control:draw(self.is_open and control == self.focused)
     end
   end
+  if self.body_scroll then self.body_scroll:draw_node(self) end
+  if self.footer and self.footer.visible then self.footer:draw_node(self) end
 end
 
 ---Called each frame while the Dialog is open, before its layout.
 function Dialog:on_update() end
+
+local function header_height(self, w)
+  local h = self.title_text:height(w)
+  if self.description then h = h + ui.metrics().text_gap + self.description_text:height(w) end
+  return h
+end
 
 -- The card is centred on the Window, near the top of the area below the Title Bar. Its content sets its height.
 function Dialog:layout()
@@ -316,18 +358,59 @@ function Dialog:layout()
   local bx, _, bw, bh = root:backdrop_rect()
   local top = root.position.y + (core.title_bar and core.title_bar.size.y or 0)
   local w = math.floor(math.max(1, math.min(self.width * SCALE, bw - 2 * m.side)))
-  local header_h = um.control_h
-  local fixed_h = 2 * m.pad + header_h + m.header_gap
-  local available_h = math.max(fixed_h, bh - top - 2 * m.side)
   local inner_w = w - 2 * m.pad
-  local content_h = self:layout_content(0, 0, inner_w, available_h - fixed_h)
+  local close = um.control_sm_h
+  self.title_text:set_text(self.title)
+  self.description_text:set_text(self.description or "")
+  local title_w = inner_w - close
+  local header_h = header_height(self, title_w)
+  local footer = self.footer and self.footer.visible and self.footer
+  local footer_h = footer and footer:height(inner_w) or 0
+  local fixed_h = 2 * m.pad + header_h + m.header_gap + (footer and m.footer_gap + footer_h or 0)
+  local available_h = math.max(fixed_h, bh - top - 2 * m.side)
+  local body = self.body
+  if not body then
+    self.body_scroll = nil
+  elseif not (self.body_scroll and self.body_scroll:child() == body) then
+    self.body_scroll = layout.Scroll { body }
+  end
+  local content_h
+  if body then
+    content_h = math.min(body:height(inner_w), available_h - fixed_h)
+  else
+    content_h = self:layout_content(0, 0, inner_w, available_h - fixed_h)
+  end
   local h = math.min(fixed_h + content_h, available_h)
   local x = math.floor(bx + (bw - w) / 2)
   local y = math.floor(top + math.max(m.side, math.min((bh - top - h) / 2, m.top)))
   self.rect.x, self.rect.y, self.rect.w, self.rect.h = x, y, w, h
-  self.header = { x = x + m.pad, y = y + m.pad, w = inner_w, h = header_h }
-  self.close_button:set_rect(x + w - m.pad - header_h + um.gap, y + m.pad, header_h, header_h)
-  self:layout_content(x + m.pad, y + m.pad + header_h + m.header_gap, inner_w, available_h - fixed_h)
+  local hx, hy = x + m.pad, y + m.pad
+  self.header = { x = hx, y = hy, w = inner_w, h = header_h }
+  local title_h = self.title_text:height(title_w)
+  self.title_text:place(hx, hy, title_w, title_h)
+  if self.description then
+    self.description_text:place(hx, hy + title_h + um.text_gap, title_w, self.description_text:height(title_w))
+  end
+  self.close_button:set_rect(x + w - math.floor(12 * SCALE + 0.5) - close,
+    hy + math.floor((title_h - close) / 2), close, close)
+  local cy = hy + header_h + m.header_gap
+  local live = self.live
+  for i = #live, 1, -1 do live[i] = nil end
+  for _, control in ipairs(self.controls) do
+    if control.visible then live[#live + 1] = control end
+  end
+  if body then
+    ui.layout_focus, ui.layout_clip = self.focused, nil
+    self.body_scroll:place(hx, cy, inner_w, content_h)
+    self.body_scroll:collect(live)
+  else
+    self:layout_content(hx, cy, inner_w, available_h - fixed_h)
+  end
+  if footer then
+    ui.layout_focus, ui.layout_clip = nil, nil
+    footer:place(hx, y + h - m.pad - footer_h, inner_w, footer_h)
+    footer:collect(live)
+  end
 end
 
 function Dialog:step()
@@ -344,9 +427,12 @@ function Dialog:step()
     core.redraw = true
   end
   if self.is_open then
-    if self.focused and not self.focused:can_focus() then self:focus(self:focusables()[1]) end
     self:on_update()
     self:layout()
+    -- A control that hides, or leaves the layout, gives its focus to the first control.
+    if self.focused and not (self.focused:can_focus() and shows(self, self.focused)) then
+      self:focus(self:focusables()[1])
+    end
   end
 end
 
@@ -364,12 +450,10 @@ function Dialog:draw_dialog()
   -- The card settles into place from a slightly smaller size.
   local transformed = p < 0.999
   if transformed then renderer.push_transform(r.x + r.w / 2, r.y, 0.97 + 0.03 * p, p) end
-  card.draw(r.x, r.y, r.w, r.h, m.radius)
+  surface.draw("dialog", r.x, r.y, r.w, r.h, m.radius)
   core.push_clip_rect(r.x, r.y, r.w, r.h)
-  local header = self.header
-  local title_w = header.w - self.close_button.w
-  common.draw_text(ui.bold_font(), style.text, ui.fit_text(ui.bold_font(), self.title, title_w), "left",
-    header.x, header.y, title_w, header.h)
+  self.title_text:draw_node(self)
+  if self.description then self.description_text:draw_node(self) end
   self.close_button:draw(false)
   self:draw_content()
   core.pop_clip_rect()

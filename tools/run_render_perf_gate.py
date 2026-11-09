@@ -150,6 +150,12 @@ SCENARIOS["file-types-dialog"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["machines-dialog"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["machines-dialog-others"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["update-dialog"] = dict(SCENARIOS["image-viewer"])
+# The UI Gallery's pages. Buttons and Choices also show in the other themes.
+for _page in ("buttons", "inputs", "choices", "lists", "look"):
+    SCENARIOS["ui-gallery-" + _page] = dict(SCENARIOS["image-viewer"])
+for _page in ("buttons", "choices"):
+    for _theme in ("light", "light2", "dark3"):
+        SCENARIOS["ui-gallery-%s-%s" % (_page, _theme)] = dict(SCENARIOS["image-viewer"], theme=_theme)
 SCENARIOS["keyboard-map"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["project-launcher"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["terminal-images"] = dict(SCENARIOS["image-viewer"])

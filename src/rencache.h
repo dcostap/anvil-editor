@@ -82,7 +82,7 @@ void  rencache_push_transform(
 );
 void  rencache_pop_transform(RenCache *rc);
 void  rencache_draw_rect(RenCache *rc, RenRect rect, RenColor color, bool replace);
-void  rencache_draw_rounded_rect(RenCache *rc, RenRect rect, float radius, RenColor color);
+void  rencache_draw_rounded_rect(RenCache *rc, RenRect rect, float radius, RenColor color, RenColor bottom, float softness);
 void  rencache_draw_rect_grid(RenCache *rc, float x, float y, float step_x, float w, float h, int count, RenColor color);
 double rencache_draw_text(RenCache *rc, RenFont **font, const char *text, size_t len, double x, double y, RenColor color, RenTab tab);
 double rencache_draw_text_known_bounds(RenCache *rc, RenFont **font, const char *text, size_t len, double x, double y, RenRect rect, RenColor color, RenTab tab);

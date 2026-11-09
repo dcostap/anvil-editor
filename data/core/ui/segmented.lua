@@ -1,6 +1,7 @@
 local common = require "core.common"
 local style = require "core.style"
 local ui = require "core.ui"
+local surface = require "core.ui.surface"
 local Control = require "core.ui.control"
 
 -- A row of choices where one is on, such as a role. A click, or the editor's character moves, change it.
@@ -98,26 +99,26 @@ end
 
 function Segmented:draw(focused)
   local m = ui.metrics()
-  local x, y, w, h, r = self.x, self.y, self.w, self.h, m.radius
-  if focused then ui.draw_focus_ring(x, y, w, h, r) end
-  renderer.draw_rounded_rect(x, y, w, h, r, style.card_field)
+  local x, y, w, h, r = self.x, self.y, self.w, self.h, m.control_radius
+  local pushed = ui.push_look(x, y, w, h, 1, self.enabled and 1 or ui.DISABLED_OPACITY)
+  if focused then ui.draw_ring(x, y, w, h, r) end
+  surface.draw("well", x, y, w, h, r)
   local index = index_of(self, self.value)
   if index then
     local sx, sy, sw, sh = segment_rect(self, index)
-    -- The highlight slides to a new choice.
+    -- The thumb slides to a new choice.
     local tx = ui.approach(self, "thumb_x", sx, 28)
     local tw = ui.approach(self, "thumb_w", sw, 28)
-    -- The highlight is the card's color, so it stands up from the darker track.
-    renderer.draw_rounded_rect(tx, sy, tw, sh, r - m.border, style.card)
-    renderer.draw_rounded_rect(tx, sy, tw, sh, r - m.border, self.enabled and style.button or style.card_selection)
+    surface.draw("raised", tx, sy, tw, sh, r - 2 * m.border)
   end
   local font = ui.font()
   for i, option in ipairs(self.options) do
     local sx, sy, sw, sh = segment_rect(self, i)
-    local color = i == index and style.text or style.card_text
-    if not (self.enabled and enabled(option)) then color = ui.fade(color, i == index and 0.7 or 0.4) end
+    local color = i == index and style.dialog_text_strong or style.dialog_text_muted
+    if not enabled(option) then color = ui.fade(color, 0.5) end
     common.draw_text(font, color, option.label, "center", sx, sy, sw, sh)
   end
+  ui.pop_look(pushed)
 end
 
 return Segmented

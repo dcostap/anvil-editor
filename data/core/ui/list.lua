@@ -38,6 +38,11 @@ function List:set_rows(rows, selected)
   core.redraw = true
 end
 
+---The natural size: all rows, up to 8.
+function List:measure()
+  return 0, math.min(#self.rows, 8) * self.row_height
+end
+
 function List:content_height()
   return #self.rows * self.row_height
 end
@@ -152,9 +157,10 @@ function List:draw(focused)
     self.selection_highlight:step()
   end
   local top = y - self.scroll
-  self.hover_highlight:draw(x, top, w, m.radius, ui.fade(style.card_selection, 0.45))
+  local surfaces = style.dialog_surfaces
+  self.hover_highlight:draw(x, top, w, m.control_radius, surfaces.ghost_hover.fill)
   -- The selection is quieter while another control has focus.
-  self.selection_highlight:draw(x, top, w, m.radius, ui.fade(style.card_selection, focused and 1 or 0.6))
+  self.selection_highlight:draw(x, top, w, m.control_radius, ui.fade(surfaces.selected.fill, focused and 1 or 0.6))
   local first = math.max(1, math.floor(self.scroll / rh) + 1)
   local last = math.min(#self.rows, math.ceil((self.scroll + h) / rh))
   local state = self.row_state or {}

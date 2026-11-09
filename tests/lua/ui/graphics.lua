@@ -224,6 +224,31 @@ test.describe("graphics apis", function()
     c:render()
   end)
 
+  test.test("draws rounded rects with a vertical gradient and a soft edge", function()
+    local function pixel(c, x, y)
+      local r, g, b, a = c:get_pixels(x, y, 1, 1):byte(1, 4)
+      return { r, g, b, a }
+    end
+
+    local gradient = canvas.new(40, 60, { 0, 0, 0, 255 }, true)
+    gradient:draw_rounded_rect(10, 10, 20, 40, 4, { 200, 0, 0, 255 }, { 0, 0, 200, 255 })
+    gradient:render()
+    local top, middle, bottom = pixel(gradient, 20, 11), pixel(gradient, 20, 30), pixel(gradient, 20, 48)
+    test.ok(top[1] > 180 and top[3] < 20, "the top row has the top color")
+    test.ok(bottom[3] > 180 and bottom[1] < 20, "the bottom row has the bottom color")
+    test.ok(math.abs(middle[1] - middle[3]) < 20 and middle[1] > 80, "the middle row mixes both colors")
+    test.same(pixel(gradient, 20, 5), { 0, 0, 0, 255 })
+
+    local soft = canvas.new(40, 40, { 0, 0, 0, 255 }, true)
+    soft:draw_rounded_rect(10, 10, 20, 20, 0, { 255, 255, 255, 255 }, nil, 4)
+    soft:render()
+    test.equal(pixel(soft, 20, 20)[1], 255)
+    local edge, outside = pixel(soft, 20, 10)[1], pixel(soft, 20, 8)[1]
+    test.ok(edge > outside and outside > 0, "the edge fades out past the outline")
+    test.ok(edge < 255, "the edge fades in inside the outline")
+    test.equal(pixel(soft, 20, 2)[1], 0)
+  end)
+
   test.test("saves and loads raster and SVG images", function(context)
     local c = canvas.new(2, 2, {0, 0, 0, 255}, true)
     local png_path = context.temp_root .. PATHSEP .. "sample.png"

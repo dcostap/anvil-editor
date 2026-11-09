@@ -1,6 +1,7 @@
 local core = require "core"
 local style = require "core.style"
 local ui = require "core.ui"
+local surface = require "core.ui.surface"
 local Control = require "core.ui.control"
 local LineInput = require "core.line_input"
 
@@ -9,6 +10,9 @@ local LineInput = require "core.line_input"
 -- A refused submit keeps the text for Enter and shows the message. A focus change puts back the last accepted text.
 -- Escape puts back the last accepted text.
 local TextField = Control:extend()
+
+-- The character that shows for each character of a secret text.
+local MASK = "\u{2022}"
 
 TextField.focusable = true
 TextField.takes_text = true
@@ -123,7 +127,7 @@ end
 
 function TextField:offset_at(x)
   if self.secret then
-    local width = ui.font():get_width("*")
+    local width = ui.font():get_width(MASK)
     local count = math.max(0, math.min(utf8.len(self.input.text), math.floor((x - text_x(self)) / width + 0.5)))
     return count == 0 and 0 or (utf8.offset(self.input.text, count + 1) or (#self.input.text + 1)) - 1
   end
@@ -155,22 +159,29 @@ function TextField:on_mouse_released()
 end
 
 local function offset_x(field, font, pos)
-  if field.secret then return font:get_width("*") * utf8.len(field.input.text:sub(1, pos)) end
+  if field.secret then return font:get_width(MASK) * utf8.len(field.input.text:sub(1, pos)) end
   return font:get_width(field.input.text:sub(1, pos))
+end
+
+---The natural size: room for about 30 characters.
+function TextField:measure()
+  return math.floor(240 * SCALE + 0.5), ui.metrics().field_h
+end
+
+---Mark the field as refused with `message`, or clear the mark with nil. The next edit clears it too.
+function TextField:set_error(message)
+  self.error = message
+  core.redraw = true
 end
 
 function TextField:draw(focused)
   local m = ui.metrics()
-  local x, y, w, h, r = self.x, self.y, self.w, self.h, m.radius
+  local x, y, w, h, r = self.x, self.y, self.w, self.h, m.control_radius
   local font = ui.font()
-  -- A focused field has an accent outline. A refused text has an error outline.
-  local outline = self.error and style.error or (focused and style.accent)
-  if outline then
-    local border = math.max(1, math.floor(1.5 * SCALE + 0.5))
-    renderer.draw_rounded_rect(x, y, w, h, r, outline)
-    renderer.draw_rounded_rect(x + border, y + border, w - 2 * border, h - 2 * border, r - border, style.card)
-  end
-  if self.enabled then renderer.draw_rounded_rect(x, y, w, h, r, style.card_field) end
+  local pushed = ui.push_look(x, y, w, h, 1, self.enabled and 1 or ui.DISABLED_OPACITY)
+  -- A focused field has a rim in the focus color. A refused text has a rim in the danger color.
+  local rim = self.error and style.dialog_danger or (focused and style.dialog_focus_ring) or nil
+  surface.draw("well", x, y, w, h, r, rim)
   local input = self.input
   local available = w - 2 * m.pad_x
   local ty = y + math.floor((h - font:get_height()) / 2)
@@ -188,19 +199,20 @@ function TextField:draw(focused)
     renderer.draw_rect(tx + left, ty, offset_x(self, font, last) - left, font:get_height(), style.selection)
   end
   if input.text == "" and self.placeholder then
-    renderer.draw_text(font, self.placeholder, tx, ty, style.dim)
+    renderer.draw_text(font, self.placeholder, tx, ty, style.dialog_placeholder)
   end
   local shown = input.text
   if self.secret then
     local count = utf8.len(input.text)
     if count ~= self.mask_length then
-      self.mask_length, self.mask_text = count, string.rep("*", count)
+      self.mask_length, self.mask_text = count, string.rep(MASK, count)
     end
     shown = self.mask_text
   end
-  renderer.draw_text(font, shown, tx, ty, self.enabled and style.text or style.card_text)
-  if focused then renderer.draw_rect(tx + caret_x, ty, caret_w, font:get_height(), style.accent) end
+  renderer.draw_text(font, shown, tx, ty, style.dialog_text)
+  if focused then renderer.draw_rect(tx + caret_x, ty, caret_w, font:get_height(), style.dialog_text_strong) end
   core.pop_clip_rect()
+  ui.pop_look(pushed)
 end
 
 return TextField

@@ -1065,11 +1065,14 @@ static int f_draw_rounded_rect(lua_State *L) {
   lua_Number radius = luaL_checknumber(L, 5);
   RenRect rect = rect_to_grid(x, y, w, h);
   RenColor color = luaXL_checkcolor(L, 6, 255);
+  /* Optional: the color at the bottom edge, for a vertical gradient, and the width of a soft edge. */
+  RenColor bottom = lua_isnoneornil(L, 7) ? color : luaXL_checkcolor(L, 7, 255);
+  float softness = (float)luaL_optnumber(L, 8, 0);
   RenWindow *window = ren_get_target_window();
   if (!window) {
     return luaL_error(L, "no target window found");
   } else {
-    rencache_draw_rounded_rect(&window->cache, rect, radius, color);
+    rencache_draw_rounded_rect(&window->cache, rect, radius, color, bottom, softness);
   }
   return 0;
 }

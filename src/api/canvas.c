@@ -488,6 +488,24 @@ static int f_draw_rect(lua_State *L) {
 }
 
 
+static int f_draw_rounded_rect(lua_State *L) {
+  RenCache *canvas = luaL_checkudata(L, 1, API_TYPE_CANVAS);
+  lua_Number x = luaL_checknumber(L, 2);
+  lua_Number y = luaL_checknumber(L, 3);
+  lua_Number w = luaL_checknumber(L, 4);
+  lua_Number h = luaL_checknumber(L, 5);
+  lua_Number radius = luaL_checknumber(L, 6);
+  RenColor color = luaXL_checkcolor(L, 7, 255);
+  RenColor bottom = lua_isnoneornil(L, 8) ? color : luaXL_checkcolor(L, 8, 255);
+  float softness = (float)luaL_optnumber(L, 9, 0);
+
+  RenRect rect = { .x = x, .y = y, .width = w, .height = h };
+  rencache_draw_rounded_rect(canvas, rect, radius, color, bottom, softness);
+
+  return 0;
+}
+
+
 static int f_draw_poly(lua_State *L) {
   RenCache *canvas = luaL_checkudata(L, 1, API_TYPE_CANVAS);
 
@@ -674,6 +692,7 @@ static const luaL_Reg canvasLib[] = {
   { "clear",         f_clear         },
   { "set_clip_rect", f_set_clip_rect },
   { "draw_rect",     f_draw_rect     },
+  { "draw_rounded_rect", f_draw_rounded_rect },
   { "draw_text",     f_draw_text     },
   { "draw_text_cells", f_draw_text_cells },
   { "draw_poly",     f_draw_poly     },

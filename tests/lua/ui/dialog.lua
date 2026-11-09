@@ -210,3 +210,114 @@ test.describe("Dialog", function()
     test.equal(submitted, "new")
   end)
 end)
+
+test.describe("Dialog with a layout body", function()
+  local layout = require "core.ui.layout"
+  local Checkbox = require "core.ui.checkbox"
+  local RadioGroup = require "core.ui.radio_group"
+  local Switch = require "core.ui.switch"
+  local saved
+
+  test.before_each(function()
+    panes.reset_for_tests()
+    saved = { core.root_panel.size.x, core.root_panel.size.y }
+    core.root_panel.size.x, core.root_panel.size.y = 1000, 700
+  end)
+
+  test.after_each(function()
+    local open = dialog.current()
+    if open then open:close() end
+    for _ = 1, 3 do dialog.update() end
+    panes.reset_for_tests()
+    core.root_panel.size.x, core.root_panel.size.y = saved[1], saved[2]
+  end)
+
+  local function inside_card(instance, control)
+    local r = instance.rect
+    return control.y >= r.y and control.y + control.h <= r.y + r.h
+  end
+
+  test.it("places its body and footer, and moves focus through them in layout order", function()
+    open_editor("behind")
+    local name, switch = TextField {}, Switch {}
+    local cancel, save = Button { label = "Cancel" }, Button { label = "Save", kind = "primary" }
+    local instance = dialog.Dialog {
+      title = "Layout",
+      body = layout.Column { layout.Field { title = "Name", stacked = true, control = name },
+        layout.Field { title = "Enabled", control = switch } },
+      footer = layout.Row { justify = "end", cancel, save },
+    }
+    instance:open()
+    dialog.update()
+
+    test.equal(instance.focused, name)
+    test.ok(name.y < switch.y and switch.y < save.y)
+    test.ok(cancel.x < save.x)
+    test.ok(inside_card(instance, save))
+    local order = {}
+    for _ = 1, 4 do
+      command.perform("dialog:focus_next")
+      order[#order + 1] = instance.focused
+    end
+    test.same(order, { switch, cancel, save, name })
+  end)
+
+  test.it("scrolls its body to show the focused control when the Window is short", function()
+    open_editor("behind")
+    core.root_panel.size.y = 320
+    local body = layout.Column {}
+    for i = 1, 12 do body.children[i] = TextField { text = "Field " .. i } end
+    local instance = dialog.Dialog { title = "Long", body = body }
+    instance:open()
+    dialog.update()
+    local last = body.children[12]
+    test.ok(not inside_card(instance, last))
+
+    instance:focus(last)
+    for _ = 1, 3 do dialog.update() end
+    test.ok(inside_card(instance, last))
+
+    -- A control that scrolled out of the card takes no click.
+    local first = body.children[1]
+    test.is_nil(instance:control_at(first.x + 4, first.y + first.h / 2))
+  end)
+
+  test.it("flips and moves its choice controls with clicks, Enter and line moves", function()
+    open_editor("behind")
+    local switch = Switch { value = false }
+    local box = Checkbox { label = "Some", value = "mixed" }
+    local refused = Switch { value = true, on_change = function() return false end }
+    local radio = RadioGroup { value = "a", options = {
+      { value = "a", label = "A" }, { value = "b", label = "B", enabled = false }, { value = "c", label = "C" },
+    } }
+    local instance = dialog.Dialog { title = "Choices", body = layout.Column { switch, box, refused, radio } }
+    instance:open()
+    dialog.update()
+
+    click(center(switch))
+    test.equal(switch.value, true)
+    instance:focus(box)
+    test.ok(command.perform("dialog:confirm"))
+    test.equal(box.value, true)
+    click(center(refused))
+    test.equal(refused.value, true)
+    instance:focus(radio)
+    test.ok(instance:perform("move_to_next_line"))
+    test.equal(radio.value, "c")
+  end)
+
+  test.it("shows each UI Gallery page and moves through them from its page list", function()
+    open_editor("behind")
+    local gallery = require "plugins.ui_gallery"
+    local instance = gallery.open()
+    dialog.update()
+    test.equal(instance.focused, instance.nav)
+    for i, page in ipairs(gallery.pages) do
+      test.equal(instance.page_id, page.id)
+      if page.id ~= "look" then test.ok(#instance:focusables() > 1, page.id) end
+      if i < #gallery.pages then test.ok(instance:perform("move_to_next_line")) end
+      dialog.update()
+    end
+    test.equal(instance.focused, instance.nav)
+  end)
+end)

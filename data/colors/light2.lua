@@ -123,6 +123,46 @@ style.button = { 107, 29, 29, 16 }
 style.button_hover = { 107, 29, 29, 14 }
 style.button_pressed = { 107, 29, 29, 32 }
 style.button_primary_text = c("faf2dd")
+-- Dialogs and their controls (core.ui). Text has four strengths, from strong to dim.
+style.dialog_text = c("2a251f")
+style.dialog_text_strong = c("1a1814")
+style.dialog_text_muted = c("6b6257")
+style.dialog_text_dim = c("8f857a")
+style.dialog_placeholder = c("948a7e")
+style.dialog_focus_ring = c("9c3b3b")
+style.dialog_line = { 107, 29, 29, 30 }
+style.dialog_danger = c("c42f3e")
+-- A surface has a fill and a 1 px rim, each a gradient from `top` to `bottom`, and a text color.
+-- `shadow` falls `shadow_y` pixels below the surface and fades over `shadow_blur` pixels, at scale 1.
+style.dialog_surfaces = {
+  dialog = { fill = c("fbf4e2"), fill_bottom = c("f7efdb"), rim = { 107, 29, 29, 40 }, rim_bottom = { 107, 29, 29, 14 },
+    shadow = { 70, 40, 10, 50 }, shadow_y = 16, shadow_blur = 40 },
+  group = { fill = c("fdf8ea"), fill_bottom = c("fbf5e5"), rim = { 107, 29, 29, 30 }, rim_bottom = { 107, 29, 29, 30 } },
+  raised = { fill = c("fffaf0"), rim = { 70, 40, 10, 54 }, rim_bottom = { 70, 40, 10, 18 }, text = c("2a251f"),
+    shadow = { 70, 40, 10, 18 }, shadow_y = 1, shadow_blur = 2 },
+  raised_hover = { fill = c("fffdf7"), rim = { 70, 40, 10, 70 }, rim_bottom = { 70, 40, 10, 24 }, text = c("1a1814"),
+    shadow = { 70, 40, 10, 22 }, shadow_y = 1, shadow_blur = 3 },
+  lit = { fill = c("6b1d1d"), rim = { 255, 220, 200, 70 }, rim_bottom = { 107, 29, 29, 0 }, text = c("faf2dd"),
+    shadow = { 70, 40, 10, 34 }, shadow_y = 1, shadow_blur = 2 },
+  lit_hover = { fill = c("7a2626"), rim = { 255, 220, 200, 70 }, rim_bottom = { 107, 29, 29, 0 }, text = c("faf2dd"),
+    shadow = { 70, 40, 10, 40 }, shadow_y = 1, shadow_blur = 3 },
+  danger_hover = { fill = c("fff3ec"), rim = { 196, 47, 62, 90 }, rim_bottom = { 196, 47, 62, 30 }, text = c("c42f3e"),
+    shadow = { 70, 40, 10, 22 }, shadow_y = 1, shadow_blur = 3 },
+  danger_primary = { fill = c("c42f3e"), rim = c("f5a49b"), rim_bottom = { 196, 47, 62, 0 }, text = c("ffffff"),
+    shadow = { 70, 40, 10, 34 }, shadow_y = 1, shadow_blur = 2 },
+  danger_primary_hover = { fill = c("d13a49"), rim = c("f5a49b"), rim_bottom = { 196, 47, 62, 0 }, text = c("ffffff"),
+    shadow = { 70, 40, 10, 40 }, shadow_y = 1, shadow_blur = 3 },
+  ghost_hover = { fill = { 107, 29, 29, 22 }, fill_bottom = { 107, 29, 29, 10 }, text = c("1a1814") },
+  selected = { fill = { 107, 29, 29, 20 }, fill_bottom = { 107, 29, 29, 9 }, text = c("1a1814") },
+  well = { fill = c("f1e6cf"), fill_bottom = c("f5ecd8"), rim = { 70, 40, 10, 72 }, rim_bottom = { 70, 40, 10, 28 },
+    text = c("2a251f"), shadow = { 70, 40, 10, 20 }, shadow_y = 1, shadow_blur = 2 },
+  switch_off = { fill = c("dccfb6"), fill_bottom = c("e7dbc4"), rim = { 70, 40, 10, 72 }, rim_bottom = { 70, 40, 10, 28 },
+    shadow = { 70, 40, 10, 20 }, shadow_y = 1, shadow_blur = 2 },
+  switch_on = { fill = c("6b1d1d"), rim = { 255, 220, 200, 70 }, rim_bottom = { 107, 29, 29, 0 }, text = c("faf2dd"),
+    shadow = { 70, 40, 10, 34 }, shadow_y = 1, shadow_blur = 2 },
+  thumb_on = { fill = c("faf2dd") },
+  thumb_off = { fill = c("fffaf0"), shadow = { 70, 40, 10, 70 }, shadow_y = 1, shadow_blur = 2 },
+}
 style.drag_overlay = { common.color "rgba(107, 29, 29, 0.10)" }
 style.drag_overlay_tab = style.accent
 style.interactive_hover_background = { common.color "rgba(107, 29, 29, 0.12)" }

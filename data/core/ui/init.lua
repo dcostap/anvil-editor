@@ -11,7 +11,9 @@ local ui = {}
 ui.icons = {
   add = "\u{F0415}", close = "\u{F0156}", remove = "\u{F09E7}", reveal = "\u{F0DCF}",
   warning = "\u{F05D6}", folder = "\u{F0256}", home = "\u{F10B6}", link = "\u{F0339}", package = "\u{F03D7}",
-  check = "\u{F012C}", open_in_new = "\u{F03CC}",
+  check = "\u{F012C}", open_in_new = "\u{F03CC}", minus = "\u{F0374}", chevron_down = "\u{F0140}",
+  search = "\u{F0349}", palette = "\u{F03D8}", form = "\u{F060E}", toggle = "\u{F0521}", button = "\u{F12A8}",
+  tune = "\u{F062E}", shape = "\u{F0831}", view_list = "\u{F0572}", delete = "\u{F01B4}",
 }
 
 ---The text font of Dialogs: the proportional font of the Sidebar and the Title Bar.
@@ -28,6 +30,32 @@ function ui.icon_font()
   return style.menu_icon_font
 end
 
+-- The text roles of Dialogs. Each is the user's Dialog font at a size relative to its own, so Zoom and the
+-- user's font choice apply to all of them.
+local ROLES = {
+  title = { size = 1, variant = "bold" },
+  strong = { size = 0, variant = "bold" },
+  label = { size = 0 },
+  body = { size = 0 },
+  description = { size = -1 },
+  meta = { size = -2 },
+}
+
+---The font of a text role: "title", "strong", "label", "body", "description" or "meta".
+function ui.role_font(role)
+  local spec = ROLES[role] or ROLES.body
+  local font = ui.font()
+  if spec.size == 0 and not spec.variant then return font end
+  return style.get_scaled_font(font, math.max(8 * SCALE, font:get_size() + spec.size * SCALE), spec.variant)
+end
+
+---The color of a text role. Descriptions and meta text are muted, and titles are strong.
+function ui.role_color(role)
+  if role == "description" or role == "meta" then return style.dialog_text_muted end
+  if role == "title" or role == "strong" then return style.dialog_text_strong end
+  return style.dialog_text
+end
+
 ---Sizes in pixels at the current scale.
 function ui.metrics()
   local h = ui.font():get_height()
@@ -39,7 +67,42 @@ function ui.metrics()
     icon_gap = math.floor(6 * SCALE + 0.5),
     border = math.max(1, math.floor(SCALE + 0.5)),
     ring = math.max(1, math.floor(2 * SCALE + 0.5)),
+    -- The sizes of core.ui's own controls and layout.
+    control_sm_h = math.floor(h + 10 * SCALE + 0.5),
+    control_xs_h = math.floor(ui.role_font("meta"):get_height() + 8 * SCALE + 0.5),
+    field_h = math.floor(h + 12 * SCALE + 0.5),
+    control_radius = math.floor(8 * SCALE + 0.5),
+    small_radius = math.floor(6 * SCALE + 0.5),
+    group_radius = math.floor(10 * SCALE + 0.5),
+    dialog_radius = math.floor(14 * SCALE + 0.5),
+    dialog_pad = math.floor(20 * SCALE + 0.5),
+    section_gap = math.floor(16 * SCALE + 0.5),
+    row_pad_x = math.floor(16 * SCALE + 0.5),
+    row_pad_y = math.floor(12 * SCALE + 0.5),
+    text_gap = math.floor(4 * SCALE + 0.5),
   }
+end
+
+---The focus ring of core.ui's controls: a 2 px outline just outside (x, y, w, h).
+function ui.draw_ring(x, y, w, h, radius, color)
+  local ring = ui.metrics().ring
+  ui.draw_rounded_outline(x - ring, y - ring, w + 2 * ring, h + 2 * ring, radius + ring, ring,
+    color or style.dialog_focus_ring)
+end
+
+-- The opacity of a disabled control.
+ui.DISABLED_OPACITY = 0.64
+
+---Draw with `opacity`, and scaled by `scale` around the rect's centre, until `ui.pop_look(pushed)`.
+---Disabled controls fade, and pressed buttons shrink. Returns whether it pushed a transform.
+function ui.push_look(x, y, w, h, scale, opacity)
+  if scale >= 0.9995 and opacity >= 0.9995 then return false end
+  renderer.push_transform(x + w / 2, y + h / 2, scale, opacity)
+  return true
+end
+
+function ui.pop_look(pushed)
+  if pushed then renderer.pop_transform() end
 end
 
 ---A copy of `color` with its alpha multiplied by `alpha`.
@@ -48,9 +111,9 @@ function ui.fade(color, alpha)
   return { color[1], color[2], color[3], (color[4] or 255) * alpha }
 end
 
----`color` mixed toward `other` by `amount`, from 0 to 1.
-function ui.mix(color, other, amount)
-  local result = {}
+---`color` mixed toward `other` by `amount`, from 0 to 1. A frame can pass `result` to reuse one table.
+function ui.mix(color, other, amount, result)
+  result = result or {}
   for i = 1, 4 do
     local a, b = color[i] or 255, other[i] or 255
     result[i] = a + (b - a) * amount

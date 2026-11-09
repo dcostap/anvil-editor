@@ -888,13 +888,16 @@ Run `ui/autocomplete_pointer.lua`, `ui/autocomplete_layout.lua`, `ui/context_men
 ## Dialogs
 
 A Dialog is a modal card over the app, for management tasks that need more than a prompt. `core.ui.dialog` owns it. Only one Dialog is open at a time.
-Its controls are in `data/core/ui`: Button, Text Field, Segmented Control and List. Use them for new management UIs. Do not use the old `data/widget` library for new UIs.
+Its controls are in `data/core/ui`: Button, Text Field, Segmented Control, Switch, Checkbox, Radio Group, Nav and List. Use them for new management UIs. Do not use the old `data/widget` library for new UIs.
+A Dialog's `body` and `footer` are layout nodes (`core.ui.layout`): Column, Row, Text, Field, Group, Separator, Spacer and Scroll. Controls are nodes too. Tab follows the layout order. The body scrolls when the Window is too short, and a focused control scrolls into view. Older Dialogs still place their controls in `layout_content`; new Dialogs use a body.
+Each control draws its parts with `core.ui.surface`: a shadow, a 1 px rim and a fill, each a vertical gradient. Each theme defines the surfaces in `style.dialog_surfaces`, and the text colors in the `dialog_text*` keys. `renderer.draw_rounded_rect` takes a bottom color and a soft edge for them, in both renderers. Text roles (`ui.role_font`) derive from the user's Dialog font, so they follow the font choice and Zoom.
+The UI Gallery (`plugins.ui_gallery`, `ui_gallery:open`) shows each control and surface. Check its `ui-gallery-*` render scenarios after visual changes to `core.ui`. Some pages also have `-light`, `-light2` and `-dark3` variants.
 The Dialog takes modal input. A text field gets typed text and the user's bindings for the editor's line commands. Other `core:` commands go to the focused control. Tab, Enter and Escape run `dialog:` commands.
 Each change applies at once. There is no Save or Cancel. Escape first reverts an unsubmitted field edit, then closes the Dialog.
 The Context Menu and confirmations draw above a Dialog.
 Style keys for Dialogs and buttons are in `data/colors/default.lua`. `config.disabled_transitions.dialog` turns off its animation.
 The Project Paths Dialog (`plugins.project_paths`) is the first Dialog. `project_paths:manage` opens it. `project_paths:add` and `filetree:add_to_project_paths` add a folder.
-Run `ui/dialog.lua`, `ui/project_paths_dialog.lua` and `ui/filetree_project_paths.lua` after changes. Check the `project-paths-dialog` render scenario after visual changes.
+Run `ui/dialog.lua`, `ui/graphics.lua`, `ui/project_paths_dialog.lua` and `ui/filetree_project_paths.lua` after changes. Check the `project-paths-dialog` render scenario after visual changes.
 
 ## File Types
 

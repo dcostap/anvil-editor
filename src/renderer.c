@@ -3471,8 +3471,94 @@ void ren_font_group_wrap_text(
   if (hb_buffer) hb_buffer_destroy(hb_buffer);
 }
 
-void ren_draw_rounded_rect(RenSurface *rs, RenRect rect, float radius, RenColor color) {
-  if (rect.width <= 0 || rect.height <= 0 || color.a == 0) return;
+static float shape_distance(float px, float py, float cx, float cy, float half_w, float half_h, float radius) {
+  float qx = fabsf(px - cx) - (half_w - radius);
+  float qy = fabsf(py - cy) - (half_h - radius);
+  float ox = qx > 0.0f ? qx : 0.0f, oy = qy > 0.0f ? qy : 0.0f;
+  float inside = qx > qy ? qx : qy;
+  return sqrtf(ox * ox + oy * oy) + (inside < 0.0f ? inside : 0.0f) - radius;
+}
+
+static float shape_coverage(float distance, float edge) {
+  float t = (distance + edge) / (2.0f * edge);
+  if (t <= 0.0f) return 1.0f;
+  if (t >= 1.0f) return 0.0f;
+  return 1.0f - t * t * (3.0f - 2.0f * t);
+}
+
+static void fill_surface_span(SDL_Surface *surface, int x, int y, int w, RenColor color) {
+  if (w <= 0 || color.a == 0) return;
+  SDL_Rect span = { x, y, w, 1 };
+  if (color.a == 0xff) {
+    SDL_FillSurfaceRect(surface, &span, SDL_MapSurfaceRGBA(surface, color.r, color.g, color.b, color.a));
+    return;
+  }
+  *((uint32_t *)draw_rect_surface->pixels) = SDL_MapSurfaceRGBA(draw_rect_surface, color.r, color.g, color.b, color.a);
+  SDL_BlitSurface(draw_rect_surface, NULL, surface, &span);
+}
+
+/* The software form of the D3D11 shape: a vertical gradient, and an edge that fades over `softness`
+   pixels on each side of the outline. The same distance and smoothstep give the same coverage. */
+static void draw_shape(RenSurface *rs, RenRect rect, float radius, RenColor top, RenColor bottom, float softness) {
+  SDL_Surface *surface = rs->surface;
+  float scale = rs->scale_x;
+  float x0 = rect.x * rs->scale_x, y0 = rect.y * rs->scale_y;
+  float w = rect.width * rs->scale_x, h = rect.height * rs->scale_y;
+  float half_w = w * 0.5f, half_h = h * 0.5f, cx = x0 + half_w, cy = y0 + half_h;
+  radius *= scale;
+  softness *= scale;
+  if (radius > half_w) radius = half_w;
+  if (radius > half_h) radius = half_h;
+  if (radius < 0.0f) radius = 0.0f;
+  float edge = softness > 0.75f ? softness : 0.75f;
+  int reach = (int)ceilf(edge) + 1;
+  SDL_Rect clip, area = { (int)floorf(x0) - reach, (int)floorf(y0) - reach,
+                          (int)ceilf(w) + 2 * reach, (int)ceilf(h) + 2 * reach };
+  SDL_GetSurfaceClipRect(surface, &clip);
+  if (!SDL_GetRectIntersection(&clip, &area, &area)) return;
+  for (int py = area.y; py < area.y + area.h; py++) {
+    float fy = py + 0.5f;
+    float t = h > 0.0f ? (fy - y0) / h : 0.0f;
+    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    float alpha = top.a + (bottom.a - top.a) * t;
+    if (alpha <= 0.0f) continue;
+    /* Mix the premultiplied colors, as the shader does. */
+    float r = (top.r * top.a + (bottom.r * bottom.a - top.r * top.a) * t) / alpha;
+    float g = (top.g * top.a + (bottom.g * bottom.a - top.g * top.a) * t) / alpha;
+    float b = (top.b * top.a + (bottom.b * bottom.a - top.b * top.a) * t) / alpha;
+    RenColor row = { .r = (uint8_t)lroundf(r), .g = (uint8_t)lroundf(g), .b = (uint8_t)lroundf(b),
+                     .a = (uint8_t)lroundf(alpha) };
+    for (int px = area.x; px < area.x + area.w;) {
+      float d = shape_distance(px + 0.5f, fy, cx, cy, half_w, half_h, radius);
+      if (d <= -edge) {
+        int end = px + 1;
+        while (end < area.x + area.w && shape_distance(end + 0.5f, fy, cx, cy, half_w, half_h, radius) <= -edge) end++;
+        fill_surface_span(surface, px, py, end - px, row);
+        px = end;
+        continue;
+      }
+      float coverage = shape_coverage(d, edge);
+      int a = (int)lroundf(alpha * coverage);
+      if (a > 0) {
+        Uint8 dr, dg, db, da;
+        if (SDL_ReadSurfacePixel(surface, px, py, &dr, &dg, &db, &da)) {
+          int ia = 255 - a;
+          SDL_WriteSurfacePixel(surface, px, py,
+            (Uint8)((row.r * a + dr * ia + 127) / 255), (Uint8)((row.g * a + dg * ia + 127) / 255),
+            (Uint8)((row.b * a + db * ia + 127) / 255), da);
+        }
+      }
+      px++;
+    }
+  }
+}
+
+void ren_draw_rounded_rect(RenSurface *rs, RenRect rect, float radius, RenColor color, RenColor bottom_color, float softness) {
+  if (rect.width <= 0 || rect.height <= 0 || (color.a == 0 && bottom_color.a == 0)) return;
+  if (softness > 0.0f || memcmp(&color, &bottom_color, sizeof(color)) != 0) {
+    draw_shape(rs, rect, radius, color, bottom_color, softness);
+    return;
+  }
 
   int r = (int)roundf(radius);
   int max_radius = (int)(rect.width < rect.height ? rect.width : rect.height) / 2;

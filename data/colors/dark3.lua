@@ -124,6 +124,46 @@ style.button = { 255, 240, 210, 16 }
 style.button_hover = { 255, 240, 210, 14 }
 style.button_pressed = { 0, 0, 0, 50 }
 style.button_primary_text = c("1f1d18")
+-- Dialogs and their controls (core.ui). Text has four strengths, from strong to dim.
+style.dialog_text = c("c8c4b6")
+style.dialog_text_strong = c("ece6d6")
+style.dialog_text_muted = c("9a9688")
+style.dialog_text_dim = c("6f6c62")
+style.dialog_placeholder = c("7d7a6f")
+style.dialog_focus_ring = c("d2a36b")
+style.dialog_line = { 255, 240, 210, 20 }
+style.dialog_danger = c("e07a70")
+-- A surface has a fill and a 1 px rim, each a gradient from `top` to `bottom`, and a text color.
+-- `shadow` falls `shadow_y` pixels below the surface and fades over `shadow_blur` pixels, at scale 1.
+style.dialog_surfaces = {
+  dialog = { fill = c("2a2b27"), fill_bottom = c("262723"), rim = { 255, 240, 210, 22 }, rim_bottom = { 255, 240, 210, 4 },
+    shadow = { 0, 0, 0, 160 }, shadow_y = 16, shadow_blur = 40 },
+  group = { fill = c("2f302b"), fill_bottom = c("2d2e29"), rim = { 255, 240, 210, 20 }, rim_bottom = { 255, 240, 210, 20 } },
+  raised = { fill = c("363731"), rim = { 255, 240, 210, 56 }, rim_bottom = { 255, 240, 210, 5 }, text = c("c8c4b6"),
+    shadow = { 0, 0, 0, 70 }, shadow_y = 1, shadow_blur = 2 },
+  raised_hover = { fill = c("3c3d36"), rim = { 255, 240, 210, 77 }, rim_bottom = { 255, 240, 210, 10 }, text = c("ece6d6"),
+    shadow = { 0, 0, 0, 70 }, shadow_y = 1, shadow_blur = 3 },
+  lit = { fill = c("e9e2d0"), rim = { 255, 255, 255, 255 }, rim_bottom = { 255, 255, 255, 0 }, text = c("1f1d18"),
+    shadow = { 0, 0, 0, 56 }, shadow_y = 1, shadow_blur = 2 },
+  lit_hover = { fill = c("f3eddf"), rim = { 255, 255, 255, 255 }, rim_bottom = { 255, 255, 255, 0 }, text = c("1f1d18"),
+    shadow = { 0, 0, 0, 63 }, shadow_y = 1, shadow_blur = 3 },
+  danger_hover = { fill = c("3d2c28"), rim = { 224, 122, 112, 110 }, rim_bottom = { 224, 122, 112, 20 }, text = c("e07a70"),
+    shadow = { 0, 0, 0, 70 }, shadow_y = 1, shadow_blur = 3 },
+  danger_primary = { fill = c("d0574e"), rim = c("f5b3a8"), rim_bottom = { 208, 87, 78, 0 }, text = c("ffffff"),
+    shadow = { 0, 0, 0, 56 }, shadow_y = 1, shadow_blur = 2 },
+  danger_primary_hover = { fill = c("db665d"), rim = c("f5b3a8"), rim_bottom = { 208, 87, 78, 0 }, text = c("ffffff"),
+    shadow = { 0, 0, 0, 63 }, shadow_y = 1, shadow_blur = 3 },
+  ghost_hover = { fill = { 255, 240, 210, 20 }, fill_bottom = { 255, 240, 210, 8 }, text = c("ece6d6") },
+  selected = { fill = { 255, 240, 210, 18 }, fill_bottom = { 255, 240, 210, 8 }, text = c("ece6d6") },
+  well = { fill = c("1f201c"), fill_bottom = c("22231f"), rim = { 255, 240, 210, 30 }, rim_bottom = { 255, 240, 210, 52 },
+    text = c("c8c4b6"), shadow = { 0, 0, 0, 98 }, shadow_y = 1, shadow_blur = 2 },
+  switch_off = { fill = c("1a1b17"), fill_bottom = c("252622"), rim = { 255, 240, 210, 30 }, rim_bottom = { 255, 240, 210, 52 },
+    shadow = { 0, 0, 0, 98 }, shadow_y = 1, shadow_blur = 2 },
+  switch_on = { fill = c("e9e2d0"), rim = { 255, 255, 255, 255 }, rim_bottom = { 255, 255, 255, 0 }, text = c("1f1d18"),
+    shadow = { 0, 0, 0, 56 }, shadow_y = 1, shadow_blur = 2 },
+  thumb_on = { fill = c("23241f") },
+  thumb_off = { fill = c("e9e2d0"), shadow = { 0, 0, 0, 90 }, shadow_y = 1, shadow_blur = 2 },
+}
 style.drag_overlay = { common.color "rgba(210, 163, 107, 0.10)" }
 style.drag_overlay_tab = p("ctrl_clickable")
 style.interactive_hover_background = { common.color "rgba(210, 163, 107, 0.18)" }

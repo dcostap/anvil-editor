@@ -1144,6 +1144,13 @@ local function scenario_is_ready()
     require("plugins.project_paths").open({ select = DATADIR .. PATHSEP .. "colors" })
     return false
   end
+  if benchmark.scenario:find("^ui%-gallery%-") then
+    if require("core.ui.dialog").current() then return true end
+    config.transitions = false
+    -- A theme suffix, such as "-light", names the theme in the runner.
+    require("plugins.ui_gallery").open(benchmark.scenario:match("^ui%-gallery%-(%a+)"))
+    return false
+  end
   if benchmark.scenario:find("^databases%-dialog") then
     if require("core.ui.dialog").current() then return true end
     config.transitions = false
