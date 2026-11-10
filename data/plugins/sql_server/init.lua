@@ -111,7 +111,7 @@ function M.add_connection()
   if not loaded then return nil end
   serial = serial + 1
   local c = { id = string.format("%s-%d-%d", system.get_process_id(), system.get_time() * 1000000, serial),
-    name = "SQL Server", server = "", database = "", integrated = true, user = "", trust_certificate = false, encrypt = true,
+    name = "New Connection", server = "", database = "", integrated = true, user = "", trust_certificate = false, encrypt = true,
     state = "Disconnected", generation = 0 }
   M.connections[#M.connections + 1] = c
   save(); changed()

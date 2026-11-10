@@ -1,5 +1,6 @@
 -- The Project Databases Dialog: the Project's SQL Server connections. The list shows each connection and its
--- state. The fields below it change the selected one. Each change applies at once.
+-- state. The form below it shows the selected one: its fields, its state and the actions on its session.
+-- Each change applies at once. The footer opens a query with the selected connection.
 
 local core = require "core"
 local common = require "core.common"
@@ -31,15 +32,25 @@ local STATES = {
 -- One dot draws the state of each row.
 local row_dot = StatusDot {}
 
+-- Where the connection goes: "server / database".
+local function target(c)
+  if c.server == "" and c.database == "" then return "No server" end
+  return (c.server ~= "" and c.server or "No server") .. " / " .. (c.database ~= "" and c.database or "No database")
+end
+
 local function draw_connection(c, x, y, w, h)
   local font, pad = ui.font(), ui.metrics().pad_x
+  local line_h = font:get_height()
+  local top = y + math.floor((h - 2 * line_h) / 2)
   local state = STATES[c.state] or STATES.Disconnected
   row_dot:set(state[2], state[1])
   local dot_w = row_dot:width()
-  row_dot:place(x + w - pad - dot_w, y, dot_w, h)
+  row_dot:place(x + w - pad - dot_w, top, dot_w, line_h)
   row_dot:draw_node()
   local name_w = w - 2 * pad - dot_w - ui.metrics().gap
-  common.draw_text(font, style.dialog_text, ui.fit_text(font, c.name, name_w), "left", x + pad, y, name_w, h)
+  renderer.draw_text(font, ui.fit_text(font, c.name, name_w), x + pad, top, style.dialog_text)
+  renderer.draw_text(font, ui.fit_text(font, target(c), w - 2 * pad, true), x + pad, top + line_h,
+    style.dialog_text_muted)
 end
 
 function Databases:new()
@@ -48,7 +59,7 @@ function Databases:new()
   Databases.super.new(self, { title = "Project Databases — " .. name, width = 660 })
   self.fields = {}
   self.list = List {
-    row_height = ui.metrics().control_h,
+    row_height = 2 * ui.font():get_height() + math.floor(14 * SCALE),
     max_rows = 3,
     draw_row = draw_connection,
     on_select = function() self:show_selected() end,
@@ -87,14 +98,17 @@ function Databases:new()
       return sql.update(c.id, "trust_certificate", value == "trust")
     end,
   }
-  self.add_button = Button { label = "Add Connection", icon = ui.icons.add, on_click = function()
+  local function add()
     local c = sql.add_connection()
     if c then self:refresh(c.id); self:focus(self.fields.name) end
-  end }
-  self.remove_button = Button { label = "Remove", icon = ui.icons.remove, kind = "danger", on_click = function()
-    local c = self:selected()
-    if c then sql.remove(c.id); self:refresh() end
-  end }
+  end
+  self.add_button = Button { label = "Add", icon = ui.icons.add, size = "small", on_click = add }
+  self.empty_add_button = Button { label = "Add Connection", icon = ui.icons.add, kind = "primary", on_click = add }
+  self.remove_button = Button { label = "Remove Connection", icon = ui.icons.remove, kind = "danger", size = "small",
+    on_click = function()
+      local c = self:selected()
+      if c then sql.remove(c.id); self:refresh(); self:focus(self:selected() and self.list or self.empty_add_button) end
+    end }
   self.connect_button = Button { label = "Connect", on_click = function()
     local c = self:selected()
     if not c then return end
@@ -109,16 +123,25 @@ function Databases:new()
     local c = self:selected()
     if c then self:close(); sql.new_query(c.id) end
   end }
-  self.bind_button = Button { label = "Use for Query", on_click = function()
+  -- Gives the selected connection to the Editor that was active when the Dialog opened. Its label names that Editor.
+  self.bind_button = Button { label = "", on_click = function()
     local c = self:selected()
     if c and self.source and self.source.buffer then sql.bind(self.source.buffer, c.id); self:close() end
   end }
   self.status_text = layout.Text {}
+  self.state_dot = StatusDot {}
   self.user_row = layout.Field { title = "User", control = self.fields.user }
   self.password_row = layout.Field { title = "Password", control = self.password }
   self.form = layout.Column {
-    self.list,
+    layout.Column {
+      gap = 8,
+      layout.Row { layout.Text { text = "Connections", role = "meta", wrap = false }, layout.Spacer { grow = 1 },
+        self.add_button },
+      self.list,
+    },
     layout.Group {
+      layout.Field { title = "Status", control = layout.Row { gap = 8, self.state_dot, self.connect_button,
+        self.disconnect_button } },
       layout.Field { title = "Name", control = self.fields.name },
       layout.Field { title = "Server", control = self.fields.server },
       layout.Field { title = "Database", control = self.fields.database },
@@ -126,17 +149,16 @@ function Databases:new()
       self.user_row,
       self.password_row,
       layout.Field { title = "Encryption", control = self.trust },
+      layout.Row { gap = 8, self.remove_button },
     },
     self.status_text,
-    layout.Row { gap = 8, self.connect_button, self.disconnect_button, layout.Spacer { grow = 1 },
-      self.add_button, self.remove_button },
   }
   -- Without connections, the body shows only the Add button. The status shows in both bodies.
   self.empty = layout.Column {
     EmptyState {
       icon = ui.icons.database, title = "No connections",
       description = "Add a SQL Server connection for this Project.",
-      actions = { self.add_button },
+      actions = { self.empty_add_button },
     },
     self.status_text,
   }
@@ -173,18 +195,24 @@ function Databases:show_selected()
   self.status_text.align = c and "left" or "center"
   self.width = c and 660 or 480
   self.add_button.enabled = sql.ready()
-  self.add_button.kind = c and "secondary" or "primary"
+  self.empty_add_button.enabled = sql.ready()
   self.remove_button.enabled = c ~= nil
+  local state = STATES[c and c.state] or STATES.Disconnected
+  self.state_dot:set(state[2], state[1])
   self.connect_button.enabled = c ~= nil and c.state ~= "Connecting"
-  self.connect_button.label = c and c.state == "Ready" and "Refresh" or "Connect"
+  self.connect_button.label = c and c.state == "Ready" and "Reload Schema" or "Connect"
   self.disconnect_button.enabled = c ~= nil and c.state ~= "Disconnected"
   self.disconnect_button.visible = c ~= nil and (c.state == "Ready" or c.state == "Connecting")
   self.query_button.enabled = c ~= nil
   self.query_button.visible = c ~= nil
-  self.bind_button.enabled = c ~= nil and self.source ~= nil and self.source.buffer ~= nil
+  local buffer = self.source and self.source.buffer
+  self.bind_button.enabled = c ~= nil and buffer ~= nil and buffer.sql_connection_id ~= c.id
   self.bind_button.visible = self.bind_button.enabled
+  if buffer then self.bind_button.label = "Use in " .. buffer:get_name():match("[^/\\]*$") end
   self.footer.visible = c ~= nil
-  if self.is_open and (not self.focused or not self.focused:can_focus()) then self:focus(c and self.list or self.add_button) end
+  if self.is_open and (not self.focused or not self.focused:can_focus()) then
+    self:focus(c and self.list or self.empty_add_button)
+  end
 end
 
 function Databases:on_update()
@@ -209,7 +237,7 @@ function M.open()
   local instance = Databases()
   instance.source = core.active_view and core.active_view:extends(require "core.editor") and core.active_view or nil
   instance:refresh(instance.source and instance.source.buffer.sql_connection_id)
-  instance:open(instance:selected() and instance.list or instance.add_button)
+  instance:open(instance:selected() and instance.list or instance.empty_add_button)
   return instance
 end
 return M
