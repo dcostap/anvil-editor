@@ -1,6 +1,6 @@
 -- The Project Databases Dialog: the Project's SQL Server connections. The list shows each connection and its
 -- state. The form below it shows the selected one: its fields, its state and the actions on its session.
--- Each change applies at once. The footer opens a query with the selected connection.
+-- Each change applies at once.
 
 local core = require "core"
 local common = require "core.common"
@@ -14,7 +14,6 @@ local TextField = require "core.ui.text_field"
 local Segmented = require "core.ui.segmented"
 local Select = require "core.ui.select"
 local StatusDot = require "core.ui.status_dot"
-local EmptyState = require "core.ui.empty_state"
 local project_look = require "core.project_look"
 local sql = require "plugins.sql_server"
 local Databases = Dialog:extend()
@@ -25,7 +24,7 @@ function Databases:__tostring() return "Databases" end
 local STATES = {
   Disconnected = { "Disconnected", "neutral" },
   Connecting = { "Connecting", "info" },
-  Ready = { "Connected", "success" },
+  Ready = { "Ready", "success" },
   Failed = { "Failed", "danger" },
 }
 
@@ -119,15 +118,6 @@ function Databases:new()
     local c = self:selected()
     if c then sql.disconnect(c.id); self.password:set_text("") end
   end }
-  self.query_button = Button { label = "New Query", kind = "primary", on_click = function()
-    local c = self:selected()
-    if c then self:close(); sql.new_query(c.id) end
-  end }
-  -- Gives the selected connection to the Editor that was active when the Dialog opened. Its label names that Editor.
-  self.bind_button = Button { label = "", on_click = function()
-    local c = self:selected()
-    if c and self.source and self.source.buffer then sql.bind(self.source.buffer, c.id); self:close() end
-  end }
   self.status_text = layout.Text {}
   self.state_dot = StatusDot {}
   self.user_row = layout.Field { title = "User", control = self.fields.user }
@@ -155,14 +145,9 @@ function Databases:new()
   }
   -- Without connections, the body shows only the Add button. The status shows in both bodies.
   self.empty = layout.Column {
-    EmptyState {
-      icon = ui.icons.database, title = "No connections",
-      description = "Add a SQL Server connection for this Project.",
-      actions = { self.empty_add_button },
-    },
+    self.empty_add_button,
     self.status_text,
   }
-  self.footer = layout.Row { self.bind_button, layout.Spacer { grow = 1 }, self.query_button }
   self:refresh()
 end
 
@@ -203,13 +188,6 @@ function Databases:show_selected()
   self.connect_button.label = c and c.state == "Ready" and "Reload Schema" or "Connect"
   self.disconnect_button.enabled = c ~= nil and c.state ~= "Disconnected"
   self.disconnect_button.visible = c ~= nil and (c.state == "Ready" or c.state == "Connecting")
-  self.query_button.enabled = c ~= nil
-  self.query_button.visible = c ~= nil
-  local buffer = self.source and self.source.buffer
-  self.bind_button.enabled = c ~= nil and buffer ~= nil and buffer.sql_connection_id ~= c.id
-  self.bind_button.visible = self.bind_button.enabled
-  if buffer then self.bind_button.label = "Use in " .. buffer:get_name():match("[^/\\]*$") end
-  self.footer.visible = c ~= nil
   if self.is_open and (not self.focused or not self.focused:can_focus()) then
     self:focus(c and self.list or self.empty_add_button)
   end

@@ -4,13 +4,13 @@
 
 Use **SQL Server: Manage** in Command Search to manage the current Project's connections. The Dialog title shows **Project Databases — <project name>**. The Connections list shows each connection's name, server, database and state. The form below it shows the selected connection: its state with Connect or Reload Schema and Disconnect, its fields, and Remove Connection. Select Add, enter the server and database, then select Connect. Connect checks access and loads metadata. Reload Schema loads metadata again. A change to a field disconnects the connection. An empty Dialog shows only Add Connection. Windows authentication hides the user and password fields.
 
-New Query opens an Untitled SQL Query in a normal Editor. When the Dialog opens from an Editor that uses another connection, **Use in <tab name>** assigns the selected connection to that Editor. Queries use normal editing, Save As, completion, and symbol navigation. Navigation opens a read-only column summary; Back returns to the same query. The summary is not a CREATE script or complete DDL.
+Open a `.sql` file, select SQL as an Untitled Buffer's Language Mode, or use **SQL Server: New Query**. All three use the normal Editor. Selecting SQL does not connect to a server. **SQL Server: Choose Connection** assigns a connection to the Editor. An execution command asks for a connection when none is assigned, then connects if needed. Queries use normal editing, Save As, completion, and symbol navigation. Navigation opens a read-only column summary; Back returns to the same query. The summary is not a CREATE script or complete DDL.
 
 The Dialog has no separate database sidebar. Table editing and transaction controls are not available.
 
 ## Run SQL
 
-Use **SQL Server: Run** in a connected SQL Query. It runs the primary selection, or the whole Query when that selection is empty. It sends that text as one batch. It does not split `GO` lines or select a statement at the caret.
+Use **SQL Server: Run Selection** in a SQL Query. It runs the primary selection and does nothing when that selection is empty. **SQL Server: Run Buffer** explicitly runs the whole Buffer. Both send the text as one batch. Neither splits `GO` lines or selects a statement at the caret. An edit, caret move, or focus change while a connection starts cancels the pending execution request.
 
 **SQL can change database data. Only the result display is read-only.** Each run opens a new connection with normal autocommit. Temporary tables, session settings, and transactions do not carry into the next run. Cancellation does not undo committed changes.
 
@@ -28,9 +28,9 @@ Batches are limited to 256 KiB. Each run holds at most 16 result records, 128 co
 
 ## Connections and persistence
 
-Connection settings belong to the current Project on this PC. Scratch has its own saved connections; it does not share them with other Projects. Its Dialog title shows **Project Databases — Scratch**. Each open query remembers its connection. Workspace restore and Untitled recovery keep that identity. Save As keeps it while the query remains open or saved in the Workspace. Opening a saved SQL file without its Workspace state requires Use in <tab name> again.
+Connection settings belong to the current Project on this PC. Scratch has its own saved connections; it does not share them with other Projects. Its Dialog title shows **Project Databases — Scratch**. Each open query remembers its connection. Workspace restore and Untitled recovery keep that identity. Save As keeps it while the query remains open or saved in the Workspace. Opening a saved SQL file without its Workspace state requires choosing its connection again.
 
-Restoring a query does not connect. Select Connect to load metadata again. Explicitly closing an Untitled Query keeps the normal discard confirmation.
+Restoring a query does not connect. An explicit execution command connects when needed. Select Connect in the Databases Dialog to load metadata without executing SQL. Explicitly closing an Untitled Query keeps the normal discard confirmation.
 
 Windows uses Microsoft ODBC Driver 18, or Driver 17 when 18 is absent. Windows authentication and SQL login are supported. Passwords are masked and are not saved. A successful Connect keeps the password in memory for query runs. Disconnect, a connection change, a Project change, or exit clears it. Enter it again for each connection attempt.
 

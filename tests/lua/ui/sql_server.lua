@@ -41,6 +41,7 @@ end
 test.describe("SQL Queries", function()
   test.after_each(function(context)
     autocomplete.close()
+    core.global_prompt_bar:exit(true)
     if context.original_backend then require("plugins.sql_server.backend").read_schema = context.original_backend end
     if context.original_execute then require("plugins.sql_server.backend").execute = context.original_execute end
     if context.connection_id then require("plugins.sql_server").remove(context.connection_id) end
@@ -50,23 +51,22 @@ test.describe("SQL Queries", function()
     if context.folder then test.ok(test.remove_tree(context.folder)) end
   end)
 
-  test.it("opens a persistent Untitled SQL Query from the Databases Dialog", function(context)
+  test.it("opens an ordinary Untitled SQL Query before choosing a connection and keeps its choice through restore", function(context)
     local sql = require "plugins.sql_server"
-    test.ok(command.perform("sql_server:manage"))
-    local open = test.not_nil(dialog.current())
-    test.ok(open.title:find(require("core.common").basename(core.root_project().path), 1, true),
-      "The Dialog must identify the Project whose connections it manages")
+    test.ok(command.perform("sql_server:new_query"))
+    local editor = core.active_view
+    test.ok(editor.buffer.intellij_untitled)
+    test.equal(editor.buffer.syntax.name, "SQL")
+    test.equal(sql.connection_for(editor.buffer), nil)
+    test.ok(command.is_valid("sql_server:run_selection"))
+    sql.load()
     local deadline = system.get_time() + 10
     while not sql.ready() and system.get_time() < deadline do coroutine.yield(0.01) end
     test.ok(sql.ready())
     local connection = sql.add_connection()
     test.ok(connection)
     context.connection_id = connection.id
-    open:refresh(connection.id)
-    test.ok(open.query_button:activate())
-    local editor = core.active_view
-    test.ok(editor.buffer.intellij_untitled)
-    test.equal(editor.buffer.language_mode_override, "SQL")
+    test.ok(sql.bind(editor.buffer, connection.id))
     test.equal(sql.connection_for(editor.buffer).id, connection.id)
     editor.buffer:text_input("SELECT id FROM dbo.customers")
     local state = editor:get_state()
@@ -97,6 +97,31 @@ test.describe("SQL Queries", function()
     test.equal(buffer:get_text(1, 1, math.huge, math.huge), "SELECT * FROM sales.customers")
   end)
 
+  test.it("chooses a connection when an ordinary SQL Editor first runs a selection", function(context)
+    local _, c = connected_query(context)
+    local sql = require "plugins.sql_server"
+    sql.disconnect(c.id)
+    local editor = sql.new_query()
+    editor.buffer:text_input("SELECT 1")
+    editor.buffer:set_selection(1, 1, 1, 9)
+    local submitted
+    require("plugins.sql_server.backend").execute = function(_, text, callback)
+      submitted = text
+      callback({ results = {}, affected_rows = {} })
+      return { cancel = function() end }
+    end
+    test.ok(command.perform("sql_server:run_selection"))
+    local deadline = system.get_time() + 10
+    while core.active_view ~= core.global_prompt_bar and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.equal(core.active_view, core.global_prompt_bar)
+    test.equal(submitted, nil)
+    core.global_prompt_bar:submit()
+    while not submitted and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.equal(submitted, "SELECT 1")
+    test.equal(sql.connection_for(editor.buffer), c)
+    test.equal(core.active_view, editor)
+  end)
+
   test.it("completes a column through the normal popup using the table alias", function(context)
     local editor = connected_query(context)
     editor.buffer:text_input("SELECT c.na FROM sales.customers AS c")
@@ -119,7 +144,7 @@ test.describe("SQL Queries", function()
     end
     editor.buffer:text_input("-- not selected\nSELECT name FROM sales.customers\n-- not selected")
     editor.buffer:set_selection(2, 1, 2, #"SELECT name FROM sales.customers" + 1)
-    test.ok(command.perform("sql_server:run"))
+    test.ok(command.perform("sql_server:run_selection"))
     test.equal(submitted, "SELECT name FROM sales.customers")
     test.equal(core.active_view, editor)
     reply({ results = { {
@@ -143,7 +168,7 @@ test.describe("SQL Queries", function()
     test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "-- not selected\nSELECT name FROM sales.customers\n-- not selected")
   end)
 
-  test.it("runs the whole Query at a caret and replaces results without changing its text", function(context)
+  test.it("runs nothing at a caret unless Run Buffer is explicit, and reuses its results", function(context)
     local editor = connected_query(context)
     local replies, submitted = {}, {}
     require("plugins.sql_server.backend").execute = function(_, text, callback)
@@ -151,11 +176,14 @@ test.describe("SQL Queries", function()
       return { cancel = function() end }
     end
     editor.buffer:text_input("SELECT name FROM sales.customers")
-    test.ok(command.perform("sql_server:run"))
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(#submitted, 0)
+    test.equal(#panes.ordered(), 1)
+    test.ok(command.perform("sql_server:run_buffer"))
     test.equal(submitted[1], "SELECT name FROM sales.customers")
     replies[1]({ results = {}, affected_rows = { "3" } })
     test.equal(core.active_view, editor)
-    test.ok(command.perform("sql_server:run"))
+    test.ok(command.perform("sql_server:run_buffer"))
     replies[2]({ error = "Test server refused the statement." })
     test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "SELECT name FROM sales.customers")
     local count = 0
@@ -178,7 +206,7 @@ test.describe("SQL Queries", function()
       return { cancel = function() cancelled = true end }
     end
     editor.buffer:text_input("SELECT name FROM sales.customers")
-    test.ok(command.perform("sql_server:run"))
+    test.ok(command.perform("sql_server:run_buffer"))
     test.ok(command.perform("sql_server:cancel"))
     test.ok(cancelled)
     require("plugins.sql_server").disconnect(c.id)
@@ -205,7 +233,7 @@ test.describe("SQL Queries", function()
       return { cancel = function() cancelled = true end }
     end
     editor.buffer:text_input("SELECT name FROM sales.customers")
-    test.ok(command.perform("sql_server:run"))
+    test.ok(command.perform("sql_server:run_buffer"))
     local result_pane
     for _, pane in ipairs(panes.ordered()) do
       for _, view in ipairs(panes.views(pane)) do

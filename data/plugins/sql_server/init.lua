@@ -188,14 +188,21 @@ function M.connection_for(buffer)
   return buffer and M.find(buffer.sql_connection_id)
 end
 
-function M.run(editor)
+function M.is_sql(view)
+  return view and view:extends(Editor) and view.buffer.syntax.name == "SQL"
+end
+function M.with_connection(view, action)
+  return require("plugins.sql_server.connection").with_connection(M, view, action)
+end
+
+function M.run(editor, whole_buffer)
   local buffer = editor.buffer
-  local c = M.connection_for(buffer)
-  if not c or c.state ~= "Ready" then core.error("Connect this Query in Databases first."); return false end
   if buffer.sql_execution and buffer.sql_execution.active then return false end
   local line1, col1, line2, col2 = buffer:get_selection(true)
-  if line1 == line2 and col1 == col2 then
+  if whole_buffer then
     line1, col1, line2, col2 = 1, 1, #buffer.lines, #buffer.lines[#buffer.lines]
+  elseif line1 == line2 and col1 == col2 then
+    return false
   end
   local bytes = col2 - col1
   for line = line1, line2 - 1 do
@@ -205,6 +212,8 @@ function M.run(editor)
   if bytes > 256 * 1024 then core.error("SQL exceeds the 256 KiB batch limit."); return false end
   local text = buffer:get_text(line1, col1, line2, col2)
   if not text:find("%S") then return false end
+  return M.with_connection(editor, function(c)
+  if buffer.sql_execution and buffer.sql_execution.active then return false end
   local run = { active = true, connection = c, generation = c.generation, started = system.get_time() }
   local view = buffer.sql_results
   if not view or view.closed or not panes.pane_for_view(view) then
@@ -233,12 +242,14 @@ function M.run(editor)
   if not handle then finish({ error = err or "Could not start SQL execution." })
   elseif run.active then run.handle = handle; if run.cancelled then handle:cancel() end end
   return handle ~= nil
+  end)
 end
 function M.new_query(id)
-  if not loaded or not M.find(id) then return nil end
+  if id and (not loaded or not M.find(id)) then return nil end
   local buffer = core.open_buffer()
   require("plugins.untitled_tabs").tag_buffer(buffer)
-  M.bind(buffer, id)
+  buffer:set_language_mode("sql", { reason = "New SQL Query" })
+  if id then M.bind(buffer, id) end
   local editor = Editor(buffer)
   panes.place(function() return editor end, { placement = "new", focus = true })
   return editor
@@ -299,12 +310,17 @@ end
 
 command.add(nil, {
   ["sql_server:manage"] = command.palette(function() return require("plugins.sql_server.dialog").open() end),
+  ["sql_server:new_query"] = command.palette(function() return M.new_query() end),
 })
 command.add(function()
   local view = core.active_view
-  return view and view:extends(Editor) and M.connection_for(view.buffer) ~= nil, view
+  return M.is_sql(view), view
 end, {
-  ["sql_server:run"] = command.palette(M.run),
+  ["sql_server:choose_connection"] = command.palette(function(view)
+    return require("plugins.sql_server.connection").choose(M, view)
+  end),
+  ["sql_server:run_selection"] = command.palette(function(view) return M.run(view, false) end),
+  ["sql_server:run_buffer"] = command.palette(function(view) return M.run(view, true) end),
 })
 command.add(function()
   local view = core.active_view

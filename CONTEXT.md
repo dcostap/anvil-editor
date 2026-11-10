@@ -160,7 +160,7 @@ An editable Buffer that is not linked to a filesystem file.
 _Avoid_: scratch buffer, unnamed file
 
 **SQL Query**:
-A SQL Buffer associated with a Database Connection. It can remain Untitled or have a file path.
+A Buffer of SQL text, either Untitled or saved as a file. A Database Connection gives it a database context for execution and symbol navigation.
 _Avoid_: SQL Commander, query tab
 
 **SQL Result**:
@@ -171,8 +171,11 @@ A named configuration that identifies a database server, database, and authentic
 _Avoid_: database profile
 
 **Databases Dialog**:
-The Dialog for managing Database Connections and opening SQL Queries.
+The Dialog for managing a Project's Database Connections.
 _Avoid_: database manager, database hub
+
+**Database Definition**:
+A read-only SQL document that describes a database object. It belongs to that object's Database Connection and can contain a generated query for the object.
 
 **Language Mode**:
 The language Anvil uses to interpret a Buffer for syntax highlighting and other language-aware behavior. It is normally detected from the file name or content, but a Buffer may have an explicit Language Mode override.
