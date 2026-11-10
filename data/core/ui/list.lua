@@ -43,12 +43,12 @@ function List:measure()
   return 0, math.min(#self.rows, 8) * self.row_height
 end
 
-function List:content_height()
+function List:rows_height()
   return #self.rows * self.row_height
 end
 
 local function max_scroll(self)
-  return math.max(0, self:content_height() - self.h)
+  return math.max(0, self:rows_height() - self.h)
 end
 
 function List:scroll_to_selected()

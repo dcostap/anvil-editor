@@ -74,6 +74,13 @@ test.describe("Dialog layout", function()
     test.same(rect(footer), { 60, 280, 80, 20 })
   end)
 
+  test.it("sizes a long list to the height of its measure", function()
+    local rows = {}
+    for i = 1, 20 do rows[i] = { name = tostring(i) } end
+    local list = require("core.ui.list") { rows = rows, row_height = 10 }
+    test.equal(list:height(px(200)), 80)
+  end)
+
   test.it("gives a scroll's child at least the scroll's height", function()
     local footer = Box { w = 10, h = 20 }
     local scroll = layout.Scroll { height = 300, layout.Column { gap = 0, layout.Spacer { grow = 1 }, footer } }
