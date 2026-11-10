@@ -498,9 +498,10 @@ static int f_draw_rounded_rect(lua_State *L) {
   RenColor color = luaXL_checkcolor(L, 7, 255);
   RenColor bottom = lua_isnoneornil(L, 8) ? color : luaXL_checkcolor(L, 8, 255);
   float softness = (float)luaL_optnumber(L, 9, 0);
+  float stroke = (float)luaL_optnumber(L, 10, 0);
 
   RenRect rect = { .x = x, .y = y, .width = w, .height = h };
-  rencache_draw_rounded_rect(canvas, rect, radius, color, bottom, softness);
+  rencache_draw_rounded_rect(canvas, rect, radius, color, bottom, softness, stroke);
 
   return 0;
 }

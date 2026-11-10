@@ -24,6 +24,7 @@ struct VSOut {
   float4 color : COLOR0;
   float4 style : TEXCOORD1;
   nointerpolation float4 bottom : COLOR1;
+  nointerpolation float stroke : TEXCOORD2;
 };
 
 struct PSOut {
@@ -55,12 +56,19 @@ VSOut vs_main(VSIn input) {
   output.color = input.color;
   output.style = input.style;
   output.bottom = float4(0.0f, 0.0f, 0.0f, 0.0f);
+  output.stroke = 0.0f;
   // A shape keeps its rect's origin in uvrect.xy, and its bottom color in uvrect.zw:
   // red, green and blue as one 24-bit integer, then alpha.
+  // An outline has a negative alpha there, and its width in place of the color.
   if (input.style.x > 4.5f) {
     output.uv = positions[vid] - input.uvrect.xy;
-    uint rgb = (uint)input.uvrect.z;
-    output.bottom = float4((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255, input.uvrect.w) / 255.0f;
+    if (input.uvrect.w < 0.0f) {
+      output.bottom = input.color;
+      output.stroke = input.uvrect.z;
+    } else {
+      uint rgb = (uint)input.uvrect.z;
+      output.bottom = float4((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255, input.uvrect.w) / 255.0f;
+    }
   }
   return output;
 }
@@ -97,7 +105,10 @@ PSOut ps_main(VSOut input) {
     float2 centered = input.uv - size * 0.5f;
     float2 q = abs(centered) - (size * 0.5f - radius);
     float distance = length(max(q, 0.0f)) + min(max(q.x, q.y), 0.0f) - radius;
-    float edge = max(softness, 0.75f);
+    // An outline is the band of the given width inside the edge.
+    if (input.stroke > 0.0f) distance = abs(distance + input.stroke * 0.5f) - input.stroke * 0.5f;
+    // An outline is thin, so its edge is one pixel wide. A fill keeps a softer edge.
+    float edge = max(softness, input.stroke > 0.0f ? 0.5f : 0.75f);
     float coverage = 1.0f - smoothstep(-edge, edge, distance);
     float t = saturate(input.uv.y / max(size.y, 1.0f));
     float3 top = input.color.rgb * input.color.a;

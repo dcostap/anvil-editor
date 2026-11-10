@@ -459,11 +459,17 @@ function Scroll:new(options)
   self.controls = {}
 end
 
+-- The space above and below the child, for the focus rings of its first and last controls.
+local function inset()
+  local m = ui.metrics()
+  return m.ring + m.border
+end
+
 function Scroll:child() return self.children[1] end
 function Scroll:width() return self:child():width() end
 function Scroll:height(w)
   if self.fixed_h then return px(self.fixed_h) end
-  return self:child():height(w)
+  return self:child():height(w) + 2 * inset()
 end
 
 ---Replace the child, and scroll to its top.
@@ -513,19 +519,20 @@ end
 function Scroll:place(x, y, w, h)
   Scroll.super.place(self, x, y, w, h)
   local child = self:child()
-  self.content_h = child:height(w)
+  local pad = inset()
+  local child_h = child:height(w)
+  self.content_h = child_h + 2 * pad
   self.scroll_to = math.max(0, math.min(self.scroll_to, self:max_scroll()))
   reveal(self, ui.layout_focus)
   self.scroll_to = math.max(0, math.min(self.scroll_to, self:max_scroll()))
   self.scroll = math.max(0, math.min(ui.approach(self, "scroll", self.scroll_to, 24), self:max_scroll()))
   -- The clip takes focus rings at the sides, and the scroll bar at the right.
-  local ring = ui.metrics().ring + ui.metrics().border
   local outer = ui.layout_clip
   self.clip_area = self.clip_area or {}
   local area = self.clip_area
-  area.x, area.y, area.w, area.h = x - ring, y, w + ring + px(12), h
+  area.x, area.y, area.w, area.h = x - pad, y, w + pad + px(12), h
   ui.layout_clip = intersect(outer, area, self.clip)
-  child:place(x, y - math.floor(self.scroll + 0.5), w, self.content_h)
+  child:place(x, y + pad - math.floor(self.scroll + 0.5), w, child_h)
   ui.layout_clip = outer
   for i = #self.controls, 1, -1 do self.controls[i] = nil end
   child:collect(self.controls)

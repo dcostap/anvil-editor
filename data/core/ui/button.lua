@@ -75,7 +75,9 @@ function Button:draw(focused)
   local down = self.enabled and self.pressed and self.hovered
   local hover = ui.approach(self, "hover_amount", self.enabled and (self.hovered or self.pressed) and 1 or 0, 30)
   local scale = ui.approach(self, "press_scale", down and 0.97 or 1, 40)
-  local pushed = ui.push_look(x, y, w, h, scale, self.enabled and 1 or ui.DISABLED_OPACITY)
+  local opacity = self.enabled and 1 or ui.DISABLED_OPACITY
+  -- A press shrinks the surface only. Scaled text moves its glyphs between pixels, so the label stays.
+  local pushed = ui.push_look(x, y, w, h, scale, opacity)
   if focused then ui.draw_ring(x, y, w, h, r) end
   local rest, over = kind[1] and surface.get(kind[1]), surface.get(kind[2])
   if rest then surface.draw(rest, x, y, w, h, r) end
@@ -85,6 +87,8 @@ function Button:draw(focused)
     surface.draw(over, x, y, w, h, r)
     ui.pop_look(faded)
   end
+  ui.pop_look(pushed)
+  pushed = ui.push_look(x, y, w, h, 1, opacity)
   local base = rest and rest.text or (self.kind == "danger" and style.dialog_danger) or style.dialog_text_muted
   if self.kind == "danger" then base = style.dialog_danger end
   local text = ui.mix(base, over.text or base, hover, self.text_color)

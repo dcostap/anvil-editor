@@ -321,4 +321,26 @@ test.describe("Dialog with a layout body", function()
     end
     test.equal(instance.focused, instance.nav)
   end)
+
+  test.it("selects text in a field with a pointer drag", function()
+    open_editor("behind")
+    local instance = require("plugins.ui_gallery").open("inputs")
+    dialog.update()
+    local field
+    for _, control in ipairs(instance:focusables()) do
+      if control.takes_text and control.enabled and not control.secret and control:get_text() ~= "" then
+        field = control
+        break
+      end
+    end
+    field = test.not_nil(field)
+    local y = field.y + field.h / 2
+    core.on_event("mousepressed", "left", field.x + field.w - 2, y, 1)
+    core.on_event("mousemoved", field.x + 1, y, 0, 0)
+    core.on_event("mousereleased", "left", field.x + 1, y)
+    test.equal(instance.focused, field)
+    local first, last = field.input:selection()
+    test.equal(first, 0)
+    test.equal(last, #field:get_text())
+  end)
 end)

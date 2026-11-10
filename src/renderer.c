@@ -3471,12 +3471,15 @@ void ren_font_group_wrap_text(
   if (hb_buffer) hb_buffer_destroy(hb_buffer);
 }
 
-static float shape_distance(float px, float py, float cx, float cy, float half_w, float half_h, float radius) {
+static float shape_distance(float px, float py, float cx, float cy, float half_w, float half_h, float radius,
+                            float stroke) {
   float qx = fabsf(px - cx) - (half_w - radius);
   float qy = fabsf(py - cy) - (half_h - radius);
   float ox = qx > 0.0f ? qx : 0.0f, oy = qy > 0.0f ? qy : 0.0f;
   float inside = qx > qy ? qx : qy;
-  return sqrtf(ox * ox + oy * oy) + (inside < 0.0f ? inside : 0.0f) - radius;
+  float d = sqrtf(ox * ox + oy * oy) + (inside < 0.0f ? inside : 0.0f) - radius;
+  /* An outline is the band of the given width inside the edge. */
+  return stroke > 0.0f ? fabsf(d + stroke * 0.5f) - stroke * 0.5f : d;
 }
 
 static float shape_coverage(float distance, float edge) {
@@ -3499,7 +3502,8 @@ static void fill_surface_span(SDL_Surface *surface, int x, int y, int w, RenColo
 
 /* The software form of the D3D11 shape: a vertical gradient, and an edge that fades over `softness`
    pixels on each side of the outline. The same distance and smoothstep give the same coverage. */
-static void draw_shape(RenSurface *rs, RenRect rect, float radius, RenColor top, RenColor bottom, float softness) {
+static void draw_shape(RenSurface *rs, RenRect rect, float radius, RenColor top, RenColor bottom, float softness,
+                       float stroke) {
   SDL_Surface *surface = rs->surface;
   float scale = rs->scale_x;
   float x0 = rect.x * rs->scale_x, y0 = rect.y * rs->scale_y;
@@ -3507,10 +3511,12 @@ static void draw_shape(RenSurface *rs, RenRect rect, float radius, RenColor top,
   float half_w = w * 0.5f, half_h = h * 0.5f, cx = x0 + half_w, cy = y0 + half_h;
   radius *= scale;
   softness *= scale;
+  stroke *= scale;
   if (radius > half_w) radius = half_w;
   if (radius > half_h) radius = half_h;
   if (radius < 0.0f) radius = 0.0f;
-  float edge = softness > 0.75f ? softness : 0.75f;
+  float min_edge = stroke > 0.0f ? 0.5f : 0.75f;
+  float edge = softness > min_edge ? softness : min_edge;
   int reach = (int)ceilf(edge) + 1;
   SDL_Rect clip, area = { (int)floorf(x0) - reach, (int)floorf(y0) - reach,
                           (int)ceilf(w) + 2 * reach, (int)ceilf(h) + 2 * reach };
@@ -3529,10 +3535,10 @@ static void draw_shape(RenSurface *rs, RenRect rect, float radius, RenColor top,
     RenColor row = { .r = (uint8_t)lroundf(r), .g = (uint8_t)lroundf(g), .b = (uint8_t)lroundf(b),
                      .a = (uint8_t)lroundf(alpha) };
     for (int px = area.x; px < area.x + area.w;) {
-      float d = shape_distance(px + 0.5f, fy, cx, cy, half_w, half_h, radius);
+      float d = shape_distance(px + 0.5f, fy, cx, cy, half_w, half_h, radius, stroke);
       if (d <= -edge) {
         int end = px + 1;
-        while (end < area.x + area.w && shape_distance(end + 0.5f, fy, cx, cy, half_w, half_h, radius) <= -edge) end++;
+        while (end < area.x + area.w && shape_distance(end + 0.5f, fy, cx, cy, half_w, half_h, radius, stroke) <= -edge) end++;
         fill_surface_span(surface, px, py, end - px, row);
         px = end;
         continue;
@@ -3553,10 +3559,11 @@ static void draw_shape(RenSurface *rs, RenRect rect, float radius, RenColor top,
   }
 }
 
-void ren_draw_rounded_rect(RenSurface *rs, RenRect rect, float radius, RenColor color, RenColor bottom_color, float softness) {
+void ren_draw_rounded_rect(RenSurface *rs, RenRect rect, float radius, RenColor color, RenColor bottom_color, float softness,
+                           float stroke) {
   if (rect.width <= 0 || rect.height <= 0 || (color.a == 0 && bottom_color.a == 0)) return;
-  if (softness > 0.0f || memcmp(&color, &bottom_color, sizeof(color)) != 0) {
-    draw_shape(rs, rect, radius, color, bottom_color, softness);
+  if (softness > 0.0f || stroke > 0.0f || memcmp(&color, &bottom_color, sizeof(color)) != 0) {
+    draw_shape(rs, rect, radius, color, bottom_color, softness, stroke);
     return;
   }
 

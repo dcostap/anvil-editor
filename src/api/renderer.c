@@ -1068,11 +1068,13 @@ static int f_draw_rounded_rect(lua_State *L) {
   /* Optional: the color at the bottom edge, for a vertical gradient, and the width of a soft edge. */
   RenColor bottom = lua_isnoneornil(L, 7) ? color : luaXL_checkcolor(L, 7, 255);
   float softness = (float)luaL_optnumber(L, 8, 0);
+  /* Optional: draw only an outline of this width, inside the rect. An outline has one color. */
+  float stroke = (float)luaL_optnumber(L, 9, 0);
   RenWindow *window = ren_get_target_window();
   if (!window) {
     return luaL_error(L, "no target window found");
   } else {
-    rencache_draw_rounded_rect(&window->cache, rect, radius, color, bottom, softness);
+    rencache_draw_rounded_rect(&window->cache, rect, radius, color, bottom, softness, stroke);
   }
   return 0;
 }

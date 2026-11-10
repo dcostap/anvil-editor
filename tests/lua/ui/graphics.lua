@@ -247,6 +247,15 @@ test.describe("graphics apis", function()
     test.ok(edge > outside and outside > 0, "the edge fades out past the outline")
     test.ok(edge < 255, "the edge fades in inside the outline")
     test.equal(pixel(soft, 20, 2)[1], 0)
+
+    local outline = canvas.new(40, 40, { 0, 0, 0, 255 }, true)
+    outline:draw_rounded_rect(10, 10, 20, 20, 6, { 255, 255, 255, 255 }, nil, 0, 2)
+    outline:render()
+    test.equal(pixel(outline, 20, 11)[1], 255)
+    test.equal(pixel(outline, 20, 20)[1], 0)
+    test.equal(pixel(outline, 20, 5)[1], 0)
+    local corner = pixel(outline, 11, 11)[1]
+    test.ok(corner > 0 and corner < 255, "the curve of a corner has a smooth edge")
   end)
 
   test.test("saves and loads raster and SVG images", function(context)

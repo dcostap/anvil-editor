@@ -147,6 +147,8 @@ typedef struct {
   RenColor bottom;
   float radius;
   float softness;
+  /* An outline's width, or 0 for a filled shape. */
+  float stroke;
 } DrawRoundedRectCommand;
 
 typedef struct {
@@ -502,8 +504,10 @@ void rencache_draw_rect(RenCache *ren_cache, RenRect rect, RenColor color, bool 
 }
 
 void rencache_draw_rounded_rect(RenCache *ren_cache, RenRect rect, float radius, RenColor color,
-                                RenColor bottom, float softness) {
+                                RenColor bottom, float softness, float stroke) {
   if (!isfinite(softness) || softness < 0.0f) softness = 0.0f;
+  if (!isfinite(stroke) || stroke < 0.0f) stroke = 0.0f;
+  if (stroke > 0.0f) bottom = color;
   int reach = softness > 0.0f ? (int)ceilf(softness) + 1 : 0;
   RenRect bounds = { rect.x - reach, rect.y - reach, rect.width + 2 * reach, rect.height + 2 * reach };
   if (rect.width <= 0 || rect.height <= 0 || (color.a == 0 && bottom.a == 0) ||
@@ -519,6 +523,7 @@ void rencache_draw_rounded_rect(RenCache *ren_cache, RenRect rect, float radius,
     cmd->bottom = bottom;
     cmd->radius = radius < 0.0f ? 0.0f : (radius > max_radius ? max_radius : radius);
     cmd->softness = softness;
+    cmd->stroke = stroke;
   }
 }
 
@@ -896,7 +901,7 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
       case DRAW_ROUNDED_RECT: {
         DrawRoundedRectCommand *rcmd = (DrawRoundedRectCommand*)&cmd->command;
         if (!anvil_d3d11_push_rounded_rect(ren_cache->window, rcmd->shape, rcmd->radius, clip, rcmd->color,
-                                           rcmd->bottom, rcmd->softness)) { fail_reason = "draw_rounded_rect"; goto fail; }
+                                           rcmd->bottom, rcmd->softness, rcmd->stroke)) { fail_reason = "draw_rounded_rect"; goto fail; }
       } break;
       case DRAW_RECT_GRID: {
         DrawRectGridCommand *gcmd = (DrawRectGridCommand*)&cmd->command;
@@ -1116,7 +1121,8 @@ void rencache_end_frame(RenCache *ren_cache) {
             rrcmd->radius * transform.scale,
             transform_color(rrcmd->color, transform),
             transform_color(rrcmd->bottom, transform),
-            rrcmd->softness * transform.scale
+            rrcmd->softness * transform.scale,
+            rrcmd->stroke * transform.scale
           );
           break;
         case DRAW_RECT_GRID:

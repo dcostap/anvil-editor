@@ -1382,9 +1382,11 @@ bool anvil_d3d11_push_rect(SDL_Window *window, RenRect rect, RenRect clip, RenCo
 }
 
 /* A rounded rect with a vertical gradient from `color` to `bottom`, and an edge that fades over
-   `softness` pixels on each side of the outline, as a CSS box-shadow blur does. */
+   `softness` pixels on each side of the outline, as a CSS box-shadow blur does.
+   With a `stroke`, only an outline of that width inside the rect, in `color`. The shader reads a
+   negative bottom alpha as an outline, and the bottom color's place as its width. */
 static bool d3d11_push_shape(RenRect rect, float radius, RenRect clip, RenColor color, RenColor bottom,
-                             float softness) {
+                             float softness, float stroke) {
   if (!d3d11_ensure_quad_pipeline(NULL) || !d3d11_ensure_white_texture()) return false;
   g_d3d11.stats.frame.rect_pushes++;
   float width = (float)rect.width;
@@ -1400,7 +1402,8 @@ static bool d3d11_push_shape(RenRect rect, float radius, RenRect clip, RenColor 
   D3D11QuadInstance inst = {
     (float)r.x, (float)r.y, (float)(r.x + r.width), (float)(r.y + r.height),
     (float)rect.x, (float)rect.y,
-    (float)((uint32_t)bottom.r << 16 | (uint32_t)bottom.g << 8 | bottom.b), (float)bottom.a,
+    stroke > 0.0f ? stroke : (float)((uint32_t)bottom.r << 16 | (uint32_t)bottom.g << 8 | bottom.b),
+    stroke > 0.0f ? -1.0f : (float)bottom.a,
     color.r / 255.0f, color.g / 255.0f, color.b / 255.0f, color.a / 255.0f,
     5.0f + softness, radius, width, height,
   };
@@ -1408,11 +1411,11 @@ static bool d3d11_push_shape(RenRect rect, float radius, RenRect clip, RenColor 
 }
 
 bool anvil_d3d11_push_rounded_rect(SDL_Window *window, RenRect rect, float radius, RenRect clip, RenColor color,
-                                   RenColor bottom, float softness) {
+                                   RenColor bottom, float softness, float stroke) {
   if (window != g_d3d11.active_window) return false;
   if ((color.a == 0 && bottom.a == 0) || rect.width <= 0 || rect.height <= 0) return true;
-  bool shape = softness > 0.0f || memcmp(&color, &bottom, sizeof(color)) != 0;
-  if (shape) return d3d11_push_shape(rect, radius, clip, color, bottom, softness);
+  bool shape = softness > 0.0f || stroke > 0.0f || memcmp(&color, &bottom, sizeof(color)) != 0;
+  if (shape) return d3d11_push_shape(rect, radius, clip, color, bottom, softness, stroke);
   if (radius <= 0.0f) return anvil_d3d11_push_rect(window, rect, clip, color);
   if (!d3d11_ensure_quad_pipeline(NULL) || !d3d11_ensure_white_texture()) return false;
   g_d3d11.stats.frame.rect_pushes++;
@@ -1889,10 +1892,11 @@ static bool d3d11_queue_quad(ID3D11ShaderResourceView *srv,
     + queued.y1 * g_d3d11.transform.scale;
   queued.a *= g_d3d11.transform.opacity;
   if (queued.mode >= 5.0f) {
-    /* A shape: the rect's origin moves with the quad. Its bottom color stays. */
+    /* A shape: the rect's origin moves with the quad. Its bottom color stays, and an outline's width scales. */
     queued.u0 = g_d3d11.transform.offset_x + queued.u0 * g_d3d11.transform.scale;
     queued.v0 = g_d3d11.transform.offset_y + queued.v0 * g_d3d11.transform.scale;
-    queued.v1 *= g_d3d11.transform.opacity;
+    if (queued.v1 < 0.0f) queued.u1 *= g_d3d11.transform.scale;
+    else queued.v1 *= g_d3d11.transform.opacity;
     queued.mode = 5.0f + (queued.mode - 5.0f) * g_d3d11.transform.scale;
     queued.pad0 *= g_d3d11.transform.scale;
     queued.pad1 *= g_d3d11.transform.scale;

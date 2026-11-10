@@ -140,48 +140,9 @@ function ui.approach(state, key, target, rate)
   return value
 end
 
----A focus ring just outside a rounded rectangle. The gap between them shows the card.
-function ui.draw_focus_ring(x, y, w, h, radius)
-  local m = ui.metrics()
-  local gap = m.ring + m.border
-  renderer.draw_rounded_rect(x - gap, y - gap, w + 2 * gap, h + 2 * gap, radius + gap, style.accent)
-  renderer.draw_rounded_rect(x - gap + m.ring, y - gap + m.ring, w + 2 * (gap - m.ring), h + 2 * (gap - m.ring),
-    radius + gap - m.ring, style.card)
-end
-
--- The point lists of the four corners. Each draw fills them in place, so a frame makes no new tables.
-local outline_corners = {}
-
-local function corner_points(index, cx, cy, outer, inner, from, steps)
-  local points = outline_corners[index] or {}
-  outline_corners[index] = points
-  local count = 0
-  local function add(radius, angle)
-    count = count + 1
-    local point = points[count] or {}
-    points[count] = point
-    point[1], point[2] = cx + radius * math.cos(angle), cy + radius * math.sin(angle)
-  end
-  for i = 0, steps do add(outer, from + i / steps * math.pi / 2) end
-  for i = steps, 0, -1 do add(inner, from + i / steps * math.pi / 2) end
-  for i = count + 1, #points do points[i] = nil end
-  return points
-end
-
 ---A rounded rectangle's outline, `thickness` pixels wide, inside (x, y, w, h). The inside stays clear.
 function ui.draw_rounded_outline(x, y, w, h, radius, thickness, color)
-  local r = math.min(radius, w / 2, h / 2)
-  local t = math.min(thickness, r > 0 and r or thickness)
-  renderer.draw_rect(x + r, y, w - 2 * r, t, color)
-  renderer.draw_rect(x + r, y + h - t, w - 2 * r, t, color)
-  renderer.draw_rect(x, y + r, t, h - 2 * r, color)
-  renderer.draw_rect(x + w - t, y + r, t, h - 2 * r, color)
-  if r <= 0 then return end
-  local steps, inner = math.max(4, math.ceil(r / 1.5)), r - t
-  renderer.draw_poly(corner_points(1, x + r, y + r, r, inner, math.pi, steps), color)
-  renderer.draw_poly(corner_points(2, x + w - r, y + r, r, inner, math.pi * 1.5, steps), color)
-  renderer.draw_poly(corner_points(3, x + w - r, y + h - r, r, inner, 0, steps), color)
-  renderer.draw_poly(corner_points(4, x + r, y + h - r, r, inner, math.pi / 2, steps), color)
+  renderer.draw_rounded_rect(x, y, w, h, radius, color, nil, 0, thickness)
 end
 
 ---A check box with its top left corner at (x, y). `amount` goes from 0, clear, to 1, checked, so the box can fade.
