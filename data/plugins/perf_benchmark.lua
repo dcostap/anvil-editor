@@ -1147,8 +1147,11 @@ local function scenario_is_ready()
   if benchmark.scenario:find("^ui%-gallery%-") then
     if require("core.ui.dialog").current() then return true end
     config.transitions = false
-    -- A theme suffix, such as "-light", names the theme in the runner.
-    require("plugins.ui_gallery").open(benchmark.scenario:match("^ui%-gallery%-(%a+)"))
+    -- A theme suffix, such as "-light", names the theme in the runner. An "-end" suffix scrolls to the page's end.
+    local instance = require("plugins.ui_gallery").open(benchmark.scenario:match("^ui%-gallery%-(%a+)"))
+    if benchmark.scenario:find("%-end$") then
+      instance.page_scroll.scroll_to = math.huge
+    end
     return false
   end
   if benchmark.scenario:find("^databases%-dialog") then

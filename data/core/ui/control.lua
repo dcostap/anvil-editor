@@ -1,5 +1,6 @@
 local Object = require "core.object"
 local ui = require "core.ui"
+local layout = require "core.ui.layout"
 
 -- A control in a Dialog, such as a button or a text field. The Dialog places it, sends it input and draws it.
 --
@@ -11,8 +12,8 @@ local ui = require "core.ui"
 --   cancel()          Escape. A control that has nothing to cancel returns false, and the Dialog closes.
 --   on_focus(), on_blur()
 -- `hovered` is true while the pointer is over the control, and `pressed` while a press on it lasts.
--- A control is also a layout node (core.ui.layout): `measure()` gives its natural size, and the options
--- `width` and `height`, in pixels at scale 1, replace it.
+-- A control is also a layout node (core.ui.layout): `measure()` gives its natural size, and it takes the size
+-- options of a node, such as `width`, `max_width` and `grow`.
 local Control = Object:extend()
 
 -- Whether Tab and a click give the control keyboard focus.
@@ -28,8 +29,7 @@ function Control:new(options)
   self.enabled = options.enabled ~= false
   self.visible = options.visible ~= false
   self.hovered, self.pressed = false, false
-  self.preferred_w, self.preferred_h = options.width, options.height
-  self.grow = options.grow
+  layout.init_size(self, options)
 end
 
 function Control:set_rect(x, y, w, h)
@@ -53,16 +53,17 @@ function Control:measure()
   return 0, ui.metrics().control_h
 end
 
-function Control:width()
-  if self.preferred_w then return math.floor(self.preferred_w * SCALE + 0.5) end
+function Control:content_width()
   return (self:measure())
 end
 
-function Control:height(w)
-  if self.preferred_h then return math.floor(self.preferred_h * SCALE + 0.5) end
+function Control:content_height(w)
   local _, h = self:measure(w)
   return h
 end
+
+Control.width_limits, Control.height_limits = layout.Node.width_limits, layout.Node.height_limits
+Control.width, Control.height = layout.Node.width, layout.Node.height
 
 ---Take a rect from a layout node. The clip of an enclosing Scroll limits where the pointer reaches the control.
 function Control:place(x, y, w, h)

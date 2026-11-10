@@ -206,8 +206,8 @@ function Swatch:new(options)
   self.surface = options.surface
 end
 
-function Swatch:width() return layout.px(112) end
-function Swatch:height() return layout.px(72) + ui.role_font("meta"):get_height() + layout.px(8) end
+function Swatch:content_width() return layout.px(112) end
+function Swatch:content_height() return layout.px(72) + ui.role_font("meta"):get_height() + layout.px(8) end
 
 function Swatch:draw_node()
   local h = layout.px(72)
@@ -248,11 +248,116 @@ local function look_page()
   }
 end
 
+-- A sample box for the Layout page: a raised surface with a label, at a natural size.
+local Block = layout.Node:extend()
+
+function Block:new(options)
+  Block.super.new(self, options)
+  self.label = options.label or ""
+  self.natural_w, self.natural_h = options.w or 0, options.h or 32
+end
+
+function Block:content_width()
+  return math.max(layout.px(self.natural_w), ui.role_font("meta"):get_width(self.label) + layout.px(16))
+end
+
+function Block:content_height() return layout.px(self.natural_h) end
+
+function Block:draw_node()
+  surface.draw("raised", self.x, self.y, self.w, self.h, ui.metrics().small_radius)
+  local meta = ui.role_font("meta")
+  common.draw_text(meta, style.dialog_text_muted, ui.fit_text(meta, self.label, self.w - layout.px(8)), "center",
+    self.x, self.y, self.w, self.h)
+end
+
+-- A sunken frame around one container, so its edges show.
+local Frame = layout.Node:extend()
+
+function Frame:content_width() return self.children[1]:width() end
+function Frame:content_height(w) return self.children[1]:height(w) end
+
+function Frame:place(x, y, w, h)
+  Frame.super.place(self, x, y, w, h)
+  self.children[1]:place(x, y, w, h)
+end
+
+function Frame:draw_node(dialog)
+  surface.draw("well", self.x, self.y, self.w, self.h, ui.metrics().control_radius)
+  Frame.super.draw_node(self, dialog)
+end
+
+local function layout_page()
+  local function frame(child, options)
+    options = options or {}
+    options[1] = child
+    return Frame(options)
+  end
+  local function example(title, description, control)
+    return Field { title = title, description = description, stacked = true, control = control }
+  end
+  local justify = Column { gap = 6 }
+  for _, value in ipairs { "start", "center", "end", "between" } do
+    justify.children[#justify.children + 1] = frame(Row {
+      justify = value, gap = 6, padding = 6,
+      Block { label = value, w = 72 }, Block { w = 40 }, Block { w = 40 },
+    })
+  end
+  local align = Row { gap = 8 }
+  for _, value in ipairs { "start", "center", "end", "stretch" } do
+    align.children[#align.children + 1] = frame(Row {
+      align = value, gap = 6, padding = 6, height = 88,
+      Block { label = value, h = 24 }, Block { w = 24, h = 48 },
+    }, { grow = 1 })
+  end
+  return Column {
+    Group {
+      title = "Grow and shrink",
+      example("Weights", "grow = 2 takes twice the free width of grow = 1. A child without grow keeps its width.",
+        frame(Row {
+          gap = 6, padding = 6,
+          Block { label = "natural" }, Block { label = "grow = 2", grow = 2 }, Block { label = "grow = 1", grow = 1 },
+        })),
+      example("Limits", "max_width stops a growing child, and the others take the rest.",
+        frame(Row {
+          gap = 6, padding = 6,
+          Block { label = "grow, max_width = 160", grow = 1, max_width = 160 }, Block { label = "grow", grow = 1 },
+        })),
+      example("Shrink", "Children that are too wide shrink in proportion to their widths, down to min_width.",
+        frame(Row {
+          gap = 6, padding = 6,
+          Block { label = "400 wide, min_width = 240", w = 400, min_width = 240 }, Block { label = "400 wide", w = 400 },
+        })),
+    },
+    Group {
+      title = "Placement",
+      example("Justify", "Where the children go along a Row or Column when space is free.", justify),
+      example("Align", "Where each child goes across the axis. A Row centres by default.", align),
+      example("Grow in a Column", "A Spacer with grow = 1 pushes the buttons to the bottom of a 160 px Column.",
+        frame(Column {
+          height = 160, padding = 12, gap = 8,
+          Text { role = "description", text = "Content at the top." },
+          layout.Spacer { grow = 1 },
+          Row { justify = "end", Button { label = "Cancel", size = "small" }, Button { label = "Save", kind = "primary", size = "small" } },
+        })),
+    },
+    Group {
+      title = "Form",
+      example("Server", "The host grows, the port keeps 96 px, and the button keeps its width.",
+        Row {
+          TextField { text = "db.example.invalid", grow = 1, min_width = 120 },
+          TextField { text = "1433", width = 96 },
+          Button { label = "Test" },
+        }),
+    },
+  }
+end
+
 local PAGES = {
   { id = "buttons", label = "Buttons", icon = ui.icons.button, build = buttons_page },
   { id = "inputs", label = "Inputs", icon = ui.icons.form, build = inputs_page },
   { id = "choices", label = "Choices", icon = ui.icons.toggle, build = choices_page },
   { id = "lists", label = "Lists", icon = ui.icons.view_list, build = lists_page },
+  { id = "layout", label = "Layout", icon = ui.icons.shape, build = layout_page },
   { id = "look", label = "Type and Surfaces", icon = ui.icons.palette, build = look_page },
 }
 
