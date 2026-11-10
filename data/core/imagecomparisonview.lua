@@ -51,7 +51,7 @@ function ImageComparisonView:sync_from(source)
   target.zoom_mode = source.zoom_mode
   target.transition, target.glide = nil, nil
   local scale = source.zoom_mode == "fit" and not source.transition and target:get_fit_scale()
-    or math.max(target:get_fit_scale(), source.zoom_scale)
+    or math.max(target:get_min_scale(), source.zoom_scale)
   target:apply_transform(scale, source.image_x, source.image_y)
 end
 

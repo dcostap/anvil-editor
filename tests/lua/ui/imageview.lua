@@ -91,6 +91,27 @@ test.describe("Image View interaction", function()
     near(rect[4], 400)
   end)
 
+  test.it("zooms out below fit and keeps the smaller image centered after a resize", function(context)
+    local view = context.view
+    config.transitions = false
+    for _, size in ipairs({ { 60, 40 }, { 1200, 800 } }) do
+      view.size.x, view.size.y = 600, 400
+      view:set_image(canvas.new(size[1], size[2], { 40, 100, 180, 255 }, true), "Image")
+      view:zoom_fit()
+      local fitted = image_rect(view)
+      test.ok(view:zoom_out())
+      local smaller = image_rect(view)
+      test.ok(smaller[3] < fitted[3], "zoom out must work below fit, including at 100%")
+      near(smaller[1] + smaller[3] / 2, view.position.x + view.size.x / 2)
+      near(smaller[2] + smaller[4] / 2, view.position.y + view.size.y / 2)
+      view.size.x, view.size.y = 700, 500
+      view:update()
+      near(image_rect(view)[3], smaller[3])
+      view:zoom_fit()
+      test.ok(image_rect(view)[3] > smaller[3], "Fit must remain available after zooming out")
+    end
+  end)
+
   test.it("pans directly, clamps image edges, and stops when the pointer leaves", function(context)
     local view = context.view
     config.transitions = false
@@ -140,9 +161,10 @@ test.describe("Image View interaction", function()
     test.ok(image_rect(view)[3] > before[3])
     config.transitions = false
     view:on_mouse_wheel(-100)
-    near(image_rect(view)[3], 600)
+    local smallest = image_rect(view)[3]
+    test.ok(smallest > 0 and smallest < 600)
     view:on_mouse_wheel(-100)
-    near(image_rect(view)[3], 600)
+    near(image_rect(view)[3], smallest)
     test.equal(view:on_mouse_wheel(0), false)
   end)
 
@@ -403,6 +425,12 @@ test.describe("Image View interaction", function()
       near(a[3], b[3])
       near(a[1] - left.position.x, b[1] - right.position.x)
     end
+    config.transitions = false
+    left:zoom_fit()
+    test.ok(view:on_mouse_wheel(-1))
+    view:update()
+    test.ok(image_rect(left)[3] < left.size.x)
+    near(image_rect(left)[3], image_rect(right)[3])
   end)
 
   test.it("animates the Image Overlay through the same wheel interaction", function(context)

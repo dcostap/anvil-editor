@@ -247,6 +247,11 @@ function ImageView:get_max_scale()
   return math.max(MAX_ZOOM, MAX_FILL_ZOOM * self:get_fill_scale())
 end
 
+---Allow zooming out to one tenth of the fitted size, including for small images.
+function ImageView:get_min_scale()
+  return self:get_fit_scale() / 10
+end
+
 ---Return the displayed image rectangle in screen coordinates.
 function ImageView:get_image_rect()
   return self.position.x + self.image_x, self.position.y + self.image_y, self.width, self.height
@@ -344,7 +349,7 @@ function ImageView:set_zoom(scale, x, y, mode)
   if not self.image or self.size.x <= 0 or self.size.y <= 0 then return false end
   self:update()
   local fit = self:get_fit_scale()
-  scale = common.clamp(scale, fit, self:get_max_scale())
+  scale = common.clamp(scale, self:get_min_scale(), self:get_max_scale())
   local bx, by, bw, bh = self:get_box()
   x = x and x - self.position.x or bx + bw / 2
   y = y and y - self.position.y or by + bh / 2
@@ -364,7 +369,7 @@ function ImageView:zoom_by(delta, x, y)
   local exponent = common.clamp(delta, -32, 32)
   local power = ZOOM_STEP ^ exponent
   local target = common.clamp(scale * power,
-    self:get_fit_scale(), self:get_max_scale())
+    self:get_min_scale(), self:get_max_scale())
   core.log_quiet("Image View wheel: %s delta=%.17g base=%.17g exponent=%.17g power=%.17g from=%.17g target=%.17g",
     self:get_name(), delta, ZOOM_STEP, exponent, power, scale, target)
   -- A zoom that passes source size stops there once.
@@ -554,7 +559,7 @@ function ImageView:update_layout()
   local old = self.layout_box
   self.layout_key, self.layout_box = key, { x = bx, y = by, w = bw, h = bh }
   local fit = self:get_fit_scale()
-  local scale = self.zoom_mode == "fit" and fit or common.clamp(self.zoom_scale, fit, self:get_max_scale())
+  local scale = self.zoom_mode == "fit" and fit or common.clamp(self.zoom_scale, self:get_min_scale(), self:get_max_scale())
   local x, y = self.image_x, self.image_y
   if old and self.width > 0 then
     local px = (old.x + old.w / 2 - self.image_x) / self.zoom_scale
