@@ -1571,6 +1571,44 @@ function M.is_forward_available(target)
   return pane ~= nil and pane.history.index < #pane.history.entries
 end
 
+local function nearest_after_removal(old_order, old_index, excluded)
+  local start = math.min(old_index, #old_order)
+  for index = start, #old_order do
+    local pane = old_order[index]
+    if pane and not excluded[pane.id] then return pane end
+  end
+  for index = start - 1, 1, -1 do
+    local pane = old_order[index]
+    if not excluded[pane.id] then return pane end
+  end
+end
+
+-- The position that `pane` has, or would have, among the Panes that navigation reaches.
+local function navigable_index(pane)
+  local index = 1
+  for _, member in ipairs(M.ordered()) do
+    if member == pane then return index end
+    if not member.group.snoozed then index = index + 1 end
+  end
+  return index
+end
+
+-- Automatic focus replacement never reads a pending result or enters a Snoozed Pane.
+-- Explicit navigation and View moves use their requested target instead.
+local function focus_after_removal(group, member_index, old_index, previous_view, attention)
+  attention = attention or require("core.pending_panes").local_attention()
+  local survivors = group and group.root and not group.snoozed and layout.leaves(group.root) or {}
+  local next_pane = nearest_after_removal(survivors, member_index, attention)
+    or nearest_after_removal(M.navigable(), old_index, attention)
+  M.active_pane, M.visible_group_value = next_pane, next_pane and next_pane.group
+  if next_pane then
+    focus_view(next_pane)
+  elseif previous_view and core.clear_active_view then
+    core.clear_active_view(previous_view)
+  end
+  quiet("Automatic Pane selection: %s", next_pane and next_pane.id or "Project Launcher")
+end
+
 ---With keep_pane, close only this View and use a blank Editor if no View remains.
 function M.close_view(target, opts)
   opts = opts or {}
@@ -1600,6 +1638,7 @@ function M.close_view(target, opts)
       return
     end
     local was_current = pane.current_view == view
+    local previous_view = M.pane_for_view(core.active_view) == pane and core.active_view
     if was_current then call_lifecycle(view, "on_suspend") end
     unretain_view(pane, view)
     for index = #pane.history.entries, 1, -1 do
@@ -1616,24 +1655,24 @@ function M.close_view(target, opts)
     pane.history.index = common.clamp(pane.history.index, 1, #pane.history.entries)
     pane.current_view = pane.history.entries[pane.history.index].view
     if was_current then call_lifecycle(pane.current_view, "on_resume") end
-    if opts.focus ~= false then M.focus(pane) end
+    if opts.focus ~= false then
+      local attention = was_current and pane.current_view.terminal_view
+        and require("core.pending_panes").local_attention()
+      if attention and attention[pane.id] then
+        local member_index
+        for index, member in ipairs(layout.leaves(pane.group.root)) do
+          if member == pane then member_index = index; break end
+        end
+        focus_after_removal(pane.group, member_index, navigable_index(pane), previous_view, attention)
+      else
+        M.focus(pane)
+      end
+    end
     after_mutation("closed View in " .. pane.id)
     committed = true
   end
   if opts.force or not view.can_close then approved() else view:can_close(approved, opts.close_caller) end
   return committed, failure
-end
-
-local function nearest_after_removal(old_order, old_index, excluded)
-  local start = math.min(old_index, #old_order)
-  for index = start, #old_order do
-    local pane = old_order[index]
-    if pane and not (excluded and excluded[pane.id]) then return pane end
-  end
-  for index = start - 1, 1, -1 do
-    local pane = old_order[index]
-    if not (excluded and excluded[pane.id]) then return pane end
-  end
 end
 
 -- A Snoozed Pane is its own Pane Group with `snoozed` set. Pane navigation and Pane numbers skip it.
@@ -1650,16 +1689,6 @@ end
 function M.is_snoozed(target)
   local pane = M.find(target)
   return pane ~= nil and pane.group.snoozed == true
-end
-
--- The position that `pane` has, or would have, among the Panes that navigation reaches.
-local function navigable_index(pane)
-  local index = 1
-  for _, member in ipairs(M.ordered()) do
-    if member == pane then return index end
-    if not member.group.snoozed then index = index + 1 end
-  end
-  return index
 end
 
 -- Snoozes `target`: it leaves its Pane Group for its own Snoozed one. If it had focus, the nearest Pane that
@@ -1681,16 +1710,8 @@ function M.snooze(target, keep_focus)
   if keep_focus and M.active_pane == pane then
     M.visible_group_value = pane.group
   elseif not keep_focus and (M.active_pane == pane or M.visible_group_value == pane.group) then
-    local attention = require("core.pending_panes").local_attention()
-    local survivors = old_group ~= pane.group and layout.leaves(old_group.root) or {}
-    local next_pane = nearest_after_removal(survivors, member_index, attention)
-      or nearest_after_removal(M.navigable(), old_index, attention)
-    M.active_pane, M.visible_group_value = next_pane, next_pane and next_pane.group
-    if next_pane then
-      focus_view(next_pane)
-    elseif M.pane_for_view(core.active_view) == pane and core.clear_active_view then
-      core.clear_active_view(core.active_view)
-    end
+    local previous_view = M.pane_for_view(core.active_view) == pane and core.active_view
+    focus_after_removal(old_group, member_index, old_index, previous_view)
   end
   after_mutation("snoozed " .. pane.id)
   return pane
@@ -1818,7 +1839,7 @@ local function commit_close(pane)
   if #closed_panes > 20 then table.remove(closed_panes, 1) end
   quiet("Pane close snapshot: %s (%s)", pane.id, ok and "saved" or tostring(snapshot))
   local old_index = navigable_index(pane)
-  local closed_active_view = M.pane_for_view(core.active_view) == pane
+  local closed_active_view = M.pane_for_view(core.active_view) == pane and core.active_view
   local group = pane.group
   local old_group_order = layout.leaves(group.root)
   local old_group_index
@@ -1838,17 +1859,9 @@ local function commit_close(pane)
     if index then table.remove(M.groups, index) end
     M.groups_by_id[group.id] = nil
   end
-  -- Keep selection in this group when possible, then select the nearest remaining Pane Group.
+  -- Use the same automatic replacement rule for Close, Terminal exit and cross-Project transfer.
   if M.active_pane == pane then
-    local next_pane = (group.root and nearest_after_removal(layout.leaves(group.root), old_group_index))
-      or nearest_after_removal(M.navigable(), old_index) or M.ordered()[1]
-    M.active_pane = next_pane
-    M.visible_group_value = next_pane and next_pane.group
-    if next_pane then
-      focus_view(next_pane)
-    else
-      if closed_active_view and core.clear_active_view then core.clear_active_view(core.active_view) end
-    end
+    focus_after_removal(group, old_group_index, old_index, closed_active_view)
   end
   after_mutation("closed " .. pane.id)
 end
@@ -2145,15 +2158,14 @@ function M.restore_workspace_state(state, load_view)
     end
   end
 
-  local first = M.navigable()[1]
-  local visible = M.groups_by_id[state.visible_group_id] or first and first.group or M.groups[1]
+  local visible = M.groups_by_id[state.visible_group_id]
   local focused = M.panes_by_id[state.focused_pane_id]
-  if not focused or not visible or focused.group ~= visible then
-    focused = visible and layout.leaves(visible.root)[1] or nil
+  if focused and visible and focused.group == visible then
+    M.visible_group_value, M.active_pane = visible, focused
+    focus_view(focused)
+  else
+    focus_after_removal(visible, 1, 1)
   end
-  M.visible_group_value = visible
-  M.active_pane = focused
-  if focused then focus_view(focused) end
   after_mutation("restored Workspace")
   return true
 end

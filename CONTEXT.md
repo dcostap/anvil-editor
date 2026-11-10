@@ -421,6 +421,7 @@ _Avoid_: mouse-friendly UI, basic mouse support
 
 **Pane**:
 A work area that shows one Current View and owns one Navigation History. Each Pane belongs to one Pane Group.
+Automatic focus replacement skips Panes with attention marks and Snoozed Panes. If none qualify, the Project shows its Project Launcher. Explicit navigation keeps its requested target.
 _Avoid_: Left Pane, Right Pane, panel, split
 
 **Pane History**:
@@ -693,7 +694,6 @@ _Avoid_: Reminder, timer
 
 **Snoozed Pane**:
 A Terminal's Pane with a Snooze. It is its own Pane Group, listed in its Project's Snoozed section at the end of the Project in the Project Sidebar. Pane navigation and Pane numbers skip it, but Text Search still finds its Terminal.
-When the selected Pane is Snoozed, automatic selection skips Panes with attention marks. If none remain, the Project shows its Project Launcher.
 _Avoid_: hidden Pane, held Pane
 
 **Terminal Text Capture**:

@@ -196,6 +196,31 @@ test.describe("Pane Workspace state", function()
     test.ok(panes.validate())
   end)
 
+  test.it("skips attention marks only when the saved selection cannot restore", function()
+    local missing = panes.create {factory = factory("missing")}
+    local unread = panes.create {factory = factory("unread")}
+    panes.create {factory = factory("next")}
+    panes.focus(missing)
+    local state = panes.save_workspace_state(save_view)
+    local unread_id, unread_group = unread.id, unread.group.id
+    local function restore(saved)
+      if saved.state.name == "missing" then return nil end
+      local view = load_view(saved)
+      if view.name == "unread" then
+        view.terminal_view, view.session_id, view.state = true, "restore-unread", "running"
+        view.bell_at = os.time()
+      end
+      return view
+    end
+
+    test.ok(panes.restore_workspace_state(state, restore))
+    test.equal(panes.active().current_view.name, "next", "restore fallback consumed an Unread Result")
+
+    state.focused_pane_id, state.visible_group_id = unread_id, unread_group
+    test.ok(panes.restore_workspace_state(state, restore))
+    test.equal(panes.active().current_view.name, "unread", "an explicit saved selection must still restore")
+  end)
+
   test.it("ignores obsolete Left and Right state", function()
     local legacy = { panes = { left = { views = {} }, right = { views = {} } } }
     test.not_ok(panes.restore_workspace_state(legacy, load_view))

@@ -50,11 +50,13 @@ end
 test.describe("Pane manager", function()
   local set_active_view
   local global_prompt_enter
+  local project_sidebar
 
   test.before_each(function()
     panes.reset_for_tests()
     set_active_view = core.set_active_view
     global_prompt_enter = core.global_prompt_bar.enter
+    project_sidebar = core.project_sidebar
     core.set_active_view = function(view) core.active_view = view end
   end)
 
@@ -62,6 +64,7 @@ test.describe("Pane manager", function()
     panes.reset_for_tests()
     core.set_active_view = set_active_view
     core.global_prompt_bar.enter = global_prompt_enter
+    core.project_sidebar = project_sidebar
   end)
 
   test.it("owns Pane commands under the pane prefix", function()
@@ -507,6 +510,39 @@ test.describe("Pane manager", function()
     test.equal(panes.visible_group(), two.group)
   end)
 
+  test.it("skips attention marks when the active Pane closes", function()
+    local closing = panes.create { factory = factory("closing") }
+    local unread = panes.split(closing, "right", { factory = factory("unread") })
+    unread.current_view.terminal_view, unread.current_view.session_id = true, "close-unread"
+    unread.current_view.state, unread.current_view.bell_at = "running", os.time()
+    local next_pane = panes.create { factory = factory("next") }
+    panes.focus(closing)
+
+    test.ok(panes.close(closing, { force = true }))
+
+    test.equal(panes.active(), next_pane, "automatic selection consumed an attention mark")
+    panes.focus(unread)
+    test.equal(panes.active(), unread, "manual selection must still reach an Unread Result")
+  end)
+
+  test.it("shows the Launcher after a close leaves only attention marks and Snoozed Panes", function()
+    local closing = panes.create { factory = factory("closing") }
+    local parked = panes.create { factory = factory("parked") }
+    panes.snooze(parked)
+    local unread = panes.create { factory = factory("unread") }
+    unread.current_view.terminal_view, unread.current_view.session_id = true, "last-unread"
+    unread.current_view.state, unread.current_view.bell_at = "running", os.time()
+    panes.focus(closing)
+
+    test.ok(panes.close(closing, { force = true }))
+
+    test.is_nil(panes.active(), "automatic selection must leave the Unread Result alone")
+    test.is_nil(core.active_view, "the closed View must not keep keyboard input")
+    test.ok(require("core.project_launcher").shown())
+    test.same(panes.ordered(), {parked, unread})
+    test.ok(panes.validate())
+  end)
+
   test.it("rejects duplicate Pane membership", function()
     local one = panes.create { factory = factory("one") }
     local group = one.group
@@ -695,5 +731,23 @@ test.describe("Pane manager", function()
     test.equal(pane.current_view, first)
     test.equal(panes.history_length(pane), 1)
     test.equal(second.closed, 1)
+  end)
+
+  test.it("does not focus an Unread Result revealed when the Current View closes", function()
+    local pane = panes.create { factory = factory("unread") }
+    local unread = pane.current_view
+    unread.terminal_view, unread.session_id, unread.state = true, "history-unread", "running"
+    panes.present(FakeView("closing"), {pane = pane})
+    unread.bell_at = os.time()
+    local next_pane = panes.create { factory = factory("next") }
+    core.project_sidebar = {{path = core.root_project().path, selected = true}}
+    panes.focus(pane)
+
+    test.ok(panes.close_view(pane, {force = true}))
+
+    test.equal(panes.active(), next_pane, "the history fallback consumed an Unread Result")
+    test.equal(pane.current_view, unread, "the Unread Result must stay available in its Pane")
+    panes.focus(pane)
+    test.equal(panes.active(), pane, "manual selection must still reach the revealed View")
   end)
 end)

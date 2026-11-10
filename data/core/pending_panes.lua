@@ -130,6 +130,8 @@ end
 -- All local attention marks, without the Pane number limit or Recent Pane slots.
 function pending.local_attention()
   local projects = model()
+  -- A close can just have revealed this Pane's Terminal. Selection alone does not mean it was read.
+  projects[#projects].selected = false
   local result = {}
   for _, item in ipairs(pending.order {projects[#projects]}) do result[item.id] = true end
   return result
