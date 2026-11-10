@@ -169,6 +169,14 @@ function GlobalPromptBar:supports_text_input()
 end
 
 
+---Refresh suggestions even when typing replaces a selected completion with identical text.
+function GlobalPromptBar:on_text_input(text)
+  local handled = GlobalPromptBar.super.on_text_input(self, text)
+  if handled then self.last_change_id = nil end
+  return handled
+end
+
+
 ---Get scrollable size (disabled for the Global Prompt Bar).
 ---@return integer size Always returns 0
 function GlobalPromptBar:get_scrollable_size()
@@ -463,7 +471,7 @@ function GlobalPromptBar:update()
       local suggested_text = self.suggestions[self.suggestion_idx].text or ""
       if #self.last_text < #current_text and
          string.find(suggested_text:lower(), current_text:lower(), 1, true) == 1 then
-        self:set_text(suggested_text)
+        self:set_text(current_text .. suggested_text:sub(#current_text + 1))
         self.buffer:set_selection(1, #current_text + 1, 1, math.huge)
       end
       self.last_text = current_text
@@ -713,7 +721,10 @@ function GlobalPromptBar:on_mouse_pressed(button, x, y, clicks)
     end
     return true
   end
-  if not self:is_on_card(x, y) then return false end
+  if not self:is_on_card(x, y) then
+    if not self.pane_scope and self.state.overlay then self:exit(false, true) end
+    return false
+  end
   GlobalPromptBar.super.on_mouse_pressed(self, button, x, y, clicks)
   return true
 end

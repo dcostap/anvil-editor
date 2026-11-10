@@ -83,6 +83,8 @@ The standard frame-work budgets apply to the uncapped cases. The response case s
 
 ## Focused runtime workloads
 
+`prompt-typeahead` types a folder path through the Global Prompt Bar, including a suggested delimiter and uppercase input. Fixed suggestions separate prompt input and drawing costs from filesystem timing. Run it before and after prompt completion changes.
+
 `fuzzy-text-accents` runs in the default `smoke` suite and the focused `search` suite. It searches a generated 6,000-file Project with 2,400 accented lines. It checks composed and combining accents, quoted phrases, multiple terms, `ñ`, no matches, and query replacement before scanner startup. Each action waits for completion, not only the first rows. It edits only a fixture-owned file and refuses `--project`.
 
 `ui/fuzzy_searcher_exact_grep.lua` tests replacement after a running scan publishes partial results. A controlled process stream keeps that test independent of machine speed. It checks cancellation and rejects queued results from the old query.

@@ -102,6 +102,8 @@ class Scenario:
 
 
 SCENARIOS: dict[str, Scenario] = {
+    "prompt-typeahead": Scenario(
+        "prompt_typeahead", RUNTIME_WORKLOADS, actions=60, suites=("prompt",)),
     "benchmark-idle-setup": Scenario(
         "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("harness",),
         settings={"workload": "idle_setup"}, targets=1, timeout_seconds=45),

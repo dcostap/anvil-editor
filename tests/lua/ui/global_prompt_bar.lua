@@ -145,25 +145,56 @@ test.describe("Global Prompt Bar focus restoration", function()
 end)
 
 test.describe("Global Prompt Bar typeahead", function()
-  test.it("completes a suggestion without matching letter case", function()
+  -- Seam: typed input and real path suggestions, including a selected delimiter.
+  test.it("suggests folder contents after typing the suggested delimiter", function()
+    local common = require "core.common"
+    local root = USERDIR .. PATHSEP .. "prompt-typeahead"
+    local folder = "plans" .. PATHSEP
+    test.ok(common.mkdirp(root .. PATHSEP .. folder .. "child"))
+    local bar = core.global_prompt_bar
+    bar:exit(true)
+    local previous_view = core.active_view
+    local ok, err = pcall(function()
+      bar:enter("Save As", {
+        suggest = function(text) return common.path_suggest(text, root) end,
+      })
+      bar:on_text_input("plans")
+      bar:update()
+      test.equal(bar:get_text(), folder)
+      local _, col1, _, col2 = bar.buffer:get_selection()
+      test.equal(col1, #"plans" + 1)
+      test.equal(col2, #folder + 1)
+
+      bar:on_text_input(PATHSEP)
+      bar:update()
+      test.equal(bar.suggestions[1] and bar.suggestions[1].text, folder .. "child" .. PATHSEP)
+    end)
+    bar:exit(true)
+    if previous_view then core.set_active_view(previous_view) end
+    test.ok(test.remove_tree(root))
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("completes a suggestion without changing the typed letter case", function()
     local bar = core.global_prompt_bar
     bar:exit(true)
     local previous_view = core.active_view
     local ok, err = pcall(function()
       bar:enter("Open File", {
         suggest = function()
-          return { "Coding-Conventions.md" }
+          return { "plans" .. PATHSEP .. "child" .. PATHSEP }
         end,
       })
-      bar:on_text_input("coding")
+      local typed = "plans" .. PATHSEP .. "C"
+      bar:on_text_input(typed)
       bar:update()
 
-      test.equal(bar:get_text(), "Coding-Conventions.md")
+      test.equal(bar:get_text(), "plans" .. PATHSEP .. "Child" .. PATHSEP)
       local line1, col1, line2, col2 = bar.buffer:get_selection()
       test.equal(line1, 1)
-      test.equal(col1, #"coding" + 1)
+      test.equal(col1, #typed + 1)
       test.equal(line2, 1)
-      test.equal(col2, #"Coding-Conventions.md" + 1)
+      test.equal(col2, #("plans" .. PATHSEP .. "child" .. PATHSEP) + 1)
     end)
     bar:exit(true)
     if previous_view then core.set_active_view(previous_view) end
