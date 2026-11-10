@@ -14,6 +14,8 @@ ui.icons = {
   check = "\u{F012C}", open_in_new = "\u{F03CC}", minus = "\u{F0374}", chevron_down = "\u{F0140}",
   search = "\u{F0349}", palette = "\u{F03D8}", form = "\u{F060E}", toggle = "\u{F0521}", button = "\u{F12A8}",
   tune = "\u{F062E}", shape = "\u{F0831}", view_list = "\u{F0572}", delete = "\u{F01B4}",
+  database = "\u{F01BC}", server = "\u{F048B}", inbox = "\u{F0687}", info = "\u{F02FD}", console = "\u{F018D}",
+  web = "\u{F059F}", label = "\u{F0316}", unfold = "\u{F054F}", keyboard = "\u{F097B}",
 }
 
 ---The text font of Dialogs: the proportional font of the Sidebar and the Title Bar.
@@ -28,6 +30,11 @@ end
 
 function ui.icon_font()
   return style.menu_icon_font
+end
+
+---The icon font at the size of small text, for Badges.
+function ui.small_icon_font()
+  return style.get_scaled_font(style.menu_icon_font, math.floor(15 * SCALE + 0.5))
 end
 
 -- The text roles of Dialogs. Each is the user's Dialog font at a size relative to its own, so Zoom and the
@@ -115,6 +122,29 @@ end
 function ui.fade(color, alpha)
   if alpha >= 1 then return color end
   return { color[1], color[2], color[3], (color[4] or 255) * alpha }
+end
+
+local tints = setmetatable({}, { __mode = "k" })
+
+---`color` with its alpha multiplied by `alpha`, from a cache. Use it for a fixed set of alphas, such as a
+---Badge's fill. A changing alpha, such as an animation, needs ui.push_look instead.
+function ui.tint(color, alpha)
+  local by_alpha = tints[color]
+  if not by_alpha then
+    by_alpha = {}
+    tints[color] = by_alpha
+  end
+  local tinted = by_alpha[alpha]
+  if not tinted then
+    tinted = { color[1], color[2], color[3], (color[4] or 255) * alpha }
+    by_alpha[alpha] = tinted
+  end
+  return tinted
+end
+
+---The color of a tone: "neutral", "success", "warning", "danger" or "info".
+function ui.tone_color(tone)
+  return style.dialog_tones[tone] or style.dialog_text_muted
 end
 
 ---`color` mixed toward `other` by `amount`, from 0 to 1. A frame can pass `result` to reuse one table.

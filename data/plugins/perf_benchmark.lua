@@ -1152,6 +1152,11 @@ local function scenario_is_ready()
     if benchmark.scenario:find("%-end$") then
       instance.page_scroll.scroll_to = math.huge
     end
+    -- An "-open" suffix opens the Pickers page's first Select.
+    if benchmark.scenario:find("%-open$") then
+      instance:focus(instance.demo_select)
+      instance.demo_select:open_list()
+    end
     return false
   end
   if benchmark.scenario:find("^databases%-dialog") then

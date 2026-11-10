@@ -1,10 +1,12 @@
 local core = require "core"
+local common = require "core.common"
 local command = require "core.command"
 local config = require "core.config"
 local keymap = require "core.keymap"
 local style = require "core.style"
 local View = require "core.view"
 local card = require "core.card"
+local popup = require "core.popup"
 local ui = require "core.ui"
 local layout = require "core.ui.layout"
 local surface = require "core.ui.surface"
@@ -21,10 +23,16 @@ local Button = require "core.ui.button"
 -- Enter activates the focused control, Escape cancels its edit or closes the Dialog, and a click outside the card
 -- closes it. Keys reach the focused control as the editor's commands, with the user's bindings: Up and Down are
 -- "move_to_previous_line" and "move_to_next_line", for example. A subclass can take them first in `perform`.
+-- A control's `tooltip` shows below it after the pointer rests on it for `dialog.TOOLTIP_DELAY` seconds. The
+-- focused control's `overlay`, such as a Select's list, shows above the card and takes the pointer first.
 local dialog = {}
 
 -- How fast the card fades in and out, per second.
 local SHOW_RATE, HIDE_RATE = 18, 26
+
+-- Seconds before a tooltip shows. After one tooltip shows, the next one shows at once for TOOLTIP_GRACE seconds.
+dialog.TOOLTIP_DELAY = 0.5
+local TOOLTIP_GRACE = 0.6
 
 -- The Dialogs that show or fade out, oldest first. The last open one takes input.
 local shown = {}
@@ -53,7 +61,7 @@ function Dialog:new(options)
   self.title_text = layout.Text { role = "title" }
   self.description_text = layout.Text { role = "description" }
   self.close_button = self:add(Button({
-    icon = ui.icons.close, kind = "ghost", size = "small", focusable = false,
+    icon = ui.icons.close, kind = "ghost", size = "small", focusable = false, tooltip = "Close",
     on_click = function() self:close() end,
   }))
 end
@@ -258,7 +266,7 @@ end
 
 function Dialog:release_pointer()
   if self.pressed_control then self.pressed_control.pressed = false end
-  self.pressed_control = nil
+  self.pressed_control, self.pressed_overlay = nil, nil
   self:set_hovered(nil)
 end
 
@@ -266,8 +274,21 @@ local function inside(rect, x, y)
   return x >= rect.x and y >= rect.y and x < rect.x + rect.w and y < rect.y + rect.h
 end
 
+-- The focused control's popup, such as a Select's list, or nil.
+local function overlay(self)
+  local control = self.focused
+  return control and control.overlay
+end
+
 function Dialog:on_modal_mouse_moved(x, y)
   self.mouse_x, self.mouse_y = x, y
+  local open = overlay(self)
+  if open and (self.pressed_overlay or (not self.pressed_control and open:contains(x, y))) then
+    self:set_hovered(nil)
+    open:on_mouse_moved(x, y)
+    core.request_cursor("arrow")
+    return true
+  end
   local pressed = self.pressed_control
   local over = self:control_at(x, y)
   if pressed then
@@ -283,6 +304,22 @@ function Dialog:on_modal_mouse_moved(x, y)
 end
 
 function Dialog:on_modal_mouse_pressed(button, x, y, clicks)
+  local open = overlay(self)
+  if open then
+    if open:contains(x, y) then
+      if button == "left" then
+        self.pressed_overlay = open
+        open:on_mouse_pressed(x, y, clicks)
+      end
+      return true
+    end
+    -- A press outside the popup closes it. A press on its control goes on to the control.
+    if not self.focused:contains(x, y) then
+      self.focused:cancel()
+      return true
+    end
+  end
+  self.tooltip_dismissed = self.hovered_control
   if not inside(self.rect, x, y) then
     -- A press beside the card closes the Dialog, as in a Context Menu.
     if button == "left" or button == "right" then self:close() end
@@ -299,6 +336,13 @@ function Dialog:on_modal_mouse_pressed(button, x, y, clicks)
 end
 
 function Dialog:on_modal_mouse_released(button, x, y)
+  local pressed_overlay = self.pressed_overlay
+  if pressed_overlay and button == "left" then
+    self.pressed_overlay = nil
+    if overlay(self) == pressed_overlay then pressed_overlay:on_mouse_released(x, y) end
+    if self.is_open then self:on_modal_mouse_moved(x, y) end
+    return true
+  end
   local control = self.pressed_control
   if button ~= "left" or not control then return true end
   control:on_mouse_released(x, y)
@@ -311,6 +355,8 @@ end
 function Dialog:on_modal_mouse_wheel(dy)
   local x, y = self.mouse_x, self.mouse_y
   if not x then return true end
+  local open = overlay(self)
+  if open and open:contains(x, y) then return open:on_mouse_wheel(dy) end
   local control = self:control_at(x, y)
   if control and control:on_mouse_wheel(dy) then return true end
   if self.body_scroll and inside(self.body_scroll, x, y) then self.body_scroll:on_wheel(x, y, dy) end
@@ -432,7 +478,50 @@ function Dialog:step()
     if self.focused and not (self.focused:can_focus() and shows(self, self.focused)) then
       self:focus(self:focusables()[1])
     end
+    self:update_tooltip()
   end
+end
+
+---The control under the pointer shows its tooltip after a delay. A press hides it until the pointer leaves.
+function Dialog:update_tooltip()
+  local now = system.get_time()
+  local control = self.hovered_control
+  if control ~= self.tooltip_control then
+    if control ~= self.tooltip_dismissed then self.tooltip_dismissed = nil end
+    local recent = self.tooltip_seen and now - self.tooltip_seen < TOOLTIP_GRACE
+    self.tooltip_control, self.tooltip_since = control, recent and -math.huge or now
+  end
+  local wanted = control and control.tooltip and control.enabled and not self.pressed_control
+    and control ~= self.tooltip_dismissed and not overlay(self)
+  self.tooltip_shown = wanted and now - self.tooltip_since >= dialog.TOOLTIP_DELAY or false
+  if self.tooltip_shown then
+    self.tooltip_seen = now
+  elseif wanted then
+    -- Run frames until the delay ends.
+    core.redraw = true
+  end
+end
+
+---The text of the tooltip that shows, or nil.
+function Dialog:tooltip()
+  return self.tooltip_shown and self.tooltip_control.tooltip or nil
+end
+
+local function draw_tooltip(self)
+  local text = self:tooltip()
+  if not text then return end
+  local control = self.tooltip_control
+  local font = ui.role_font("description")
+  local px = layout.px
+  local w, h = math.ceil(font:get_width(text)) + 2 * px(8), font:get_height() + 2 * px(4)
+  local root = core.root_panel
+  local _, by, _, bh = popup.bounds(root)
+  local y = control.y + control.h + px(6)
+  if y + h > by + bh - px(4) then y = control.y - px(6) - h end
+  local x
+  x, y, w = popup.place(root, math.floor(control.x + (control.w - w) / 2), y, w, h, nil, px(4))
+  surface.draw("popover", x, y, w, h, px(6))
+  common.draw_text(font, style.dialog_text, text, "center", x, y, w, h)
 end
 
 function Dialog:draw_dialog()
@@ -457,6 +546,11 @@ function Dialog:draw_dialog()
   self:draw_content()
   core.pop_clip_rect()
   if transformed then renderer.pop_transform() end
+  if self.is_open then
+    local open = overlay(self)
+    if open then open:draw() end
+    draw_tooltip(self)
+  end
 end
 
 ------------------------------------------------------------------------------------------------------------------

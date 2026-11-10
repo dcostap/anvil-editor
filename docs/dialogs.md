@@ -142,10 +142,26 @@ Column { height = 240, Text { text = "..." }, layout.Spacer { grow = 1 }, Row { 
 | One item of a set of items, or a "mixed" state | `Checkbox` |
 | One of 2 to 4 short choices | `Segmented` |
 | One of several choices that need a description | `RadioGroup` |
+| One choice of many, such as a database | `Select`. It opens a list below or above it. Typed letters move to an option. |
+| One of 2 to 4 large choices with an icon and a description | `ChoiceCards`. The cards go into more rows in a narrow Dialog. |
 | A list of items with one selected | `List`. You draw each row with `draw_row`. |
 | Pages of a large Dialog | `Nav` at the left, with a `Scroll` beside it. The UI Gallery does this. |
 
 Each control takes `enabled` and `visible`. Change them at any time; the next frame shows the change. A disabled control fades and refuses input. A control that is not visible takes no space.
+
+Each control also takes `tooltip`: text that shows below it while the pointer rests on it. Give one to each button that has only an icon.
+
+These nodes show a state and take no input:
+
+| Need | Node |
+|---|---|
+| A state or a count, such as "Connected" or "3 servers" | `Badge { label, tone, icon }` |
+| The state of a connection, with a label | `StatusDot { tone, label }` |
+| A key or a chord | `Kbd { command = "editor:save" }` shows the user's binding. Use `keys = "ctrl+k"` only for a key that no command owns. |
+| Work in progress, where no text can show it | `Spinner { size }`. Prefer a label, such as "Connecting". |
+| A list or page with nothing in it | `EmptyState { icon, title, description, actions }` |
+
+A `tone` is `"neutral"`, `"success"`, `"warning"`, `"danger"` or `"info"`. Each theme defines the colors in `style.dialog_tones`.
 
 To change the content, change the controls (`set_value`, `set_text`, `set_rows`, `set_options`), or give a node new children with `set_children`. `Dialog:on_update()` runs in each frame before the layout, for state that comes from outside the Dialog.
 
@@ -158,11 +174,13 @@ Most Dialogs need only the controls above. When you need a new one:
 - **A node that only draws**, such as a preview: extend `layout.Node`. Give `content_width()` and `content_height(w)`, and draw in `draw_node(dialog)`. `self.x`, `self.y`, `self.w` and `self.h` hold its rect.
 - **A control that takes input**: extend `core.ui.control`. Give its natural size in `measure()`, and draw in `draw(focused)`. Set `focusable = true` to take Tab focus. The comment at the top of `control.lua` lists the input methods.
 - Draw its parts with `surface.draw(name, x, y, w, h, radius)`. Draw a focus ring with `ui.draw_ring` when `focused` is true.
+- **A control with a popup**, such as a list: set the control's `overlay` to the popup while it is open, as `Select` does. The Dialog draws the overlay above the card and gives it the pointer first. The popup gives `contains`, `draw` and the mouse methods. Place it with `core.popup`, so it stays inside the Root Panel. Close it in `cancel()` and `on_blur()`.
+- For a fill with a fixed alpha, use `ui.tint(color, alpha)`. It keeps one table for each color and alpha, so a frame makes no new tables.
 - Add it to the UI Gallery, so it shows in each Color Theme.
 
 ## Keys
 
-The Dialog takes Tab, Enter and Escape. Tab moves through the controls in layout order. Enter activates the focused control. Escape first undoes an unsubmitted text edit, then closes the Dialog.
+The Dialog takes Tab, Enter and Escape. Tab moves through the controls in layout order. Enter activates the focused control. Escape first closes an open list, then undoes an unsubmitted text edit, then closes the Dialog.
 
 Other keys reach the focused control as editor commands, with the user's bindings. For example, Up and Down reach a List as `move_to_previous_line` and `move_to_next_line`. A Text Field gets the editor's line commands. Never test a key binding; test the command or the method.
 
@@ -170,5 +188,6 @@ Other keys reach the focused control as editor commands, with the user's binding
 
 - Drive the Dialog through its methods and its controls, as `tests/lua/ui/dialog.lua` does: `instance:focus(control)`, `instance:perform("move_to_next_line")`, `command.perform("dialog:confirm")`, `field:submit()`, `switch:set_value(true)`. Check the saved settings and the shown state.
 - Call `dialog.update()` after a change, to run a layout before you check positions or focus.
+- Set `dialog.TOOLTIP_DELAY` to 0 to check a tooltip without a wait, and put the old value back after the test.
 - For a visual change, add a render scenario to `tools/run_render_perf_gate.py` and open the Dialog in `data/plugins/perf_benchmark.lua`, as `databases-dialog` does. Read [the render gate](../tools/RENDER_PERF_GATE.md) first.
 - After a change to `core.ui`, run `ui/dialog.lua`, `ui/ui_layout.lua` and `ui/graphics.lua`, and check the `ui-gallery-*` render scenarios.

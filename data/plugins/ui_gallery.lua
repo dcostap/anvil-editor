@@ -8,12 +8,19 @@ local ui = require "core.ui"
 local layout = require "core.ui.layout"
 local surface = require "core.ui.surface"
 local dialog = require "core.ui.dialog"
+local Badge = require "core.ui.badge"
 local Button = require "core.ui.button"
 local Checkbox = require "core.ui.checkbox"
+local ChoiceCards = require "core.ui.choice_cards"
+local EmptyState = require "core.ui.empty_state"
+local Kbd = require "core.ui.kbd"
 local List = require "core.ui.list"
 local Nav = require "core.ui.nav"
 local RadioGroup = require "core.ui.radio_group"
 local Segmented = require "core.ui.segmented"
+local Select = require "core.ui.select"
+local Spinner = require "core.ui.spinner"
+local StatusDot = require "core.ui.status_dot"
 local Switch = require "core.ui.switch"
 local TextField = require "core.ui.text_field"
 
@@ -54,11 +61,11 @@ local function buttons_page()
         },
       },
       Field {
-        title = "Icon only",
+        title = "Icon only", description = "Each one has a tooltip that names its action.",
         control = Row {
-          Button { kind = "ghost", icon = ui.icons.close },
-          Button { kind = "secondary", icon = ui.icons.delete, size = "small" },
-          Button { kind = "ghost", icon = ui.icons.search, size = "small" },
+          Button { kind = "ghost", icon = ui.icons.close, tooltip = "Close" },
+          Button { kind = "secondary", icon = ui.icons.delete, size = "small", tooltip = "Delete" },
+          Button { kind = "ghost", icon = ui.icons.search, size = "small", tooltip = "Search" },
         },
       },
     },
@@ -157,6 +164,105 @@ local function choices_page()
             { value = "light", label = "Light" }, { value = "dark", label = "Dark" }, { value = "auto", label = "Auto" },
           },
         },
+      },
+    },
+  }
+end
+
+local function pickers_page(self)
+  local environments = {
+    { value = "dev", label = "Development" }, { value = "staging", label = "Staging" },
+    { value = "prod", label = "Production" }, { value = "demo", label = "Demo", enabled = false },
+  }
+  local databases = {}
+  for i, name in ipairs {
+    "master", "model", "msdb", "tempdb", "Inventory", "Orders", "Billing", "Customers", "Reports", "Archive",
+    "Staging", "Analytics",
+  } do databases[i] = { value = name, label = name } end
+  self.demo_select = Select { value = "staging", options = environments }
+  return Column {
+    Group {
+      title = "Select",
+      Field {
+        title = "Environment", description = "One choice of many. The list opens below, or above near the bottom.",
+        control = self.demo_select,
+      },
+      Field {
+        title = "Database", description = "A long list scrolls. Typed letters move to an option.",
+        control = Select { options = databases, placeholder = "Choose a database", width = 200 },
+      },
+      Field { title = "Disabled", control = Select { value = "dev", options = environments, enabled = false } },
+    },
+    Group {
+      title = "Choice cards",
+      Column {
+        gap = 8,
+        Text { role = "description", text = "Large choices with a description. Narrow Dialogs put them in more rows." },
+        ChoiceCards {
+          value = "sql",
+          options = {
+            { value = "sql", label = "SQL Server", icon = ui.icons.database,
+              description = "Connect with Windows or SQL authentication." },
+            { value = "machine", label = "Machine", icon = ui.icons.server,
+              description = "Open Projects on another PC." },
+            { value = "web", label = "Web service", icon = ui.icons.web,
+              description = "Not available yet.", enabled = false },
+          },
+        },
+      },
+    },
+  }
+end
+
+local function status_page()
+  local function badges(names)
+    local row = Row { gap = 6 }
+    for _, tone in ipairs(names) do row.children[#row.children + 1] = Badge { label = tone, tone = tone } end
+    return row
+  end
+  local function dots()
+    local row = Row { gap = 16 }
+    for _, item in ipairs {
+      { "neutral", "Stopped" }, { "success", "Connected" }, { "warning", "Slow" }, { "danger", "Failed" },
+      { "info", "Starting" },
+    } do row.children[#row.children + 1] = StatusDot { tone = item[1], label = item[2] } end
+    return row
+  end
+  return Column {
+    Group {
+      title = "Badges",
+      Field { title = "Tones", control = badges { "neutral", "success", "warning", "danger", "info" } },
+      Field {
+        title = "With an icon",
+        control = Row { gap = 6, Badge { label = "3 servers", icon = ui.icons.server },
+          Badge { label = "Read only", tone = "warning", icon = ui.icons.info } },
+      },
+    },
+    Group {
+      title = "Status dots",
+      Field { title = "Tones", description = "A dot with a label for the state of a connection.", control = dots() },
+    },
+    Group {
+      title = "Key caps",
+      Field { title = "Keys", control = Row { gap = 12, Kbd { keys = "ctrl+shift+p" }, Kbd { keys = "escape" } } },
+      Field {
+        title = "A command's binding", description = "Shows the user's binding of Save, and follows changes.",
+        control = Kbd { command = "editor:save" },
+      },
+    },
+    Group {
+      title = "Spinners",
+      Field {
+        title = "Sizes", description = "For a place without text. Prefer a label, such as \"Connecting\".",
+        control = Row { gap = 16, Spinner { size = 12 }, Spinner {}, Spinner { size = 24 } },
+      },
+    },
+    Group {
+      title = "Empty state",
+      EmptyState {
+        icon = ui.icons.inbox, title = "No databases",
+        description = "Add a server to see its databases here. Anvil keeps the connection for this Project.",
+        actions = { Button { label = "Add Server", icon = ui.icons.add, kind = "primary", size = "small" } },
       },
     },
   }
@@ -356,7 +462,9 @@ local PAGES = {
   { id = "buttons", label = "Buttons", icon = ui.icons.button, build = buttons_page },
   { id = "inputs", label = "Inputs", icon = ui.icons.form, build = inputs_page },
   { id = "choices", label = "Choices", icon = ui.icons.toggle, build = choices_page },
+  { id = "pickers", label = "Pickers", icon = ui.icons.unfold, build = pickers_page },
   { id = "lists", label = "Lists", icon = ui.icons.view_list, build = lists_page },
+  { id = "status", label = "Status", icon = ui.icons.label, build = status_page },
   { id = "layout", label = "Layout", icon = ui.icons.shape, build = layout_page },
   { id = "look", label = "Type and Surfaces", icon = ui.icons.palette, build = look_page },
 }
@@ -386,7 +494,7 @@ end
 function Gallery:show_page(id)
   for _, page in ipairs(PAGES) do
     if page.id == id then
-      self.pages[id] = self.pages[id] or page.build()
+      self.pages[id] = self.pages[id] or page.build(self)
       self.page_id = id
       self.nav.selected = id
       self.page_scroll:set_child(self.pages[id])

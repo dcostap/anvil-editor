@@ -82,6 +82,18 @@ test.describe("Dialog layout", function()
     test.same(rect(footer), { 60, 280, 80, 20 })
   end)
 
+  test.it("puts Choice Cards into more rows when the width is too small", function()
+    local options = {}
+    for i = 1, 3 do options[i] = { value = i, label = "Card " .. i, description = "A short description." } end
+    local cards = require("core.ui.choice_cards") { options = options }
+    test.ok(cards:height(px(250)) > 2 * cards:height(px(700)))
+    place(cards, 250)
+    local first = cards.rects[1]
+    test.equal(cards:index_at(first.x + 4, first.y + first.h + px(10)), 2)
+    place(cards, 700)
+    test.equal(cards:index_at(first.x + first.w + px(20), first.y + 4), 2)
+  end)
+
   test.it("sizes a long list to the height of its measure", function()
     local rows = {}
     for i = 1, 20 do rows[i] = { name = tostring(i) } end

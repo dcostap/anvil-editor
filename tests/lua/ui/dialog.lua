@@ -216,6 +216,8 @@ test.describe("Dialog with a layout body", function()
   local Checkbox = require "core.ui.checkbox"
   local RadioGroup = require "core.ui.radio_group"
   local Switch = require "core.ui.switch"
+  local Select = require "core.ui.select"
+  local ChoiceCards = require "core.ui.choice_cards"
   local saved
 
   test.before_each(function()
@@ -305,6 +307,115 @@ test.describe("Dialog with a layout body", function()
     instance:focus(radio)
     test.ok(instance:perform("move_to_next_line"))
     test.equal(radio.value, "c")
+
+    local cards = ChoiceCards { value = "sql", options = {
+      { value = "sql", label = "SQL Server" }, { value = "pg", label = "PostgreSQL", enabled = false },
+      { value = "machine", label = "Machine" },
+    } }
+    instance:set_body(layout.Column { cards })
+    dialog.update()
+    instance:focus(cards)
+    test.ok(instance:perform("move_to_next_char"))
+    test.equal(cards.value, "machine", "a move skips a disabled card")
+    local first = cards.rects[1]
+    click(first.x + first.w / 2, first.y + first.h / 2)
+    test.equal(cards.value, "sql")
+  end)
+
+  local function select_options()
+    return {
+      { value = "dev", label = "Development" }, { value = "staging", label = "Staging" },
+      { value = "prod", label = "Production", enabled = false }, { value = "demo", label = "Demo" },
+    }
+  end
+
+  test.it("chooses from a Select's list with keys, typed letters and clicks, and keeps the Dialog open", function()
+    open_editor("behind")
+    local changes = {}
+    local select = Select { value = "dev", options = select_options(),
+      on_change = function(value) changes[#changes + 1] = value end }
+    local other = Button { label = "Other" }
+    local instance = dialog.Dialog { title = "Select", body = layout.Column { select, other } }
+    instance:open(select)
+    dialog.update()
+
+    test.ok(command.perform("dialog:confirm"))
+    test.not_nil(select.overlay, "Enter opens the list")
+    test.ok(instance:perform("move_to_next_line"))
+    test.ok(command.perform("dialog:confirm"))
+    test.equal(select.value, "staging")
+    test.is_nil(select.overlay)
+
+    instance:on_modal_text_input("d")
+    dialog.update()
+    test.ok(command.perform("dialog:confirm"))
+    test.equal(select.value, "demo", "a typed letter highlights the next option with it")
+
+    test.ok(command.perform("dialog:confirm"))
+    test.ok(command.perform("dialog:close"))
+    test.is_nil(select.overlay)
+    test.equal(dialog.current(), instance, "Escape closes the list, not the Dialog")
+
+    click(center(select))
+    dialog.update()
+    local menu = test.not_nil(select.overlay)
+    local row_h = (menu.h - 2 * layout.px(4)) / 4
+    click(menu.x + menu.w / 2, menu.y + layout.px(4) + row_h * 2.5)
+    test.equal(select.value, "demo", "a click on a disabled option chooses nothing")
+    click(menu.x + menu.w / 2, menu.y + layout.px(4) + row_h * 0.5)
+    test.equal(select.value, "dev")
+    test.is_nil(select.overlay)
+    test.same(changes, { "staging", "demo", "dev" })
+
+    click(center(select))
+    dialog.update()
+    click(center(other))
+    test.is_nil(select.overlay)
+    test.same(other.pressed, false)
+    test.equal(dialog.current(), instance, "a press outside the list only closes the list")
+  end)
+
+  test.it("keeps a Select's list inside the Root Panel", function()
+    open_editor("behind")
+    core.root_panel.size.y = 420
+    local options = {}
+    for i = 1, 20 do options[i] = { value = i, label = "Option " .. i } end
+    local select = Select { value = 20, options = options }
+    local instance = dialog.Dialog { title = "Low", body = layout.Column { layout.Spacer { height = 200 }, select } }
+    instance:open(select)
+    dialog.update()
+    test.ok(command.perform("dialog:confirm"))
+    dialog.update()
+    local menu = test.not_nil(select.overlay)
+    local root = core.root_panel
+    test.ok(menu.y >= root.position.y and menu.y + menu.h <= root.position.y + root.size.y)
+    test.ok(menu.y + menu.h <= select.y, "the list opens above when more space is there")
+    test.equal(menu:index_at(menu.x + menu.w / 2, menu.y + menu.h - layout.px(8)), 20,
+      "the chosen option scrolls into view")
+  end)
+
+  test.it("shows a control's tooltip after the pointer rests on it, and hides it on a press", function()
+    open_editor("behind")
+    local delay = dialog.TOOLTIP_DELAY
+    local button = Button { icon = require("core.ui").icons.delete, tooltip = "Remove" }
+    local instance = dialog.Dialog { title = "Tips", body = layout.Column { button } }
+    instance:open()
+    dialog.update()
+
+    dialog.TOOLTIP_DELAY = 60
+    core.on_event("mousemoved", center(button))
+    dialog.update()
+    test.is_nil(instance:tooltip(), "the tooltip waits for the delay")
+    dialog.TOOLTIP_DELAY = 0
+    dialog.update()
+    test.equal(instance:tooltip(), "Remove")
+    core.on_event("mousepressed", "left", center(button))
+    dialog.update()
+    test.is_nil(instance:tooltip())
+    core.on_event("mousereleased", "left", center(button))
+    dialog.update()
+    test.is_nil(instance:tooltip(), "the tooltip stays hidden until the pointer leaves")
+    dialog.TOOLTIP_DELAY = delay
   end)
 
   test.it("shows each UI Gallery page and moves through them from its page list", function()

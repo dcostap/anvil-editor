@@ -132,6 +132,8 @@ style.dialog_placeholder = c("948a7e")
 style.dialog_focus_ring = c("9c3b3b")
 style.dialog_line = { 107, 29, 29, 30 }
 style.dialog_danger = c("c42f3e")
+-- The colors of Badges and Status Dots, for each tone other than neutral.
+style.dialog_tones = { success = c("2f6b2a"), warning = c("8a5a00"), danger = c("c42f3e"), info = c("3b5ba5") }
 -- A surface has a fill and a 1 px rim, each a gradient from `top` to `bottom`, and a text color.
 -- `shadow` falls `shadow_y` pixels below the surface and fades over `shadow_blur` pixels, at scale 1.
 style.dialog_surfaces = {
@@ -162,6 +164,12 @@ style.dialog_surfaces = {
     shadow = { 70, 40, 10, 34 }, shadow_y = 1, shadow_blur = 2 },
   thumb_on = { fill = c("faf2dd") },
   thumb_off = { fill = c("fffaf0"), shadow = { 70, 40, 10, 70 }, shadow_y = 1, shadow_blur = 2 },
+  -- Menus, such as a Select's list, and tooltips.
+  popover = { fill = c("fffaf0"), fill_bottom = c("fdf6e8"), rim = { 107, 29, 29, 36 }, rim_bottom = { 107, 29, 29, 14 },
+    shadow = { 70, 40, 10, 40 }, shadow_y = 8, shadow_blur = 24 },
+  -- Key caps.
+  kbd = { fill = c("f8f0dd"), fill_bottom = c("f0e7d1"), rim = { 70, 40, 10, 40 }, rim_bottom = { 70, 40, 10, 20 },
+    shadow = { 70, 40, 10, 20 }, shadow_y = 1 },
 }
 style.drag_overlay = { common.color "rgba(107, 29, 29, 0.10)" }
 style.drag_overlay_tab = style.accent
