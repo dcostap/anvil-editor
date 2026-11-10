@@ -1339,8 +1339,9 @@ function SidebarView:update_hover()
   local pill = inside and not self.drag and not self.reorder and self:attention_pill_at(self.hover_x, self.hover_y)
   if scrollbar or pill then hover = nil end
   scrollbar = scrollbar and scrollbar.field
-  local changed = hover ~= self.hover or scrollbar ~= self.scrollbar_hover
-  self.hover, self.scrollbar_hover, self.pill_hover = hover, scrollbar, pill and pill.id or nil
+  pill = pill and pill.id or nil
+  local changed = hover ~= self.hover or scrollbar ~= self.scrollbar_hover or pill ~= self.pill_hover
+  self.hover, self.scrollbar_hover, self.pill_hover = hover, scrollbar, pill
   local tooltip = self:get_tooltip()
   if tooltip ~= self.tooltip_text then
     self.tooltip_text, self.tooltip_started = tooltip, system.get_time()
@@ -2374,6 +2375,9 @@ function SidebarView:draw_attention_pills()
         fade(style.sidebar_shadow, alpha * (4 - i) / 8))
     end
     renderer.draw_rounded_rect(x, y, w, h, h / 2, fade(tab.attention_color(item.kind), alpha))
+    if self.pill_hover == item.id then
+      renderer.draw_rounded_rect(x, y, w, h, h / 2, fade(style.background, alpha * 0.22))
+    end
     local color = fade(style.background, alpha)
     local size, cx, cy = h * 0.2, x + h / 2 + SCALE, y + h / 2
     local d = item.edge == "top" and -1 or 1
