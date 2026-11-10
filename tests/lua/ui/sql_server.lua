@@ -7,12 +7,12 @@ local autocomplete = require "plugins.autocomplete"
 
 local schema = {
   database = "AnvilTest", default_schema = "dbo", case_sensitive = false,
-  tables = {
-    { schema = "sales", name = "customers", columns = {
+  objects = {
+    { schema = "sales", name = "customers", kind = "table", columns = {
       { name = "id", type = "int", nullable = false, primary_key = true },
       { name = "name", type = "nvarchar(80)", nullable = true },
     } },
-    { schema = "dbo", name = "orders", columns = {
+    { schema = "dbo", name = "orders", kind = "table", columns = {
       { name = "customer_id", type = "int", nullable = false },
     } },
   },
@@ -319,6 +319,44 @@ test.describe("SQL Queries", function()
     editor.buffer:text_input("SELECT missing FROM sales.customers")
     editor.buffer:set_selection(1, #"SELECT missing" + 1)
     test.not_ok(require("core.commands.language").activate_symbol(editor))
+    test.equal(core.active_view, editor)
+  end)
+  test.it("expands a SELECT star using its source columns and undoes it in one step", function(context)
+    local editor = connected_query(context)
+    editor.buffer:text_input("SELECT c.* FROM sales.customers c")
+    editor.buffer:set_selection(1, #"SELECT c.*" + 1)
+    test.ok(command.perform("sql_server:expand_star"))
+    test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "SELECT c.id, c.name FROM sales.customers c")
+    editor.buffer:undo()
+    test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "SELECT c.* FROM sales.customers c")
+  end)
+
+  test.it("finds database symbols with Project Symbol Search and opens their source", function(context)
+    local _, c = connected_query(context)
+    local sql = require "plugins.sql_server"
+    sql.disconnect(c.id)
+    local editor = sql.new_query()
+    editor.buffer:text_input("SELECT 1;")
+    test.ok(command.perform("fuzzy:open_symbols"))
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    local deadline = system.get_time() + 10
+    local chose_connection
+    while system.get_time() < deadline and not (picker.results[1] and picker.results[1].label == "sales.customers") do
+      if core.active_view == core.global_prompt_bar then
+        chose_connection = true
+        core.global_prompt_bar:submit()
+      end
+      picker = core.fuzzy_searcher_active_view or picker
+      if not picker.closed and not picker.closing then picker.input:set_text("$customers"); picker:update() end
+      coroutine.yield(0.01)
+    end
+    test.ok(chose_connection)
+    test.equal(sql.connection_for(editor.buffer), c)
+    test.equal(test.not_nil(picker.results[1]).label, "sales.customers")
+    picker:confirm()
+    test.ok(core.active_view.buffer.read_only)
+    test.ok(core.active_view.buffer:get_text(1, 1, math.huge, math.huge):find("CREATE TABLE", 1, true))
+    test.ok(command.perform("core:navigate_back"))
     test.equal(core.active_view, editor)
   end)
 

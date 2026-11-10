@@ -5,6 +5,10 @@
 #include <stdint.h>
 
 void sql_server_catalog_free(SqlServerCatalog *c) {
+  for (size_t i = 0; i < c->object_count; ++i) {
+    free(c->objects[i].schema); free(c->objects[i].name); free(c->objects[i].kind);
+  }
+  free(c->objects);
   for (size_t i = 0; i < c->count; ++i) {
     free(c->columns[i].schema); free(c->columns[i].table);
     free(c->columns[i].name); free(c->columns[i].type);
@@ -144,6 +148,26 @@ int sql_server_read_schema(const SqlServerOptions *o, SqlServerCatalog *out) {
   if (!out->database || !out->default_schema || !sensitive) { free(sensitive); goto done; }
   out->case_sensitive = !strcmp(sensitive, "1"); free(sensitive);
   SQLFreeHandle(SQL_HANDLE_STMT, stmt); stmt = SQL_NULL_HSTMT;
+  if (!execute(dbc, &stmt, L"SELECT s.name,o.name,CASE o.type WHEN 'U' THEN 'table' WHEN 'V' THEN 'view' WHEN 'P' THEN 'procedure' ELSE 'function' END "
+      L"FROM sys.objects o JOIN sys.schemas s ON s.schema_id=o.schema_id "
+      L"WHERE o.type IN('U','V','P','FN','IF','TF') AND o.is_ms_shipped=0 ORDER BY s.name,o.name", out)) goto done;
+  size_t object_capacity = 0;
+  for (;;) {
+    SQLRETURN rc = SQLFetch(stmt);
+    if (rc == SQL_NO_DATA) break;
+    if (!SQL_SUCCEEDED(rc)) { sql_server_diagnostic(out->error, SQL_HANDLE_STMT, stmt, "Object read"); goto done; }
+    if (out->object_count == 10000) { snprintf(out->error,sizeof(out->error),"Database metadata exceeds 10000 objects."); goto done; }
+    if (out->object_count == object_capacity) {
+      object_capacity = object_capacity ? object_capacity * 2 : 256;
+      SqlServerObject *p = realloc(out->objects,object_capacity*sizeof(*p));
+      if (!p) goto done;
+      out->objects=p;
+    }
+    SqlServerObject *object=&out->objects[out->object_count++];
+    object->schema=cell(stmt,1); object->name=cell(stmt,2); object->kind=cell(stmt,3);
+    if (!object->schema || !object->name || !object->kind) goto done;
+  }
+  SQLFreeHandle(SQL_HANDLE_STMT, stmt); stmt = SQL_NULL_HSTMT;
   const wchar_t *query =
     L"SELECT s.name, o.name, c.name, "
     L"t.name + CASE WHEN t.name IN ('varchar','char','varbinary','binary','nvarchar','nchar') "
@@ -156,7 +180,7 @@ int sql_server_read_schema(const SqlServerOptions *o, SqlServerCatalog *out) {
     L"WHERE i.object_id=o.object_id AND i.is_primary_key=1 AND ic.column_id=c.column_id) THEN N'1' ELSE N'0' END "
     L"FROM sys.objects o JOIN sys.schemas s ON s.schema_id=o.schema_id "
     L"JOIN sys.columns c ON c.object_id=o.object_id JOIN sys.types t ON t.user_type_id=c.user_type_id "
-    L"WHERE o.type IN ('U','V') AND o.is_ms_shipped=0 ORDER BY s.name,o.name,c.column_id";
+    L"WHERE o.type IN ('U','V') AND o.is_ms_shipped=0 AND c.is_hidden=0 ORDER BY s.name,o.name,c.column_id";
   if (!execute(dbc, &stmt, query, out)) goto done;
   size_t capacity = 0;
   for (;;) {

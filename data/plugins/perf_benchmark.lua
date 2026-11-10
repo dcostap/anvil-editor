@@ -1187,6 +1187,33 @@ local function scenario_is_ready()
     require("core.panes").present(benchmark.view, { focus = true })
     return false
   end
+  if benchmark.scenario == "sql-symbols" then
+    local picker = core.fuzzy_searcher_active_view
+    if picker then return #picker.results == 4 end
+    local sql = require "plugins.sql_server"
+    sql.load()
+    if not sql.ready() then return false end
+    local backend = require "plugins.sql_server.backend"
+    backend.read_schema = function(_, done)
+      done({ database = "Example", default_schema = "dbo", case_sensitive = false, objects = {
+        { schema = "sales", name = "customers", kind = "table", columns = {} },
+        { schema = "sales", name = "orders", kind = "table", columns = {} },
+        { schema = "sales", name = "customer_names", kind = "view", columns = {} },
+        { schema = "sales", name = "list_customers", kind = "procedure", columns = {} },
+      } })
+      return { cancel = function() end }
+    end
+    backend.execute = function() error("SQL render scenes cannot execute SQL") end
+    backend.read_definition = function() error("SQL render scenes cannot connect") end
+    local c = sql.add_connection()
+    sql.update(c.id, "server", "test-only.invalid")
+    sql.update(c.id, "database", "Example")
+    sql.connect(c.id)
+    benchmark.view = sql.new_query(c.id)
+    benchmark.view.buffer:text_input("SELECT * FROM sales.customers;")
+    require("plugins.fuzzy_searcher").open_project_symbols("", { source_view = benchmark.view })
+    return false
+  end
   if benchmark.scenario == "sql-results" then
     local Results = require "plugins.sql_server.results"
     if view:extends(Results) then view:select_cell(2, 2, false); return true end

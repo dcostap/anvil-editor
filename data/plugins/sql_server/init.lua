@@ -306,6 +306,9 @@ end, {
   end),
   ["sql_server:run_selection"] = command.palette(function(view) return M.run(view, false) end),
   ["sql_server:run_buffer"] = command.palette(function(view) return M.run(view, true) end),
+  ["sql_server:expand_star"] = command.palette(function(view)
+    return require("plugins.sql_server.intelligence").expand_star(view, M)
+  end),
 })
 for _, action in ipairs({ "select", "create", "alter", "insert", "update", "delete" }) do
   command.add(function() return M.is_sql(core.active_view), core.active_view end, {

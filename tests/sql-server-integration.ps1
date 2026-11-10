@@ -48,7 +48,14 @@ try {
         [void]$command.ExecuteNonQuery()
         $command.CommandText = 'CREATE VIEW sales.customer_names AS SELECT [na]]me] FROM sales.customers'
         [void]$command.ExecuteNonQuery()
+        $command.CommandText = "EXEC sp_rename 'sales.customer_names', 'renamed_names'"
+        [void]$command.ExecuteNonQuery()
+        $command.CommandText = 'CREATE TABLE sales.periods (id int PRIMARY KEY, start_at datetime2 GENERATED ALWAYS AS ROW START HIDDEN NOT NULL, end_at datetime2 GENERATED ALWAYS AS ROW END HIDDEN NOT NULL, PERIOD FOR SYSTEM_TIME(start_at,end_at))'
+        [void]$command.ExecuteNonQuery()
         $command.CommandText = 'CREATE PROCEDURE sales.list_customers AS SELECT * FROM sales.customers'
+        [void]$command.ExecuteNonQuery()
+        $prefix = "CREATE PROCEDURE sales.long_text AS SELECT N'"
+        $command.CommandText = $prefix + ('x' * (3999 - $prefix.Length)) + [char]0xd83d + [char]0xde42 + "'"
         [void]$command.ExecuteNonQuery()
         $editorPath = (Resolve-Path $Editor).Path.Replace('\', '/')
         $build = (Split-Path (Split-Path $editorPath -Parent) -Parent).Replace('\', '/')

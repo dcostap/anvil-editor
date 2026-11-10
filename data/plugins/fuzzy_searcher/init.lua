@@ -2882,13 +2882,18 @@ function fuzzy_searcher.draw_symbol_result_row(
   local symbol_icons = require "core.symbol_icons"
   local icon_size = symbol_icons.size_for_row(row_height)
   local icon_column_width = fuzzy_searcher.symbol_icon_column_width(row_height)
-  local line = tonumber(r.line) or 1
-  local line_suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
-  local prefix = r.symbol_scope == "buffer" and "$$" or "$"
-  local line_x = fuzzy_searcher.draw_grouped_file_location(
-    font, r, prefix, line_suffix, x, y, path_w, x + path_w,
-    collapse_file, collapsed_line_x, metadata_parts, metadata_columns
-  )
+  local line_x
+  if r.activate then
+    line_x = renderer.draw_text(font, truncate_text(font, r.location_label or "", path_w), x, y, style.dim)
+  else
+    local line = tonumber(r.line) or 1
+    local line_suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
+    local prefix = r.symbol_scope == "buffer" and "$$" or "$"
+    line_x = fuzzy_searcher.draw_grouped_file_location(
+      font, r, prefix, line_suffix, x, y, path_w, x + path_w,
+      collapse_file, collapsed_line_x, metadata_parts, metadata_columns
+    )
+  end
   if text_w <= 0 then return line_x end
 
   local preview_font = style.get_small_font(font)
@@ -7181,8 +7186,12 @@ local function symbol_result_from_item(item, query, opts)
   local path_query = trim_query(opts.path_query)
   local path_score, file_spans = fuzzy_match_file_fast(path_query, file, opts.case_sensitive)
   if path_query ~= "" and not path_score then return nil end
+  local location_label
+  if item.activate then location_label, file = file, nil end
   return {
     kind = "symbol",
+    activate = item.activate,
+    location_label = location_label,
     label = label,
     name = label,
     symbol_kind = item.kind,
@@ -7290,6 +7299,25 @@ function FSView:start_symbol_search(query, reset_selection, path_query)
   local limit = self:max_result_limit()
   query = trim_query(query)
   path_query = trim_query(path_query)
+  local buffer = self.source_buffer or (self.source_view and self.source_view.buffer)
+  local provider = require("core.language_intelligence").providers_for("project_symbols", buffer)[1]
+  if provider then
+    local results, reason, status = provider.project_symbols(buffer, query, {
+      limit = limit + 1, case_sensitive = self.case_sensitive,
+    })
+    if status == "pending" and provider.prepare_project_symbols then
+      local source, pane, sensitive = self.source_view, self.source_pane, self.case_sensitive
+      self:close()
+      provider.prepare_project_symbols(source, function()
+        fuzzy_searcher.open_project_symbols(query, { source_view = source, source_pane = pane, case_sensitive = sensitive })
+      end)
+    else
+      set_symbol_results(self, query, results, provider.name or provider.id, status, reason, limit, {
+        scope = "project", path_query = path_query, case_sensitive = self.case_sensitive,
+      })
+    end
+    return
+  end
   -- A multiword query can use the declaration line to identify a symbol.
   local search_declaration = query:find("%s") ~= nil
   local candidate_limit = path_query ~= ""
@@ -8503,6 +8531,11 @@ function FSView:activate_selected_result(new_group)
     tostring(self.selected), #self.results, tostring(r and r.kind),
     tostring(r and (r.file or r.abs_path or r.path)), tostring(r and r.line), tostring(new_group))
   if not r then return end
+  if r.activate then
+    local source = self.source_view
+    self:close()
+    return r.activate(source, new_group and { placement = "new", focus = true } or nil)
+  end
   if self.bookmark_open_cancel then self.bookmark_open_cancel(); self.bookmark_open_cancel = nil end
   self.bookmark_activation = nil
   if r.kind == "bookmark" then

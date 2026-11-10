@@ -10,9 +10,12 @@ typedef struct {
   char *schema, *table, *name, *type;
   int nullable, identity, primary_key;
 } SqlServerColumn;
+typedef struct { char *schema, *name, *kind; } SqlServerObject;
 typedef struct {
   SqlServerColumn *columns;
   size_t count;
+  SqlServerObject *objects;
+  size_t object_count;
   char *database, *default_schema;
   int case_sensitive;
   char error[256];

@@ -15,7 +15,7 @@ end
 
 local function read(sql, view, object, done)
   return sql.with_connection(view, function(c)
-    object = object or require("plugins.sql_server.intelligence").table_at(view, sql)
+    object = object or require("plugins.sql_server.intelligence").object_at(view, sql)
     if not object then core.warn("No database symbol at the caret."); return false end
     local buffer, generation, revision = view.buffer, c.generation, view.buffer.text_revision
     local l1, c1, l2, c2 = buffer:get_selection()

@@ -24,7 +24,9 @@ static int context(lua_State *L) {
     lua_pushnil(L); lua_pushliteral(L, "SQL context exceeds the supported size."); return 2;
   }
   lua_newtable(L);
-  text(L, "mode", out.mode == SQL_CONTEXT_TABLE ? "table" : out.mode == SQL_CONTEXT_COLUMN ? "column" : "none");
+  text(L, "mode", out.mode == SQL_CONTEXT_TABLE ? "table" : out.mode == SQL_CONTEXT_COLUMN ? "column" : out.mode == SQL_CONTEXT_OBJECT ? "object" : "none");
+  boolean(L,"star",out.star);
+  text(L,"object_kind",out.object_kind);
   text(L, "prefix", out.prefix); text(L, "qualifier", out.qualifier);
   lua_pushinteger(L, (lua_Integer)out.start); lua_setfield(L, -2, "start");
   lua_pushinteger(L, (lua_Integer)out.end); lua_setfield(L, -2, "end");
@@ -71,24 +73,25 @@ static int read_schema(lua_State *L) {
   text(L, "database", c->database); text(L, "default_schema", c->default_schema);
   boolean(L, "case_sensitive", c->case_sensitive);
   lua_newtable(L);
-  int table_index = 0, column_index = 0;
-  for (size_t i = 0; i < c->count; ++i) {
-    SqlServerColumn *column = &c->columns[i];
-    if (!i || strcmp(column->schema, c->columns[i - 1].schema) || strcmp(column->table, c->columns[i - 1].table)) {
-      if (i) { lua_setfield(L, -2, "columns"); lua_rawseti(L, -2, table_index); }
-      ++table_index; column_index = 0;
-      lua_newtable(L);
-      text(L, "schema", column->schema); text(L, "name", column->table);
-      lua_newtable(L);
-    }
+  size_t column_index = 0;
+  for (size_t i = 0; i < c->object_count; ++i) {
+    SqlServerObject *object=&c->objects[i];
     lua_newtable(L);
-    text(L, "name", column->name); text(L, "type", column->type);
-    boolean(L, "nullable", column->nullable); boolean(L, "identity", column->identity);
-    boolean(L, "primary_key", column->primary_key);
-    lua_rawseti(L, -2, ++column_index);
+    text(L,"schema",object->schema); text(L,"name",object->name); text(L,"kind",object->kind);
+    lua_newtable(L);
+    size_t index=0;
+    while (column_index<c->count) {
+      SqlServerColumn *column=&c->columns[column_index];
+      if (strcmp(object->schema,column->schema) || strcmp(object->name,column->table)) break;
+      lua_newtable(L);
+      text(L, "name", column->name); text(L, "type", column->type);
+      boolean(L, "nullable", column->nullable); boolean(L, "identity", column->identity);
+      boolean(L, "primary_key", column->primary_key);
+      lua_rawseti(L,-2,++index); ++column_index;
+    }
+    lua_setfield(L,-2,"columns"); lua_rawseti(L,-2,i+1);
   }
-  if (c->count) { lua_setfield(L, -2, "columns"); lua_rawseti(L, -2, table_index); }
-  lua_setfield(L, -2, "tables");
+  lua_setfield(L, -2, "objects");
   sql_server_catalog_free(c);
   return 1;
 }

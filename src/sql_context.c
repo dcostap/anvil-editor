@@ -50,6 +50,58 @@ static int go_line(const char *s, size_t len, Token t) {
   while (b < len && s[b] != '\n') if (!isspace((unsigned char)s[b++])) return 0;
   return 1;
 }
+static int object_context(const char *s, Token *ts, size_t first, size_t last, size_t caret, SqlContext *out) {
+  for (size_t i=first; i<last; ++i) {
+    const char *kind=NULL;
+    if (word(s,ts[i],"EXEC") || word(s,ts[i],"EXECUTE")) kind="procedure";
+    else if (word(s,ts[i],"UPDATE") || word(s,ts[i],"INTO") || word(s,ts[i],"REFERENCES")) kind="table";
+    else if (i>first && word(s,ts[i-1],"DELETE") && word(s,ts[i],"FROM")) kind="table";
+    else if (i>first && (word(s,ts[i-1],"CREATE") || word(s,ts[i-1],"ALTER"))) {
+      if (word(s,ts[i],"TABLE")) kind="table";
+      else if (word(s,ts[i],"VIEW")) kind="view";
+      else if (word(s,ts[i],"PROC") || word(s,ts[i],"PROCEDURE")) kind="procedure";
+      else if (word(s,ts[i],"FUNCTION")) kind="function";
+    }
+    if (!kind || caret<=ts[i].end) continue;
+    size_t target=i+1;
+    if (target<last && !is_name(ts[target])) continue;
+    if (target<last && target+1<last && ts[target+1].kind=='.') {
+      if (!name(s,ts[target],ts[target].end,out->qualifier)) return -1;
+      target+=2;
+      if (target<last && (!is_name(ts[target]) || (target+1<last && ts[target+1].kind=='.'))) {
+        out->qualifier[0]=0; continue;
+      }
+    }
+    if (target<last && caret>ts[target].end) { out->qualifier[0]=0; continue; }
+    /* Names with three parts require a cross-database catalog. */
+    if (target>i+1 && caret<ts[target-1].end) { out->qualifier[0]=0; continue; }
+    out->mode=SQL_CONTEXT_OBJECT;
+    strcpy(out->object_kind,kind);
+    if (target<last && caret>=ts[target].start) {
+      out->start=ts[target].start; out->end=ts[target].end;
+      if (!name(s,ts[target],caret,out->prefix)) return -1;
+    }
+    return 1;
+  }
+  return 0;
+}
+static int projection_start(const char *s, Token *ts, size_t begin, size_t target) {
+  if (target>begin && ts[target-1].kind==',') return 1;
+  size_t i=begin+1;
+  if (i<target && (word(s,ts[i],"DISTINCT") || word(s,ts[i],"ALL"))) ++i;
+  if (i<target && word(s,ts[i],"TOP")) {
+    ++i;
+    if (i<target && ts[i].kind=='(') {
+      int depth=ts[i++].depth;
+      while (i<target && !(ts[i].kind==')' && ts[i].depth==depth)) ++i;
+      if (i==target) return 0;
+      ++i;
+    } else if (i<target) ++i;
+    if (i<target && word(s,ts[i],"PERCENT")) ++i;
+    if (i+1<target && word(s,ts[i],"WITH") && word(s,ts[i+1],"TIES")) i+=2;
+  }
+  return i==target;
+}
 int sql_context_parse(const char *s, size_t len, size_t caret, SqlContext *out) {
   memset(out, 0, sizeof(*out));
   if (!s || len > TEXT_LIMIT || caret > len) return 0;
@@ -101,6 +153,8 @@ int sql_context_parse(const char *s, size_t len, size_t caret, SqlContext *out) 
     if (ts[i].end <= caret) first = i + 1;
     else { last = i; break; }
   }
+  int object = object_context(s,ts,first,last,caret,out);
+  if (object) { if (object<0) ok=0; goto done; }
   /* Select the innermost SELECT scope that contains the caret. Parentheses
    * without SELECT (function arguments) do not make a new query scope. */
   size_t scopes[64], scope_count = 0;
@@ -128,13 +182,19 @@ int sql_context_parse(const char *s, size_t len, size_t caret, SqlContext *out) 
 
   size_t current = n, prev = n;
   for (size_t i = begin; i < end; ++i) {
-    if (is_name(ts[i]) && caret > ts[i].start && caret <= ts[i].end) { current = i; break; }
+    if ((is_name(ts[i]) || ts[i].kind=='*') && caret > ts[i].start && caret <= ts[i].end) { current = i; break; }
     if (ts[i].end <= caret) prev = i;
   }
   if (current < n) {
     out->start = ts[current].start; out->end = ts[current].end;
-    if (!name(s, ts[current], caret, out->prefix)) { ok = 0; goto done; }
+    if (ts[current].kind!='*' && !name(s, ts[current], caret, out->prefix)) { ok = 0; goto done; }
     prev = current > begin ? current - 1 : n;
+  }
+  if (current<n && ts[current].kind=='*' && ts[current].depth==scope) {
+    size_t target=current;
+    if (prev<n && ts[prev].kind=='.' && prev>begin && is_name(ts[prev-1])) target=prev-1;
+    out->star=projection_start(s,ts,begin,target);
+    for (size_t i=begin; i<current; ++i) if (ts[i].depth==scope && word(s,ts[i],"FROM")) out->star=0;
   }
   if (prev < n && ts[prev].kind == '.' && prev > begin && is_name(ts[prev - 1])) {
     if (!name(s, ts[prev - 1], ts[prev - 1].end, out->qualifier)) { ok = 0; goto done; }

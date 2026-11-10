@@ -30,6 +30,13 @@ test.describe("SQL execution input", function()
     test.not_nil(backend.read_schema(connection, function(value, err) reply.value = value or { error = err } end))
     local catalog = await(reply)
     test.equal(catalog.database, "AnvilTest")
+    local procedure, periods
+    for _, object in ipairs(catalog.objects) do
+      if object.schema == "sales" and object.name == "list_customers" then procedure = object end
+      if object.schema == "sales" and object.name == "periods" then periods = object end
+    end
+    test.equal(test.not_nil(procedure).kind, "procedure")
+    test.equal(#test.not_nil(periods).columns, 1)
     local definition
     reply = {}
     test.not_nil(backend.read_definition(connection, { schema = "sales", name = "child" }, function(value, err)
@@ -50,7 +57,7 @@ test.describe("SQL execution input", function()
       reply.value = value or { error = err }
     end)
     test.equal(await(reply).create, copy)
-    for _, object in ipairs({ "customer_names", "list_customers" }) do
+    for _, object in ipairs({ "renamed_names", "list_customers", "long_text" }) do
       reply = {}
       backend.read_definition(connection, { schema = "sales", name = object }, function(value, err)
         reply.value = value or { error = err }
@@ -59,6 +66,14 @@ test.describe("SQL execution input", function()
       test.equal(source.error, nil)
       test.ok(source.create:match("^CREATE "))
       test.ok(source.alter:match("^ALTER "))
+      if object == "long_text" then test.ok(source.source:find(string.char(0xf0, 0x9f, 0x99, 0x82), 1, true)) end
+      if object == "renamed_names" then
+        test.ok(source.source:find("sales.customer_names", 1, true))
+        test.ok(source.alter:find("[sales].[renamed_names]", 1, true))
+        reply = {}
+        backend.execute(connection, source.alter, function(value) reply.value = value end)
+        test.equal(await(reply).error, nil)
+      end
     end
     local schema_job = test.not_nil(backend.read_schema(connection, function() end))
     test.ok(schema_job:cancel())

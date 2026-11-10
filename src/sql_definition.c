@@ -64,7 +64,20 @@ static int valid_utf8(const char *s, size_t n) {
   }
   return 1;
 }
-char *sql_module_script(const char *s, size_t n, int alter) {
+static size_t identifier_end(const char *s, size_t n, size_t p) {
+  if (p==n) return p;
+  if (s[p]=='[' || s[p]=='"') {
+    char close=s[p++]=='[' ? ']' : '"';
+    while (p<n) {
+      if (s[p++]!=close) continue;
+      if (p<n && s[p]==close) ++p; else return p;
+    }
+    return 0;
+  }
+  while (p<n && ((unsigned char)s[p]>=128 || isalnum((unsigned char)s[p]) || s[p]=='_' || s[p]=='#' || s[p]=='@' || s[p]=='$')) ++p;
+  return p;
+}
+static char *module_script(const char *s, size_t n, int alter, const char *schema, const char *name) {
   if (!s || n > SOURCE_LIMIT || memchr(s, 0, n) || !valid_utf8(s,n)) return NULL;
   size_t start = skip(s, n, 0), end;
   if (word(s, n, start, "CREATE")) {
@@ -80,9 +93,24 @@ char *sql_module_script(const char *s, size_t n, int alter) {
   size_t p = skip(s, n, end);
   if (!word(s, n, p, "VIEW") && !word(s, n, p, "PROC") && !word(s, n, p, "PROCEDURE") &&
       !word(s, n, p, "FUNCTION") && !word(s, n, p, "TRIGGER")) return NULL;
-  Text out = {0}; append_n(&out, s, start); add(&out, alter ? "ALTER" : "CREATE"); append_n(&out, s + end, n - end);
+  Text out = {0}; append_n(&out, s, start); add(&out, alter ? "ALTER" : "CREATE");
+  if (schema && name) {
+    while (p<n && isalpha((unsigned char)s[p])) ++p;
+    size_t name_start=skip(s,n,p), name_end=identifier_end(s,n,name_start);
+    if (name_end<=name_start) { free(out.text); return NULL; }
+    p=skip(s,n,name_end);
+    if (p<n && s[p]=='.') {
+      p=skip(s,n,p+1); name_end=identifier_end(s,n,p);
+      if (name_end<=p) { free(out.text); return NULL; }
+      p=skip(s,n,name_end);
+      if (p<n && s[p]=='.') { free(out.text); return NULL; }
+    }
+    append_n(&out,s+end,name_start-end); quoted(&out,schema,0); add(&out,"."); quoted(&out,name,0);
+    append_n(&out,s+name_end,n-name_end);
+  } else append_n(&out,s+end,n-end);
   return take(&out);
 }
+char *sql_module_script(const char *s, size_t n, int alter) { return module_script(s,n,alter,NULL,NULL); }
 void sql_definition_free(SqlDefinition *out) {
   free(out->source_sql);
   free(out->create_sql); free(out->alter_sql); free(out->select_sql);
@@ -104,7 +132,7 @@ static const char *catalog_query =
   "FROM sys.objects o JOIN sys.schemas s ON s.schema_id=o.schema_id LEFT JOIN sys.sql_modules m ON m.object_id=o.object_id "
   "LEFT JOIN sys.tables t ON t.object_id=o.object_id WHERE o.object_id=@id; "
   "WITH n AS (SELECT 0 AS n UNION ALL SELECT n+1 FROM n WHERE n<127) "
-  "SELECT SUBSTRING(m.definition,n.n*4000+1,4000) FROM sys.sql_modules m CROSS JOIN n "
+  "SELECT SUBSTRING(m.definition COLLATE Latin1_General_100_CI_AS_SC,n.n*4000+1,4000) FROM sys.sql_modules m CROSS JOIN n "
   "WHERE m.object_id=@id AND n.n*4000<DATALENGTH(m.definition)/2 ORDER BY n.n OPTION(MAXRECURSION 128); "
   "SELECT c.name, QUOTENAME(c.name) COLLATE DATABASE_DEFAULT+' '+ CASE WHEN cc.definition IS NOT NULL THEN 'AS '+cc.definition+CASE WHEN cc.is_persisted=1 THEN ' PERSISTED'+CASE WHEN c.is_nullable=0 THEN ' NOT NULL' ELSE '' END ELSE '' END "
   "ELSE CASE WHEN ty.is_user_defined=1 THEN QUOTENAME(SCHEMA_NAME(ty.schema_id))+'.'+QUOTENAME(ty.name) ELSE ty.name+ "
@@ -173,6 +201,15 @@ int sql_definition_read(const SqlServerOptions *options, const char *schema, con
   for (size_t i=0; i<rows.count; ++i) if (rows.tables[i].truncated) {
     snprintf(out->error, sizeof(out->error), "Definition metadata exceeds its size limit."); goto done;
   }
+  for (size_t i=0; i<rows.count; ++i) {
+    SqlQueryTable *t=&rows.tables[i];
+    for (size_t j=0; j<t->row_count*t->column_count; ++j) {
+      SqlQueryCell *cell=&t->cells[j];
+      if (cell->text && memchr(cell->text,0,cell->length)) {
+        snprintf(out->error,sizeof(out->error),"Definition metadata contains a NUL character."); goto done;
+      }
+    }
+  }
   const char *kind = value(&rows.tables[0],0,0), *qualified = value(&rows.tables[0],0,1);
   if (!kind || !qualified || !is_one(value(&rows.tables[0],0,6))) {
     snprintf(out->error, sizeof(out->error), "Object not found or VIEW DEFINITION permission is missing."); goto done;
@@ -213,8 +250,8 @@ int sql_definition_read(const SqlServerOptions *options, const char *schema, con
     }
     for (size_t i=0; i<rows.tables[1].row_count; ++i) add(&source,value(&rows.tables[1],i,0));
     if (source.failed) goto done;
-    out->create_sql = sql_module_script(source.text, source.length, 0);
-    out->alter_sql = sql_module_script(source.text, source.length, 1);
+    out->create_sql = module_script(source.text, source.length, 0, schema, name);
+    out->alter_sql = module_script(source.text, source.length, 1, schema, name);
     out->source_sql = take(&source);
     /* These flags change parsing. Do not offer a script that would use different settings. */
     if (!is_one(value(&rows.tables[0],0,3)) || !is_one(value(&rows.tables[0],0,4))) {

@@ -13,7 +13,10 @@ typedef struct {
 typedef struct {
   /* Byte offsets, like Anvil's Buffer columns. End is exclusive. */
   size_t start, end;
-  enum { SQL_CONTEXT_NONE, SQL_CONTEXT_TABLE, SQL_CONTEXT_COLUMN } mode;
+  enum { SQL_CONTEXT_NONE, SQL_CONTEXT_TABLE, SQL_CONTEXT_COLUMN, SQL_CONTEXT_OBJECT } mode;
+  int star;
+  /* Empty means any object; table also permits a view for DML. */
+  char object_kind[16];
   char prefix[SQL_CONTEXT_NAME], qualifier[SQL_CONTEXT_NAME];
   SqlSource sources[SQL_CONTEXT_SOURCES];
   size_t count;

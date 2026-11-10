@@ -12,17 +12,19 @@ The Dialog has no separate database sidebar. Table editing and transaction contr
 
 Symbol navigation reads the database object's source into a read-only SQL Editor. Back returns to the same Query. The definition inherits its connection and supports completion, navigation, and Run Selection. Table and view definitions include a SELECT example. Definitions are snapshots; reopening one reads it again. They are not saved in the Workspace.
 
+In a SQL Editor, **Project Symbol Search** searches that Buffer's database connection. It lists tables, views, procedures, and SQL functions. An empty query lists objects. Selecting a result opens the same source as symbol navigation. The first search can ask for a connection; opening SQL alone never does.
+
 **SQL Server: Generate Select**, **Insert**, **Update**, **Delete**, **Create**, and **Alter** act on the database symbol at the caret. Each supported command opens an editable SQL Buffer with the same connection. It executes nothing. UPDATE and DELETE templates start with a false predicate. INSERT and UPDATE values require editing.
 
 Table scripts include column types, identity settings, computed columns, defaults, keys, checks, foreign keys, and ordinary indexes. They explicitly exclude storage options, triggers, and permissions. They are not complete database deployment scripts. Unsupported table features, disabled indexes, and disabled or untrusted constraints stop scripting instead of producing an incomplete declaration. Table ALTER generation is not available.
 
-Module source comes from SQL Server. CREATE and ALTER generation changes its opening declaration, not its body. Modules with ANSI_NULLS or QUOTED_IDENTIFIER OFF show their settings but offer no CREATE or ALTER script. Selected execution does not apply those settings automatically. Encrypted source, missing VIEW DEFINITION permission, and source limits produce an error. Source reads are bounded to 512 KiB and use the execution worker's bounded result reader.
+Module source comes from SQL Server. CREATE and ALTER generation changes its opening declaration, not its body. Generated scripts use the object's current name, also after a rename. Modules with ANSI_NULLS or QUOTED_IDENTIFIER OFF show their settings but offer no CREATE or ALTER script. Selected execution does not apply those settings automatically. Encrypted source, missing VIEW DEFINITION permission, and source limits produce an error. Source reads are bounded to 512 KiB and use the execution worker's bounded result reader.
 
 ## Run SQL
 
 Use **SQL Server: Run Selection** in a SQL Query. It runs the primary selection and does nothing when that selection is empty. **SQL Server: Run Buffer** explicitly runs the whole Buffer. Both send the text as one batch. Neither splits `GO` lines or selects a statement at the caret. An edit, caret move, or focus change while a connection starts cancels the pending execution request.
 
-**SQL can change database data. Only the result display is read-only.** Each run opens a new connection with normal autocommit. Temporary tables, session settings, and transactions do not carry into the next run. Cancellation does not undo committed changes.
+**SQL can change database data, even when selected from a read-only definition.** Each run opens a new connection with normal autocommit. Temporary tables, session settings, and transactions do not carry into the next run. Cancellation does not undo committed changes.
 
 Results open below the Query without taking focus or moving the caret. Another run replaces that Query's results. The View reuses Tabular Data Preview's selection, copy, sorting, filtering, column sizing, and scrolling. `NULL` is distinct from an empty value. Numbers remain text, so large integers and decimals keep their precision. Binary values show as hexadecimal.
 
@@ -52,9 +54,11 @@ Metadata reads run on a worker. They use fixed SQL Server catalog queries, reque
 
 The native parser supports SELECT scopes, FROM and JOIN sources, aliases, schema-qualified tables, bracketed identifiers, quoted identifiers, comments, and strings. Semicolons and standalone GO lines separate statements. Nested SELECT scopes use their own sources. Completion inserts quoted names when needed and replaces the complete token at the caret.
 
+Object navigation also recognizes EXEC, INSERT INTO, UPDATE, DELETE FROM, REFERENCES, and CREATE or ALTER object declarations. **SQL Server: Expand Star** replaces the projection `*` at the caret with its source columns. It supports an alias-qualified star and qualifies joined columns. It changes no database data. One undo restores the star.
+
 Unqualified table lookup follows the database user's default schema, then `dbo`. Ambiguous column navigation does not choose a table. Joined-column completion qualifies its inserted names.
 
-CTEs, derived tables, cross-database references, table-valued functions, correlated outer references, and temporary-table metadata are not supported. This is not a complete T-SQL parser or a Tree-sitter SQL grammar. Context reads stop above 256 KiB, 32,768 tokens, 64 nested SELECT scopes, or 64 sources. Metadata reads stop above 50,000 columns.
+CTEs, derived tables, cross-database references, table-valued function sources, correlated outer references, and temporary-table metadata are not supported. This is not a complete T-SQL parser or a Tree-sitter SQL grammar. Context reads stop above 256 KiB, 32,768 tokens, 64 nested SELECT scopes, or 64 sources. Metadata reads stop above 10,000 objects or 50,000 columns.
 
 ## Source reference
 
@@ -93,7 +97,7 @@ ANVIL_SQL_INTEGRATION=1 meson test -C build-windows-x86_64 anvil:sql-server-inte
 
 Without opt-in or dependencies, the test reports SKIP, not PASS. It installs nothing. LocalDB tests use Windows authentication and explicitly disable TLS because LocalDB does not support it. They do not prove remote TLS or SQL-login behavior.
 
-The `databases-dialog` and `sql-results` render scenarios use fixed data on a private desktop. They make no database connection.
+The `databases-dialog`, `sql-results`, and `sql-symbols` render scenarios use fixed data on a private desktop. They make no database connection.
 
 ## References
 
