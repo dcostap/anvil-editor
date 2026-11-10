@@ -256,6 +256,20 @@ test.describe("graphics apis", function()
     test.equal(pixel(outline, 20, 5)[1], 0)
     local corner = pixel(outline, 11, 11)[1]
     test.ok(corner > 0 and corner < 255, "the curve of a corner has a smooth edge")
+
+    local translucent = canvas.new(40, 40, { 0, 0, 0, 255 }, true)
+    translucent:draw_rounded_rect(10, 10, 20, 20, 0, { 255, 255, 255, 128 }, nil, 1)
+    translucent:render()
+    for x = 12, 28, 4 do
+      test.ok(math.abs(pixel(translucent, x, 20)[1] - 128) < 8, "a translucent fill covers its whole row")
+    end
+
+    local clear = canvas.new(40, 40, { 0, 0, 0, 0 }, true)
+    clear:draw_rounded_rect(10, 10, 20, 20, 0, { 255, 255, 255, 255 }, nil, 2)
+    clear:render()
+    local edge_alpha = pixel(clear, 20, 10)[4]
+    test.ok(edge_alpha > 0 and edge_alpha < 255, "a soft edge is partly opaque on a clear canvas")
+    test.equal(pixel(clear, 20, 20)[4], 255)
   end)
 
   test.test("saves and loads raster and SVG images", function(context)

@@ -3496,8 +3496,9 @@ static void fill_surface_span(SDL_Surface *surface, int x, int y, int w, RenColo
     SDL_FillSurfaceRect(surface, &span, SDL_MapSurfaceRGBA(surface, color.r, color.g, color.b, color.a));
     return;
   }
+  /* The 1x1 surface stretches over the span, as in ren_draw_rect. */
   *((uint32_t *)draw_rect_surface->pixels) = SDL_MapSurfaceRGBA(draw_rect_surface, color.r, color.g, color.b, color.a);
-  SDL_BlitSurface(draw_rect_surface, NULL, surface, &span);
+  SDL_BlitSurfaceScaled(draw_rect_surface, NULL, surface, &span, SDL_SCALEMODE_NEAREST);
 }
 
 /* The software form of the D3D11 shape: a vertical gradient, and an edge that fades over `softness`
@@ -3548,10 +3549,11 @@ static void draw_shape(RenSurface *rs, RenRect rect, float radius, RenColor top,
       if (a > 0) {
         Uint8 dr, dg, db, da;
         if (SDL_ReadSurfacePixel(surface, px, py, &dr, &dg, &db, &da)) {
+          /* Blend as SDL's blend mode does for the spans, so a clear canvas also takes the edge's alpha. */
           int ia = 255 - a;
           SDL_WriteSurfacePixel(surface, px, py,
             (Uint8)((row.r * a + dr * ia + 127) / 255), (Uint8)((row.g * a + dg * ia + 127) / 255),
-            (Uint8)((row.b * a + db * ia + 127) / 255), da);
+            (Uint8)((row.b * a + db * ia + 127) / 255), (Uint8)(a + (da * ia + 127) / 255));
         }
       }
       px++;
