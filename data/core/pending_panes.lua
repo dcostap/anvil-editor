@@ -127,6 +127,14 @@ local function model()
   return projects, path
 end
 
+-- All local attention marks, without the Pane number limit or Recent Pane slots.
+function pending.local_attention()
+  local projects = model()
+  local result = {}
+  for _, item in ipairs(pending.order {projects[#projects]}) do result[item.id] = true end
+  return result
+end
+
 function pending.local_numbers()
   local projects, path = model()
   local numbers, result = pending.numbers(projects), {}

@@ -40,7 +40,8 @@ test.describe("Snoozed Panes", function()
   local saved
   test.before_each(function()
     panes.reset_for_tests()
-    saved = {root = core.root_panel, focus = core.set_active_view, active = core.active_view}
+    saved = {root = core.root_panel, focus = core.set_active_view, active = core.active_view,
+      sidebar = core.project_sidebar}
     core.set_active_view = function(view) core.active_view = view end
     core.root_panel = RootPanel()
     storage.clear("sidebar", "snoozes")
@@ -48,6 +49,7 @@ test.describe("Snoozed Panes", function()
   test.after_each(function()
     panes.reset_for_tests()
     core.root_panel, core.set_active_view, core.active_view = saved.root, saved.focus, saved.active
+    core.project_sidebar = saved.sidebar
     storage.clear("sidebar", "snoozes")
   end)
 
@@ -75,6 +77,38 @@ test.describe("Snoozed Panes", function()
     snooze(b)
     test.is_nil(report_item(b).snoozed)
     test.same(panes.navigable(), {a, b})
+  end)
+
+  test.it("skips attention marks when a Snoozed Pane gives up selection", function()
+    local t = terminal("snoozing")
+    local question = panes.split(t, "right", {factory = function() return FakeTerminal("question") end})
+    local result, bell, next_file = terminal("result"), terminal("bell"), file()
+    for _, pane in ipairs {question, result, bell} do pane.current_view.state = "running" end
+    bell.current_view.bell_at = os.time()
+    core.project_sidebar = {{path = core.root_project().path, terminals = {
+      {id = "question", state = "running", agent_state = "blocked", agent_since = os.time()},
+      {id = "result", state = "running", agent_state = "done", agent_since = os.time()},
+    }}}
+    panes.focus(t)
+    snooze(t)
+    test.equal(panes.active(), next_file, "automatic selection consumed an attention mark")
+    request {action = "focus", pane = result.id}
+    test.equal(panes.active(), result, "manual selection must still reach an Unread Result")
+  end)
+
+  test.it("shows the Project Launcher when Snooze leaves no Pane without an attention mark", function()
+    local t, unread = terminal("snoozing"), terminal("unread")
+    unread.current_view.state, unread.current_view.bell_at = "running", os.time()
+    panes.focus(t)
+    snooze(t)
+    test.is_nil(panes.active(), "automatic selection must leave the Unread Result alone")
+    test.is_nil(core.active_view, "the Snoozed View must not keep keyboard input")
+    test.ok(require("core.project_launcher").shown())
+    test.equal(panes.count(), 2, "showing the Launcher must retain the Panes")
+    panes.focus(unread)
+    snooze(unread)
+    test.ok(require("core.project_launcher").shown(), "only Snoozed Panes remain")
+    test.ok(panes.validate())
   end)
 
   test.it("shows a Snoozed Pane on request and keeps it snoozed", function()

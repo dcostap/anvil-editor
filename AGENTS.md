@@ -262,6 +262,7 @@ The Project moves a Snoozed Pane into its own Pane Group with the `snoozed` flag
 Pane navigation, Pane numbers and the Title Bar skip it. A focus request still shows it.
 A Sidebar drop cannot snooze a Pane. The Snoozed fold takes a drop after the Project's other Tabs. A Snoozed Tab that the user drops, in the Sidebar or on the Project's Panes, wakes. The Sidebar removes its saved time first, and the Project wakes it before a drop on its Panes, because the two requests take different routes.
 The Pane report marks it, and the Sidebar lists it in the collapsed Snoozed fold at the end of its Project.
+When the selected Pane is Snoozed, automatic selection skips all Panes with attention marks, without the Pane number limit. It prefers an eligible Pane in the same group, then another navigable Pane. If none remain, the Project shows its Launcher and clears the Snoozed View's keyboard focus. Manual selection and saved Snooze recovery keep their normal behavior.
 The fold shows the mark of a Snoozed Pane that needs the user, also in a collapsed Project.
 Collapsed Projects and Dormant Projects show a coloured count of Terminals that need the user. Collapsed age groups show their total.
 A Pi question counts during a Snooze. Other attention stays hidden until the Snooze ends.

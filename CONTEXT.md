@@ -693,6 +693,7 @@ _Avoid_: Reminder, timer
 
 **Snoozed Pane**:
 A Terminal's Pane with a Snooze. It is its own Pane Group, listed in its Project's Snoozed section at the end of the Project in the Project Sidebar. Pane navigation and Pane numbers skip it, but Text Search still finds its Terminal.
+When the selected Pane is Snoozed, automatic selection skips Panes with attention marks. If none remain, the Project shows its Project Launcher.
 _Avoid_: hidden Pane, held Pane
 
 **Terminal Text Capture**:

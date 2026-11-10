@@ -1624,8 +1624,16 @@ function M.close_view(target, opts)
   return committed, failure
 end
 
-local function nearest_after_removal(old_order, old_index)
-  return old_order[math.min(old_index, #old_order)] or old_order[old_index - 1]
+local function nearest_after_removal(old_order, old_index, excluded)
+  local start = math.min(old_index, #old_order)
+  for index = start, #old_order do
+    local pane = old_order[index]
+    if pane and not (excluded and excluded[pane.id]) then return pane end
+  end
+  for index = start - 1, 1, -1 do
+    local pane = old_order[index]
+    if not (excluded and excluded[pane.id]) then return pane end
+  end
 end
 
 -- A Snoozed Pane is its own Pane Group with `snoozed` set. Pane navigation and Pane numbers skip it.
@@ -1655,7 +1663,7 @@ local function navigable_index(pane)
 end
 
 -- Snoozes `target`: it leaves its Pane Group for its own Snoozed one. If it had focus, the nearest Pane that
--- navigation reaches takes focus. Without one, the Snoozed Pane stays shown.
+-- navigation reaches without an attention mark takes focus. Without one, the Project Launcher shows.
 function M.snooze(target, keep_focus)
   local pane = M.find(target)
   if not pane then return nil, "invalid Pane" end
@@ -1673,12 +1681,15 @@ function M.snooze(target, keep_focus)
   if keep_focus and M.active_pane == pane then
     M.visible_group_value = pane.group
   elseif not keep_focus and (M.active_pane == pane or M.visible_group_value == pane.group) then
+    local attention = require("core.pending_panes").local_attention()
     local survivors = old_group ~= pane.group and layout.leaves(old_group.root) or {}
-    local next_pane = nearest_after_removal(survivors, member_index)
-      or nearest_after_removal(M.navigable(), old_index)
+    local next_pane = nearest_after_removal(survivors, member_index, attention)
+      or nearest_after_removal(M.navigable(), old_index, attention)
+    M.active_pane, M.visible_group_value = next_pane, next_pane and next_pane.group
     if next_pane then
-      M.active_pane, M.visible_group_value = next_pane, next_pane.group
       focus_view(next_pane)
+    elseif M.pane_for_view(core.active_view) == pane and core.clear_active_view then
+      core.clear_active_view(core.active_view)
     end
   end
   after_mutation("snoozed " .. pane.id)
@@ -2239,10 +2250,10 @@ function M.validate()
     assert(seen_owned_views[owner], "focus target owner is not retained by a Pane")
     assert(owner.__pane_owner == seen_owned_views[owner], "focus target owner points to the wrong Pane")
   end
-  if not next(seen_panes) then
-    assert(M.active_pane == nil and M.visible_group_value == nil, "zero Panes require no active Pane or visible group")
+  if not M.active_pane then
+    assert(M.visible_group_value == nil, "the Project Launcher requires no visible Pane Group")
   else
-    assert(M.active_pane and seen_panes[M.active_pane], "active Pane is invalid")
+    assert(seen_panes[M.active_pane], "active Pane is invalid")
     assert(M.visible_group_value and M.groups_by_id[M.visible_group_value.id] == M.visible_group_value, "visible Pane Group is invalid")
     assert(M.active_pane.group == M.visible_group_value, "active Pane must belong to visible Pane Group")
   end
