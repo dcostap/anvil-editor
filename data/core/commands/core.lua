@@ -32,7 +32,7 @@ end
 local function file_prompt_defaults()
   local view = core.active_view
   local default_text, root_dir = "", core.root_project().path
-  if view.buffer and view.buffer.abs_filename then
+  if view and view.buffer and view.buffer.abs_filename then
     local dirname = common.dirname(view.buffer.abs_filename)
     if dirname and common.path_belongs_to(dirname, root_dir) then
       dirname = core.normalize_to_project_dir(dirname)

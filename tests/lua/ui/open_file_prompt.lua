@@ -65,6 +65,14 @@ test.describe("open file prompt", function()
     test.equal(#errors, 0)
   end)
 
+  test.it("opens without an active View", function()
+    if core.active_view then core.clear_active_view(core.active_view) end
+    test.ok(command.perform("core:pick_file"))
+    test.ok(core.active_view == core.global_prompt_bar, errors[1] or "Open File did not take focus")
+    test.equal(core.global_prompt_bar.label, "Open File")
+    test.equal(#errors, 0)
+  end)
+
   test.it("enters the highlighted folder", function()
     local root = join_path(USERDIR, "open file folder navigation")
     local child = join_path(root, "child")
