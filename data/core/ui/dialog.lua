@@ -74,16 +74,15 @@ function Dialog:set_body(body)
 end
 
 ---Sizes in pixels at the current scale.
+local card_metrics = {}
+
 function Dialog:metrics()
-  local um = ui.metrics()
-  return {
-    pad = um.dialog_pad,
-    side = math.floor(24 * SCALE + 0.5),
-    radius = um.dialog_radius,
-    header_gap = um.section_gap,
-    footer_gap = math.floor(20 * SCALE + 0.5),
-    top = math.floor(72 * SCALE + 0.5),
-  }
+  local um, m = ui.metrics(), card_metrics
+  m.pad, m.radius, m.header_gap = um.dialog_pad, um.dialog_radius, um.section_gap
+  m.side = math.floor(24 * SCALE + 0.5)
+  m.footer_gap = math.floor(20 * SCALE + 0.5)
+  m.top = math.floor(72 * SCALE + 0.5)
+  return m
 end
 
 ---Whether `control` has the keyboard focus of the open Dialog.
@@ -376,7 +375,7 @@ function Dialog:layout()
   end
   local content_h
   if body then
-    content_h = math.min(body:height(inner_w), available_h - fixed_h)
+    content_h = math.min(self.body_scroll:height(inner_w), available_h - fixed_h)
   else
     content_h = self:layout_content(0, 0, inner_w, available_h - fixed_h)
   end

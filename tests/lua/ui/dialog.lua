@@ -254,6 +254,7 @@ test.describe("Dialog with a layout body", function()
     test.ok(name.y < switch.y and switch.y < save.y)
     test.ok(cancel.x < save.x)
     test.ok(inside_card(instance, save))
+    test.equal(instance.body_scroll:max_scroll(), 0, "a body that fits does not scroll")
     local order = {}
     for _ = 1, 4 do
       command.perform("dialog:focus_next")

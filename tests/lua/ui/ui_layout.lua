@@ -65,6 +65,14 @@ test.describe("Dialog layout", function()
     test.same(rect(a), { 70, 5, 20, 10 })
   end)
 
+  test.it("keeps a child's size limits in each cross-axis alignment", function()
+    local wide, tall = Box { width = 200, h = 10 }, Box { w = 10, h = 5, min_height = 30 }
+    place(layout.Column { align = "start", wide }, 100)
+    test.equal(rect(wide)[3], 200)
+    place(layout.Row { align = "start", tall }, 100, 20)
+    test.equal(rect(tall)[4], 30)
+  end)
+
   test.it("grows a column's children into its height, so a spacer pushes a footer down", function()
     local body, footer = Box { w = 50, h = 40 }, Box { w = 80, h = 20 }
     local column = layout.Column { gap = 0, align = "center", body, layout.Spacer { grow = 1 }, footer }
@@ -87,5 +95,32 @@ test.describe("Dialog layout", function()
     place(scroll, 200, 300)
     test.ok(footer.y + footer.h >= px(290), "the footer sits at the bottom of the scroll")
     test.equal(scroll:max_scroll(), 0)
+  end)
+
+  test.it("scrolls a control child with the wheel, and gives a hidden child no space", function()
+    local button = require("core.ui.button") { label = "OK" }
+    local scroll = place(layout.Scroll { height = 10, button }, 200)
+    test.ok(scroll:on_wheel(5, 5, -1), "a control taller than the scroll scrolls")
+
+    local hidden = Box { w = 10, h = 40, visible = false }
+    local empty = layout.Scroll { hidden }
+    test.equal(empty:height(px(200)), 0)
+    place(empty, 200)
+    local list = {}
+    empty:collect(list)
+    test.equal(#list, 0)
+    test.not_ok(empty:on_wheel(5, 5, -1))
+  end)
+
+  test.it("wraps text again when its font changes size in place", function()
+    local words = string.rep("word ", 40)
+    local text = layout.Text { text = words }
+    local font = require("core.ui").role_font("body")
+    local size = font:get_size()
+    text:height(px(200))
+    font:set_size(size * 2)
+    local after, fresh = text:height(px(200)), layout.Text({ text = words }):height(px(200))
+    font:set_size(size)
+    test.equal(after, fresh)
   end)
 end)

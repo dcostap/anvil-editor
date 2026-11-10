@@ -56,10 +56,15 @@ function ui.role_color(role)
   return style.dialog_text
 end
 
----Sizes in pixels at the current scale.
+local metrics, metrics_scale, metrics_h, metrics_xs_h
+
+---Sizes in pixels at the current scale. Layout reads them many times in each frame, so one table holds them
+---until the scale or the font changes. Do not change it.
 function ui.metrics()
-  local h = ui.font():get_height()
-  return {
+  local h, xs_h = ui.font():get_height(), ui.role_font("meta"):get_height()
+  if metrics and metrics_scale == SCALE and metrics_h == h and metrics_xs_h == xs_h then return metrics end
+  metrics_scale, metrics_h, metrics_xs_h = SCALE, h, xs_h
+  metrics = {
     control_h = math.floor(h + 14 * SCALE + 0.5),
     radius = math.floor(6 * SCALE + 0.5),
     pad_x = math.floor(12 * SCALE + 0.5),
@@ -69,7 +74,7 @@ function ui.metrics()
     ring = math.max(1, math.floor(2 * SCALE + 0.5)),
     -- The sizes of core.ui's own controls and layout.
     control_sm_h = math.floor(h + 10 * SCALE + 0.5),
-    control_xs_h = math.floor(ui.role_font("meta"):get_height() + 8 * SCALE + 0.5),
+    control_xs_h = math.floor(xs_h + 8 * SCALE + 0.5),
     field_h = math.floor(h + 12 * SCALE + 0.5),
     control_radius = math.floor(8 * SCALE + 0.5),
     small_radius = math.floor(6 * SCALE + 0.5),
@@ -81,6 +86,7 @@ function ui.metrics()
     row_pad_y = math.floor(12 * SCALE + 0.5),
     text_gap = math.floor(4 * SCALE + 0.5),
   }
+  return metrics
 end
 
 ---The focus ring of core.ui's controls: a 2 px outline just outside (x, y, w, h).

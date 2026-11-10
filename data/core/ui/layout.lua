@@ -12,7 +12,8 @@ local surface = require "core.ui.surface"
 --   place(x, y, w, h)   take a rect, and place the children in it
 --   draw_node(dialog)   draw. A control draws its focus ring when it has the Dialog's keyboard focus.
 --   collect(list)       add the visible controls to `list`, in Tab order
---   on_wheel(x, y, dy)  scroll, for a node under the pointer. Returns true when it scrolled.
+--   on_wheel(x, y, dy)  nodes only: scroll, for a node under the pointer. Returns true when it scrolled.
+--                       The Dialog gives the wheel to the control under the pointer first.
 -- A new kind of node gives its own size with content_width() and content_height(w). A control uses measure().
 --
 -- A container takes its children in the array part of its options: `layout.Column { gap = 8, a, b }`.
@@ -152,7 +153,7 @@ end
 local function column_child_width(self, child, w)
   local low, high = child:width_limits()
   if self.align == "stretch" then return clamp(w, low, high) end
-  return math.min(child:width(), w)
+  return clamp(math.min(child:width(), w), low, high)
 end
 
 -- Grow or shrink the sizes by `free` pixels. A child that reaches a limit keeps it, and the others share the
@@ -278,7 +279,7 @@ function Flex:place(x, y, w, h)
       local size = finish - start
       if self.row then
         local low, high = child:height_limits()
-        local ch = self.align == "stretch" and clamp(inner_h, low, high) or math.min(inner_h, child:height(size))
+        local ch = clamp(self.align == "stretch" and inner_h or math.min(inner_h, child:height(size)), low, high)
         child:place(x + left + start, y + top + aligned(self.align, inner_h, ch), size, ch)
       else
         local cw = column_child_width(self, child, inner_w)
@@ -347,8 +348,10 @@ end
 
 function Text:lines_for(w)
   local font = ui.role_font(self.role)
-  if self.wrap_key ~= w or self.wrap_font ~= font or self.wrap_text ~= self.text then
-    self.wrap_key, self.wrap_font, self.wrap_text = w, font, self.text
+  -- Zoom changes a font's size in place, so the size is part of the key.
+  local size = font:get_size()
+  if self.wrap_key ~= w or self.wrap_font ~= font or self.wrap_size ~= size or self.wrap_text ~= self.text then
+    self.wrap_key, self.wrap_font, self.wrap_size, self.wrap_text = w, font, size, self.text
     if self.wraps then
       wrap(font, self.text, w, self.lines)
     else
@@ -572,9 +575,21 @@ local function inset()
 end
 
 function Scroll:child() return self.children[1] end
-function Scroll:content_width() return self:child():width() end
+
+-- The child, when it is visible.
+local function shown(self)
+  local child = self.children[1]
+  return child.visible and child
+end
+
+function Scroll:content_width()
+  local child = shown(self)
+  return child and child:width() or 0
+end
+
 function Scroll:content_height(w)
-  return self:child():height(w) + 2 * inset()
+  local child = shown(self)
+  return child and child:height(w) + 2 * inset() or 0
 end
 
 ---Replace the child, and scroll to its top.
@@ -623,7 +638,13 @@ end
 
 function Scroll:place(x, y, w, h)
   Scroll.super.place(self, x, y, w, h)
-  local child = self:child()
+  local controls = self.controls
+  local child = shown(self)
+  if not child then
+    self.content_h, self.scroll, self.scroll_to = 0, 0, 0
+    for i = #controls, 1, -1 do controls[i] = nil end
+    return
+  end
   local pad = inset()
   local child_h = math.max(child:height(w), h - 2 * pad)
   self.content_h = child_h + 2 * pad
@@ -639,14 +660,17 @@ function Scroll:place(x, y, w, h)
   ui.layout_clip = intersect(outer, area, self.clip)
   child:place(x, y + pad - math.floor(self.scroll + 0.5), w, child_h)
   ui.layout_clip = outer
-  for i = #self.controls, 1, -1 do self.controls[i] = nil end
-  child:collect(self.controls)
+  -- reveal() reads the controls of the last place, so they change only here.
+  for i = #controls, 1, -1 do controls[i] = nil end
+  child:collect(controls)
 end
 
 function Scroll:draw_node(dialog)
   local clip = self.clip
+  local child = shown(self)
+  if not child then return end
   core.push_clip_rect(clip.x, clip.y, clip.w, clip.h)
-  self:child():draw_node(dialog)
+  child:draw_node(dialog)
   local max = self:max_scroll()
   if max > 0 then
     local bar_w = px(4)
@@ -659,7 +683,9 @@ function Scroll:draw_node(dialog)
 end
 
 function Scroll:on_wheel(x, y, dy)
-  if self:child():on_wheel(x, y, dy) then return true end
+  local child = shown(self)
+  if not child then return false end
+  if child.on_wheel and child:on_wheel(x, y, dy) then return true end
   if self:max_scroll() <= 0 then return false end
   self.scroll_to = math.max(0, math.min(self.scroll_to - dy * config.mouse_wheel_scroll, self:max_scroll()))
   core.redraw = true
