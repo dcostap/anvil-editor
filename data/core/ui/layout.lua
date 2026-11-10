@@ -327,7 +327,8 @@ local function wrap(font, text, width, lines)
   return lines
 end
 
----@param options { text: string, role: string?, color: table?, wrap: boolean?, align: string? }
+---@param options { text: string, role: string?, color: table?, wrap: boolean?, align: string?, cut: string? }
+---Text with `wrap = false` cuts a long line with "…" at its end, or at its start with `cut = "start"`, for a path.
 function Text:new(options)
   Text.super.new(self, options)
   self.text = options.text or ""
@@ -335,6 +336,7 @@ function Text:new(options)
   self.color = options.color
   self.wraps = options.wrap ~= false
   self.align = options.align or "left"
+  self.cut_start = options.cut == "start"
   self.lines = {}
 end
 
@@ -378,7 +380,7 @@ function Text:draw_node()
   local color = self.color or ui.role_color(self.role)
   local line_h = font:get_height()
   for i, line in ipairs(lines) do
-    local text = self.wraps and line or ui.fit_text(font, line, self.w)
+    local text = self.wraps and line or ui.fit_text(font, line, self.w, self.cut_start)
     common.draw_text(font, color, text, self.align, self.x, self.y + (i - 1) * line_h, self.w, line_h)
   end
 end
@@ -386,6 +388,8 @@ end
 ------------------------------------------------------------------------------------------------------------------
 -- Field: a title and an optional description, with a control at the right, as in a settings row.
 -- `stacked = true` puts the control below the text at the full width, for a text field.
+-- The control's `error`, such as a Text Field's refused text, shows in red below the description, or below a
+-- stacked control.
 
 local Field = Node:extend()
 layout.Field = Field
@@ -397,12 +401,28 @@ function Field:new(options)
   self.description = options.description and Text { text = options.description, role = "description" }
   self.control = options.control
   self.stacked = options.stacked
+  self.error_text = Text { role = "description" }
+end
+
+-- The control's error message, or nil.
+local function error_message(self)
+  local control = self.control
+  local message = control and control.visible and control.error
+  if type(message) == "string" and message ~= "" then
+    self.error_text:set_text(message)
+    return message
+  end
 end
 
 local function text_height(self, w)
   local h = self.title:height(w)
   if self.description then h = h + ui.metrics().text_gap + self.description:height(w) end
+  if not self.stacked and error_message(self) then h = h + ui.metrics().text_gap + self.error_text:height(w) end
   return h
+end
+
+local function stacked_error_height(self, w)
+  return self.stacked and error_message(self) and px(6) + self.error_text:height(w) or 0
 end
 
 local function control_width(self, w)
@@ -420,7 +440,7 @@ end
 function Field:content_height(w)
   local control = self.control and self.control.visible and self.control
   if not control then return text_height(self, w) end
-  if self.stacked then return text_height(self, w) + px(8) + control:height(w) end
+  if self.stacked then return text_height(self, w) + px(8) + control:height(w) + stacked_error_height(self, w) end
   local cw = control_width(self, w)
   return math.max(text_height(self, w - cw - px(24)), control:height(cw))
 end
@@ -434,13 +454,22 @@ function Field:place(x, y, w, h)
   local ty = (control and not self.stacked) and y + math.floor((h - th) / 2) or y
   local title_h = self.title:height(tw)
   self.title:place(x, ty, tw, title_h)
+  local gap = ui.metrics().text_gap
+  local below = ty + title_h
   if self.description then
-    local gap = ui.metrics().text_gap
-    self.description:place(x, ty + title_h + gap, tw, self.description:height(tw))
+    local dh = self.description:height(tw)
+    self.description:place(x, below + gap, tw, dh)
+    below = below + gap + dh
+  end
+  self.shows_error = error_message(self) ~= nil
+  if self.shows_error and not self.stacked then
+    self.error_text:place(x, below + gap, tw, self.error_text:height(tw))
   end
   if control then
     if self.stacked then
-      control:place(x, y + th + px(8), w, control:height(w))
+      local ch = control:height(w)
+      control:place(x, y + th + px(8), w, ch)
+      if self.shows_error then self.error_text:place(x, y + th + px(8) + ch + px(6), w, self.error_text:height(w)) end
     else
       local cw = control_width(self, w)
       local ch = control:height(cw)
@@ -452,6 +481,10 @@ end
 function Field:draw_node(dialog)
   self.title:draw_node(dialog)
   if self.description then self.description:draw_node(dialog) end
+  if self.shows_error then
+    self.error_text.color = style.dialog_danger
+    self.error_text:draw_node(dialog)
+  end
   if self.control and self.control.visible then self.control:draw_node(dialog) end
 end
 

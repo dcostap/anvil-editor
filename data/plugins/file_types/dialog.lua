@@ -7,8 +7,10 @@ local common = require "core.common"
 local style = require "core.style"
 local file_icons = require "core.file_icons"
 local ui = require "core.ui"
+local layout = require "core.ui.layout"
 local Dialog = require("core.ui.dialog").Dialog
 local Button = require "core.ui.button"
+local Checkbox = require "core.ui.checkbox"
 local List = require "core.ui.list"
 local file_types = require "plugins.file_types"
 
@@ -23,20 +25,23 @@ function FileTypesDialog:new()
   FileTypesDialog.super.new(self, { title = "File Types", width = 520 })
   -- How far each type's check box shows its check, by type name. The check fades in and out.
   self.check_amounts = {}
-  self.list = self:add(List({
+  self.list = List({
     row_height = ui.metrics().control_h + math.floor(4 * SCALE),
+    max_rows = VISIBLE_ROWS,
     click_activates = true,
     draw_row = function(...) self:draw_row(...) end,
     on_activate = function(row) self:toggle(row) end,
-  }))
-  self.all_button = self:add(Button({
+  })
+  self.all_button = Button({
     label = "Select All",
     on_click = function() self:set_all(not self:all_checked()) end,
-  }))
-  self.default_button = self:add(Button({
+  })
+  self.default_button = Button({
     label = "Set as Default", icon = ui.icons.open_in_new, kind = "primary",
     on_click = function() self:set_default() end,
-  }))
+  })
+  self.body = layout.Column { self.list }
+  self.footer = layout.Row { justify = "between", self.all_button, self.default_button }
   self:refresh()
 end
 
@@ -89,23 +94,6 @@ function FileTypesDialog:on_modal_key_pressed(key, event)
 end
 
 ------------------------------------------------------------------------------------------------------------------
--- Layout
-
-function FileTypesDialog:layout_content(x, y, w, max_h)
-  local um = ui.metrics()
-  local footer_gap = math.floor(20 * SCALE + 0.5)
-  local list = self.list
-  local rows = math.max(1, math.min(#list.rows, VISIBLE_ROWS))
-  local list_h = math.max(list.row_height, math.min(rows * list.row_height, max_h - footer_gap - um.control_h))
-  list:set_rect(x, y, w, list_h)
-  local cy = y + list_h + footer_gap
-  self.all_button:set_rect(x, cy, self.all_button:measure(), um.control_h)
-  local default_w = self.default_button:measure()
-  self.default_button:set_rect(x + w - default_w, cy, default_w, um.control_h)
-  return cy + um.control_h - y
-end
-
-------------------------------------------------------------------------------------------------------------------
 -- Drawing
 
 function FileTypesDialog:draw_row(row, x, y, w, h, state)
@@ -114,7 +102,7 @@ function FileTypesDialog:draw_row(row, x, y, w, h, state)
   local pad = um.pad_x
   local box = math.floor(16 * SCALE + 0.5)
   local amount = ui.approach(self.check_amounts, row.name, row.checked and 1 or 0, 30)
-  ui.draw_check_box(x + pad, y + math.floor((h - box) / 2), box, amount)
+  Checkbox.draw_box(x + pad, y + math.floor((h - box) / 2), box, amount)
   local cx = x + pad + box + um.gap + um.icon_gap
   if row.icon_height ~= h then
     row.icon = file_icons.prepare("file." .. row.extensions[1], h)
@@ -125,16 +113,16 @@ function FileTypesDialog:draw_row(row, x, y, w, h, state)
   row.extensions_label = row.extensions_label or ("." .. table.concat(row.extensions, "  ."))
   local extensions = row.extensions_label
   local extensions_w = font:get_width(extensions)
-  common.draw_text(font, state.selected and style.text or style.card_text, extensions, "right",
+  common.draw_text(font, state.selected and style.dialog_text or style.dialog_text_muted, extensions, "right",
     x + w - pad - extensions_w, y, extensions_w, h)
   local name_w = x + w - pad - extensions_w - um.gap - cx
-  local name_x = common.draw_text(font, style.text, ui.fit_text(font, row.name, name_w), "left", cx, y, 0, h)
+  local name_x = common.draw_text(font, style.dialog_text, ui.fit_text(font, row.name, name_w), "left", cx, y, 0, h)
   -- A type that another anvil.exe opens says so, after its name.
   if row.other then
     local note = "Another Anvil"
     local note_x = name_x + 2 * um.gap
     if note_x + font:get_width(note) <= cx + name_w then
-      common.draw_text(font, style.warn, note, "left", note_x, y, 0, h)
+      common.draw_text(font, ui.tone_color("warning"), note, "left", note_x, y, 0, h)
     end
   end
 end

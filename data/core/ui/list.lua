@@ -1,4 +1,5 @@
 local core = require "core"
+local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
 local ui = require "core.ui"
@@ -10,11 +11,12 @@ local RowHighlight = require "core.row_highlight"
 -- `draw_row(row, x, y, w, h, state)` draws one row. `state` has `selected`, `hovered` and `focused`.
 -- `on_select(row, index)` follows each new selection. `on_activate(row, index)` follows Enter and a double click,
 -- or each click with `click_activates`, as in a list of check boxes.
+-- The list is as tall as its rows, up to `max_rows` (8), and scrolls past that. An empty list shows `empty`.
 local List = Control:extend()
 
 List.focusable = true
 
----@param options { rows: table[]?, row_height: number, draw_row: function, on_select: function?, on_activate: function?, click_activates: boolean? }
+---@param options { rows: table[]?, row_height: number, draw_row: function, on_select: function?, on_activate: function?, click_activates: boolean?, max_rows: integer?, empty: string? }
 function List:new(options)
   List.super.new(self, options)
   self.rows = options.rows or {}
@@ -23,6 +25,8 @@ function List:new(options)
   self.on_select = options.on_select
   self.on_activate = options.on_activate
   self.click_activates = options.click_activates
+  self.max_rows = options.max_rows or 8
+  self.empty = options.empty
   self.selected = #self.rows > 0 and 1 or nil
   self.scroll, self.scroll_to = 0, 0
   self.selection_highlight = RowHighlight(RowHighlight.selection)
@@ -38,9 +42,9 @@ function List:set_rows(rows, selected)
   core.redraw = true
 end
 
----The natural size: all rows, up to 8.
+---The natural size: all rows, up to `max_rows`, and at least one row.
 function List:measure()
-  return 0, math.min(#self.rows, 8) * self.row_height
+  return 0, math.max(1, math.min(#self.rows, self.max_rows)) * self.row_height
 end
 
 function List:rows_height()
@@ -157,6 +161,9 @@ function List:draw(focused)
     self.selection_highlight:step()
   end
   local top = y - self.scroll
+  if #self.rows == 0 and self.empty then
+    common.draw_text(ui.role_font("description"), ui.role_color("description"), self.empty, "center", x, y, w, rh)
+  end
   local surfaces = style.dialog_surfaces
   self.hover_highlight:draw(x, top, w, m.control_radius, surfaces.ghost_hover.fill)
   -- The selection is quieter while another control has focus.

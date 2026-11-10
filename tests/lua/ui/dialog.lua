@@ -6,6 +6,7 @@ local keymap = require "core.keymap"
 local panes = require "core.panes"
 local test = require "core.test"
 local dialog = require "core.ui.dialog"
+local layout = require "core.ui.layout"
 local Button = require "core.ui.button"
 local TextField = require "core.ui.text_field"
 
@@ -22,17 +23,12 @@ end
 -- A Dialog with a text field and two buttons.
 local function open_dialog(options)
   options = options or {}
-  local instance = dialog.Dialog({ title = "Test Dialog" })
-  instance.clicks = {}
-  instance.field = instance:add(TextField({ text = options.text or "", on_submit = options.on_submit }))
-  instance.first = instance:add(Button({ label = "First", on_click = function() table.insert(instance.clicks, "first") end }))
-  instance.second = instance:add(Button({ label = "Second", on_click = function() table.insert(instance.clicks, "second") end }))
-  function instance:layout_content(x, y, w)
-    self.field:set_rect(x, y, w, 30)
-    self.first:set_rect(x, y + 40, 100, 30)
-    self.second:set_rect(x + 110, y + 40, 100, 30)
-    return 70
-  end
+  local clicks = {}
+  local field = TextField({ text = options.text or "", on_submit = options.on_submit })
+  local first = Button({ label = "First", on_click = function() table.insert(clicks, "first") end })
+  local second = Button({ label = "Second", on_click = function() table.insert(clicks, "second") end })
+  local instance = dialog.Dialog({ title = "Test Dialog", body = layout.Column { field, layout.Row { first, second } } })
+  instance.clicks, instance.field, instance.first, instance.second = clicks, field, first, second
   instance:open()
   dialog.update()
   return instance
@@ -212,7 +208,6 @@ test.describe("Dialog", function()
 end)
 
 test.describe("Dialog with a layout body", function()
-  local layout = require "core.ui.layout"
   local Checkbox = require "core.ui.checkbox"
   local RadioGroup = require "core.ui.radio_group"
   local Switch = require "core.ui.switch"

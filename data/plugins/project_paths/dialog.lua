@@ -7,6 +7,7 @@ local common = require "core.common"
 local style = require "core.style"
 local project_paths = require "core.project_paths"
 local ui = require "core.ui"
+local layout = require "core.ui.layout"
 local Dialog = require("core.ui.dialog").Dialog
 local Button = require "core.ui.button"
 local List = require "core.ui.list"
@@ -44,41 +45,54 @@ end
 function ProjectPathsDialog:new()
   ProjectPathsDialog.super.new(self, { title = "Project Paths", width = 620 })
   local font = ui.font()
-  self.list = self:add(List({
+  self.list = List({
     row_height = 2 * font:get_height() + math.floor(14 * SCALE),
+    max_rows = VISIBLE_ROWS,
     draw_row = function(...) self:draw_row(...) end,
     on_select = function() self:show_selected() end,
     on_activate = function() self:focus(self.label_field) end,
-  }))
-  self.label_field = self:add(TextField({
+  })
+  self.label_field = TextField({
+    width = 320,
     on_submit = function(text)
       local entry = self:selected_entry()
       if not entry then return false end
       return paths.set_label(entry.id, text)
     end,
-  }))
-  self.role_control = self:add(Segmented({
+  })
+  self.role_control = Segmented({
     on_change = function(role)
       local entry = self:selected_entry()
       return entry ~= nil and paths.set_role(entry.id, role)
     end,
-  }))
-  self.reveal_button = self:add(Button({
-    label = "Show in File Tree", icon = ui.icons.reveal,
+  })
+  self.location_text = layout.Text { wrap = false, cut = "start", align = "right" }
+  self.reveal_button = Button({
+    label = "Show in File Tree", icon = ui.icons.reveal, size = "small",
     on_click = function() self:reveal_selected() end,
-  }))
-  self.remove_button = self:add(Button({
-    label = "Remove", icon = ui.icons.remove, kind = "danger",
+  })
+  self.remove_button = Button({
+    label = "Remove", icon = ui.icons.remove, kind = "danger", size = "small",
     on_click = function() self:remove_selected() end,
-  }))
-  self.add_button = self:add(Button({
+  })
+  self.add_button = Button({
     label = "Add Folder", icon = ui.icons.add,
     on_click = function() command.perform("project_paths:add") end,
-  }))
-  self.done_button = self:add(Button({
-    label = "Done", kind = "primary",
+  })
+  self.done_button = Button({
+    label = "Done", kind = "primary", min_width = 88,
     on_click = function() self:close() end,
-  }))
+  })
+  self.body = layout.Column {
+    self.list,
+    layout.Group {
+      layout.Field { title = "Label", control = self.label_field },
+      layout.Field { title = "Role", control = self.role_control },
+      layout.Field { title = "Location", control = self.location_text },
+      layout.Row { gap = 8, self.reveal_button, self.remove_button },
+    },
+  }
+  self.footer = layout.Row { justify = "between", self.add_button, self.done_button }
   self:refresh()
 end
 
@@ -134,6 +148,9 @@ function ProjectPathsDialog:show_selected()
     end
   end
   role.enabled = editable
+  local location = self.location_text
+  location:set_text(entry and (entry.exists == false and "Not found: " or "") .. common.home_encode(entry.path) or "")
+  location.color = entry and entry.exists == false and style.dialog_danger or nil
   self.reveal_button.enabled = entry ~= nil and entry.exists ~= false
   self.remove_button.enabled = editable
   core.redraw = true
@@ -170,64 +187,6 @@ function ProjectPathsDialog:on_update()
 end
 
 ------------------------------------------------------------------------------------------------------------------
--- Layout
-
-local function sizes()
-  local um = ui.metrics()
-  local font = ui.font()
-  local label_w = 0
-  for _, text in ipairs({ "Label", "Role", "Location" }) do label_w = math.max(label_w, font:get_width(text)) end
-  return {
-    control_h = um.control_h, gap = um.gap,
-    section_gap = math.floor(16 * SCALE + 0.5), row_gap = math.floor(10 * SCALE + 0.5),
-    label_w = math.floor(label_w + 20 * SCALE), line_h = font:get_height(),
-    footer_gap = math.floor(20 * SCALE + 0.5),
-  }
-end
-
-function ProjectPathsDialog:layout_content(x, y, w, max_h)
-  local s = sizes()
-  local list = self.list
-  local fixed_h = s.section_gap * 2 + s.control_h * 4 + s.row_gap * 3 + s.footer_gap
-    + (self.label_field.error and s.line_h + s.row_gap or 0)
-  local rows = math.max(1, math.min(#list.rows, VISIBLE_ROWS))
-  local list_h = math.max(list.row_height, math.min(rows * list.row_height, max_h - fixed_h))
-  list:set_rect(x, y, w, list_h)
-  local cy = y + list_h + s.section_gap
-  self.divider_y = cy
-  cy = cy + s.section_gap
-  local fx, fw = x + s.label_w, w - s.label_w
-  self.field_rows = self.field_rows or {}
-  local rows_y = self.field_rows
-  rows_y.label = cy
-  self.label_field:set_rect(fx, cy, fw, s.control_h)
-  cy = cy + s.control_h + s.row_gap
-  if self.label_field.error then
-    rows_y.error = cy
-    cy = cy + s.line_h + s.row_gap
-  end
-  rows_y.role = cy
-  local role_w = self.role_control:measure()
-  self.role_control:set_rect(fx, cy, math.min(fw, math.max(role_w, math.floor(220 * SCALE))), s.control_h)
-  cy = cy + s.control_h + s.row_gap
-  rows_y.location = cy
-  cy = cy + s.control_h + s.row_gap
-  local bx = fx
-  for _, button in ipairs({ self.reveal_button, self.remove_button }) do
-    local bw = button:measure()
-    button:set_rect(bx, cy, bw, s.control_h)
-    bx = bx + bw + s.gap
-  end
-  cy = cy + s.control_h + s.footer_gap
-  local add_w = self.add_button:measure()
-  self.add_button:set_rect(x, cy, add_w, s.control_h)
-  local done_w = math.max(self.done_button:measure(), math.floor(88 * SCALE))
-  self.done_button:set_rect(x + w - done_w, cy, done_w, s.control_h)
-  self.content_x, self.content_w = x, w
-  return cy + s.control_h - y
-end
-
-------------------------------------------------------------------------------------------------------------------
 -- Drawing
 
 function ProjectPathsDialog:draw_row(entry, x, y, w, h, state)
@@ -238,45 +197,20 @@ function ProjectPathsDialog:draw_row(entry, x, y, w, h, state)
   local top = y + math.floor((h - 2 * line_h) / 2)
   local icon_w = math.floor(28 * SCALE)
   local icon = entry.exists == false and ui.icons.warning or ROLE_ICONS[entry.role] or ui.icons.folder
-  local icon_color = entry.exists == false and style.error or role_color(entry.role)
+  local icon_color = entry.exists == false and style.dialog_danger or role_color(entry.role)
   common.draw_text(icon_font, icon_color, icon, "center", x + pad, y, icon_w, h)
   local tx = x + pad + icon_w + um.icon_gap
   local role = paths.role_label(entry.role)
   local role_w = font:get_width(role)
   local text_w = w - (tx - x) - pad
   local label_w = text_w - role_w - um.gap
-  renderer.draw_text(font, ui.fit_text(font, entry.label or "", label_w), tx, top, style.text)
-  renderer.draw_text(font, role, x + w - pad - role_w, top, state.selected and style.text or style.card_text)
+  renderer.draw_text(font, ui.fit_text(font, entry.label or "", label_w), tx, top, style.dialog_text)
+  renderer.draw_text(font, role, x + w - pad - role_w, top,
+    state.selected and style.dialog_text or style.dialog_text_muted)
   local path = shown_path(entry.path)
   if entry.exists == false then path = "Not found: " .. path end
   renderer.draw_text(font, ui.fit_text(font, path, text_w, true), tx, top + line_h,
-    entry.exists == false and style.error or style.card_text)
-end
-
-function ProjectPathsDialog:draw_content()
-  local s = sizes()
-  local font = ui.font()
-  local x, w = self.content_x, self.content_w
-  renderer.draw_rect(x, self.divider_y, w, ui.metrics().border, style.card_border)
-  local rows = self.field_rows
-  local function caption(text, row_y)
-    common.draw_text(font, style.card_text, text, "left", x, row_y, s.label_w, s.control_h)
-  end
-  caption("Label", rows.label)
-  caption("Role", rows.role)
-  caption("Location", rows.location)
-  if rows.error and self.label_field.error then
-    renderer.draw_text(font, self.label_field.error, x + s.label_w, rows.error, style.error)
-  end
-  local entry = self:selected_entry()
-  if entry then
-    local fx, fw = x + s.label_w, w - s.label_w
-    local text = entry.exists == false and "Not found: " .. common.home_encode(entry.path)
-      or common.home_encode(entry.path)
-    common.draw_text(font, entry.exists == false and style.error or style.text, ui.fit_text(font, text, fw, true),
-      "left", fx, rows.location, fw, s.control_h)
-  end
-  ProjectPathsDialog.super.draw_content(self)
+    entry.exists == false and style.dialog_danger or style.dialog_text_muted)
 end
 
 ------------------------------------------------------------------------------------------------------------------

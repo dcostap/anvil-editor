@@ -18,8 +18,6 @@ local Button = require "core.ui.button"
 -- A Dialog's `body` is a layout node (core.ui.layout) with its controls, and its optional `footer` is a node
 -- below it, usually a Row of buttons. The body scrolls when the Window is too short for it. Tab visits the
 -- controls in layout order.
--- An older Dialog adds its controls with `add`, places them in `layout_content`, and draws its other content in
--- `draw_content`.
 -- Enter activates the focused control, Escape cancels its edit or closes the Dialog, and a click outside the card
 -- closes it. Keys reach the focused control as the editor's commands, with the user's bindings: Up and Down are
 -- "move_to_previous_line" and "move_to_next_line", for example. A subclass can take them first in `perform`.
@@ -52,28 +50,21 @@ function Dialog:new(options)
   self.description = options.description
   self.width = options.width or 560
   self.body, self.footer = options.body, options.footer
-  self.controls = {}
-  -- The controls that show, from the last layout: the added controls, then the body's and the footer's.
+  -- The controls that show, from the last layout: the close button, then the body's and the footer's.
   self.live = {}
   self.progress = 0
   self.is_open = false
   self.rect = { x = 0, y = 0, w = 0, h = 0 }
   self.title_text = layout.Text { role = "title" }
   self.description_text = layout.Text { role = "description" }
-  self.close_button = self:add(Button({
+  self.close_button = Button({
     icon = ui.icons.close, kind = "ghost", size = "small", focusable = false, tooltip = "Close",
     on_click = function() self:close() end,
-  }))
+  })
 end
 
 function Dialog:get_name() return self.title end
 function Dialog:supports_text_input() return true end
-
----Add a control. Tab visits the controls in the order they were added.
-function Dialog:add(control)
-  self.controls[#self.controls + 1] = control
-  return control
-end
 
 ---Replace the body.
 function Dialog:set_body(body)
@@ -371,22 +362,6 @@ end
 ------------------------------------------------------------------------------------------------------------------
 -- Layout and drawing
 
----Place the content's controls in the column at (x, y) with width `w`, and return the content's height.
----`max_h` is the most height that the card has room for. The default content is empty.
-function Dialog:layout_content(x, y, w, max_h) return 0 end
-
----Draw the content other than its controls, then the controls. The default draws the added controls, the
----body and the footer.
-function Dialog:draw_content()
-  for _, control in ipairs(self.controls) do
-    if control ~= self.close_button and control.visible then
-      control:draw(self.is_open and control == self.focused)
-    end
-  end
-  if self.body_scroll then self.body_scroll:draw_node(self) end
-  if self.footer and self.footer.visible then self.footer:draw_node(self) end
-end
-
 ---Called each frame while the Dialog is open, before its layout.
 function Dialog:on_update() end
 
@@ -419,12 +394,7 @@ function Dialog:layout()
   elseif not (self.body_scroll and self.body_scroll:child() == body) then
     self.body_scroll = layout.Scroll { body }
   end
-  local content_h
-  if body then
-    content_h = math.min(self.body_scroll:height(inner_w), available_h - fixed_h)
-  else
-    content_h = self:layout_content(0, 0, inner_w, available_h - fixed_h)
-  end
+  local content_h = body and math.min(self.body_scroll:height(inner_w), available_h - fixed_h) or 0
   local h = math.min(fixed_h + content_h, available_h)
   local x = math.floor(bx + (bw - w) / 2)
   local y = math.floor(top + math.max(m.side, math.min((bh - top - h) / 2, m.top)))
@@ -441,15 +411,11 @@ function Dialog:layout()
   local cy = hy + header_h + m.header_gap
   local live = self.live
   for i = #live, 1, -1 do live[i] = nil end
-  for _, control in ipairs(self.controls) do
-    if control.visible then live[#live + 1] = control end
-  end
+  live[1] = self.close_button
   if body then
     ui.layout_focus, ui.layout_clip = self.focused, nil
     self.body_scroll:place(hx, cy, inner_w, content_h)
     self.body_scroll:collect(live)
-  else
-    self:layout_content(hx, cy, inner_w, available_h - fixed_h)
   end
   if footer then
     ui.layout_focus, ui.layout_clip = nil, nil
@@ -543,7 +509,8 @@ function Dialog:draw_dialog()
   self.title_text:draw_node(self)
   if self.description then self.description_text:draw_node(self) end
   self.close_button:draw(false)
-  self:draw_content()
+  if self.body_scroll then self.body_scroll:draw_node(self) end
+  if self.footer and self.footer.visible then self.footer:draw_node(self) end
   core.pop_clip_rect()
   if transformed then renderer.pop_transform() end
   if self.is_open then

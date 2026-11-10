@@ -94,6 +94,23 @@ test.describe("Dialog layout", function()
     test.equal(cards:index_at(first.x + first.w + px(20), first.y + 4), 2)
   end)
 
+  test.it("shows a field's refused text below it until the next edit", function()
+    local TextField = require "core.ui.text_field"
+    for _, stacked in ipairs { false, true } do
+      local field = TextField { on_submit = function() return false, "Type a host." end }
+      local row = layout.Field { title = "Host", stacked = stacked, control = field }
+      local plain = row:height(px(400))
+      field:on_text("a")
+      field:submit()
+      test.ok(row:height(px(400)) > plain, "a refused text adds a line")
+      place(row, 400)
+      test.equal(row.error_text.text, "Type a host.")
+      test.ok(row.error_text.y >= (stacked and field.y + field.h or row.title.y + row.title.h))
+      field:on_text("x")
+      test.equal(row:height(px(400)), plain, "an edit clears it")
+    end
+  end)
+
   test.it("sizes a long list to the height of its measure", function()
     local rows = {}
     for i = 1, 20 do rows[i] = { name = tostring(i) } end

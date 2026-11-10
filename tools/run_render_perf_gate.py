@@ -146,11 +146,12 @@ SCENARIOS["tabular-data-preview"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["sql-results"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["databases-dialog-empty"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["databases-dialog-windows"] = dict(SCENARIOS["image-viewer"])
+SCENARIOS["databases-dialog-light"] = dict(SCENARIOS["image-viewer"], theme="light")
 SCENARIOS["file-types-dialog"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["machines-dialog"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["machines-dialog-others"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["update-dialog"] = dict(SCENARIOS["image-viewer"])
-# The UI Gallery's pages. Buttons and Choices also show in the other themes.
+# The UI Gallery's pages. Some pages also show in the other themes.
 for _page in ("buttons", "inputs", "choices", "pickers", "lists", "status", "layout", "look"):
     SCENARIOS["ui-gallery-" + _page] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["ui-gallery-layout-end"] = dict(SCENARIOS["image-viewer"])

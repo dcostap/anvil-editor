@@ -8,11 +8,13 @@ local common = require "core.common"
 local json = require "core.json"
 local style = require "core.style"
 local ui = require "core.ui"
+local layout = require "core.ui.layout"
 local Dialog = require("core.ui.dialog").Dialog
 local Button = require "core.ui.button"
 local List = require "core.ui.list"
 local Segmented = require "core.ui.segmented"
 local TextField = require "core.ui.text_field"
+local StatusDot = require "core.ui.status_dot"
 local MachineClient = require "core.machine_client"
 local access = require "core.machine_access"
 
@@ -22,6 +24,29 @@ function MachineDialog:__tostring() return "MachineDialog" end
 
 -- The rows that each list shows before it scrolls.
 local VISIBLE_ROWS = 4
+
+-- The pages of the Dialog, one at a time. The node is as tall as its tallest page, so the card does not move when
+-- the page changes.
+local Pages = layout.Node:extend()
+
+function Pages:content_width()
+  local widest = 0
+  for _, page in ipairs(self.children) do widest = math.max(widest, page:width()) end
+  return widest
+end
+
+function Pages:content_height(w)
+  local tallest = 0
+  for _, page in ipairs(self.children) do tallest = math.max(tallest, page:height(w)) end
+  return tallest
+end
+
+function Pages:place(x, y, w, h)
+  Pages.super.place(self, x, y, w, h)
+  for _, page in ipairs(self.children) do
+    if page.visible then page:place(x, y, w, page:height(w)) end
+  end
+end
 -- The port of a Machine address without one. The Machine server uses it unless it starts with `--port`.
 local DEFAULT_PORT = 7690
 -- How often the open Dialog asks this PC's server for its devices, in seconds.
@@ -58,54 +83,95 @@ end
 function MachineDialog:new()
   MachineDialog.super.new(self, { title = "Machines", width = 600 })
   self.page = "this"
-  self.page_control = self:add(Segmented({
+  self.page_control = Segmented({
     options = { { value = "this", label = "This PC" }, { value = "others", label = "Other Machines" } },
     value = "this",
     on_change = function(page)
       self:show_page(page)
       return true
     end,
-  }))
-  local row_h = ui.font():get_height() + math.floor(14 * SCALE)
+  })
+  local row_h = ui.metrics().control_h
 
   -- This PC
-  self.access_button = self:add(Button({ label = "Share on Tailnet", on_click = function() self:toggle_access() end }))
-  self.level_control = self:add(Segmented({
+  self.access_button = Button({ label = "Share on Tailnet", size = "small",
+    on_click = function() self:toggle_access() end })
+  self.level_control = Segmented({
     options = { { value = "full", label = LEVELS.full }, { value = "view", label = LEVELS.view } },
     value = "full",
-  }))
-  self.code_button = self:add(Button({ label = "Make Code", on_click = function() self:make_code() end }))
-  self.device_list = self:add(List({
+  })
+  self.code_button = Button({ label = "Make Code", on_click = function() self:make_code() end })
+  self.device_list = List({
     row_height = row_h,
+    max_rows = VISIBLE_ROWS,
+    empty = "No paired devices",
     draw_row = function(...) self:draw_device(...) end,
     on_select = function() self:update_buttons() end,
-  }))
-  self.revoke_button = self:add(Button({
-    label = "Revoke", icon = ui.icons.remove, kind = "danger",
+  })
+  self.revoke_button = Button({
+    label = "Revoke", icon = ui.icons.remove, kind = "danger", size = "small",
     on_click = function() self:revoke() end,
-  }))
+  })
 
   -- Other Machines
-  self.machine_list = self:add(List({
+  self.machine_list = List({
     row_height = row_h,
+    max_rows = VISIBLE_ROWS,
+    empty = "No paired Machines",
     draw_row = function(...) self:draw_machine(...) end,
     on_select = function() self:update_buttons() end,
     on_activate = function() self:open_project() end,
-  }))
-  self.open_button = self:add(Button({
-    label = "Open Project", icon = ui.icons.open_in_new,
+  })
+  self.open_button = Button({
+    label = "Open Project", icon = ui.icons.open_in_new, size = "small",
     on_click = function() self:open_project() end,
-  }))
-  self.forget_button = self:add(Button({
-    label = "Forget", icon = ui.icons.remove, kind = "danger",
+  })
+  self.forget_button = Button({
+    label = "Forget", icon = ui.icons.remove, kind = "danger", size = "small",
     on_click = function() self:forget() end,
-  }))
-  self.address_field = self:add(TextField({
-    on_change = function() self:update_buttons() end }))
-  self.code_field = self:add(TextField({ on_change = function() self:update_buttons() end }))
-  self.pair_button = self:add(Button({ label = "Pair", on_click = function() self:pair() end }))
+  })
+  self.address_field = TextField({ width = 280, placeholder = "host or host:port",
+    on_change = function() self:update_buttons() end })
+  self.code_field = TextField({ width = 140, on_change = function() self:update_buttons() end })
+  self.pair_button = Button({ label = "Pair", on_click = function() self:pair() end })
 
-  self.done_button = self:add(Button({ label = "Done", kind = "primary", on_click = function() self:close() end }))
+  self.done_button = Button({ label = "Done", kind = "primary", min_width = 88, on_click = function() self:close() end })
+
+  self.access_row = layout.Field { title = "Access", description = "", control = self.access_button }
+  self.code_text = layout.Text { role = "title", wrap = false }
+  self.code_timer = layout.Text { role = "meta", wrap = false }
+  self.code_row = layout.Row { self.code_text, layout.Spacer { grow = 1 }, self.code_timer }
+  self.pair_status = layout.Text {}
+  self.this_page = layout.Column {
+    layout.Group {
+      self.access_row,
+      layout.Field { title = "Pairing", control = layout.Row { gap = 8, self.level_control, self.code_button } },
+      self.code_row,
+    },
+    layout.Group {
+      title = "Devices",
+      self.device_list,
+      layout.Row { justify = "end", self.revoke_button },
+    },
+  }
+  self.others_page = layout.Column {
+    layout.Group {
+      title = "Paired Machines",
+      self.machine_list,
+      layout.Row { gap = 8, justify = "end", self.open_button, self.forget_button },
+    },
+    layout.Group {
+      title = "Pair a Machine",
+      layout.Field { title = "Address", control = self.address_field },
+      layout.Field { title = "Code", control = layout.Row { gap = 8, self.code_field, self.pair_button } },
+      self.pair_status,
+    },
+  }
+  self.body = layout.Column {
+    layout.Row { self.page_control },
+    Pages { self.this_page, self.others_page },
+  }
+  self.footer = layout.Row { justify = "end", self.done_button }
 
   self.owner = MachineClient.new(server_file(), function()
     self:update_buttons()
@@ -135,14 +201,7 @@ function MachineDialog:show_page(page)
   self.page = page
   self.page_control:set_value(page)
   local this = page == "this"
-  for _, control in ipairs({ self.access_button, self.level_control, self.code_button, self.device_list,
-    self.revoke_button }) do
-    control.visible = this
-  end
-  for _, control in ipairs({ self.machine_list, self.open_button, self.forget_button, self.address_field,
-    self.code_field, self.pair_button }) do
-    control.visible = not this
-  end
+  self.this_page.visible, self.others_page.visible = this, not this
   if this then self:refresh_devices() end
   self:update_buttons()
 end
@@ -153,7 +212,7 @@ function MachineDialog:update_buttons()
   self.level_control.enabled = ready
   self.revoke_button.enabled = ready and self.device_list:selected_row() ~= nil
   local state = self.access and self.access.state
-  self.access_button.visible = self.page == "this" and (state == "off" or state == "on" or state == "error")
+  self.access_button.visible = state == "off" or state == "on" or state == "error"
   self.access_button.enabled = not self.changing_access
   self.access_button.label = state == "on" and "Stop Sharing" or "Share on Tailnet"
   local machine = self.machine_list:selected_row()
@@ -348,184 +407,84 @@ function MachineDialog:on_close()
 end
 
 ------------------------------------------------------------------------------------------------------------------
--- Layout
-
-local CAPTIONS = { "Access", "Pairing", "Devices", "Machines", "Address", "Code" }
-
-local function sizes()
-  local um = ui.metrics()
-  local font = ui.font()
-  local label_w = 0
-  for _, text in ipairs(CAPTIONS) do label_w = math.max(label_w, font:get_width(text)) end
-  return {
-    control_h = um.control_h, gap = um.gap,
-    section_gap = math.floor(16 * SCALE + 0.5), row_gap = math.floor(10 * SCALE + 0.5),
-    label_w = math.floor(label_w + 20 * SCALE), line_h = font:get_height(),
-    footer_gap = math.floor(20 * SCALE + 0.5),
-  }
-end
-
--- Places a row of buttons from `x` and returns the x after them.
-local function place_buttons(buttons, x, y, s)
-  for _, button in ipairs(buttons) do
-    local bw = button:measure()
-    button:set_rect(x, y, bw, s.control_h)
-    x = x + bw + s.gap
-  end
-  return x
-end
-
-function MachineDialog:layout_content(x, y, w, max_h)
-  local s = sizes()
-  local fx, fw = x + s.label_w, w - s.label_w
-  self.rows = self.rows or {}
-  local rows = self.rows
-  self.page_control:set_rect(x, y, self.page_control:measure(), s.control_h)
-  local top = y + s.control_h + s.section_gap
-  local fixed_h = top - y + s.control_h * 4 + s.row_gap * 3 + s.section_gap * 2 + s.footer_gap + s.line_h
-  local list_h = math.max(self.device_list.row_height,
-    math.min(VISIBLE_ROWS * self.device_list.row_height, max_h - fixed_h))
-
-  -- This PC
-  local cy = top
-  rows.access = cy
-  local access_w = self.access_button:measure()
-  self.access_button:set_rect(x + w - access_w, cy, access_w, s.control_h)
-  cy = cy + s.control_h + s.row_gap
-  rows.pairing = cy
-  local level_w = self.level_control:measure()
-  self.level_control:set_rect(fx, cy, level_w, s.control_h)
-  rows.code_x = place_buttons({ self.code_button }, fx + level_w + s.gap, cy, s)
-  cy = cy + s.control_h + s.section_gap
-  rows.this_divider = cy
-  cy = cy + s.section_gap
-  rows.devices = cy
-  self.device_list:set_rect(fx, cy, fw, list_h)
-  cy = cy + list_h + s.row_gap
-  place_buttons({ self.revoke_button }, fx, cy, s)
-  local this_bottom = cy + s.control_h
-
-  -- Other Machines
-  cy = top
-  rows.machines = cy
-  self.machine_list:set_rect(fx, cy, fw, list_h)
-  cy = cy + list_h + s.row_gap
-  place_buttons({ self.open_button, self.forget_button }, fx, cy, s)
-  cy = cy + s.control_h + s.section_gap
-  rows.others_divider = cy
-  cy = cy + s.section_gap
-  rows.address = cy
-  self.address_field:set_rect(fx, cy, fw, s.control_h)
-  cy = cy + s.control_h + s.row_gap
-  rows.code = cy
-  local code_w = math.floor(140 * SCALE)
-  self.code_field:set_rect(fx, cy, code_w, s.control_h)
-  place_buttons({ self.pair_button }, fx + code_w + s.gap, cy, s)
-  cy = cy + s.control_h + s.row_gap
-  rows.pair_status = cy
-  local others_bottom = cy + s.line_h
-
-  -- Both pages have the same height, so the card does not move when the page changes.
-  cy = math.max(this_bottom, others_bottom) + s.footer_gap
-  local done_w = math.max(self.done_button:measure(), math.floor(88 * SCALE))
-  self.done_button:set_rect(x + w - done_w, cy, done_w, s.control_h)
-  self.content_x, self.content_w = x, w
-  return cy + s.control_h - y
-end
-
-------------------------------------------------------------------------------------------------------------------
 -- Drawing
 
-local function draw_row_text(left, right, right_color, x, y, w, h)
-  local font = ui.font()
-  local pad = ui.metrics().pad_x
-  local right_w = right and font:get_width(right) or 0
-  local left_w = w - 2 * pad - (right and right_w + ui.metrics().gap or 0)
-  common.draw_text(font, style.text, ui.fit_text(font, left, left_w), "left", x + pad, y, left_w, h)
-  if right then common.draw_text(font, right_color, right, "right", x + w - pad - right_w, y, right_w, h) end
+-- One dot draws the state of each Machine row.
+local row_dot = StatusDot {}
+
+-- A row's name at the left, and `right_w` pixels kept free at the right.
+local function draw_name(text, right_w, x, y, w, h)
+  local font, m = ui.font(), ui.metrics()
+  local name_w = w - 2 * m.pad_x - right_w - m.gap
+  common.draw_text(font, style.dialog_text, ui.fit_text(font, text, name_w), "left", x + m.pad_x, y, name_w, h)
 end
 
 function MachineDialog:draw_device(device, x, y, w, h)
-  draw_row_text(tostring(device.name or device.id), device.level == "full" and "Full" or "View", style.card_text,
-    x, y, w, h)
+  local font, pad = ui.role_font("description"), ui.metrics().pad_x
+  local level = device.level == "full" and LEVELS.full or LEVELS.view
+  local level_w = font:get_width(level)
+  common.draw_text(font, style.dialog_text_muted, level, "right", x + w - pad - level_w, y, level_w, h)
+  draw_name(tostring(device.name or device.id), level_w, x, y, w, h)
 end
 
 function MachineDialog:draw_machine(record, x, y, w, h)
   local client = self.clients[record.machine]
-  local state, color = "Connecting", style.card_text
   if client and client.state == "ready" then
-    state, color = "Online", style.good
+    row_dot:set("success", "Online")
   elseif client and client.error then
-    state = "Offline"
+    row_dot:set("neutral", "Offline")
+  else
+    row_dot:set("info", "Connecting")
   end
-  draw_row_text(machine_label(record), state, color, x, y, w, h)
+  local dot_w = row_dot:width()
+  row_dot:place(x + w - ui.metrics().pad_x - dot_w, y, dot_w, h)
+  row_dot:draw_node()
+  draw_name(machine_label(record), dot_w, x, y, w, h)
 end
 
 -- The text of the Access row and its color.
 function MachineDialog:access_text()
   local owner = self.owner
   if not (owner and owner.state == "ready") then
-    if owner and owner.error then return owner.error, style.error end
-    return "Connecting to the Machine server", style.card_text
+    if owner and owner.error then return owner.error, style.dialog_danger end
+    return "Connecting to the Machine server", style.dialog_text_muted
   end
-  if self.changing_access then return "Changing Tailscale", style.card_text end
+  if self.changing_access then return "Changing Tailscale", style.dialog_text_muted end
   local status = self.access
-  if not status then return "Checking Tailscale", style.card_text end
-  if status.state == "on" then return status.address or "Shared on the tailnet", style.text end
-  if status.state == "off" then return "Only this PC", style.text end
-  if status.state == "missing" then return "Only this PC. Install Tailscale to reach it from other devices.", style.card_text end
-  if status.state == "disconnected" then return "Only this PC. Tailscale is not connected.", style.card_text end
-  return status.message or "Tailscale failed", style.error
+  if not status then return "Checking Tailscale", style.dialog_text_muted end
+  if status.state == "on" then return status.address or "Shared on the tailnet", style.dialog_text end
+  if status.state == "off" then return "Only this PC", style.dialog_text end
+  if status.state == "missing" then
+    return "Only this PC. Install Tailscale to reach it from other devices.", style.dialog_text_muted
+  end
+  if status.state == "disconnected" then return "Only this PC. Tailscale is not connected.", style.dialog_text_muted end
+  return status.message or "Tailscale failed", style.dialog_danger
 end
 
-function MachineDialog:draw_content()
-  local s = sizes()
-  local font = ui.font()
-  local x, w = self.content_x, self.content_w
-  local fx, fw = x + s.label_w, w - s.label_w
-  local rows = self.rows
-  local function caption(text, row_y)
-    common.draw_text(font, style.card_text, text, "left", x, row_y, s.label_w, s.control_h)
+-- The texts that change without an event: the Access row, the pairing code and its time, and the pairing state.
+function MachineDialog:on_update()
+  local text, color = self:access_text()
+  local access = self.access_row.description
+  access:set_text(text)
+  access.color = color
+  local code = self:active_code()
+  self.code_row.visible = code ~= nil
+  if code and code.error then
+    self.code_text.role = "body"
+    self.code_text:set_text(code.error)
+    self.code_text.color = style.dialog_danger
+    self.code_timer:set_text("")
+  elseif code then
+    local left = math.max(0, math.ceil(code.expires - system.get_time()))
+    self.code_text.role = "title"
+    self.code_text:set_text(code.code:sub(1, 3) .. " " .. code.code:sub(4))
+    self.code_text.color = nil
+    self.code_timer:set_text(string.format("%s · %d:%02d", LEVELS[code.level] or "", math.floor(left / 60), left % 60))
   end
-  local function empty(list, text)
-    if #list.rows == 0 then
-      common.draw_text(font, style.card_text, text, "center", list.x, list.y, list.w, list.h)
-    end
-  end
-  if self.page == "this" then
-    caption("Access", rows.access)
-    local text, color = self:access_text()
-    local text_w = (self.access_button.visible and self.access_button.x - s.gap or x + w) - fx
-    common.draw_text(font, color, ui.fit_text(font, text, text_w), "left", fx, rows.access, text_w, s.control_h)
-    caption("Pairing", rows.pairing)
-    local code = self:active_code()
-    if code and code.error then
-      common.draw_text(font, style.error, ui.fit_text(font, code.error, x + w - rows.code_x), "left", rows.code_x,
-        rows.pairing, x + w - rows.code_x, s.control_h)
-    elseif code then
-      local left = math.max(0, math.ceil(code.expires - system.get_time()))
-      local bold = ui.bold_font()
-      local digits = code.code:sub(1, 3) .. " " .. code.code:sub(4)
-      common.draw_text(bold, style.text, digits, "left", rows.code_x, rows.pairing, bold:get_width(digits), s.control_h)
-      local timer = string.format("%d:%02d", math.floor(left / 60), left % 60)
-      common.draw_text(font, style.card_text, timer, "right", x, rows.pairing, w, s.control_h)
-    end
-    renderer.draw_rect(x, rows.this_divider, w, ui.metrics().border, style.card_border)
-    caption("Devices", rows.devices)
-    empty(self.device_list, "No paired devices")
-  else
-    caption("Machines", rows.machines)
-    empty(self.machine_list, "No paired Machines")
-    renderer.draw_rect(x, rows.others_divider, w, ui.metrics().border, style.card_border)
-    caption("Address", rows.address)
-    caption("Code", rows.code)
-    local status = self.pairing and "Pairing" or self.pair_error
-    if status then
-      renderer.draw_text(font, ui.fit_text(font, status, fw), fx, rows.pair_status,
-        self.pair_error and not self.pairing and style.error or style.card_text)
-    end
-  end
-  MachineDialog.super.draw_content(self)
+  local status = self.pairing and "Pairing" or self.pair_error
+  self.pair_status.visible = status ~= nil
+  self.pair_status:set_text(status or "")
+  self.pair_status.color = self.pair_error and not self.pairing and style.dialog_danger or style.dialog_text_muted
 end
 
 ------------------------------------------------------------------------------------------------------------------

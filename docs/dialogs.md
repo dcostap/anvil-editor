@@ -62,8 +62,9 @@ These are the parts:
 ## Rules
 
 - **Each change applies at once.** There is no Save or Cancel. A Switch saves in `on_change`. A Text Field saves in `on_submit`, which runs on Enter and when the field loses focus. A Done button only closes the Dialog.
-- **Refuse bad input in the control.** `on_submit` returns `false, "message"` to keep the text and show a red rim. `on_change` returns `false` to refuse a choice.
-- **Use layout nodes, not coordinates.** Do not override `layout_content` or `draw_content`. Some older Dialogs still use them. Do not copy those Dialogs.
+- **Refuse bad input in the control.** `on_submit` returns `false, "message"` to keep the text and show a red rim. A `Field` shows the message below the title, or below a stacked control. `on_change` returns `false` to refuse a choice.
+- **Use layout nodes, not coordinates.** Do not set a control's rect or draw over the card. A Dialog draws only its body and footer.
+- **Change the layout with state, not with new nodes.** Build the nodes once. Then change `visible`, `enabled`, `Text:set_text` or `color` in `on_update` or after an event. Hide a whole `Field` when its control does not apply, so its title hides too. `set_body` swaps between whole bodies, such as an Empty State and a form.
 - **Use the theme.** Controls draw with `style.dialog_surfaces` and the `dialog_text*` colors. To draw your own content, use `core.ui.surface`, `ui.role_font(role)` and `ui.role_color(role)`. Do not write colors or font sizes in a Dialog.
 - **Sizes are pixels at scale 1.** Layout options such as `gap`, `width` and `padding` scale with the display and Zoom. In your own drawing code, use `layout.px(n)` or `ui.metrics()`.
 - **Put defaults in the defaults layer.** A first-party setting gets its default in `data/plugins/anvil_defaults.lua`, not in the Dialog.
@@ -144,7 +145,7 @@ Column { height = 240, Text { text = "..." }, layout.Spacer { grow = 1 }, Row { 
 | One of several choices that need a description | `RadioGroup` |
 | One choice of many, such as a database | `Select`. It opens a list below or above it. Typed letters move to an option. |
 | One of 2 to 4 large choices with an icon and a description | `ChoiceCards`. The cards go into more rows in a narrow Dialog. |
-| A list of items with one selected | `List`. You draw each row with `draw_row`. |
+| A list of items with one selected | `List`. You draw each row with `draw_row`. `max_rows` sets how many rows show before it scrolls, and `empty` gives the text of an empty list. |
 | Pages of a large Dialog | `Nav` at the left, with a `Scroll` beside it. The UI Gallery does this. |
 
 Each control takes `enabled` and `visible`. Change them at any time; the next frame shows the change. A disabled control fades and refuses input. A control that is not visible takes no space.

@@ -95,7 +95,7 @@ local function inputs_page()
         stacked = true, control = TextField { text = "correct horse", secret = true },
       },
       Field {
-        title = "Refused text", description = "A refused text has a red rim until the next edit.",
+        title = "Refused text", description = "A refused text keeps a red rim and its message until the next edit.",
         stacked = true, control = refused,
       },
       Field { title = "Disabled", stacked = true, control = TextField { text = "localhost", enabled = false } },
