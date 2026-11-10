@@ -303,7 +303,7 @@ gallery.pages = PAGES
 gallery.Gallery = Gallery
 
 command.add(nil, {
-  ["ui_gallery:open"] = function() gallery.open() end,
+  ["ui_gallery:open"] = command.palette(function() gallery.open() end),
 })
 
 return gallery

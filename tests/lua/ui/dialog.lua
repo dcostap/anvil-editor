@@ -309,6 +309,7 @@ test.describe("Dialog with a layout body", function()
   test.it("shows each UI Gallery page and moves through them from its page list", function()
     open_editor("behind")
     local gallery = require "plugins.ui_gallery"
+    test.equal(require("core.command").get_metadata("ui_gallery:open").palette, true)
     local instance = gallery.open()
     dialog.update()
     test.equal(instance.focused, instance.nav)
