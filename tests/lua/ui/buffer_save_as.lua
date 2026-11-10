@@ -68,15 +68,28 @@ test.describe("Save As command", function()
         end
       end
       if context.original_cwd then pcall(system.chdir, context.original_cwd) end
-      if system.get_file_info(context.temp_root) then
-        local ok, err = common.rm(context.temp_root, true)
-        test.ok(ok, err)
-      end
+      test.ok(test.remove_tree(context.temp_root))
     end
     core.projects = context.original_projects
     core.active_view = context.original_active_view
     core.nag_view = context.original_nag_view
     if context.original_cwd then pcall(system.chdir, context.original_cwd) end
+  end)
+
+  test.it("saves an untitled Buffer to a new filename in an existing folder", function(context)
+    local folder = join_path(context.temp_root, "plans")
+    test.ok(common.mkdirp(folder))
+    local buffer = core.open_buffer()
+    buffer:insert(1, 1, "new content")
+    panes.place(function() return Editor(buffer) end, { placement = "new", focus = true })
+
+    test.ok(command.perform("editor:save_as"))
+    core.global_prompt_bar:set_text(join_path("plans", "CHEATSHEET.md"))
+    core.global_prompt_bar:submit()
+
+    test.equal(read_file(join_path(folder, "CHEATSHEET.md")):gsub("\r\n", "\n"), "new content\n")
+    test.ok(common.path_equals(buffer.abs_filename, join_path(folder, "CHEATSHEET.md")))
+    test.not_ok(buffer:is_dirty())
   end)
 
   test.test("untitled Save As warns before overwriting an existing project file", function(context)

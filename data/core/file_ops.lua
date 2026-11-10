@@ -269,9 +269,13 @@ function file_ops.run(path, fn)
   if fs.on_machine(path) then core.add_thread(fn) else fn() end
 end
 
--- `{type, size, modified}` of the path, or nil when it does not exist.
+-- `{type, size, modified}` of the path, nil when it does not exist, or nil and an error.
 function file_ops.info(path)
-  if not fs.on_machine(path) then return system.get_file_info(path) end
+  if not fs.on_machine(path) then
+    local info, err, code = system.get_file_info(path)
+    if code == "not_found" then return nil end
+    return info, err
+  end
   local err, results = fs.wait(fs.stat, {path})
   if err then return nil, tostring(err.message or err.code) end
   return results[1] or nil

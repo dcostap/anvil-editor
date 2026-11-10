@@ -100,6 +100,23 @@ test.describe("system", function()
     end
   end)
 
+  test.it("distinguishes a missing file from a failed path check", function(context)
+    local missing = context.temp_root .. PATHSEP .. "missing.txt"
+    local info, err, code = system.get_file_info(missing)
+    test.is_nil(info)
+    test.type(err, "string")
+    test.equal(code, "not_found")
+    local file_ops = require "core.file_ops"
+    info, err = file_ops.info(missing)
+    test.is_nil(info)
+    test.is_nil(err)
+    if PLATFORM == "Windows" then
+      info, err = file_ops.info(context.temp_root .. PATHSEP .. "invalid|name")
+      test.is_nil(info)
+      test.type(err, "string")
+    end
+  end)
+
   test.test("provides process, time and environment helpers", function()
     local pid = system.get_process_id()
     test.ok(pid > 0)

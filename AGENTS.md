@@ -741,6 +741,7 @@ A restored File Tree on a Machine waits for the listings of its saved folders, t
 Up Directory and other folder changes stay in the Machine's Project. The folder above it is a folder of this PC. `sync_path` does not resolve a Machine path on this PC.
 Rename (`editor:rename`) moves a Machine file with `file_ops.move`, then saves the Buffer's unsaved text. Delete and New Directory also use `core.file_ops`. New Directory starts a relative name at the Project.
 Save As of a new Buffer checks the target with `file_ops.info`, so it asks before it writes over a Machine file. A File Tree delete that cannot reach the Machine shows an error and keeps the edit.
+`file_ops.info` returns nil without an error for a missing local file. `system.get_file_info` marks this case with `not_found` in its third return value, so other path errors still stop Save As. Run `ui/buffer_save_as.lua` and `runtime/system.lua` after changes.
 `common.path_suggest` lists Machine folders through `common.machine_listing`, which `fs.use_machine` sets. The listings arrive later, so the first suggestions can be empty.
 A Markdown attachment on a Machine uploads the file from this PC into the note's attachment folder. The Obsidian attachment setting comes from the Machine. A file URI link to this PC is refused.
 The link goes at the selection of the paste. An edit, a close or a new note name during the upload inserts no link, and a warning names the uploaded file.

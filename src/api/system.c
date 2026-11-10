@@ -1243,8 +1243,13 @@ static int f_get_file_info(lua_State *L) {
   }
   WIN32_FILE_ATTRIBUTE_DATA data;
   if (!GetFileAttributesExW(wpath, GetFileExInfoStandard, &data)) {
+    DWORD error = GetLastError();
     SDL_free(wpath);
-    lua_pushnil(L); push_win32_error(L, GetLastError());
+    lua_pushnil(L); push_win32_error(L, error);
+    if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
+      lua_pushliteral(L, "not_found");
+      return 3;
+    }
     return 2;
   }
   lua_pushnumber(L, win32_filetime_seconds(data.ftLastWriteTime));
@@ -1290,8 +1295,13 @@ static int f_get_file_info(lua_State *L) {
   bool is_symlink = lstat(path, &link_info) == 0 && S_ISLNK(link_info.st_mode);
   int err = stat(path, &s);
   if (err < 0) {
+    int error = errno;
     lua_pushnil(L);
-    lua_pushstring(L, strerror(errno));
+    lua_pushstring(L, strerror(error));
+    if (error == ENOENT) {
+      lua_pushliteral(L, "not_found");
+      return 3;
+    }
     return 2;
   }
 
