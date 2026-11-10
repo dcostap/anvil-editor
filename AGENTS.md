@@ -887,7 +887,7 @@ Run `ui/autocomplete_pointer.lua`, `ui/autocomplete_layout.lua`, `ui/context_men
 
 ## Dialogs
 
-A Dialog is a modal card over the app, for management tasks that need more than a prompt. `core.ui.dialog` owns it. Only one Dialog is open at a time.
+A Dialog is a modal card over the app, for management tasks that need more than a prompt. `core.ui.dialog` owns it. Only one Dialog is open at a time. Read [Building Dialogs](docs/dialogs.md) before you build or change a Dialog or a `core.ui` control.
 Its controls are in `data/core/ui`: Button, Text Field, Segmented Control, Switch, Checkbox, Radio Group, Nav and List. Use them for new management UIs. Do not use the old `data/widget` library for new UIs.
 A Dialog's `body` and `footer` are layout nodes (`core.ui.layout`): Column, Row, Text, Field, Group, Separator, Spacer and Scroll. Controls are nodes too. Tab follows the layout order. The body scrolls when the Window is too short, and a focused control scrolls into view. Older Dialogs still place their controls in `layout_content`; new Dialogs use a body.
 Row and Column work like CSS flexbox: `gap`, `padding`, `justify` and `align`. Each node and control takes `width`, `height`, min and max limits, and a `grow` weight. A Row shrinks its children down to their `min_width` when they are too wide. The comment at the top of `layout.lua` describes each option. Run `ui/ui_layout.lua` after changes.
