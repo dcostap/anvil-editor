@@ -66,6 +66,7 @@ These are the parts:
 - **Use layout nodes, not coordinates.** Do not set a control's rect or draw over the card. A Dialog draws only its body and footer.
 - **Change the layout with state, not with new nodes.** Build the nodes once. Then change `visible`, `enabled`, `Text:set_text` or `color` in `on_update` or after an event. Hide a whole `Field` when its control does not apply, so its title hides too. `set_body` swaps between whole bodies, such as an Empty State and a form.
 - **Use the theme.** Controls draw with `style.dialog_surfaces` and the `dialog_text*` colors. To draw your own content, use `core.ui.surface`, `ui.role_font(role)` and `ui.role_color(role)`. Do not write colors or font sizes in a Dialog.
+- **Each control that takes a click shows a hover look.** It fades in with `ui.approach` while `self.hovered` is true. A surface fades to its `_hover` surface with `surface.draw_faded`, such as `well` to `well_hover`. A control with parts, such as Segmented, tracks the part under the pointer in `on_mouse_moved`.
 - **Sizes are pixels at scale 1.** Layout options such as `gap`, `width` and `padding` scale with the display and Zoom. In your own drawing code, use `layout.px(n)` or `ui.metrics()`.
 - **Put defaults in the defaults layer.** A first-party setting gets its default in `data/plugins/anvil_defaults.lua`, not in the Dialog.
 - **Log state changes** with `core.log_quiet`.

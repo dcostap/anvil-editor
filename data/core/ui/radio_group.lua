@@ -20,7 +20,7 @@ function RadioGroup:new(options)
   self.options = options.options or {}
   self.value = options.value
   self.on_change = options.on_change
-  self.amounts = {}
+  self.amounts, self.hover_amounts = {}, {}
 end
 
 local function mark_size() return math.floor(16 * SCALE + 0.5) end
@@ -129,17 +129,18 @@ function RadioGroup:draw(focused)
   for i, option in ipairs(self.options) do
     local my = top + math.floor((line_h - size) / 2)
     if focused and i == ring_index then ui.draw_ring(self.x, my, size, size, size / 2) end
-    surface.draw("well", self.x, my, size, size, size / 2)
+    local hovered = self.enabled and self.hovered and self.hover_index == i and enabled(option)
+    local hover = ui.approach(self.hover_amounts, i, hovered and 1 or 0, 30)
+    surface.draw_faded("well", "well_hover", hover, self.x, my, size, size, size / 2)
     local amount = ui.approach(self.amounts, i, i == chosen and 1 or 0, 30)
     if amount > 0 then
       local faded = ui.push_look(self.x, my, size, size, 1, amount)
-      surface.draw("lit", self.x, my, size, size, size / 2)
+      surface.draw_faded("lit", "lit_hover", hover, self.x, my, size, size, size / 2)
       local dot = math.floor(6 * SCALE + 0.5)
       local offset = (size - dot) / 2
       renderer.draw_rounded_rect(self.x + offset, my + offset, dot, dot, dot / 2, ink)
       ui.pop_look(faded)
     end
-    local hovered = self.hovered and self.hover_index == i
     local color = (hovered or i == chosen) and style.dialog_text_strong or style.dialog_text
     if not enabled(option) then color = ui.fade(color, 0.5) end
     common.draw_text(font, color, ui.fit_text(font, option.label, tw), "left", tx, top, tw, line_h)

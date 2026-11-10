@@ -65,12 +65,14 @@ end
 ---Draw a check box in the square at (x, y). Radio buttons and list rows can use it.
 ---@param amount number How far it is on, from 0 to 1.
 ---@param mixed boolean? Show a dash in place of the check.
-function Checkbox.draw_box(x, y, size, amount, mixed)
+---@param hover number? How far it shows its hover look, from 0 to 1.
+function Checkbox.draw_box(x, y, size, amount, mixed, hover)
   local r = math.floor(4 * SCALE + 0.5)
-  surface.draw("well", x, y, size, size, r)
+  hover = hover or 0
+  surface.draw_faded("well", "well_hover", hover, x, y, size, size, r)
   if amount <= 0 then return end
   local pushed = ui.push_look(x, y, size, size, 1, amount)
-  surface.draw("lit", x, y, size, size, r)
+  surface.draw_faded("lit", "lit_hover", hover, x, y, size, size, r)
   local font = style.get_scaled_font(ui.icon_font(), math.floor(size * 0.9))
   local glyph = mixed and ui.icons.minus or ui.icons.check
   common.draw_text(font, surface.get("lit").text, glyph, "center", x, y, size, size)
@@ -86,7 +88,8 @@ function Checkbox:draw(focused)
   local pushed = ui.push_look(self.x, self.y, self.w, self.h, 1, self.enabled and 1 or ui.DISABLED_OPACITY)
   if focused then ui.draw_ring(x, by, box, box, math.floor(4 * SCALE + 0.5)) end
   local amount = ui.approach(self, "on_amount", self.value and 1 or 0, 30)
-  Checkbox.draw_box(x, by, box, amount, self.value == "mixed")
+  local hover = ui.approach(self, "hover_amount", self.enabled and self.hovered and 1 or 0, 30)
+  Checkbox.draw_box(x, by, box, amount, self.value == "mixed", hover)
   if self.label then
     local tx = x + box + gap()
     local tw = self.w - box - gap()

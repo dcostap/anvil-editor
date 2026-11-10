@@ -181,7 +181,8 @@ function TextField:draw(focused)
   local pushed = ui.push_look(x, y, w, h, 1, self.enabled and 1 or ui.DISABLED_OPACITY)
   -- A focused field has a rim in the focus color. A refused text has a rim in the danger color.
   local rim = self.error and style.dialog_danger or (focused and style.dialog_focus_ring) or nil
-  surface.draw("well", x, y, w, h, r, rim)
+  local hover = ui.approach(self, "hover_amount", self.enabled and self.hovered and 1 or 0, 30)
+  surface.draw_faded("well", "well_hover", hover, x, y, w, h, r, rim)
   local input = self.input
   local available = w - 2 * m.pad_x
   local ty = y + math.floor((h - font:get_height()) / 2)

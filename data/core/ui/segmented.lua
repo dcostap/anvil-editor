@@ -1,3 +1,4 @@
+local core = require "core"
 local common = require "core.common"
 local style = require "core.style"
 local ui = require "core.ui"
@@ -5,7 +6,7 @@ local surface = require "core.ui.surface"
 local Control = require "core.ui.control"
 
 -- A row of choices where one is on, such as a role. A click, or the editor's character moves, change it.
--- A highlight slides to the chosen segment. Each option is `{ value = ..., label = "...", enabled = true }`.
+-- A highlight slides to the chosen segment. Another segment under the pointer lights up. Each option is `{ value = ..., label = "...", enabled = true }`.
 -- `on_change(value)` returns false to refuse the change.
 local Segmented = Control:extend()
 
@@ -16,6 +17,8 @@ Segmented.cursor = "hand"
 function Segmented:new(options)
   Segmented.super.new(self, options)
   self.on_change = options.on_change
+  -- The hover amount of each segment, from 0 to 1.
+  self.amounts, self.text_color = {}, {}
   self:set_options(options.options or {}, options.value)
 end
 
@@ -85,14 +88,25 @@ function Segmented:perform(name)
   return false
 end
 
+local function index_at(self, x, y)
+  for i in ipairs(self.options) do
+    local sx, sy, sw, sh = segment_rect(self, i)
+    if x >= sx and x < sx + sw and y >= sy and y < sy + sh then return i end
+  end
+end
+
 function Segmented:on_mouse_pressed(x, y)
   if not self.enabled then return false end
-  for i, option in ipairs(self.options) do
-    local sx, sy, sw, sh = segment_rect(self, i)
-    if x >= sx and x < sx + sw and y >= sy and y < sy + sh then
-      self:choose(option.value)
-      break
-    end
+  local index = index_at(self, x, y)
+  if index then self:choose(self.options[index].value) end
+  return true
+end
+
+function Segmented:on_mouse_moved(x, y)
+  local index = index_at(self, x, y)
+  if index ~= self.hover_index then
+    self.hover_index = index
+    core.redraw = true
   end
   return true
 end
@@ -114,7 +128,15 @@ function Segmented:draw(focused)
   local font = ui.font()
   for i, option in ipairs(self.options) do
     local sx, sy, sw, sh = segment_rect(self, i)
-    local color = i == index and style.dialog_text_strong or style.dialog_text_muted
+    local lit = self.enabled and self.hovered and self.hover_index == i and i ~= index and enabled(option)
+    local hover = ui.approach(self.amounts, i, lit and 1 or 0, 30)
+    if hover > 0 then
+      local faded = ui.push_look(sx, sy, sw, sh, 1, hover)
+      surface.draw("ghost_hover", sx, sy, sw, sh, r - 2 * m.border)
+      ui.pop_look(faded)
+    end
+    local color = i == index and style.dialog_text_strong
+      or ui.mix(style.dialog_text_muted, style.dialog_text_strong, hover, self.text_color)
     if not enabled(option) then color = ui.fade(color, 0.5) end
     common.draw_text(font, color, option.label, "center", sx, sy, sw, sh)
   end

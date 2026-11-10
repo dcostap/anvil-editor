@@ -27,4 +27,14 @@ function surface.draw(s, x, y, w, h, radius, rim)
   if s.fill then renderer.draw_rounded_rect(x, y, w, h, radius, s.fill, s.fill_bottom or s.fill) end
 end
 
+---Draw `base`, then `over` on it at `amount` opacity, such as a well that fades to its hover look.
+function surface.draw_faded(base, over, amount, x, y, w, h, radius, rim)
+  surface.draw(base, x, y, w, h, radius, rim)
+  if amount <= 0 then return end
+  local pushed = amount < 0.9995
+  if pushed then renderer.push_transform(x + w / 2, y + h / 2, 1, amount) end
+  surface.draw(over, x, y, w, h, radius, rim)
+  if pushed then renderer.pop_transform() end
+end
+
 return surface

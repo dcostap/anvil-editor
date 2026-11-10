@@ -46,12 +46,13 @@ function Switch:draw(focused)
   local x, y, w, h = self.x, self.y, self.w, self.h
   local r = h / 2
   local amount = ui.approach(self, "on_amount", self.value and 1 or 0, 30)
+  local hover = ui.approach(self, "hover_amount", self.enabled and self.hovered and 1 or 0, 30)
   local pushed = ui.push_look(x, y, w, h, 1, self.enabled and 1 or ui.DISABLED_OPACITY)
   if focused then ui.draw_ring(x, y, w, h, r) end
-  surface.draw("switch_off", x, y, w, h, r)
+  surface.draw_faded("switch_off", "switch_off_hover", hover, x, y, w, h, r)
   if amount > 0 then
     local faded = ui.push_look(x, y, w, h, 1, amount)
-    surface.draw("switch_on", x, y, w, h, r)
+    surface.draw_faded("switch_on", "switch_on_hover", hover, x, y, w, h, r)
     ui.pop_look(faded)
   end
   local inset = math.floor(2 * SCALE + 0.5)
