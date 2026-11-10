@@ -147,6 +147,8 @@ function SidebarView:metrics()
   m.rail_x, m.rail = m.tab_left + 3 * SCALE, math.max(2, math.floor(2 * SCALE))
   -- Pane numbers end here, left of their Tab's row and its Pane Group's rail.
   m.number_gutter = m.tab_left - 3 * SCALE
+  -- The space between a Pane Group and the other rows of its Project. A line divides it.
+  m.group_gap = 11 * SCALE
   self.metrics_cache = m
   return m
 end
@@ -888,7 +890,7 @@ function SidebarView:rebuild_rows()
       -- A Pane Group with several Panes shows as one container around its Tabs. A collapsed Project shows single
       -- Tabs, so it has no containers.
       local bracket = sizes[group] > 1 and not only_attention and {first = (panes[index - 1] or {}).group ~= group,
-        last = (panes[index + 1] or {}).group ~= group, visible = group == panes.visible} or nil
+        last = (panes[index + 1] or {}).group ~= group} or nil
       local row = {kind = "tab", project = project, tab = item, selected = index == active, bracket = bracket,
         id_key = "tab:" .. project.path .. ":" .. tostring(item.id)}
       if item.snoozed then
@@ -1013,8 +1015,17 @@ function SidebarView:rebuild_rows()
   end
   local main_y, bottom_y = 0, 0
   local lift = self.lift
+  local previous
   for _, row in ipairs(rows) do
     row.lifted = lift and row.area == "main" and row.project and row.project.path == lift.path or nil
+    -- A Pane Group has space above and below it, but not under its Project's row.
+    local starts, ends = row.bracket and row.bracket.first, previous and previous.bracket and previous.bracket.last
+    if (starts or ends) and previous and previous.area == row.area and previous.project == row.project
+      and previous.kind ~= "project" and row.kind ~= "project" then
+      row.spaced, previous.spaced_after = starts or nil, ends or nil
+      if row.area == "main" then main_y = main_y + m.group_gap else bottom_y = bottom_y + m.group_gap end
+    end
+    previous = row
     if row.area == "main" then
       row.gap = row.kind == "project" and main_y > 0 or nil
       if row.gap then main_y = main_y + m.project_gap end
@@ -2624,8 +2635,8 @@ function SidebarView:draw_tab(row, x, y, width, now)
   end
 end
 
--- Pane Groups with several Panes: a rail beside their Tabs, in the accent colour for the visible group. A drop line
--- inside a group tints its Tabs: the new Pane joins that group.
+-- Pane Groups with several Panes: a rail beside their Tabs, and a line in the space above and below them. All groups
+-- look the same. A drop line inside a group tints its Tabs: the new Pane joins that group.
 function SidebarView:draw_containers(area, width, lifted)
   local m = self:metrics()
   local origin = self:shown_origin(area)
@@ -2647,8 +2658,13 @@ function SidebarView:draw_containers(area, width, lifted)
             fade(style.drop_target_background, alpha * mark.alpha))
         end
         if bottom - top > 12 * SCALE then
-          renderer.draw_rect(m.rail_x, top + 6 * SCALE, m.rail, bottom - top - 12 * SCALE,
-            fade(row.bracket.visible and style.titlebar_group_indicator or style.divider, alpha))
+          renderer.draw_rect(m.rail_x, top + 6 * SCALE, m.rail, bottom - top - 12 * SCALE, fade(style.text, alpha * 0.28))
+        end
+        local line, line_w = math.max(1, math.floor(SCALE + 0.5)), x + w - m.tab_x
+        local color = fade(style.text, alpha * 0.12)
+        if first.spaced then renderer.draw_rect(m.tab_x, top - math.floor(m.group_gap / 2), line_w, line, color) end
+        if row.spaced_after then
+          renderer.draw_rect(m.tab_x, bottom + math.floor(m.group_gap / 2) - line, line_w, line, color)
         end
         first = nil
       end

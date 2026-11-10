@@ -2481,11 +2481,22 @@ test.describe("Sidebar scrolling", function()
     local saved = config.transitions
     config.transitions = true
     local ok, err = pcall(function()
-      local view = sidebar()
-      view:on_mouse_wheel(-10, 400, 200)
-      with_renderer({}, function() view:draw(300, 400) end)
-      for _ = 1, 60 do view:step(1 / 60) end
-      view:on_mouse_moved(100, 200)
+      local function scrolled()
+        local view = sidebar()
+        view:on_mouse_wheel(-10, 400, 200)
+        with_renderer({}, function() view:draw(300, 400) end)
+        for _ = 1, 60 do view:step(1 / 60) end
+        return view
+      end
+      -- The pointer rests on a row before and after the focus scroll, not in the space between rows.
+      local view, focused = scrolled(), scrolled()
+      focused:on_focus(true)
+      local pointer
+      for y = 150, 300 do
+        if not pointer and view:row_at(y) and focused:row_at(y) then pointer = y end
+      end
+      test.not_nil(pointer, "No row under the middle of the list")
+      view:on_mouse_moved(100, pointer)
       for _ = 1, 60 do view:step(1 / 60) end
       -- The keyboard focus scrolls to the current Tab.
       view:on_focus(true)
@@ -2496,7 +2507,7 @@ test.describe("Sidebar scrolling", function()
         end}, function() view:draw(300, 400) end)
         view:step(1 / 60)
         test.not_nil(hover, "No hover highlight in frame " .. frame)
-        test.ok(hover[1] <= 200 and 200 < hover[1] + hover[2] + 2,
+        test.ok(hover[1] <= pointer and pointer < hover[1] + hover[2] + 2,
           string.format("Frame %d drew the hover highlight at %d, away from the pointer", frame, hover[1]))
       end
     end)
