@@ -2,9 +2,11 @@
 #include "../sql_context.h"
 #include "../sql_server.h"
 #include "../sql_query.h"
+#include "../sql_definition.h"
 #include "../worker_pool.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 static void text(lua_State *L, const char *key, const char *value) {
   lua_pushstring(L, value ? value : ""); lua_setfield(L, -2, key);
@@ -160,11 +162,51 @@ static int execute_query(lua_State *L) {
   sql_query_free(result);
   return 1;
 }
+static int definition_gc(lua_State *L) {
+  sql_definition_free(luaL_checkudata(L, 1, "anvil.sql_definition")); return 0;
+}
+static int read_definition(lua_State *L) {
+  size_t slen, nlen;
+  const char *schema = luaL_checklstring(L, 2, &slen), *name = luaL_checklstring(L, 3, &nlen);
+  luaL_argcheck(L, slen > 0 && slen <= 512 && strlen(schema) == slen, 2, "invalid object schema");
+  luaL_argcheck(L, nlen > 0 && nlen <= 512 && strlen(name) == nlen, 3, "invalid object name");
+  const char *token_name = luaL_optstring(L, 4, NULL);
+  SqlServerOptions options = read_options(L);
+  SqlDefinition *d = lua_newuserdata(L, sizeof(*d)); memset(d, 0, sizeof(*d));
+  luaL_setmetatable(L, "anvil.sql_definition");
+  AnvilWorkerCancelToken *token = token_name ? anvil_worker_cancel_token_open(token_name) : NULL;
+  luaL_argcheck(L, !token_name || token, 4, "cancel token unavailable");
+  int ok = sql_definition_read(&options, schema, name, token ? query_cancelled : NULL, token, d);
+  if (token) anvil_worker_cancel_token_release(token);
+  if (!ok) {
+    lua_pushnil(L); lua_pushstring(L, d->error); sql_definition_free(d); return 2;
+  }
+  lua_newtable(L);
+  text(L, "source", d->source_sql);
+  if (d->create_sql) text(L, "create", d->create_sql);
+  if (d->alter_sql) text(L, "alter", d->alter_sql);
+  if (d->select_sql) text(L, "select", d->select_sql);
+  if (d->insert_sql) text(L, "insert", d->insert_sql);
+  if (d->update_sql) text(L, "update", d->update_sql);
+  if (d->delete_sql) text(L, "delete", d->delete_sql);
+  sql_definition_free(d); return 1;
+}
+static int module_script(lua_State *L) {
+  size_t length; const char *source = luaL_checklstring(L, 1, &length);
+  const char *mode = luaL_checkstring(L, 2);
+  luaL_argcheck(L, !strcmp(mode, "CREATE") || !strcmp(mode, "ALTER"), 2, "expected CREATE or ALTER");
+  char *script = sql_module_script(source, length, !strcmp(mode, "ALTER"));
+  if (!script) lua_pushnil(L); else { lua_pushstring(L, script); free(script); }
+  return 1;
+}
 int luaopen_sql_server_native(lua_State *L) {
+  luaL_newmetatable(L, "anvil.sql_definition");
+  lua_pushcfunction(L, definition_gc); lua_setfield(L, -2, "__gc"); lua_pop(L, 1);
   luaL_newmetatable(L, "anvil.sql_catalog");
   lua_pushcfunction(L, catalog_gc); lua_setfield(L, -2, "__gc"); lua_pop(L, 1);
   luaL_newmetatable(L, "anvil.sql_query");
   lua_pushcfunction(L, query_gc); lua_setfield(L, -2, "__gc"); lua_pop(L, 1);
-  const luaL_Reg functions[] = { {"context", context}, {"read_schema", read_schema}, {"execute", execute_query}, {NULL, NULL} };
+  const luaL_Reg functions[] = { {"context", context}, {"read_schema", read_schema}, {"execute", execute_query},
+    {"read_definition", read_definition}, {"module_script", module_script}, {NULL, NULL} };
   luaL_newlib(L, functions); return 1;
 }

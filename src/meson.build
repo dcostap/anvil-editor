@@ -22,6 +22,7 @@ anvil_sources = [
     'sql_context.c',
     'sql_server.c',
     'sql_query.c',
+    'sql_definition.c',
     'fuzzy.c',
     'git_status_index.c',
     'worker_pool.c',

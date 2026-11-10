@@ -30,4 +30,7 @@ int sql_query_execute(const SqlServerOptions *options, const char *sql, size_t l
                       unsigned max_rows, unsigned timeout_seconds,
                       SqlQueryCancelled cancelled, void *context, SqlQueryResult *out);
 void sql_query_free(SqlQueryResult *result);
+/* For fixed catalog queries only. Opens with read-only access. */
+int sql_query_read(const SqlServerOptions *options, const char *sql, size_t length,
+                   SqlQueryCancelled cancelled, void *context, SqlQueryResult *out);
 #endif

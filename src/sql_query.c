@@ -97,9 +97,9 @@ done:
   free(text);
   return ok;
 }
-int sql_query_execute(const SqlServerOptions *options, const char *sql, size_t length,
+static int query_execute(const SqlServerOptions *options, const char *sql, size_t length,
                       unsigned max_rows, unsigned timeout_seconds,
-                      SqlQueryCancelled cancelled, void *context, SqlQueryResult *out) {
+                      SqlQueryCancelled cancelled, void *context, SqlQueryResult *out, int read_only) {
   memset(out, 0, sizeof(*out));
   SqlServerConnection connection = {0};
   SQLHSTMT statement = SQL_NULL_HSTMT;
@@ -119,7 +119,7 @@ int sql_query_execute(const SqlServerOptions *options, const char *sql, size_t l
   MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sql, (int)length, (wchar_t *)wide, units);
   wide[units] = 0;
   if (cancelled && cancelled(context)) { out->cancelled = 1; goto done; }
-  if (!sql_server_open(options, 0, &connection, out->error)) goto done;
+  if (!sql_server_open(options, read_only, &connection, out->error)) goto done;
   if (cancelled && cancelled(context)) { out->cancelled = 1; goto done; }
   if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, connection.dbc, &statement)) ||
       !SQL_SUCCEEDED(SQLSetStmtAttr(statement, SQL_ATTR_QUERY_TIMEOUT, (SQLPOINTER)(uintptr_t)timeout_seconds, 0))) goto done;
@@ -199,12 +199,24 @@ done:
   return success;
 }
 #else
-int sql_query_execute(const SqlServerOptions *options, const char *sql, size_t length,
+static int query_execute(const SqlServerOptions *options, const char *sql, size_t length,
                       unsigned max_rows, unsigned timeout_seconds,
-                      SqlQueryCancelled cancelled, void *context, SqlQueryResult *out) {
+                      SqlQueryCancelled cancelled, void *context, SqlQueryResult *out, int read_only) {
   (void)options; (void)sql; (void)length; (void)max_rows; (void)timeout_seconds; (void)cancelled; (void)context;
+  (void)read_only;
   memset(out, 0, sizeof(*out));
   snprintf(out->error, sizeof(out->error), "SQL Server execution currently requires Windows.");
   return 0;
 }
 #endif
+
+int sql_query_execute(const SqlServerOptions *options, const char *sql, size_t length,
+                      unsigned max_rows, unsigned timeout_seconds,
+                      SqlQueryCancelled cancelled, void *context, SqlQueryResult *out) {
+  return query_execute(options, sql, length, max_rows, timeout_seconds, cancelled, context, out, 0);
+}
+
+int sql_query_read(const SqlServerOptions *options, const char *sql, size_t length,
+                   SqlQueryCancelled cancelled, void *context, SqlQueryResult *out) {
+  return query_execute(options, sql, length, 10000, 30, cancelled, context, out, 1);
+}

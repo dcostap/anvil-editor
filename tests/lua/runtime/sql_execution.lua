@@ -28,7 +28,38 @@ test.describe("SQL execution input", function()
     end
     local reply = {}
     test.not_nil(backend.read_schema(connection, function(value, err) reply.value = value or { error = err } end))
-    test.equal(await(reply).database, "AnvilTest")
+    local catalog = await(reply)
+    test.equal(catalog.database, "AnvilTest")
+    local definition
+    reply = {}
+    test.not_nil(backend.read_definition(connection, { schema = "sales", name = "child" }, function(value, err)
+      reply.value = value or { error = err }
+    end))
+    definition = await(reply)
+    test.equal(definition.error, nil)
+    test.ok(definition.create:find("IDENTITY(7,3)", 1, true))
+    test.ok(definition.create:find("REFERENCES [sales].[parent]", 1, true))
+    test.ok(definition.create:find("[CK_amount] CHECK", 1, true))
+    test.ok(definition.create:find("INCLUDE ([amount])", 1, true))
+    local copy = definition.create:gsub("%[sales%]%.%[child%]", "[roundtrip].[child]")
+    reply = {}
+    backend.execute(connection, copy, function(value) reply.value = value end)
+    test.equal(await(reply).error, nil)
+    reply = {}
+    backend.read_definition(connection, { schema = "roundtrip", name = "child" }, function(value, err)
+      reply.value = value or { error = err }
+    end)
+    test.equal(await(reply).create, copy)
+    for _, object in ipairs({ "customer_names", "list_customers" }) do
+      reply = {}
+      backend.read_definition(connection, { schema = "sales", name = object }, function(value, err)
+        reply.value = value or { error = err }
+      end)
+      local source = await(reply)
+      test.equal(source.error, nil)
+      test.ok(source.create:match("^CREATE "))
+      test.ok(source.alter:match("^ALTER "))
+    end
     local schema_job = test.not_nil(backend.read_schema(connection, function() end))
     test.ok(schema_job:cancel())
     reply = {}

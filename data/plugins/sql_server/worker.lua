@@ -11,6 +11,9 @@ function M.run(payload, context)
       model.distinct_values = require("plugins.tabular_data_preview.parser").distinct_values(model, context.cancelled)
       if not model.distinct_values then return end
     end
+  elseif payload.operation == "definition" then
+    result, err = require("sql_server_native").read_definition(payload.options, payload.schema, payload.name, context.cancel_token_name)
+    payload.options.password = nil
   elseif payload.operation == "schema" then
     result, err = require("sql_server_native").read_schema(payload.options)
     payload.options.password = nil

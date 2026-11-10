@@ -4,9 +4,19 @@
 
 Use **SQL Server: Manage** in Command Search to manage the current Project's connections. The Dialog title shows **Project Databases — <project name>**. The Connections list shows each connection's name, server, database and state. The form below it shows the selected connection: its state with Connect or Reload Schema and Disconnect, its fields, and Remove Connection. Select Add, enter the server and database, then select Connect. Connect checks access and loads metadata. Reload Schema loads metadata again. A change to a field disconnects the connection. An empty Dialog shows only Add Connection. Windows authentication hides the user and password fields.
 
-Open a `.sql` file, select SQL as an Untitled Buffer's Language Mode, or use **SQL Server: New Query**. All three use the normal Editor. Selecting SQL does not connect to a server. **SQL Server: Choose Connection** assigns a connection to the Editor. An execution command asks for a connection when none is assigned, then connects if needed. Queries use normal editing, Save As, completion, and symbol navigation. Navigation opens a read-only column summary; Back returns to the same query. The summary is not a CREATE script or complete DDL.
+Open a `.sql` file, select SQL as an Untitled Buffer's Language Mode, or use **SQL Server: New Query**. All three use the normal Editor. Selecting SQL does not connect to a server. **SQL Server: Choose Connection** assigns a connection to the Editor. An explicit database command asks for a connection when none is assigned, then connects if needed. Queries use normal editing, Save As, completion, and symbol navigation.
 
 The Dialog has no separate database sidebar. Table editing and transaction controls are not available.
+
+## Database source
+
+Symbol navigation reads the database object's source into a read-only SQL Editor. Back returns to the same Query. The definition inherits its connection and supports completion, navigation, and Run Selection. Table and view definitions include a SELECT example. Definitions are snapshots; reopening one reads it again. They are not saved in the Workspace.
+
+**SQL Server: Generate Select**, **Insert**, **Update**, **Delete**, **Create**, and **Alter** act on the database symbol at the caret. Each supported command opens an editable SQL Buffer with the same connection. It executes nothing. UPDATE and DELETE templates start with a false predicate. INSERT and UPDATE values require editing.
+
+Table scripts include column types, identity settings, computed columns, defaults, keys, checks, foreign keys, and ordinary indexes. They explicitly exclude storage options, triggers, and permissions. They are not complete database deployment scripts. Unsupported table features, disabled indexes, and disabled or untrusted constraints stop scripting instead of producing an incomplete declaration. Table ALTER generation is not available.
+
+Module source comes from SQL Server. CREATE and ALTER generation changes its opening declaration, not its body. Modules with ANSI_NULLS or QUOTED_IDENTIFIER OFF show their settings but offer no CREATE or ALTER script. Selected execution does not apply those settings automatically. Encrypted source, missing VIEW DEFINITION permission, and source limits produce an error. Source reads are bounded to 512 KiB and use the execution worker's bounded result reader.
 
 ## Run SQL
 
@@ -71,6 +81,7 @@ Default UI tests replace the database boundary at `plugins.sql_server.backend` w
 meson test -C build-windows-x86_64 anvil:sql-context
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_context.lua
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_execution.lua
+meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_definitions.lua
 meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/sql_server.lua
 ```
 

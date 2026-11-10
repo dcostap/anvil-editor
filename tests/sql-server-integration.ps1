@@ -42,6 +42,14 @@ try {
     & $Probe "(localdb)\$name"
     $result = $LASTEXITCODE
     if ($result -eq 0 -and $Editor) {
+        $command.CommandText = 'CREATE SCHEMA roundtrip'
+        [void]$command.ExecuteNonQuery()
+        $command.CommandText = 'CREATE TABLE sales.parent (id int PRIMARY KEY); CREATE TABLE sales.child (id int IDENTITY(7,3) NOT NULL, parent_id int NOT NULL, amount decimal(19,4) CONSTRAINT DF_amount DEFAULT 0, doubled AS amount*2 PERSISTED, CONSTRAINT PK_child PRIMARY KEY(id,parent_id), CONSTRAINT FK_parent FOREIGN KEY(parent_id) REFERENCES sales.parent(id) ON DELETE CASCADE, CONSTRAINT CK_amount CHECK(amount>=0)); CREATE UNIQUE INDEX IX_child ON sales.child(parent_id) INCLUDE(amount) WHERE amount>0;'
+        [void]$command.ExecuteNonQuery()
+        $command.CommandText = 'CREATE VIEW sales.customer_names AS SELECT [na]]me] FROM sales.customers'
+        [void]$command.ExecuteNonQuery()
+        $command.CommandText = 'CREATE PROCEDURE sales.list_customers AS SELECT * FROM sales.customers'
+        [void]$command.ExecuteNonQuery()
         $editorPath = (Resolve-Path $Editor).Path.Replace('\', '/')
         $build = (Split-Path (Split-Path $editorPath -Parent) -Parent).Replace('\', '/')
         $repo = (Split-Path $PSScriptRoot -Parent).Replace('\', '/')

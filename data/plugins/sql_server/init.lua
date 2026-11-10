@@ -122,6 +122,8 @@ function M.disconnect(id)
   if not c then return false end
   c.generation = c.generation + 1
   passwords[c] = nil
+  local source = package.loaded["plugins.sql_server.source"]
+  if source then source.cancel_connection(c) end
   for run in pairs(active_runs) do if run.connection == c then cancel_run(run) end end
   if c.job then c.job:cancel(); c.job = nil end
   c.catalog, c.password, c.error, c.state = nil, nil, nil, "Disconnected"
@@ -190,6 +192,10 @@ end
 
 function M.is_sql(view)
   return view and view:extends(Editor) and view.buffer.syntax.name == "SQL"
+end
+function M.connection_options(c)
+  return { server = c.server, database = c.database, user = c.user, password = passwords[c],
+    integrated = c.integrated, trust_certificate = c.trust_certificate, encrypt = c.encrypt }
 end
 function M.with_connection(view, action)
   return require("plugins.sql_server.connection").with_connection(M, view, action)
@@ -277,34 +283,13 @@ function Editor:can_suspend()
 end
 
 function M.open_definition(view, opts)
-  local t = require("plugins.sql_server.intelligence").table_at(view, M)
-  if not t then
-    core.warn("No table definition is available. Connect or refresh metadata in Databases.")
-    return false
-  end
-  local function quote(text) return "[" .. text:gsub("]", "]]") .. "]" end
-  local title = t.schema .. "." .. t.name
-  local lines = { "-- " .. quote(t.schema) .. "." .. quote(t.name), "-- Columns (not a CREATE script)", "" }
-  for _, column in ipairs(t.columns) do
-    lines[#lines + 1] = quote(column.name) .. "  " .. column.type
-      .. (column.nullable and " NULL" or " NOT NULL")
-      .. (column.identity and " IDENTITY" or "") .. (column.primary_key and " PRIMARY KEY" or "")
-  end
-  local definition = require("core.textview").from_text(table.concat(lines, "\n"), { name = title })
-  definition.buffer:set_language_mode("sql", { reason = "SQL definition" })
-  if opts and opts.placement then
-    panes.place(function() return definition end, opts)
-  else
-    local pane, err = panes.present(definition, { focus = true })
-    if not pane then definition:on_close(); core.warn("%s", err); return false end
-  end
-  return true
+  return require("plugins.sql_server.source").open(M, view, nil, opts)
 end
 
 local language = require "core.commands.language"
 local activate_symbol = language.activate_symbol
 function language.activate_symbol(view, opts)
-  if view and view.buffer and view.buffer.sql_connection_id then return M.open_definition(view, opts) end
+  if M.is_sql(view) then return M.open_definition(view, opts) end
   return activate_symbol(view, opts)
 end
 
@@ -322,6 +307,13 @@ end, {
   ["sql_server:run_selection"] = command.palette(function(view) return M.run(view, false) end),
   ["sql_server:run_buffer"] = command.palette(function(view) return M.run(view, true) end),
 })
+for _, action in ipairs({ "select", "create", "alter", "insert", "update", "delete" }) do
+  command.add(function() return M.is_sql(core.active_view), core.active_view end, {
+    ["sql_server:generate_" .. action] = command.palette(function(view)
+      return require("plugins.sql_server.source").generate(M, view, action)
+    end),
+  })
+end
 command.add(function()
   local view = core.active_view
   local run = view and view.buffer and view.buffer.sql_execution

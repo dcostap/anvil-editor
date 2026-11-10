@@ -29,4 +29,12 @@ function M.execute(options, text, callback)
     on_cancelled = function() callback({ cancelled = true }) end,
   })
 end
+function M.read_definition(options, object, callback)
+  return submit(worker_pool.named("sql-server", { worker_count = 1 }), {
+    kind = "plugins.sql_server.worker",
+    payload = { operation = "definition", options = options, schema = object.schema, name = object.name },
+    on_result = function(message) callback(message.payload.value, message.payload.error) end,
+    on_error = function() callback(nil, "SQL definition worker failed.") end,
+  })
+end
 return M

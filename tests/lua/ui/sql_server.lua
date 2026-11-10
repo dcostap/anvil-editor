@@ -22,8 +22,14 @@ local function connected_query(context)
   local backend = require "plugins.sql_server.backend"
   context.original_backend = backend.read_schema
   context.original_execute = backend.execute
+  context.original_definition = backend.read_definition
   backend.read_schema = function(_, callback)
     callback(schema)
+    return { cancel = function() end }
+  end
+  backend.read_definition = function(_, object, callback)
+    callback({ source = "CREATE TABLE [sales].[customers] (\n  [id] int NOT NULL PRIMARY KEY,\n  [name] nvarchar(80) NULL\n);",
+      select = "SELECT [id], [name]\nFROM [sales].[customers];" })
     return { cancel = function() end }
   end
   sql.load()
@@ -44,6 +50,7 @@ test.describe("SQL Queries", function()
     core.global_prompt_bar:exit(true)
     if context.original_backend then require("plugins.sql_server.backend").read_schema = context.original_backend end
     if context.original_execute then require("plugins.sql_server.backend").execute = context.original_execute end
+    require("plugins.sql_server.backend").read_definition = context.original_definition
     if context.connection_id then require("plugins.sql_server").remove(context.connection_id) end
     local open = dialog.current()
     if open then open:close() end
@@ -277,9 +284,34 @@ test.describe("SQL Queries", function()
     test.ok(core.active_view.buffer.read_only)
     local text = core.active_view.buffer:get_text(1, 1, math.huge, math.huge)
     test.ok(text:find("nvarchar(80)", 1, true))
+    test.ok(text:find("CREATE TABLE [sales].[customers]", 1, true))
+    test.ok(text:find("SELECT [id], [name]", 1, true))
+    test.equal(require("plugins.sql_server").connection_for(core.active_view.buffer),
+      require("plugins.sql_server").connection_for(editor.buffer))
+    test.ok(command.is_valid("sql_server:run_selection"))
+    local definition = core.active_view
+    local submitted
+    require("plugins.sql_server.backend").execute = function(_, sql, done)
+      submitted = sql
+      done({ results = {}, affected_rows = {} })
+      return { cancel = function() end }
+    end
+    for line, value in ipairs(definition.buffer.lines) do
+      if value:match("^SELECT") then definition.buffer:set_selection(line, 1, line + 1, #definition.buffer.lines[line + 1]); break end
+    end
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(submitted, "SELECT [id], [name]\nFROM [sales].[customers];")
+    test.equal(core.active_view, definition)
+    test.equal(definition.buffer:get_text(1, 1, math.huge, math.huge), text)
     test.ok(command.perform("core:navigate_back"))
     test.equal(core.active_view, editor)
     test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "SELECT * FROM sales.customers")
+    test.ok(command.perform("sql_server:generate_select"))
+    test.not_equal(core.active_view, editor)
+    test.not_ok(core.active_view.buffer.read_only)
+    test.equal(core.active_view.buffer:get_text(1, 1, math.huge, math.huge), "SELECT [id], [name]\nFROM [sales].[customers];")
+    test.equal(require("plugins.sql_server").connection_for(core.active_view.buffer),
+      require("plugins.sql_server").connection_for(editor.buffer))
   end)
 
   test.it("does not navigate an unknown column to an unrelated table", function(context)
