@@ -170,6 +170,10 @@ A read-only table returned by running a SQL Query. One run can return several SQ
 A SQL Query's own open connection to its database server. Temporary tables, settings and open transactions stay in it from one run to the next. When it ends, the server rolls back its open transaction.
 _Avoid_: editor connection, physical connection
 
+**Table Design**:
+An editable copy of one table's structure: its columns, keys, indexes and constraints. It gives a script that makes the table look like the copy. It never changes the database.
+_Avoid_: table editor, schema editor
+
 **Database Connection**:
 A named configuration that identifies a database server, database, and authentication method for SQL Queries.
 _Avoid_: database profile

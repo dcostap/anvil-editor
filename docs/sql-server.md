@@ -68,6 +68,16 @@ A result can change when it is the only result of its run and a column comes fro
 
 Changed cells show in the accent color, and deleted rows show in the error color. The footer shows **Script N Changes** and **Discard**. A new run discards the edits. **SQL Server: Script Changes** opens a new SQL Query on the same connection with one `UPDATE` or `DELETE` for each row, in one transaction. Each statement finds its row by the key values that the result showed. Values are Unicode string literals, and SQL Server converts them to the column's type. A statement that does not change exactly one row stops the script, and `XACT_ABORT` rolls back its earlier statements. **The script does not run by itself.** Read it, then run it as other SQL. Anvil does not compare the other columns, so a change that another user made after your run can be overwritten.
 
+## Table Design
+
+**SQL Server: Design Table** opens the Table Design Dialog for the table at the caret. The table's Context Menu and **SQL Server: Symbol Actions** also offer it. **SQL Server: New Table** opens an empty design. The Dialog reads the table's columns, primary key, indexes, unique constraints, foreign keys and check constraints from the catalog, with a separate connection. The Query's SQL Session and transaction do not change.
+
+The pages are Table, Columns, Primary Key, Foreign Keys, Indexes and Check Constraints. Each change applies to the design at once. **Open Script** opens a new SQL Query on the same connection with the `CREATE TABLE` or `ALTER TABLE` script. **The script does not run by itself.** Read it, then run it as other SQL. The footer shows the first problem of the design, such as a foreign key without a referenced table; a design with problems opens no script. A closed design stays until the next connect, so the Dialog opens it again with its changes. An opened script ends the design.
+
+An `ALTER` script runs in one transaction with `XACT_ABORT`. It drops the changed foreign keys, checks, indexes, keys, defaults and columns first. It then renames and alters columns, adds columns, and adds the keys, indexes, checks and foreign keys again. It renames the table last. A change to a column's type, collation or nullability rebuilds each key, index and check that uses the column. SQL Server adds a new column at the end, so only a new table orders its columns. The identity of an existing column cannot change.
+
+Some items have options that the Dialog does not show, such as a filtered index, an index with included columns, a disabled constraint or a computed column. They are locked: the script keeps them as they are, or drops them when you remove them. A column that a locked item uses cannot change, because a rebuild would lose those options. Foreign keys in other tables that reference this table's primary key are not part of the design. A script that rebuilds that key fails, and `XACT_ABORT` rolls it back.
+
 ## Connections and persistence
 
 Connection settings belong to the current Project on this PC. Scratch has its own saved connections; it does not share them with other Projects. Its Dialog title shows **Project Databases — Scratch**. Each open query remembers its connection. Workspace restore and Untitled recovery keep that identity. Save As keeps it while the query remains open or saved in the Workspace. Opening a saved SQL file without its Workspace state requires choosing its connection again.
@@ -114,6 +124,8 @@ The `GO` delimiter follows `SQLAllowGo` in `com/onseven/dbvis/d/e.java` and `com
 
 Result editing follows `TableEditableCommitter` in `com/onseven/dbvis/bc/j/b/c.java` and `com/onseven/dbvis/bc/j/b/d.java`: each edit must affect exactly one row, and the key columns identify it (`TableEditableResultDialog.keyColumnChooser` in `com/onseven/dbvis/bc/j/b/s.java`). DbVisualizer commits the edits itself, in batches (`InlineEditorCommitBatchSize` in `com/onseven/dbvis/nb/s.java`). Anvil writes them to a script instead, and the user runs it.
 
+Table Design follows the tabs of `TableDetailsPanelBuilder` in `com/onseven/dbvis/objects/e/c/b/b/z.java`: columns (`ab.java`), primary key (`e.java`), foreign keys with their delete and update actions (`fb.java`), indexes and unique constraints (`d.java`), and check constraints (`j.java` and `c.java`). DbVisualizer shows the script in its Dialog and can run it. Anvil opens the script in a SQL Query instead, and the user runs it.
+
 ## Tests
 
 Default UI tests replace the database boundary at `plugins.sql_server.backend` with fixed metadata and execution replies. The real Dialog, Editor, persistence, completion, navigation, and result View run unchanged. They need no SQL Server, driver, credentials, or network access. Runtime input tests reject invalid batches before a connection opens.
@@ -124,10 +136,11 @@ meson test -C build-windows-x86_64 anvil:sql-batch
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_context.lua
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_execution.lua
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_definitions.lua
+meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_table_design.lua
 meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/sql_server.lua
 ```
 
-The real-server test is opt-in. It needs an existing LocalDB installation and Microsoft ODBC Driver 18 or 17. It creates a uniquely named instance and a database in a private temporary folder. It checks metadata, escaped identifiers, unchanged table data, and connection-value isolation. Execution checks cover multiple results, update counts, exact values, Unicode, embedded NUL, limits, errors, and cancellation. Session checks cover `GO` batches and error lines, temporary tables between runs, Auto Commit off, Commit and Roll Back, Explain Plan, a session after a cancelled run, and the rollback when a session closes. Result edit checks cover the browse-mode description of a result, a scripted update, and the rollback of a script whose row is gone. It then deletes its instance and files. It never reads user connection settings or connects to another instance.
+The real-server test is opt-in. It needs an existing LocalDB installation and Microsoft ODBC Driver 18 or 17. It creates a uniquely named instance and a database in a private temporary folder. It checks metadata, escaped identifiers, unchanged table data, and connection-value isolation. Execution checks cover multiple results, update counts, exact values, Unicode, embedded NUL, limits, errors, and cancellation. Session checks cover `GO` batches and error lines, temporary tables between runs, Auto Commit off, Commit and Roll Back, Explain Plan, a session after a cancelled run, and the rollback when a session closes. Result edit checks cover the browse-mode description of a result, a scripted update, and the rollback of a script whose row is gone. The Table Design check reads a table in a transaction, applies its `ALTER` script, and rolls back. It then deletes its instance and files. It never reads user connection settings or connects to another instance.
 
 ```sh
 ANVIL_SQL_INTEGRATION=1 meson test -C build-windows-x86_64 anvil:sql-server-integration --print-errorlogs
@@ -135,7 +148,7 @@ ANVIL_SQL_INTEGRATION=1 meson test -C build-windows-x86_64 anvil:sql-server-inte
 
 Without opt-in or dependencies, the test reports SKIP, not PASS. It installs nothing. LocalDB tests use Windows authentication and explicitly disable TLS because LocalDB does not support it. They do not prove remote TLS or SQL-login behavior.
 
-The `databases-dialog`, `sql-results`, and `sql-symbols` render scenarios use fixed data on a private desktop. They make no database connection.
+The `databases-dialog`, `sql-results`, `sql-symbols`, `sql-table-design` and `sql-table-design-foreign` render scenarios use fixed data on a private desktop. They make no database connection.
 
 ## References
 

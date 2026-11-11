@@ -323,6 +323,101 @@ test.describe("SQL Queries", function()
     test.equal(reason, "Include the key column [id] to edit this result.")
   end)
 
+  test.it("designs a table in a Dialog and opens its ALTER script in a new Query that runs nothing", function(context)
+    local editor = connected_query(context)
+    local reads = 0
+    local function result(headers, rows)
+      local out = { headers = headers, rows = {} }
+      for i, cells in ipairs(rows) do out.rows[i] = { cells = cells } end
+      return out
+    end
+    require("plugins.sql_server.backend").execute = function(_, text, callback)
+      test.ok(text:find("sys.sql_expression_dependencies", 1, true))
+      reads = reads + 1
+      callback({ results = {
+        result({ "object_id" }, { { "10" } }),
+        result({ "column_id", "name", "type", "collation_name", "is_nullable", "is_identity", "seed", "increment",
+          "default_name", "default_definition", "computed", "is_persisted", "locked" },
+          { { "1", "customer_id", "int", false, "0", "0", false, false, false, false, false, false, "0" } }),
+        result({ "index_id", "name", "kind", "is_unique", "type", "column_id", "locked" }, {}),
+        result({ "object_id", "name", "ref_schema", "ref_table", "parent_column_id", "ref_column", "on_delete",
+          "on_update", "locked" }, {}),
+        result({ "object_id", "name", "definition", "locked" }, {}),
+        result({ "object_id", "minor_id", "column_id" }, {}),
+      } })
+      return { cancel = function() end }
+    end
+    local function type_text(text)
+      for char in text:gmatch(".") do core.on_event("textinput", char) end
+      test.ok(command.perform("dialog:confirm"))
+    end
+    local orders = { schema = "dbo", name = "orders", kind = "table" }
+    test.ok(command.perform("sql_server:table_design", editor, orders))
+    local design = test.not_nil(dialog.current())
+    test.equal(tostring(design), "Table Design")
+    test.equal(design.status.text, "No changes")
+    test.ok(not design.script_button.enabled)
+
+    test.ok(design.add_column:activate())
+    test.equal(design.focused, design.column_name)
+    type_text("id")
+    design:focus(design.column_type)
+    type_text("int")
+    design.column_nullable:toggle()
+    design.column_identity:toggle()
+    design:show_page("primary")
+    design.pk_columns:select(2)
+    test.ok(design.pk_columns:activate())
+    design:show_page("foreign")
+    test.ok(design.add_fk:activate())
+    test.equal(design.status.text, "Foreign key [FK_orders_1] needs a referenced table.")
+    design.fk_table:choose("sales.customers")
+    design.fk_columns:select(1)
+    test.ok(design.fk_columns:activate())
+    design:show_page("checks")
+    test.ok(design.add_check:activate())
+    type_text("customer_id > 0")
+    design:show_page("indexes")
+    test.ok(design.add_index:activate())
+    design.index_columns:select(1)
+    test.ok(design.index_columns:activate())
+    test.equal(design.status.text, "")
+    test.ok(design.script_button.enabled)
+
+    -- A closed design stays until the next connect, so the Dialog opens it again without a read.
+    design:close()
+    test.ok(command.perform("sql_server:table_design", editor, orders))
+    design = test.not_nil(dialog.current())
+    test.equal(reads, 1)
+    test.ok(design.script_button:activate())
+    test.is_nil(dialog.current())
+    local script = core.active_view
+    test.not_equal(script, editor)
+    test.equal(require("plugins.sql_server").connection_for(script.buffer), require("plugins.sql_server").connection_for(editor.buffer))
+    test.equal(script.buffer:get_text(1, 1, math.huge, math.huge), table.concat({
+      "SET XACT_ABORT ON;",
+      "BEGIN TRANSACTION;",
+      "ALTER TABLE [dbo].[orders] ADD [id] int IDENTITY(1,1) NOT NULL;",
+      "ALTER TABLE [dbo].[orders] ADD CONSTRAINT [PK_orders] PRIMARY KEY ([id]);",
+      "CREATE INDEX [IX_orders_1] ON [dbo].[orders] ([customer_id]);",
+      "ALTER TABLE [dbo].[orders] ADD CONSTRAINT [CK_orders_1] CHECK (customer_id > 0);",
+      "ALTER TABLE [dbo].[orders] ADD CONSTRAINT [FK_orders_1] FOREIGN KEY ([customer_id]) REFERENCES [sales].[customers] ([id]);",
+      "COMMIT TRANSACTION;",
+      "",
+    }, "\n"))
+    test.equal(reads, 1)
+
+    -- A script that opened ends the design, so the next Dialog reads the table again.
+    panes.focus(panes.pane_for_view(editor))
+    test.ok(command.perform("sql_server:table_design", editor, orders))
+    test.equal(reads, 2)
+    test.not_nil(dialog.current()):close()
+    test.ok(command.perform("sql_server:new_table"))
+    design = test.not_nil(dialog.current())
+    test.equal(design.title, "New Table")
+    test.ok(design.script_button.enabled)
+  end)
+
   test.it("adjusts the Query's row limit from the result footer for the next run", function(context)
     local editor = connected_query(context)
     local context_menu = require "core.context_menu"

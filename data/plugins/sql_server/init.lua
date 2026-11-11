@@ -436,6 +436,12 @@ command.add(function() return M.is_sql(core.active_view), core.active_view end, 
   ["sql_server:symbol_actions"] = command.palette(function(view)
     return require("plugins.sql_server.source").symbol_actions(M, view)
   end),
+  ["sql_server:design_table"] = command.palette(function(view)
+    return require("plugins.sql_server.design_dialog").open(M, view)
+  end),
+  ["sql_server:new_table"] = command.palette(function(view)
+    return require("plugins.sql_server.design_dialog").new_table(M, view)
+  end),
 })
 -- Menu items carry the View and the object, so they act on the clicked symbol.
 local function object_args(view, object, action)
@@ -447,6 +453,9 @@ command.add(object_args, {
   end,
   ["sql_server:open_object"] = function(view, object)
     return require("plugins.sql_server.source").open(M, view, object)
+  end,
+  ["sql_server:table_design"] = function(view, object)
+    return require("plugins.sql_server.design_dialog").open(M, view, object)
   end,
 })
 

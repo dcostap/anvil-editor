@@ -1229,6 +1229,48 @@ local function scenario_is_ready()
     require("core.panes").present(benchmark.view, { focus = true })
     return false
   end
+  if benchmark.scenario:find("^sql%-table%-design") then
+    -- A fixed table design. The scene makes no connection and runs no SQL.
+    if require("core.ui.dialog").current() then return true end
+    config.transitions = false
+    local sql = require "plugins.sql_server"
+    sql.load()
+    if not sql.ready() then return false end
+    local backend = require "plugins.sql_server.backend"
+    backend.read_schema = function(_, done)
+      done({ database = "Example", default_schema = "dbo", case_sensitive = false, objects = {
+        { schema = "sales", name = "customers", kind = "table", columns = {
+          { name = "id", type = "int", primary_key = true }, { name = "name", type = "nvarchar(80)" } } },
+        { schema = "sales", name = "orders", kind = "table", columns = {} },
+      } })
+      return { cancel = function() end }
+    end
+    backend.execute = function() error("SQL render scenes cannot execute SQL") end
+    local c = sql.add_connection()
+    sql.update(c.id, "server", "test-only.invalid")
+    sql.update(c.id, "database", "Example")
+    sql.connect(c.id)
+    local model = require "plugins.sql_server.table_design"
+    local design = model.new_table("sales", "invoices")
+    local function column(name, type, nullable, default)
+      local item = { key = model.new_key(design), name = name, type = type, collation = "", nullable = nullable,
+        default = default or "" }
+      design.columns[#design.columns + 1] = item
+      return item
+    end
+    local customer = column("customer_id", "int", false)
+    column("issued_at", "datetime2(0)", false, "SYSUTCDATETIME()")
+    column("total", "decimal(19,4)", false, "0")
+    column("note", "nvarchar(400)", true)
+    design.foreign_keys[1] = { key = model.new_key(design), name = "FK_invoices_customers", columns = { customer.key },
+      ref_columns = { "id" }, ref_schema = "sales", ref_table = "customers", on_delete = "CASCADE", on_update = "NO ACTION" }
+    design.checks[1] = { key = model.new_key(design), name = "CK_invoices_total", condition = "total >= 0" }
+    local instance = require("plugins.sql_server.design_dialog").TableDesign(sql, c, design)
+    instance:open(instance.nav)
+    if benchmark.scenario == "sql-table-design-foreign" then instance:show_page("foreign") end
+    instance.columns:select(3)
+    return false
+  end
   if benchmark.scenario == "update-dialog" then
     -- A fixed release offer. This scene makes no network request and cannot install anything.
     if require("core.ui.dialog").current() then return true end
