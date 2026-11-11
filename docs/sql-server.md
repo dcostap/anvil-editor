@@ -6,7 +6,9 @@ Use **SQL Server: Manage** in Command Search to manage the current Project's con
 
 Open a `.sql` file, select SQL as an Untitled Buffer's Language Mode, or use **SQL Server: New Query**. All three use the normal Editor. Selecting SQL does not connect to a server. **SQL Server: Choose Connection** assigns a connection to the Editor. An explicit database command asks for a connection when none is assigned, then connects if needed. Queries use normal editing, Save As, completion, and symbol navigation.
 
-The Dialog has no separate database sidebar. Table editing and transaction controls are not available.
+The Dialog has no separate database sidebar.
+
+The Status Bar of a SQL Editor shows its connection. It also shows Auto Commit Off, an open transaction and No Row Limit when they apply. A click chooses the connection.
 
 ## Database source
 
@@ -22,19 +24,35 @@ Module source comes from SQL Server. CREATE and ALTER generation changes its ope
 
 ## Run SQL
 
-Use **SQL Server: Run Selection** in a SQL Query. It runs the primary selection and does nothing when that selection is empty. **SQL Server: Run Buffer** explicitly runs the whole Buffer. Both send the text as one batch. Neither splits `GO` lines or selects a statement at the caret. An edit, caret move, or focus change while a connection starts cancels the pending execution request.
+Use **SQL Server: Run Selection** (Ctrl+Enter) in a SQL Query. It runs the primary selection and does nothing when that selection is empty. **SQL Server: Run Buffer** explicitly runs the whole Buffer. Neither selects a statement at the caret. An edit, caret move, or focus change while a connection starts cancels the pending execution request.
 
-**SQL can change database data, even when selected from a read-only definition.** Each run opens a new connection with normal autocommit. Temporary tables, session settings, and transactions do not carry into the next run. Cancellation does not undo committed changes.
+A line with only `GO` ends a batch, as in SSMS. `GO 3` runs the batch three times. `GO` in a string, a quoted name or a comment is text. A failed batch does not stop the next batch. A run holds at most 1,024 batches, and a count is at most 1,000.
+
+**SQL can change database data, even when selected from a read-only definition.** Cancellation does not undo committed changes.
+
+## Sessions and transactions
+
+Each SQL Query has its own SQL Session: one server connection that stays open between runs. Temporary tables, `SET` options and open transactions carry into the next run of the same Query. Other Queries do not see them. The first run opens the session. Disconnect, a settings change, a Project change, exit and closing the Query end it. The server then rolls back an open transaction.
+
+Auto Commit is on by default. **SQL Server: Toggle Auto Commit** turns it off for one Query, like SSMS's implicit transactions. A statement that changes data then opens a transaction. A `SELECT` from a table also opens one. **SQL Server: Commit** and **SQL Server: Roll Back** end all open transactions of the Query. They also end a `BEGIN TRANSACTION` while Auto Commit is on. Auto Commit cannot turn on inside a transaction; Anvil asks to commit or roll back first.
+
+Before an action ends a session with an open transaction, Anvil asks: Commit, Roll Back or Cancel. Closing the Query's last View, Disconnect, Remove Connection, Connect again and quitting ask this question. A field change in the Databases Dialog is refused until the transactions end. The open-transaction count comes from `@@TRANCOUNT` after each run. After a cancelled run, the state is unknown, and Anvil asks as if a transaction is open.
+
+A lost connection ends the session. The server rolls back its transaction, and the next run opens a new session. Anvil has at most 64 open sessions.
+
+## Explain Plan
+
+**SQL Server: Explain Selection** shows the estimated plan of the selection with `SET SHOWPLAN_ALL`. SQL Server compiles the statements but does not run them. The plan shows in the results View as a table, one row for each operator. The `StmtText` column shows the operator tree.
 
 Results open below the Query without taking focus or moving the caret. Another run replaces that Query's results. The View reuses Tabular Data Preview's selection, copy, sorting, filtering, column sizing, and scrolling. `NULL` is distinct from an empty value. Numbers remain text, so large integers and decimals keep their precision. Binary values show as hexadecimal.
 
 Sorting compares text. Use `ORDER BY` for the server's typed order. Copy uses tab-separated text, with `NULL` as an empty field.
 
-Use **SQL Server: Next Result** and **Previous Result** for a batch with several tables. The result's Context Menu offers these commands and **Messages**. Messages shows update counts or the error. Results do not enter the Workspace or modify the Query.
+Use **SQL Server: Next Result** and **Previous Result** for a batch with several tables. The result's Context Menu offers these commands, **Messages** and **Go to Error**. Messages shows the server's messages in order: `PRINT` text, warnings, row counts and errors in SSMS's `Msg` format. Error lines count from the first line of the submitted text. **SQL Server: Go to Error** moves the caret to the first error's line in the Query. Results do not enter the Workspace or modify the Query.
 
 Use **SQL Server: Cancel** from the Query or its results. Closing the results, closing the Buffer, disconnecting, or changing connection settings also requests cancellation. A login can take up to its 15-second timeout before cancellation takes effect. All database calls run off the UI thread.
 
-The default row limit is 1,000 per table. The execution timeout is 30 seconds after login. Set `config.plugins.sql_server.max_rows` from 1 to 10,000, and `config.plugins.sql_server.timeout_seconds` from 1 to 300.
+The default row limit is 1,000 per table. **SQL Server: Toggle Row Limit** turns it off for one Query; results then stop at 100,000 rows and the limits below. It does not run the SQL again. The execution timeout is 30 seconds after login. Set `config.plugins.sql_server.max_rows` from 1 to 100,000, and `config.plugins.sql_server.timeout_seconds` from 1 to 300.
 
 Batches are limited to 256 KiB. Each run holds at most 16 result records, 128 columns per table, 262,144 cells, and 8 MiB of value text. A cell holds at most 32,768 UTF-16 units. A warning marks incomplete results. A row limit discards extra rows and continues to later results. A total result limit stops result reading. Later statements can already have run; these limits are not write protection.
 
@@ -48,7 +66,7 @@ Windows uses Microsoft ODBC Driver 18, or Driver 17 when 18 is absent. Windows a
 
 TLS defaults to certificate verification. Trust Certificate keeps encryption but accepts an unverified certificate. No Encryption is an explicit choice for servers such as LocalDB. Anvil never selects it after a failed encrypted connection.
 
-Metadata reads run on a worker. They use fixed SQL Server catalog queries, request read-only access, and close the connection afterward. Ready means that a metadata snapshot is available, not that a session stays connected. Completion reads that snapshot without network access. Disconnect and connection changes discard it. Late results cannot replace a newer connection state.
+Metadata reads run on a worker. They use fixed SQL Server catalog queries, request read-only access, and close the connection afterward. Ready means that a metadata snapshot is available. Each Query's SQL Session is a separate connection. Completion reads that snapshot without network access. Disconnect and connection changes discard it. Late results cannot replace a newer connection state.
 
 ## Supported SQL context
 
@@ -77,19 +95,22 @@ Anvil follows this context/provider structure for the supported cases. It does n
 
 For execution, `com/onseven/dbvis/o/f/l.java` supplies the reference for multiple results and cancellation from another thread. `com/onseven/dbvis/o/f/z.java` and `com/onseven/dbvis/db/s_.java` supply the row-limit reference. Anvil keeps its own bounded result model and uses its existing table View.
 
+The `GO` delimiter follows `SQLAllowGo` in `com/onseven/dbvis/d/e.java` and `com/onseven/dbvis/lb/i.java`. Auto Commit for each editor follows `com/onseven/dbvis/i/d.java`. The Commit, Roll Back or Cancel question follows `PendingTransactionsProps` in `com/onseven/dbvis/hb/e/b/b/ec.java`. SQL Server explain uses `SET SHOWPLAN_ALL`, as `com/onseven/dbvis/db/vb/c.java` does.
+
 ## Tests
 
 Default UI tests replace the database boundary at `plugins.sql_server.backend` with fixed metadata and execution replies. The real Dialog, Editor, persistence, completion, navigation, and result View run unchanged. They need no SQL Server, driver, credentials, or network access. Runtime input tests reject invalid batches before a connection opens.
 
 ```sh
 meson test -C build-windows-x86_64 anvil:sql-context
+meson test -C build-windows-x86_64 anvil:sql-batch
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_context.lua
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_execution.lua
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_definitions.lua
 meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/sql_server.lua
 ```
 
-The real-server test is opt-in. It needs an existing LocalDB installation and Microsoft ODBC Driver 18 or 17. It creates a uniquely named instance and a database in a private temporary folder. It checks metadata, escaped identifiers, unchanged table data, and connection-value isolation. Execution checks cover multiple results, update counts, exact values, Unicode, embedded NUL, limits, errors, and cancellation. It then deletes its instance and files. It never reads user connection settings or connects to another instance.
+The real-server test is opt-in. It needs an existing LocalDB installation and Microsoft ODBC Driver 18 or 17. It creates a uniquely named instance and a database in a private temporary folder. It checks metadata, escaped identifiers, unchanged table data, and connection-value isolation. Execution checks cover multiple results, update counts, exact values, Unicode, embedded NUL, limits, errors, and cancellation. Session checks cover `GO` batches and error lines, temporary tables between runs, Auto Commit off, Commit and Roll Back, Explain Plan, a session after a cancelled run, and the rollback when a session closes. It then deletes its instance and files. It never reads user connection settings or connects to another instance.
 
 ```sh
 ANVIL_SQL_INTEGRATION=1 meson test -C build-windows-x86_64 anvil:sql-server-integration --print-errorlogs

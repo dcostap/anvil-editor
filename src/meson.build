@@ -22,6 +22,7 @@ anvil_sources = [
     'sql_context.c',
     'sql_server.c',
     'sql_query.c',
+    'sql_batch.c',
     'sql_definition.c',
     'fuzzy.c',
     'git_status_index.c',
@@ -326,9 +327,13 @@ sql_context_test = executable('sql_context_test',
     ['../tests/native/sql_context_test.c', 'sql_context.c'],
     include_directories: include_directories('.'))
 test('sql-context', sql_context_test, env: anvil_test_env, suite: 'anvil')
+sql_batch_test = executable('sql_batch_test',
+    ['../tests/native/sql_batch_test.c', 'sql_batch.c'],
+    include_directories: include_directories('.'))
+test('sql-batch', sql_batch_test, env: anvil_test_env, suite: 'anvil')
 if host_machine.system() == 'windows'
     sql_server_integration = executable('sql_server_integration',
-        ['../tests/native/sql_server_integration.c', 'sql_server.c', 'sql_query.c'],
+        ['../tests/native/sql_server_integration.c', 'sql_server.c', 'sql_query.c', 'sql_batch.c'],
         include_directories: include_directories('.'), dependencies: [cc.find_library('odbc32')])
 endif
 

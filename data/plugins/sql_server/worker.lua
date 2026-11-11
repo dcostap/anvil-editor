@@ -1,16 +1,31 @@
 -- Runs only in a worker Lua state. No Editor or UI objects enter this module.
 local M = {}
 function M.run(payload, context)
-  if context.cancelled() then return end
+  if context.cancelled() and payload.operation ~= "close_session" then return end
   local result, err
   if payload.operation == "execute" then
-    result = require("sql_server_native").execute(payload.options, payload.text,
-      payload.max_rows, payload.timeout_seconds, context.cancel_token_name)
+    result = require("sql_server_native").execute(payload.options, payload.text, {
+      session = payload.session, autocommit = payload.autocommit, explain = payload.explain,
+      max_rows = payload.max_rows, timeout = payload.timeout_seconds, token = context.cancel_token_name })
     payload.options.password = nil
     for _, model in ipairs(result.results) do
       model.distinct_values = require("plugins.tabular_data_preview.parser").distinct_values(model, context.cancelled)
-      if not model.distinct_values then return end
+      if not model.distinct_values then break end
     end
+    -- A cancelled job can send only a cancel message. It still names the
+    -- session, so the UI can use or close it.
+    if context.cancelled() then
+      context.send { type = "cancelled", payload = { value = { cancelled = true, session = result.session,
+        session_lost = result.session_lost, transaction_count = result.transaction_count, messages = result.messages } } }
+      return
+    end
+  elseif payload.operation == "end_transaction" then
+    local count, ended
+    count, err, ended = require("sql_server_native").end_transaction(payload.session, payload.commit)
+    result = { transaction_count = count, ended = ended }
+  elseif payload.operation == "close_session" then
+    require("sql_server_native").close_session(payload.session)
+    result = true
   elseif payload.operation == "definition" then
     result, err = require("sql_server_native").read_definition(payload.options, payload.schema, payload.name, context.cancel_token_name)
     payload.options.password = nil

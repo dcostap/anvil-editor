@@ -18,15 +18,44 @@ function M.read_schema(options, callback)
     on_error = function() callback(nil, "SQL Server worker failed.") end,
   })
 end
-function M.execute(options, text, callback)
+local function execution_pool() return worker_pool.named("sql-execution", { worker_count = 2 }) end
+-- Settings: session, autocommit, explain and max_rows. A result can name the
+-- session that the run opened.
+function M.execute(options, text, callback, settings)
   local config = require "core.config"
-  return submit(worker_pool.named("sql-execution", { worker_count = 2 }), {
+  settings = settings or {}
+  return submit(execution_pool(), {
     kind = "plugins.sql_server.worker",
-    payload = { operation = "execute", options = options, text = text,
-      max_rows = config.plugins.sql_server.max_rows, timeout_seconds = config.plugins.sql_server.timeout_seconds },
+    payload = { operation = "execute", options = options, text = text, session = settings.session,
+      autocommit = settings.autocommit ~= false, explain = settings.explain == true,
+      max_rows = settings.max_rows or config.plugins.sql_server.max_rows,
+      timeout_seconds = config.plugins.sql_server.timeout_seconds },
     on_result = function(message) callback(message.payload.value) end,
     on_error = function() callback({ error = "SQL execution worker failed." }) end,
-    on_cancelled = function() callback({ cancelled = true }) end,
+    on_cancelled = function(message)
+      local value = message.payload and message.payload.value
+      callback(type(value) == "table" and value or { cancelled = true })
+    end,
+  })
+end
+-- Calls back with the new transaction count, or nil, an error and whether the
+-- session ended.
+function M.end_transaction(session, commit, callback)
+  return submit(execution_pool(), {
+    kind = "plugins.sql_server.worker",
+    payload = { operation = "end_transaction", session = session, commit = commit },
+    on_result = function(message)
+      local value = message.payload.value or {}
+      callback(value.transaction_count, message.payload.error, value.ended)
+    end,
+    on_error = function() callback(nil, "SQL transaction worker failed.") end,
+  })
+end
+-- The server rolls back an open transaction when its session closes.
+function M.close_session(session)
+  return submit(execution_pool(), {
+    kind = "plugins.sql_server.worker",
+    payload = { operation = "close_session", session = session },
   })
 end
 function M.read_definition(options, object, callback)

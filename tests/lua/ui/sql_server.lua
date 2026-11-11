@@ -50,6 +50,9 @@ test.describe("SQL Queries", function()
     core.global_prompt_bar:exit(true)
     if context.original_backend then require("plugins.sql_server.backend").read_schema = context.original_backend end
     if context.original_execute then require("plugins.sql_server.backend").execute = context.original_execute end
+    if context.original_end then require("plugins.sql_server.backend").end_transaction = context.original_end end
+    if context.original_close then require("plugins.sql_server.backend").close_session = context.original_close end
+    if context.nag_show then core.nag_view.show = context.nag_show end
     require("plugins.sql_server.backend").read_definition = context.original_definition
     if context.connection_id then require("plugins.sql_server").remove(context.connection_id) end
     local open = dialog.current()
@@ -252,6 +255,71 @@ test.describe("SQL Queries", function()
     reply({ error = "Late response" })
     test.equal(#panes.ordered(), 1)
     test.equal(core.active_view, editor)
+  end)
+
+  test.it("keeps one session per SQL Query and asks before its open transaction ends", function(context)
+    local editor, c = connected_query(context)
+    local backend = require "plugins.sql_server.backend"
+    local sql = require "plugins.sql_server"
+    context.original_end, context.original_close = backend.end_transaction, backend.close_session
+    context.nag_show = core.nag_view.show
+    local runs, ended, closed, question = {}, {}, {}, nil
+    backend.execute = function(_, text, callback, settings)
+      runs[#runs + 1] = { text = text, settings = settings }
+      callback({ results = {}, session = 7, transaction_count = text:find("INSERT") and 1 or 0,
+        messages = { { text = "(1 row affected)" } } })
+      return { cancel = function() end }
+    end
+    backend.end_transaction = function(session, commit, callback)
+      ended[#ended + 1] = { session = session, commit = commit }
+      callback(0)
+      return { cancel = function() end }
+    end
+    backend.close_session = function(session) closed[#closed + 1] = session end
+    core.nag_view.show = function(_, title, _, _, callback) question = { title = title, answer = callback } end
+    editor.buffer:text_input("INSERT sales.customers (name) VALUES (N'Ada')")
+    test.ok(command.perform("sql_server:toggle_auto_commit"))
+    test.ok(command.perform("sql_server:run_buffer"))
+    test.equal(runs[1].settings.session, nil)
+    test.equal(runs[1].settings.autocommit, false)
+    test.ok(command.perform("sql_server:run_buffer"))
+    test.equal(runs[2].settings.session, 7)
+
+    test.ok(command.perform("sql_server:disconnect"))
+    test.equal(test.not_nil(question).title, "Open Transaction")
+    question.answer({ text = "Cancel" })
+    test.same(ended, {})
+    test.equal(c.state, "Ready")
+    test.ok(command.perform("sql_server:commit"))
+    test.same(ended, { { session = 7, commit = true } })
+
+    test.ok(command.perform("sql_server:run_buffer"))
+    question = nil
+    local pane = panes.pane_for_view(editor)
+    panes.close(pane)
+    test.equal(test.not_nil(question).title, "Open Transaction")
+    test.ok(panes.pane_for_view(editor))
+    question.answer({ text = "Roll Back" })
+    test.same(ended[2], { session = 7, commit = false })
+    test.same(closed, {})
+    sql.disconnect(c.id)
+    test.same(closed, { 7 })
+  end)
+
+  test.it("shows server messages in order and moves the caret to the line of an error", function(context)
+    local editor = connected_query(context)
+    require("plugins.sql_server.backend").execute = function(_, _, callback)
+      callback({ results = {}, error = "Line 3: Invalid column name 'nam'.", error_line = 3, messages = {
+        { text = "first" }, { text = "Msg 207, Level 16, State 1, Line 3\nInvalid column name 'nam'.", line = 3, error = true } } })
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("-- note\nPRINT 'first'\nGO\nSELECT nam\nFROM sales.customers")
+    editor.buffer:set_selection(2, 1, 5, 21)
+    test.ok(command.perform("sql_server:run_selection"))
+    local results = test.not_nil(editor.buffer.sql_results)
+    test.equal(results:messages_text(), "first\nMsg 207, Level 16, State 1, Line 3\nInvalid column name 'nam'.")
+    test.ok(command.perform("sql_server:go_to_error"))
+    test.equal(select(1, editor.buffer:get_selection()), 4)
   end)
 
   test.it("shows every row of the next result without the previous result's filter", function()

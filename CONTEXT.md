@@ -166,6 +166,10 @@ _Avoid_: SQL Commander, query tab
 **SQL Result**:
 A read-only table returned by running a SQL Query. One run can return several SQL Results.
 
+**SQL Session**:
+A SQL Query's own open connection to its database server. Temporary tables, settings and open transactions stay in it from one run to the next. When it ends, the server rolls back its open transaction.
+_Avoid_: editor connection, physical connection
+
 **Database Connection**:
 A named configuration that identifies a database server, database, and authentication method for SQL Queries.
 _Avoid_: database profile

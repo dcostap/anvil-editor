@@ -6,9 +6,10 @@ test.describe("SQL execution input", function()
   test.it("refuses invalid batches before opening a connection", function()
     test.skip_if(PLATFORM ~= "Windows", "ODBC execution requires Windows")
     for _, text in ipairs({ "", "SELECT\0 1", "\255", string.rep("x", 256 * 1024 + 1) }) do
-      local result = native.execute(options, text, 1000, 30)
+      local result = native.execute(options, text, { max_rows = 1000, timeout = 30 })
       test.ok(result.error:find("SQL text", 1, true))
       test.same(result.results, {})
+      test.equal(result.session, nil)
     end
   end)
 
@@ -93,6 +94,25 @@ test.describe("SQL execution input", function()
       function(value) reply.value = value end))
     coroutine.yield(0.2)
     handle:cancel()
-    test.ok(await(reply).cancelled)
+    local cancelled = await(reply)
+    test.ok(cancelled.cancelled)
+    -- A cancelled run keeps its session, and the next run can use it at once.
+    reply = {}
+    backend.execute(connection, "CREATE TABLE #kept (id int); INSERT #kept VALUES (4)", function(value) reply.value = value end,
+      { session = test.not_nil(cancelled.session), autocommit = false })
+    local opened = await(reply)
+    test.equal(opened.error, nil)
+    test.equal(opened.session, cancelled.session)
+    test.equal(opened.transaction_count, 1)
+    reply = {}
+    test.not_nil(backend.end_transaction(opened.session, true, function(count, err) reply.value = { count = count, error = err } end))
+    test.equal(await(reply).count, 0)
+    reply = {}
+    backend.execute(connection, "SELECT id FROM #kept\nGO\nPRINT N'done'", function(value) reply.value = value end,
+      { session = opened.session })
+    local kept = await(reply)
+    test.equal(kept.results[1].rows[1].cells[1], "4")
+    test.equal(kept.messages[#kept.messages].text, "done")
+    backend.close_session(opened.session)
   end)
 end)

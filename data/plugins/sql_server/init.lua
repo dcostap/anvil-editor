@@ -1,10 +1,12 @@
 -- mod-version:3
 local core = require "core"
 local command = require "core.command"
+local config = require "core.config"
 local Editor = require "core.editor"
 local panes = require "core.panes"
 local worker_pool = require "core.worker_pool"
 local backend = require "plugins.sql_server.backend"
+local session = require "plugins.sql_server.session"
 local M = { connections = {}, generation = 0 }
 local loaded, loading, storage_key, saving, pending_save
 local serial = 0
@@ -125,6 +127,7 @@ function M.disconnect(id)
   local source = package.loaded["plugins.sql_server.source"]
   if source then source.cancel_connection(c) end
   for run in pairs(active_runs) do if run.connection == c then cancel_run(run) end end
+  session.close_connection(c)
   if c.job then c.job:cancel(); c.job = nil end
   c.catalog, c.password, c.error, c.state = nil, nil, nil, "Disconnected"
   changed()
@@ -141,9 +144,17 @@ function M.update(id, key, value)
     if key == "name" and not value:find("%S") then return false, "Enter a name." end
   else return false end
   if c[key] == value then return true end
+  if #session.pending(c) > 0 then return false, "Commit or roll back the open transactions first." end
   M.disconnect(id)
   c[key] = value
   save(); changed()
+  return true
+end
+-- Explicit actions that end sessions ask about open transactions first.
+function M.after_transactions(id, action)
+  local c = M.find(id)
+  if not c then return false end
+  session.confirm(session.pending(c), action)
   return true
 end
 function M.remove(id)
@@ -201,11 +212,21 @@ function M.with_connection(view, action)
   return require("plugins.sql_server.connection").with_connection(M, view, action)
 end
 
-function M.run(editor, whole_buffer)
+M.ROW_LIMIT_MAX = 100000
+function M.row_limit(buffer)
+  if buffer.sql_row_limit == false then return M.ROW_LIMIT_MAX end
+  return config.plugins.sql_server.max_rows
+end
+
+-- Runs the selection, or the whole Buffer with opts.whole_buffer. With
+-- opts.explain, SQL Server returns estimated plans and runs nothing.
+function M.run(editor, opts)
+  opts = opts or {}
   local buffer = editor.buffer
-  if buffer.sql_execution and buffer.sql_execution.active then return false end
+  local s = session.get(buffer)
+  if (buffer.sql_execution and buffer.sql_execution.active) or (s and s.busy) then return false end
   local line1, col1, line2, col2 = buffer:get_selection(true)
-  if whole_buffer then
+  if opts.whole_buffer then
     line1, col1, line2, col2 = 1, 1, #buffer.lines, #buffer.lines[#buffer.lines]
   elseif line1 == line2 and col1 == col2 then
     return false
@@ -228,23 +249,30 @@ function M.run(editor, whole_buffer)
     if not view then return false end
     buffer.sql_results = view
   end
-  run.view = view
+  run.view, view.source_buffer = view, buffer
   buffer.sql_execution, active_runs[run] = run, true
-  view:begin_run(function() cancel_run(run) end)
+  buffer.sql_error_line = nil
+  view:begin_run(function() cancel_run(run) end, opts.explain)
   buffer:add_metadata_listener("sql_execution", function(_, event)
-    if event.kind == "close" then cancel_run(run) end
+    if event.kind == "close" then run.closed = true; cancel_run(run) end
   end)
   local function finish(data)
     if not run.active then return end
     run.active, run.handle, active_runs[run] = false, nil, nil
     buffer:remove_metadata_listener("sql_execution")
-    if run.cancelled or c.generation ~= run.generation then data = { cancelled = true } end
+    session.adopt(buffer, c, run.generation, data, not run.closed and M.connection_for(buffer) == c)
+    if run.cancelled or c.generation ~= run.generation then
+      data = { cancelled = true, messages = data.messages, transaction_count = data.transaction_count }
+    end
+    if data.error_line then buffer.sql_error_line = math.min(line1 + data.error_line - 1, #buffer.lines) end
     if buffer.sql_execution == run and not view.closed then view:complete(data) end
-    core.log_quiet("SQL Server: execution connection=%s cancelled=%s failed=%s seconds=%.3f",
-      c.id, tostring(data.cancelled == true), tostring(data.error ~= nil), system.get_time() - run.started)
+    core.log_quiet("SQL Server: execution connection=%s cancelled=%s failed=%s explain=%s seconds=%.3f",
+      c.id, tostring(data.cancelled == true), tostring(data.error ~= nil), tostring(opts.explain == true),
+      system.get_time() - run.started)
   end
-  local handle, err = backend.execute({ server = c.server, database = c.database, user = c.user,
-    password = passwords[c], integrated = c.integrated, trust_certificate = c.trust_certificate, encrypt = c.encrypt }, text, finish)
+  local handle, err = backend.execute(M.connection_options(c), text, finish, {
+    session = session.for_run(buffer, c), autocommit = buffer.sql_auto_commit ~= false,
+    explain = opts.explain, max_rows = M.row_limit(buffer) })
   if not handle then finish({ error = err or "Could not start SQL execution." })
   elseif run.active then run.handle = handle; if run.cancelled then handle:cancel() end end
   return handle ~= nil
@@ -282,6 +310,28 @@ function Editor:can_suspend()
   return self.buffer.sql_connection_id ~= nil or editor_can_suspend(self)
 end
 
+-- Closing the last View of a SQL Query ends its session. Ask first when its
+-- transaction is open.
+local editor_can_close = Editor.can_close
+function Editor:can_close(approve, ...)
+  local s = session.get(self.buffer)
+  if s and s.transaction_count ~= 0 and #core.get_views_referencing_buffer(self.buffer) <= 1 then
+    local args = table.pack(...)
+    return session.confirm({ self.buffer }, function() editor_can_close(self, approve, table.unpack(args, 1, args.n)) end)
+  end
+  return editor_can_close(self, approve, ...)
+end
+local confirm_close_buffers = core.confirm_close_buffers
+function core.confirm_close_buffers(buffers, close_fn, cancel_fn, ...)
+  local closing, pending = {}, {}
+  for _, buffer in ipairs(buffers) do closing[buffer] = true end
+  for _, buffer in ipairs(session.pending()) do if closing[buffer] then pending[#pending + 1] = buffer end end
+  local args = table.pack(...)
+  return session.confirm(pending, function()
+    return confirm_close_buffers(buffers, close_fn, cancel_fn, table.unpack(args, 1, args.n))
+  end, cancel_fn and function() cancel_fn(table.unpack(args, 1, args.n)) end)
+end
+
 function M.open_definition(view, opts)
   return require("plugins.sql_server.source").open(M, view, nil, opts)
 end
@@ -304,10 +354,60 @@ end, {
   ["sql_server:choose_connection"] = command.palette(function(view)
     return require("plugins.sql_server.connection").choose(M, view)
   end),
-  ["sql_server:run_selection"] = command.palette(function(view) return M.run(view, false) end),
-  ["sql_server:run_buffer"] = command.palette(function(view) return M.run(view, true) end),
+  ["sql_server:run_selection"] = command.palette(function(view) return M.run(view) end),
+  ["sql_server:run_buffer"] = command.palette(function(view) return M.run(view, { whole_buffer = true }) end),
+  ["sql_server:explain_selection"] = command.palette(function(view) return M.run(view, { explain = true }) end),
+  ["sql_server:toggle_auto_commit"] = command.palette(function(view)
+    local buffer = view.buffer
+    if buffer.sql_auto_commit ~= false then
+      buffer.sql_auto_commit = false
+      core.status_bar:show_message("i", require("core.style").text, "Auto Commit off")
+      core.redraw = true
+      return true
+    end
+    -- Auto Commit cannot turn on inside a transaction, so end it first.
+    local s = session.get(buffer)
+    session.confirm(s and s.transaction_count ~= 0 and { buffer } or {}, function()
+      buffer.sql_auto_commit = nil
+      core.status_bar:show_message("i", require("core.style").text, "Auto Commit on")
+      core.redraw = true
+    end)
+    return true
+  end),
+  ["sql_server:toggle_row_limit"] = command.palette(function(view)
+    view.buffer.sql_row_limit = view.buffer.sql_row_limit ~= false and false or nil
+    core.status_bar:show_message("i", require("core.style").text, view.buffer.sql_row_limit == false
+      and string.format("Row limit off. Results stop at %d rows.", M.ROW_LIMIT_MAX)
+      or string.format("Row limit %d", config.plugins.sql_server.max_rows))
+    core.redraw = true
+    return true
+  end),
+  ["sql_server:disconnect"] = command.palette(function(view)
+    local c = M.connection_for(view.buffer)
+    if not c or c.state == "Disconnected" then return false end
+    return M.after_transactions(c.id, function() M.disconnect(c.id) end)
+  end),
   ["sql_server:expand_star"] = command.palette(function(view)
     return require("plugins.sql_server.intelligence").expand_star(view, M)
+  end),
+})
+command.add(function()
+  local view = core.active_view
+  local s = M.is_sql(view) and session.get(view.buffer)
+  return s and not s.busy and (s.transaction_count ~= 0 or view.buffer.sql_auto_commit == false), view
+end, {
+  ["sql_server:commit"] = command.palette(function(view) return session.end_transaction(view.buffer, true) end),
+  ["sql_server:rollback"] = command.palette(function(view) return session.end_transaction(view.buffer, false) end),
+})
+command.add(function()
+  local view = core.active_view
+  return M.is_sql(view) and view.buffer.sql_error_line ~= nil, view
+end, {
+  ["sql_server:go_to_error"] = command.palette(function(view)
+    local line = math.min(view.buffer.sql_error_line, #view.buffer.lines)
+    view.buffer:set_selection(line, 1)
+    view:scroll_to_line(line, true)
+    return true
   end),
 })
 for _, action in ipairs({ "select", "create", "alter", "insert", "update", "delete" }) do
@@ -340,6 +440,34 @@ function core.set_project(...)
   loaded, loading, M.connections = false, false, {}
   changed()
   return set_project(...)
+end
+-- The SQL Query's connection and transaction state, like the SQL Commander
+-- status of DbVisualizer. A click chooses the connection.
+do
+  local style = require "core.style"
+  core.status_bar:add_item {
+    name = "sql:connection",
+    alignment = core.status_bar.Item.RIGHT,
+    predicate = function(view) return M.is_sql(view) end,
+    get_item = function(_, view)
+      local c = M.connection_for(view.buffer)
+      if not c then return { style.dim, "No SQL connection" } end
+      local parts = { c.state == "Ready" and style.text or style.dim, c.name }
+      local s = session.get(view.buffer)
+      if view.buffer.sql_auto_commit == false then table.insert(parts, style.dim); table.insert(parts, " · Auto Commit Off") end
+      if s and s.transaction_count ~= 0 then
+        table.insert(parts, style.warn)
+        table.insert(parts, s.transaction_count and " · Transaction Open" or " · Transaction Unknown")
+      end
+      if view.buffer.sql_row_limit == false then table.insert(parts, style.dim); table.insert(parts, " · No Row Limit") end
+      return parts
+    end,
+    tooltip = function(_, view)
+      local c = M.connection_for(view.buffer)
+      return c and (c.database .. " @ " .. c.server .. " · " .. c.state) or "Choose a SQL connection"
+    end,
+    command = "sql_server:choose_connection",
+  }
 end
 require("plugins.sql_server.intelligence").install(M)
 return M
