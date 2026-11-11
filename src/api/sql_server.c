@@ -34,9 +34,25 @@ static int context(lua_State *L) {
   for (size_t i = 0; i < out.count; ++i) {
     lua_newtable(L);
     text(L, "schema", out.sources[i].schema); text(L, "name", out.sources[i].name); text(L, "alias", out.sources[i].alias);
+    if (out.sources[i].local) { lua_pushinteger(L, (lua_Integer)out.sources[i].local); lua_setfield(L, -2, "local_index"); }
     lua_rawseti(L, -2, (int)i + 1);
   }
   lua_setfield(L, -2, "sources");
+  static const char *kinds[] = { "", "cte", "derived", "temp", "variable" };
+  lua_createtable(L, (int)out.local_count, 0);
+  for (size_t i = 0; i < out.local_count; ++i) {
+    SqlLocal *local = &out.locals[i];
+    lua_newtable(L);
+    text(L, "name", local->name); text(L, "kind", kinds[local->kind]); boolean(L, "star", local->star);
+    lua_createtable(L, (int)local->count, 0);
+    for (size_t c = 0; c < local->count; ++c) {
+      lua_pushstring(L, out.columns[local->first + c]); lua_rawseti(L, -2, (int)c + 1);
+    }
+    lua_setfield(L, -2, "columns");
+    lua_rawseti(L, -2, (int)i + 1);
+  }
+  lua_setfield(L, -2, "locals");
+  sql_context_free(&out);
   return 1;
 }
 static const char *option(lua_State *L, const char *key) {

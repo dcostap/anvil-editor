@@ -5,10 +5,24 @@
 
 #define SQL_CONTEXT_NAME 513
 #define SQL_CONTEXT_SOURCES 64
+#define SQL_CONTEXT_LOCALS 64
+#define SQL_CONTEXT_COLUMNS 2048
 
 typedef struct {
   char schema[SQL_CONTEXT_NAME], name[SQL_CONTEXT_NAME], alias[SQL_CONTEXT_NAME];
+  /* One-based index of the Local Source that this name means, or 0 for a catalog object. */
+  size_t local;
 } SqlSource;
+
+/* A source that the text itself defines. Its columns are names in the text: a
+ * column list, or the names of a SELECT's columns. With star set, a `*` or a
+ * limit leaves the list incomplete. */
+enum { SQL_LOCAL_CTE = 1, SQL_LOCAL_DERIVED, SQL_LOCAL_TEMP, SQL_LOCAL_VARIABLE };
+typedef struct {
+  char name[SQL_CONTEXT_NAME];
+  int kind, star;
+  size_t first, count; /* Range in SqlContext.columns. */
+} SqlLocal;
 
 typedef struct {
   /* Byte offsets, like Anvil's Buffer columns. End is exclusive. */
@@ -20,8 +34,16 @@ typedef struct {
   char prefix[SQL_CONTEXT_NAME], qualifier[SQL_CONTEXT_NAME];
   SqlSource sources[SQL_CONTEXT_SOURCES];
   size_t count;
+  /* CTEs of the caret's statement, derived tables of its scope, and the temporary
+   * tables and table variables of the whole text. */
+  SqlLocal *locals;
+  size_t local_count;
+  char (*columns)[SQL_CONTEXT_NAME];
+  size_t column_count, column_capacity;
 } SqlContext;
 
-/* Returns zero for oversized input or allocation failure. No partial result. */
+/* Returns zero for oversized input or allocation failure. No partial result.
+ * Call sql_context_free after each successful parse. */
 int sql_context_parse(const char *text, size_t length, size_t caret, SqlContext *out);
+void sql_context_free(SqlContext *context);
 #endif

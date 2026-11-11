@@ -11,7 +11,7 @@ local function equal(catalog, a, b)
 end
 local function quote(buffer, value)
   local symbols = buffer.syntax and buffer.syntax.symbols or {}
-  if value:match("^[%a_][%w_]*$") and not symbols[value:upper()] then return value end
+  if value:match("^[#@]*[%a_][%w_@#$]*$") and not symbols[value:upper()] then return value end
   return "[" .. value:gsub("]", "]]") .. "]"
 end
 local function resolve(catalog, schema, name)
@@ -23,6 +23,24 @@ local function resolve(catalog, schema, name)
     end
   end
   return fallback
+end
+local LOCAL_LABELS = { cte = "CTE", derived = "derived table", temp = "temporary table", variable = "table variable" }
+-- A source's object: a Local Source that the text defines, or else a catalog object.
+local function source_object(state, source)
+  local index = source.local_index
+  if not index then return resolve(state.catalog, source.schema, source.name) end
+  state.local_objects = state.local_objects or {}
+  local object = state.local_objects[index]
+  if not object then
+    local definition = state.parsed.locals[index]
+    object = { schema = "", name = definition.name, kind = definition.kind, local_source = true,
+      incomplete = definition.star, columns = {} }
+    for i, column in ipairs(definition.columns) do
+      object.columns[i] = { name = column, type = LOCAL_LABELS[definition.kind] }
+    end
+    state.local_objects[index] = object
+  end
+  return object
 end
 local function context(view, sql)
   local buffer = view and view.buffer
@@ -71,6 +89,11 @@ local function complete(view, sql)
       return true
     end }
   end
+  if (p.mode == "table" or p.mode == "object" and p.object_kind == "table") and p.qualifier == "" then
+    for _, definition in ipairs(p.locals) do
+      if definition.kind ~= "derived" then add(definition.name, quote(buffer, definition.name), LOCAL_LABELS[definition.kind]) end
+    end
+  end
   if p.mode == "table" or p.mode == "object" then
     for _, t in ipairs(catalog.objects) do
       local kind = p.mode == "table" and "table" or p.object_kind
@@ -84,12 +107,13 @@ local function complete(view, sql)
     for _, source in ipairs(p.sources) do
       local qualifier = source.alias ~= "" and source.alias or source.name
       if p.qualifier == "" or equal(catalog, p.qualifier, qualifier) then
-        local t = resolve(catalog, source.schema, source.name)
+        local t = source_object(state, source)
         if t then
+          local owner = t.local_source and t.name or t.schema .. "." .. t.name
           for _, column in ipairs(t.columns) do
             local inserted = quote(buffer, column.name)
             if p.qualifier == "" and #p.sources > 1 then inserted = quote(buffer, qualifier) .. "." .. inserted end
-            add(column.name, inserted, t.schema .. "." .. t.name .. " · " .. column.type)
+            add(column.name, inserted, owner .. " · " .. column.type)
           end
         end
       end
@@ -140,6 +164,13 @@ function M.object_at(view, sql)
   local symbol = state.text:sub(p.start + 1, p["end"])
   if symbol:sub(1, 1) == "[" then symbol = symbol:sub(2):gsub("]$", ""):gsub("]]", "]")
   elseif symbol:sub(1, 1) == '"' then symbol = symbol:sub(2):gsub('"$', ""):gsub('""', '"') end
+  -- A Local Source has no database definition, so it must not reach a catalog
+  -- object with the same name.
+  if p.qualifier == "" then
+    for _, definition in ipairs(p.locals) do
+      if definition.kind ~= "derived" and equal(state.catalog, definition.name, symbol) then return end
+    end
+  end
   if p.mode == "table" or p.mode == "object" then
     local direct = resolve(state.catalog, p.qualifier, symbol)
     if direct then return direct end
@@ -147,9 +178,12 @@ function M.object_at(view, sql)
   local candidate
   for _, source in ipairs(p.sources) do
     local qualifier = source.alias ~= "" and source.alias or source.name
-    local t = resolve(state.catalog, source.schema, source.name)
+    local t = source_object(state, source)
     if t then
-      if p.qualifier == "" and symbol ~= "" and equal(state.catalog, qualifier, symbol) then return t end
+      if p.qualifier == "" and symbol ~= "" and equal(state.catalog, qualifier, symbol) then
+        if t.local_source then return end
+        return t
+      end
       if p.mode == "column" and (p.qualifier == "" or equal(state.catalog, qualifier, p.qualifier)) then
         for _, column in ipairs(t.columns) do
           if equal(state.catalog, column.name, symbol) then
@@ -160,6 +194,7 @@ function M.object_at(view, sql)
       end
     end
   end
+  if candidate and candidate.local_source then return end
   return candidate
 end
 
@@ -172,8 +207,10 @@ function M.expand_star(view, sql)
     for _, source in ipairs(p.sources) do
       local qualifier = source.alias ~= "" and source.alias or source.name
       if p.qualifier == "" or equal(state.catalog, p.qualifier, qualifier) then
-        local object = resolve(state.catalog, source.schema, source.name)
-        if not object or #object.columns == 0 then core.warn("Column metadata is unavailable."); return false end
+        local object = source_object(state, source)
+        if not object or #object.columns == 0 or object.incomplete then
+          core.warn("Column metadata is unavailable."); return false
+        end
         for _, column in ipairs(object.columns) do
           local name = quote(view.buffer, column.name)
           if (#columns > 0 and p.qualifier ~= "") or (p.qualifier == "" and #p.sources > 1) then

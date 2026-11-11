@@ -80,7 +80,9 @@ Object navigation also recognizes EXEC, INSERT INTO, UPDATE, DELETE FROM, REFERE
 
 Unqualified table lookup follows the database user's default schema, then `dbo`. Ambiguous column navigation does not choose a table. Joined-column completion qualifies its inserted names.
 
-CTEs, derived tables, cross-database references, table-valued function sources, correlated outer references, and temporary-table metadata are not supported. This is not a complete T-SQL parser or a Tree-sitter SQL grammar. Context reads stop above 256 KiB, 32,768 tokens, 64 nested SELECT scopes, or 64 sources. Metadata reads stop above 10,000 objects or 50,000 columns.
+The Query text also defines Local Sources: CTEs of the caret's statement, derived tables, and the temporary tables and table variables of the whole text. Their columns come from the text: a column list, `CREATE TABLE #name (...)`, `DECLARE @name TABLE (...)`, or the names of a SELECT's columns, also `SELECT ... INTO #name`. A SELECT column has a name when it is a column, `expression AS name`, `expression name` or `name = expression`. Completion offers these columns and the names of CTEs, temporary tables and table variables. Expand Star uses them. A Local Source hides a database table with the same name, and Go to Definition does not open that table. A Local Source with `*` in its SELECT has no column list, so Expand Star refuses it.
+
+Cross-database references, table-valued function sources, correlated outer references, and temporary tables that another Query or an earlier text made are not supported. This is not a complete T-SQL parser or a Tree-sitter SQL grammar. Context reads stop above 256 KiB, 32,768 tokens, 64 nested SELECT scopes, 64 sources, 64 Local Sources, or 2,048 Local Source columns. Metadata reads stop above 10,000 objects or 50,000 columns.
 
 ## Source reference
 
@@ -91,6 +93,7 @@ The selected completion path has these parts:
 - `com/onseven/dbvis/b/c/b/p.java` selects a completion provider from SQL context.
 - `com/onseven/dbvis/b/c/eb.java` scans tokens and records the context at the caret.
 - `com/onseven/dbvis/b/c/g_.java` keeps nested SQL contexts and visible tables.
+- `com/onseven/dbvis/b/c/k_.java` and `com/onseven/dbvis/b/c/ib.java` open a context for a WITH clause.
 - `com/onseven/dbvis/b/c/b/pb.java` supplies table candidates.
 - `com/onseven/dbvis/b/c/b/x.java` supplies column candidates.
 - `com/onseven/dbvis/b/c/b/gb.java` schedules background work and rejects obsolete results.
