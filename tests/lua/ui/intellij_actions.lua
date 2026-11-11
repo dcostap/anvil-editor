@@ -154,6 +154,38 @@ test.describe("IntelliJ actions batch behavior", function()
     test.equal(table.concat(buffer.lines), original .. "\n")
   end)
 
+  test.it("clone caret grows a column from each caret and the opposite direction takes the last step back", function(context)
+    local view = open_editor(context, "aa\nbb\ncc\ndd\nee\nff")
+    set_view_selections(view, { 1, 2, 1, 2, 4, 2, 4, 2 })
+
+    test.ok(command.perform("editor:create_cursor_next_line"))
+    test.same(view_selections(view), { 1, 2, 1, 2, 2, 2, 2, 2, 4, 2, 4, 2, 5, 2, 5, 2 })
+
+    test.ok(command.perform("editor:create_cursor_next_line"))
+    test.same(view_selections(view), {
+      1, 2, 1, 2, 2, 2, 2, 2, 3, 2, 3, 2, 4, 2, 4, 2, 5, 2, 5, 2, 6, 2, 6, 2,
+    })
+
+    test.ok(command.perform("editor:create_cursor_previous_line"))
+    test.same(view_selections(view), { 1, 2, 1, 2, 2, 2, 2, 2, 4, 2, 4, 2, 5, 2, 5, 2 })
+
+    test.ok(command.perform("editor:create_cursor_previous_line"))
+    test.same(view_selections(view), { 1, 2, 1, 2, 4, 2, 4, 2 })
+  end)
+
+  test.it("clone caret keeps the selection and column across a short line", function(context)
+    local view = open_editor(context, "long line\nx\nlong line\nx\nlong line")
+    set_view_selections(view, { 1, 10, 1, 6, 4, 2, 4, 2 })
+
+    test.ok(command.perform("editor:create_cursor_next_line"))
+    test.same(view_selections(view), { 1, 10, 1, 6, 3, 10, 3, 6, 4, 2, 4, 2, 5, 2, 5, 2 })
+
+    set_view_selections(view, { 1, 10, 1, 10 })
+    test.ok(command.perform("editor:create_cursor_next_line"))
+    test.ok(command.perform("editor:create_cursor_next_line"))
+    test.same(view_selections(view), { 1, 10, 1, 10, 2, 2, 2, 2, 3, 10, 3, 10 })
+  end)
+
   test.it("clone caret below until last line adds carets in one bulk selection update", function(context)
     local view, buffer = open_editor(context, "aa\nbb\ncc\ndd")
     set_view_selections(view, { 2, 2, 2, 2 })
