@@ -382,6 +382,35 @@ test.describe("SQL Queries", function()
       require("plugins.sql_server").connection_for(editor.buffer))
   end)
 
+  test.it("opens a symbol's actions with its default first and runs a generated SELECT", function(context)
+    local editor = connected_query(context)
+    local context_menu = require "core.context_menu"
+    editor.buffer:text_input("SELECT * FROM sales.customers")
+    editor.buffer:set_selection(1, #"SELECT * FROM sales.cus" + 1)
+    local items = editor:context_menu()
+    test.equal(items[1].label, "sales.customers")
+    test.equal(items[1].items[1].label, "Script as SELECT")
+    local view_items = require("plugins.sql_server.source").action_items(editor,
+      { schema = "dbo", name = "recent", kind = "view", columns = {} })
+    test.equal(view_items[1].label, "Script as ALTER")
+    local submitted, settings
+    require("plugins.sql_server.backend").execute = function(_, sql, done, options)
+      submitted, settings = sql, options
+      done({ results = {}, affected_rows = {}, messages = {} })
+      return { cancel = function() end }
+    end
+    test.ok(command.perform("sql_server:symbol_actions"))
+    test.ok(context_menu.is_open())
+    test.equal(context_menu.selected_label(), "Script as SELECT")
+    test.ok(context_menu.choose("Script as SELECT"))
+    local generated = core.active_view
+    test.not_equal(generated, editor)
+    test.equal(generated.buffer:get_text(1, 1, math.huge, math.huge), "SELECT [id], [name]\nFROM [sales].[customers];")
+    test.equal(submitted, "SELECT [id], [name]\nFROM [sales].[customers];")
+    test.not_nil(settings)
+    test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "SELECT * FROM sales.customers")
+  end)
+
   test.it("does not navigate an unknown column to an unrelated table", function(context)
     local editor = connected_query(context)
     editor.buffer:text_input("SELECT missing FROM sales.customers")

@@ -417,6 +417,46 @@ for _, action in ipairs({ "select", "create", "alter", "insert", "update", "dele
     end),
   })
 end
+command.add(function() return M.is_sql(core.active_view), core.active_view end, {
+  ["sql_server:symbol_actions"] = command.palette(function(view)
+    return require("plugins.sql_server.source").symbol_actions(M, view)
+  end),
+})
+-- Menu items carry the View and the object, so they act on the clicked symbol.
+local function object_args(view, object, action)
+  return M.is_sql(view) and not view.closed and type(object) == "table", view, object, action
+end
+command.add(object_args, {
+  ["sql_server:script_object"] = function(view, object, action)
+    return require("plugins.sql_server.source").generate(M, view, action, object)
+  end,
+  ["sql_server:open_object"] = function(view, object)
+    return require("plugins.sql_server.source").open(M, view, object)
+  end,
+})
+
+-- A SQL Editor's Context Menu starts with the actions of the symbol at the
+-- caret, then the run commands, then the normal text commands.
+local editor_context_menu = Editor.context_menu
+function Editor:context_menu(x, y)
+  local items = editor_context_menu(self, x, y)
+  if not items or not M.is_sql(self) then return items end
+  local icons = require("core.context_menu").icons
+  local sql_items = {}
+  local object = require("plugins.sql_server.intelligence").object_at(self, M)
+  if object then
+    sql_items[1] = { label = object.schema .. "." .. object.name, icon = icons.table,
+      items = require("plugins.sql_server.source").action_items(self, object) }
+  end
+  if self.buffer:has_selection() then
+    sql_items[#sql_items + 1] = { label = "Run Selection", icon = icons.run, command = "sql_server:run_selection" }
+    sql_items[#sql_items + 1] = { label = "Explain Selection", icon = icons.search, command = "sql_server:explain_selection" }
+  end
+  sql_items[#sql_items + 1] = { label = "Run Buffer", icon = icons.run, command = "sql_server:run_buffer" }
+  sql_items[#sql_items + 1] = "-"
+  for i, item in ipairs(sql_items) do table.insert(items, i, item) end
+  return items
+end
 command.add(function()
   local view = core.active_view
   local run = view and view.buffer and view.buffer.sql_execution

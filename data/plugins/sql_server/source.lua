@@ -68,14 +68,51 @@ function M.open(sql, view, object, opts)
   end)
 end
 
-function M.generate(sql, view, action)
-  return read(sql, view, nil, function(c, object, scripts)
+-- A generated SELECT runs at once, so its rows show below it.
+function M.generate(sql, view, action, object)
+  return read(sql, view, object, function(c, target, scripts)
     local text = scripts[action]
-    if not text then core.warn("This symbol does not support Generate %s.", action:upper()); return end
+    if not text then core.warn("This symbol does not support Script as %s.", action:upper()); return end
     local editor = sql.new_query(c.id)
     editor.buffer:text_input(text)
     editor.buffer:set_selection(1, 1)
-    core.log_quiet("SQL script: %s for %s.%s", action, object.schema, object.name)
+    core.log_quiet("SQL script: %s for %s.%s", action, target.schema, target.name)
+    if action == "select" and require("core.config").plugins.sql_server.run_generated_select then
+      sql.run(editor, { whole_buffer = true })
+    end
+  end)
+end
+
+-- Actions for each object kind. The first is the default, so a keyboard-opened
+-- menu selects it: SELECT for tables, ALTER for views and modules.
+local ACTIONS = {
+  table = { "select", "design", "source", "insert", "update", "delete", "create" },
+  view = { "alter", "select", "source", "create" },
+  procedure = { "alter", "source", "create" },
+  ["function"] = { "alter", "source", "create" },
+}
+local LABELS = { select = "Script as SELECT", insert = "Script as INSERT", update = "Script as UPDATE",
+  delete = "Script as DELETE", create = "Script as CREATE", alter = "Script as ALTER",
+  design = "Table Design", source = "Open Definition" }
+local COMMANDS = { design = "sql_server:table_design", source = "sql_server:open_object" }
+
+function M.action_items(view, object)
+  local icons = require("core.context_menu").icons
+  local items = {}
+  for _, action in ipairs(ACTIONS[object.kind] or ACTIONS["function"]) do
+    items[#items + 1] = { label = LABELS[action], icon = action == "source" and icons.definition or icons.source,
+      command = COMMANDS[action] or "sql_server:script_object", args = { view, object, action } }
+  end
+  return items
+end
+
+-- Opens the actions of the database symbol at the caret below the caret.
+function M.symbol_actions(sql, view)
+  return sql.with_connection(view, function()
+    local object = require("plugins.sql_server.intelligence").object_at(view, sql)
+    if not object then core.warn("No database symbol at the caret."); return false end
+    local x, y = view:context_menu_point()
+    return require("core.context_menu").open(x, y, M.action_items(view, object), {})
   end)
 end
 return M

@@ -16,7 +16,9 @@ Symbol navigation reads the database object's source into a read-only SQL Editor
 
 In a SQL Editor, **Project Symbol Search** searches that Buffer's database connection. It lists tables, views, procedures, and SQL functions. An empty query lists objects. Selecting a result opens the same source as symbol navigation. The first search can ask for a connection; opening SQL alone never does.
 
-**SQL Server: Generate Select**, **Insert**, **Update**, **Delete**, **Create**, and **Alter** act on the database symbol at the caret. Each supported command opens an editable SQL Buffer with the same connection. It executes nothing. UPDATE and DELETE templates start with a false predicate. INSERT and UPDATE values require editing.
+**SQL Server: Generate Select**, **Insert**, **Update**, **Delete**, **Create**, and **Alter** act on the database symbol at the caret. Each supported command opens an editable SQL Buffer with the same connection. UPDATE and DELETE templates start with a false predicate. INSERT and UPDATE values require editing. Only a generated SELECT runs at once, so its rows show below it. Set `config.plugins.sql_server.run_generated_select` to false to stop this.
+
+**SQL Server: Symbol Actions** opens a menu of the actions for the symbol at the caret. A SQL Editor's Context Menu shows the same menu under the symbol's name, then Run Selection, Explain Selection and Run Buffer. The first action is the default: Script as SELECT for a table, and Script as ALTER for a view, procedure or function. A keyboard-opened menu selects it, so Enter runs it.
 
 Table scripts include column types, identity settings, computed columns, defaults, keys, checks, foreign keys, and ordinary indexes. They explicitly exclude storage options, triggers, and permissions. They are not complete database deployment scripts. Unsupported table features, disabled indexes, and disabled or untrusted constraints stop scripting instead of producing an incomplete declaration. Table ALTER generation is not available.
 
