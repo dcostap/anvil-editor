@@ -113,6 +113,33 @@ test.describe("completion after parsing", function()
     test.not_nil(item.icon, "the list must not switch to Buffer words while parsing")
   end)
 
+  test.it("does not show Buffer words while parsing when the parse leaves no completion", function(context)
+    config.plugins.autocomplete.suggestions_scope = "local"
+    local view, buffer = open_editor(context)
+    -- The comment holds the only copy of the name, so the parse gives no symbol for it.
+    buffer:replace(function()
+      return "object MainWindow {\n  // " .. method .. "\n  fun run() {\n    setvisib\n  }\n}\n"
+    end)
+    view:with_selection_state(function() buffer:set_selection(4, 13) end)
+    wait_until(function()
+      core.set_active_view(view)
+      autocomplete.open()
+      local item = autocomplete.get_selected_suggestion()
+      return item and item.text == method
+    end, "expected Buffer Word Completion to learn the method name")
+    autocomplete.close()
+    buffer:set_filename(context.path .. ".kt", context.path .. ".kt")
+    wait_ready(buffer)
+    core.set_active_view(view)
+
+    core.root_panel:on_text_input("l")
+    test.not_ok(buffer.treesitter.status == "ready", "the edit must wait for a new parse")
+    test.not_ok(autocomplete.is_open(), "Buffer words that the parse removes must not show while parsing")
+    wait_ready(buffer)
+    core.root_panel:update()
+    test.not_ok(autocomplete.is_open(), "the parse leaves no completion")
+  end)
+
   test.it("shows current Buffer members after parsing a receiver dot", function(context)
     config.plugins.autocomplete.suggestions_scope = "local"
     local view, buffer = open_editor(context)

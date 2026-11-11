@@ -1404,14 +1404,15 @@ function update_suggestions()
           col = col2,
         }
         -- An edit makes the parse stale for a moment. The open list keeps its matching items until the
-        -- parse ends, so it does not switch to Buffer words and back on each key. Members after a
-        -- receiver come from the Project index, which does not wait for the parse.
+        -- parse ends. Without such items, the list waits for the parse: Buffer words would show for a
+        -- few frames, and the parse can remove them. Members after a receiver come from the Project
+        -- index, which does not wait for the parse.
         local kept = {}
         for _, item in ipairs(match_completion_items(previous, partial) or {}) do
           if suggestion_text(item) ~= partial then kept[#kept + 1] = item end
         end
-        if #kept > 0 and not member_completion_receiver(buffer) then
-          if not project_completion or not project_completion.published then
+        if not member_completion_receiver(buffer) then
+          if #kept == 0 or not project_completion or not project_completion.published then
             suggestions = annotate_matches(kept, partial)
             suggestions_idx, suggestions_offset = 1, 1
             return 0
