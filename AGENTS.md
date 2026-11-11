@@ -992,6 +992,7 @@ Whole lines, and complete lines pasted at column 1, go where a new line belongs 
 After pasted complete lines, the rest of the caret's line keeps its indentation.
 Markdown keeps the indentation of pasted whole lines, because lists and quotes own it.
 Text from outside this process with one line for each caret pastes one line at each caret, in document order. A last newline does not count as a line.
+In a switch block, `block_indent` puts a case label at the previous label's indentation, and other lines one level inside the label above them. In Go and Odin, the first label goes at the switch's indentation. Smart Backspace, paste and Move Lines use this rule.
 Move Lines shifts the moved lines, and the line that they pass, by the change of their brace block indentation (`block_indent`). A move inside one block changes no indentation, so hanging indentation keeps its offset. Languages without brace blocks keep their indentation. One undo reverts the move and the shift.
 Auto-Indent Lines (`editor:auto_indent_lines`) moves the lines of each selection as a paste of them would go: the first line with text takes the indentation of its place, and the other lines keep their shape. Markdown keeps its indentation.
 Paste as Plain Text (`core:paste_as_plain_text`) pastes like Paste, but changes no indentation and escapes nothing in a string.

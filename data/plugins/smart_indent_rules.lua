@@ -91,6 +91,7 @@ local rules = {
     indent_after = brace_indent_after,
     outdent_before = brace_outdent_before,
     case_patterns = list("^%s*case%s+", "^%s*default%s*:"),
+    case_at_switch_indent = true,
   },
   rust = {
     extensions = list("rs"),
@@ -168,7 +169,15 @@ local rules = {
   vue = { extensions = list("vue"), block_comment = { "<!--", "-->" }, indent_after = list("<[%w:_-][^>/]*>%s*$", "%{%s*$"), outdent_before = list("^%s*</", "^%s*%}") },
   svelte = { extensions = list("svelte"), block_comment = { "<!--", "-->" }, indent_after = list("<[%w:_-][^>/]*>%s*$", "%{%s*$"), outdent_before = list("^%s*</", "^%s*%}") },
   zig = { extensions = list("zig"), line_comment = "//", indent_after = brace_indent_after, outdent_before = brace_outdent_before },
-  odin = { extensions = list("odin"), line_comment = "//", block_comment = { "/*", "*/" }, indent_after = brace_indent_after, outdent_before = brace_outdent_before },
+  odin = {
+    extensions = list("odin"),
+    line_comment = "//",
+    block_comment = { "/*", "*/" },
+    indent_after = brace_indent_after,
+    outdent_before = brace_outdent_before,
+    case_patterns = list("^%s*case%f[^%w_]"),
+    case_at_switch_indent = true,
+  },
 }
 
 smart_indent.rules = rules
@@ -180,7 +189,8 @@ smart_indent.supported_fields = {
   indent_after = true,
   continuation = true,
   outdent_before = false, -- prefilled for upcoming current-line outdent work
-  case_patterns = false, -- prefilled for upcoming switch/case handling
+  case_patterns = true,
+  case_at_switch_indent = true,
 }
 
 local function lower_set(items)
@@ -447,6 +457,22 @@ local function innermost_open_bracket(buffer, line)
   return nil, first_line == 1
 end
 
+-- The nearest case label above `line` in the block that opens on `open_line`,
+-- skipping the lines of nested blocks. Returns the label's indentation.
+local function previous_case_label(buffer, line, open_line, patterns)
+  local depth = 0
+  for scan_line = line - 1, open_line + 1, -1 do
+    local brackets = line_brackets(buffer, scan_line)
+    for i = #brackets, 1, -1 do
+      depth = depth + (block_closers[brackets[i][2]] and 1 or -1)
+    end
+    local text = buffer.lines[scan_line] or ""
+    if depth <= 0 and matches_any(text, patterns) then
+      return text:match("^[\t ]*")
+    end
+  end
+end
+
 ---Returns the indentation that the block structure gives `line` in languages
 ---whose blocks open and close with brackets. `context.line_text` replaces the
 ---line's current text, such as a line with a closer about to be typed.
@@ -472,6 +498,17 @@ function smart_indent.block_indent(buffer, line, context)
   -- style rather than by block depth.
   local trailing = trim_right(code_before_line_comment(open_text:sub(open_col + 1), rule))
   if trailing ~= "" then return nil, "opener-has-content", "unavailable" end
+  -- In a switch block, a case label goes at the previous label's indentation,
+  -- and other lines go one level inside the label above them.
+  if rule.case_patterns and opener == "{" then
+    local label_indent = previous_case_label(buffer, line, open_line, rule.case_patterns)
+    if matches_any(text, rule.case_patterns) then
+      if label_indent then return label_indent, nil, "fresh" end
+      if rule.case_at_switch_indent then return open_indent, nil, "fresh" end
+    elseif label_indent then
+      return label_indent .. one_indent(buffer), nil, "fresh"
+    end
+  end
   return open_indent .. one_indent(buffer), nil, "fresh"
 end
 

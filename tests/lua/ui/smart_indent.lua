@@ -978,6 +978,27 @@ test.describe("smart indentation", function()
     test.same(view:get_selection_state().selections, { 2, 6, 2, 6 })
   end)
 
+  test.it("Backspace moves an over-indented case label to its switch's label indentation", function(context)
+    for _, case in ipairs({
+      -- After another label, with a nested block in that label's body.
+      { "f {\n  switch x {\n  case .A:\n    if a {\n      b()\n    }\n    case\n  case .B:\n  }\n}", 7,
+        "f {\n  switch x {\n  case .A:\n    if a {\n      b()\n    }\n  case\n  case .B:\n  }\n}\n" },
+      -- The first label sits at the switch's indentation.
+      { "f {\n  switch x {\n    case .A:\n  }\n}", 3,
+        "f {\n  switch x {\n  case .A:\n  }\n}\n" },
+    }) do
+      local buffer, view = new_editor(context, case[1], "sample.odin")
+      core.set_active_view(view)
+      buffer:set_selection(case[2], 5, case[2], 5)
+
+      test.ok(command.perform("core:backspace"))
+
+      test.equal(text(buffer), case[3])
+      test.same(view:get_selection_state().selections, { case[2], 3, case[2], 3 })
+      buffer:clean()
+    end
+  end)
+
   test.it("Backspace in indentation without block structure still removes one indent level", function(context)
     local buffer, view = new_editor(context, "if ok:\n    x\n    ", "sample.py")
     core.set_active_view(view)
