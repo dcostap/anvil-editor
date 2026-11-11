@@ -42,6 +42,9 @@ local function check_recovery(keyboard)
     test.not_ok(view.snapshot.mouse_tracking, "mouse reporting stays on")
     test.ok(view.snapshot.cursor.visible, "the cursor stays hidden")
 
+    -- One of the two colors changes the appearance.
+    test.ok(view.session:set_colors { background = 0xffffff })
+    test.ok(view.session:set_colors { background = 0x101010 })
     view.session:focus(false)
     view.session:focus(true)
     test.ok(view:on_key_pressed("escape"))

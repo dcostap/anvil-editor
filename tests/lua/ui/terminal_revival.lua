@@ -84,7 +84,9 @@ test.describe("Terminal revival", function()
     local handle = kernel.OpenProcess(0x100001, 0, old_pid)
     local restored
     local ok, err = pcall(function()
-      test.ok(view.session:write("echo ANVIL_DISK_SCREEN_MARKER\r"))
+      -- A program that ended without cleanup left report modes on. The new shell never asked for them.
+      test.ok(view.session:write("powershell.exe -NoProfile -Command \"[Console]::Write([char]27 + '[?2031h')\""
+        .. " & echo ANVIL_DISK_SCREEN_^MARKER\r"))
       test.ok(wait_for(view, function()
         return screen_text(view):find("ANVIL_DISK_SCREEN_MARKER", 1, true)
       end))
@@ -106,7 +108,9 @@ test.describe("Terminal revival", function()
       test.ok(restored.session:write("echo ANVIL_REVIVED_INPUT\r"))
       test.ok(wait_for(restored, function()
         return screen_text(restored):find("ANVIL_REVIVED_INPUT", 1, true)
-      end), "revived shell did not accept input")
+      end), "revived shell did not accept input: " .. screen_text(restored))
+      local revived = screen_text(restored):sub(marker)
+      test.ok(not revived:find("997", 1, true), "the revived shell got a report as input: " .. revived)
       local path = record(restored.session_id).snapshot_path
       restored:on_close()
       require("terminal_native").finish_close_commands()

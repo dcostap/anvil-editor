@@ -113,7 +113,7 @@ The host also reports a command that runs inside the shell, such as `Start-Sleep
 It ignores marks without the nonce, so a nested shell or TUI cannot end a running command.
 Run the `Terminal busy status` tests in `ui/terminal_quit.lua` after changes.
 
-The PowerShell prompt clears stale mouse, focus, paste and extended keyboard modes after a crashed program.
+The PowerShell prompt clears stale mouse, focus, paste, appearance report and extended keyboard modes after a crashed program.
 It sends control sequences through ConPTY before the custom prompt runs, and shows the cursor again.
 It keeps terminal text, scrollback and ConPTY's input mode. It does not send a full terminal reset.
 Existing shells need a new Terminal Session to load the updated integration.
@@ -1512,6 +1512,7 @@ Run `runtime/terminal_native.lua` and `ui/terminal.lua` after key input changes.
 A Terminal View reports light/dark appearance changes to programs that enable mode 2031.
 It sends the report after applying all new colors, so programs can query the new palette.
 After reconnecting, the Controller reports its current appearance once the saved screen and subscription are restored. The program can still have colors from before the disconnect.
+A revived screen turns off the old program's report modes, including mode 2031, because the new shell did not ask for reports. Otherwise the report reaches the new prompt as typed text.
 Run `runtime/terminal_native.lua` and `runtime/terminal_pi_appearance.lua` after changes. The Pi test uses a local scripted model and no inference. Set `ANVIL_TEST_PI` and `ANVIL_TEST_NODE` if Meson did not find them at configuration.
 
 Terminal Views display static Kitty graphics through Ghostty's image API.
