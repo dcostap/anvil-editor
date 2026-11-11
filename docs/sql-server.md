@@ -68,6 +68,12 @@ A result can change when it is the only result of its run and a column comes fro
 
 Changed cells show in the accent color, and deleted rows show in the error color. The footer shows **Script N Changes** and **Discard**. A new run discards the edits. **SQL Server: Script Changes** opens a new SQL Query on the same connection with one `UPDATE` or `DELETE` for each row, in one transaction. Each statement finds its row by the key values that the result showed. Values are Unicode string literals, and SQL Server converts them to the column's type. A statement that does not change exactly one row stops the script, and `XACT_ABORT` rolls back its earlier statements. **The script does not run by itself.** Read it, then run it as other SQL. Anvil does not compare the other columns, so a change that another user made after your run can be overwritten.
 
+## SQL History
+
+Each run of a SQL Query goes into the Project's SQL History, with its connection, time, duration and status: OK, Error or Cancelled. The list shows a duration of 1 second or more. Explain Plan runs do not. **SQL Server: SQL History** lists the runs, newest first. Type to search their SQL. The chosen SQL opens in a new SQL Query on its connection, or without a connection when the connection is gone. **It does not run.** A run of the same SQL on the same connection as the newest entry counts in that entry, such as `×3`.
+
+The history belongs to the Project, as its connections do. Scratch has its own. It is saved as text in the user folder, so SQL that holds a secret stays on disk. `config.plugins.sql_server.history_entries` keeps the newest 500 entries; 0 turns the history off. SQL longer than 64 KiB is not kept. **SQL Server: Clear SQL History** deletes the Project's history.
+
 ## Table Design
 
 **SQL Server: Design Table** opens the Table Design Dialog for the table at the caret. The table's Context Menu and **SQL Server: Symbol Actions** also offer it. **SQL Server: New Table** opens an empty design. The Dialog reads the table's columns, primary key, indexes, unique constraints, foreign keys and check constraints from the catalog, with a separate connection. The Query's SQL Session and transaction do not change.
@@ -123,6 +129,8 @@ For execution, `com/onseven/dbvis/o/f/l.java` supplies the reference for multipl
 The `GO` delimiter follows `SQLAllowGo` in `com/onseven/dbvis/d/e.java` and `com/onseven/dbvis/lb/i.java`. Auto Commit for each editor follows `com/onseven/dbvis/i/d.java`. The Commit, Roll Back or Cancel question follows `PendingTransactionsProps` in `com/onseven/dbvis/hb/e/b/b/ec.java`. SQL Server explain uses `SET SHOWPLAN_ALL`, as `com/onseven/dbvis/db/vb/c.java` does.
 
 Result editing follows `TableEditableCommitter` in `com/onseven/dbvis/bc/j/b/c.java` and `com/onseven/dbvis/bc/j/b/d.java`: each edit must affect exactly one row, and the key columns identify it (`TableEditableResultDialog.keyColumnChooser` in `com/onseven/dbvis/bc/j/b/s.java`). DbVisualizer commits the edits itself, in batches (`InlineEditorCommitBatchSize` in `com/onseven/dbvis/nb/s.java`). Anvil writes them to a script instead, and the user runs it.
+
+SQL History follows `HistoryGridPanel` in `com/onseven/dbvis/u/b/b.java` and `com/onseven/dbvis/u/c/b.java`: an entry keeps its connection, time, elapsed time and errors, and a run of the newest entry's SQL counts in that entry (`SQLHistoryIgnoreDuplicateEntries`, on by default in `dbvis.prefs`). DbVisualizer loads an entry into its SQL Commander. Anvil opens it in a new SQL Query.
 
 Table Design follows the tabs of `TableDetailsPanelBuilder` in `com/onseven/dbvis/objects/e/c/b/b/z.java`: columns (`ab.java`), primary key (`e.java`), foreign keys with their delete and update actions (`fb.java`), indexes and unique constraints (`d.java`), and check constraints (`j.java` and `c.java`). DbVisualizer shows the script in its Dialog and can run it. Anvil opens the script in a SQL Query instead, and the user runs it.
 

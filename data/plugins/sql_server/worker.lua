@@ -35,11 +35,12 @@ function M.run(payload, context)
   else
     USERDIR = payload.userdir
     local storage = require "core.storage"
+    local module = payload.module or "sql_server"
     if payload.operation == "load" then
-      result, err = storage.load("sql_server", payload.key)
-      if result == nil and not err then result = { connections = {} } end
+      result, err = storage.load(module, payload.key)
+      if result == nil and not err then result = module == "sql_server" and { connections = {} } or {} end
     elseif payload.operation == "save" then
-      result, err = storage.save("sql_server", payload.key, payload.value)
+      result, err = storage.save(module, payload.key, payload.value)
     else
       error("Unknown SQL worker operation")
     end

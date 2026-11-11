@@ -418,6 +418,48 @@ test.describe("SQL Queries", function()
     test.ok(design.script_button.enabled)
   end)
 
+  test.it("keeps the Project's runs in SQL History and opens one in a new Query that runs nothing", function(context)
+    local editor, c = connected_query(context)
+    local history = require "plugins.sql_server.history"
+    local runs = 0
+    require("plugins.sql_server.backend").execute = function(_, text, callback)
+      runs = runs + 1
+      callback(text:find("missing", 1, true) and { error = "Invalid object name 'missing'." }
+        or { results = {}, affected_rows = { "1" } })
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("SELECT name\nFROM sales.customers")
+    test.ok(command.perform("sql_server:run_buffer"))
+    test.ok(command.perform("sql_server:run_buffer"))
+    editor.buffer:set_selection(2, #editor.buffer.lines[2])
+    editor.buffer:text_input("\nSELECT * FROM missing")
+    editor.buffer:set_selection(3, 1, 3, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.ok(command.perform("sql_server:explain_selection"))
+    test.equal(runs, 4)
+    local deadline = system.get_time() + 10
+    while require("plugins.sql_server").is_saving() and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.ok(not require("plugins.sql_server").is_saving())
+
+    -- The history comes back from storage.
+    history.reset()
+    test.ok(command.perform("sql_server:history"))
+    while core.active_view ~= core.global_prompt_bar and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.equal(core.active_view, core.global_prompt_bar)
+    local items = core.global_prompt_bar.suggestions
+    test.equal(items[1].text, "SELECT * FROM missing")
+    test.equal(items[1].info, c.name .. " · now · Error")
+    test.equal(items[2].text, "SELECT name FROM sales.customers")
+    test.equal(items[2].info, c.name .. " · now · ×2")
+    core.global_prompt_bar:set_text("customers")
+    core.global_prompt_bar:submit()
+    local query = core.active_view
+    test.not_equal(query, editor)
+    test.equal(query.buffer:get_text(1, 1, math.huge, math.huge), "SELECT name\nFROM sales.customers")
+    test.equal(require("plugins.sql_server").connection_for(query.buffer), c)
+    test.equal(runs, 4)
+  end)
+
   test.it("adjusts the Query's row limit from the result footer for the next run", function(context)
     local editor = connected_query(context)
     local context_menu = require "core.context_menu"

@@ -61,7 +61,7 @@ local function save()
   if not handle then saving = false; M.save_error = tostring(err); core.error("%s", M.save_error) end
 end
 function M.ready() return loaded == true end
-function M.is_saving() return saving or pending_save or false end
+function M.is_saving() return saving or pending_save or require("plugins.sql_server.history").is_saving() end
 -- Only accepted shutdown or a Project switch may wait for file writes.
 local function flush_settings()
   local deadline = system.get_time() + 15
@@ -285,6 +285,11 @@ function M.run(editor, opts)
     end
     if data.error_line then buffer.sql_error_line = math.min(line1 + data.error_line - 1, #buffer.lines) end
     if buffer.sql_execution == run and not view.closed then view:complete(data) end
+    if not opts.explain then
+      require("plugins.sql_server.history").record(storage_key, { text = text, connection = c.id, name = c.name,
+        seconds = system.get_time() - run.started,
+        status = data.cancelled and "Cancelled" or data.error and "Error" or "OK" })
+    end
     core.log_quiet("SQL Server: execution connection=%s cancelled=%s failed=%s explain=%s seconds=%.3f",
       c.id, tostring(data.cancelled == true), tostring(data.error ~= nil), tostring(opts.explain == true),
       system.get_time() - run.started)
@@ -365,6 +370,14 @@ end
 command.add(nil, {
   ["sql_server:manage"] = command.palette(function() return require("plugins.sql_server.dialog").open() end),
   ["sql_server:new_query"] = command.palette(function() return M.new_query() end),
+  ["sql_server:history"] = command.palette(function()
+    M.load()
+    require("plugins.sql_server.history").open(M, storage_key)
+  end),
+  ["sql_server:clear_history"] = command.palette(function()
+    M.load()
+    require("plugins.sql_server.history").clear(storage_key)
+  end),
 })
 command.add(function()
   local view = core.active_view
@@ -500,6 +513,7 @@ local set_project = core.set_project
 function core.set_project(...)
   if not flush_settings() then return false end
   for _, c in ipairs(M.connections) do M.disconnect(c.id) end
+  require("plugins.sql_server.history").reset()
   load_generation = load_generation + 1
   loaded, loading, M.connections = false, false, {}
   changed()
