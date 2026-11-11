@@ -142,6 +142,52 @@ static int session_checks(SqlServerOptions *options) {
   return 1;
 }
 
+static const char *cell(SqlQueryTable *t, size_t row, const char *column) {
+  for (size_t c = 0; c < t->column_count; ++c)
+    if (!strcmp(t->columns[c], column)) return t->cells[row * t->column_count + c].text;
+  return NULL;
+}
+/* Result editing: SQL Server describes the source table and its key, and a
+ * script that finds a changed row stops and rolls back its earlier statements. */
+static int edit_checks(SqlServerOptions *options) {
+  SqlQueryResult result = {0};
+  const char *sql = "EXEC sys.sp_describe_first_result_set @tsql = N'SELECT [na]]me] AS who FROM sales.customers', "
+    "@params = NULL, @browse_information_mode = 1;";
+  CHECK(run_once(options, sql, 1000, 30, NULL, NULL, &result));
+  CHECK(result.count == 1 && result.tables[0].row_count == 2);
+  SqlQueryTable *t = &result.tables[0];
+  CHECK(!strcmp(cell(t, 0, "name"), "who") && !strcmp(cell(t, 0, "source_column"), "na]me"));
+  CHECK(!strcmp(cell(t, 0, "is_updateable"), "1") && !strcmp(cell(t, 0, "is_hidden"), "0"));
+  CHECK(!strcmp(cell(t, 1, "source_column"), "id") && !strcmp(cell(t, 1, "is_hidden"), "1"));
+  CHECK(!strcmp(cell(t, 1, "is_part_of_unique_key"), "1") && !strcmp(cell(t, 1, "source_table"), "customers"));
+  sql_query_free(&result);
+
+  sql = "INSERT sales.customers ([na]]me]) VALUES (N'Edit me'); SELECT CONVERT(nvarchar(20), SCOPE_IDENTITY()) AS id";
+  CHECK(run_once(options, sql, 1000, 30, NULL, NULL, &result));
+  char id[32];
+  snprintf(id, sizeof(id), "%s", result.tables[0].cells[0].text);
+  sql_query_free(&result);
+  char script[1024];
+  snprintf(script, sizeof(script), "SET XACT_ABORT ON;\nBEGIN TRANSACTION;\n"
+    "UPDATE [sales].[customers] SET [na]]me] = N'O''Neil' WHERE [id] = N'%s';\n"
+    "IF @@ROWCOUNT <> 1 THROW 50001, N'Row 1 changed or no longer exists.', 1;\nCOMMIT TRANSACTION;\n", id);
+  CHECK(run_once(options, script, 1000, 30, NULL, NULL, &result));
+  sql_query_free(&result);
+  snprintf(script, sizeof(script), "SET XACT_ABORT ON;\nBEGIN TRANSACTION;\n"
+    "UPDATE [sales].[customers] SET [na]]me] = N'Lost' WHERE [id] = N'%s';\n"
+    "IF @@ROWCOUNT <> 1 THROW 50001, N'Row 1 changed or no longer exists.', 1;\n"
+    "DELETE FROM [sales].[customers] WHERE [id] = N'-1';\n"
+    "IF @@ROWCOUNT <> 1 THROW 50001, N'Row 2 changed or no longer exists.', 1;\nCOMMIT TRANSACTION;\n", id);
+  CHECK(!run_once(options, script, 1000, 30, NULL, NULL, &result));
+  CHECK(has_message(&result, "Row 2 changed or no longer exists.") && result.transaction_count == 0);
+  sql_query_free(&result);
+  snprintf(script, sizeof(script), "SELECT [na]]me] FROM sales.customers WHERE id = %s; DELETE sales.customers WHERE id = %s", id, id);
+  CHECK(run_once(options, script, 1000, 30, NULL, NULL, &result));
+  CHECK(!strcmp(result.tables[0].cells[0].text, "O'Neil"));
+  sql_query_free(&result);
+  return 1;
+}
+
 int main(int argc, char **argv) {
   const char *prefix = "(localdb)\\AnvilTest_";
   if (argc != 2 || strncmp(argv[1], prefix, strlen(prefix))) {
@@ -162,11 +208,11 @@ int main(int argc, char **argv) {
   int valid = id && label && !strcmp(catalog.database, "AnvilTest");
   sql_server_catalog_free(&catalog);
   if (!valid) { fprintf(stderr, "Metadata did not match the fixture.\n"); return 1; }
-  if (!execution_checks(&options) || !session_checks(&options)) return 1;
+  if (!execution_checks(&options) || !session_checks(&options) || !edit_checks(&options)) return 1;
   options.database = "AnvilTest};DATABASE={master";
   int injected = sql_server_read_schema(&options, &catalog);
   sql_server_catalog_free(&catalog);
   if (injected) { fprintf(stderr, "A database name changed the connection settings.\n"); return 1; }
-  puts("SQL Server metadata, execution, batches, sessions, transactions, limits, cancellation and connection-value isolation passed.");
+  puts("SQL Server metadata, execution, batches, sessions, transactions, result edits, limits, cancellation and connection-value isolation passed.");
   return 0;
 }

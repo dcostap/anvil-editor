@@ -37,9 +37,10 @@ end
 function Results:get_name() return self.title end
 function Results:get_state() return nil end
 
-function Results:begin_run(cancel, explain)
+function Results:begin_run(cancel, explain, text)
   self.cancel_query = cancel
   self.data = nil
+  self.run_text = text
   self.kind = explain and "Explain Plan" or "SQL Results"
   self.message = explain and "Reading plan…" or "Running SQL…"
   self.title = self.kind .. " · " .. self.connection_name
@@ -75,6 +76,7 @@ end
 function Results:complete(data)
   self.cancel_query = nil
   self.data = data
+  self.edits, self.deletes, self.edit_info, self.edit_error = {}, {}, nil, nil
   local last = data.messages and data.messages[#data.messages]
   if data.cancelled then
     self.message = "SQL cancelled. Committed changes remain."
@@ -90,6 +92,28 @@ function Results:complete(data)
   end
   if not self:show_result(1) then self:publish_model(empty, 0) end
   core.redraw = true
+end
+
+-- Pending edits show in their cells until the user scripts or discards them.
+function Results:cell_value(display_row, column)
+  local row = self:source_row(display_row)
+  local edits = row and self.edits and self.edits[row]
+  if edits and edits[column] ~= nil then return edits[column] end
+  return Preview.cell_value(self, display_row, column)
+end
+
+local tints = setmetatable({}, { __mode = "k" })
+local function tint(color)
+  local t = tints[color]
+  if not t then t = { color[1], color[2], color[3], 48 }; tints[color] = t end
+  return t
+end
+function Results:cell_style(display_row, column)
+  local row = self:source_row(display_row)
+  if not row or not self.edits then return end
+  if self.deletes[row] then return tint(style.error), style.dim end
+  local edits = self.edits[row]
+  if edits and edits[column] ~= nil then return tint(style.accent), nil end
 end
 
 function Results:draw_header()
@@ -115,11 +139,14 @@ end
 
 function Results:footer_buttons()
   local buttons, labels = {}, {}
+  local changes = self.edits and require("plugins.sql_server.edit").change_count(self) or 0
   if self.cancel_query then labels[#labels + 1] = "cancel" end
+  if changes > 0 then labels[#labels + 1] = "script"; labels[#labels + 1] = "discard" end
   if self.source_buffer then labels[#labels + 1] = "limit" end
   if self.model.column_count > 0 then labels[#labels + 1] = "csv"; labels[#labels + 1] = "json" end
   if self.data then labels[#labels + 1] = "messages" end
-  local names = { cancel = "Cancel", csv = "CSV", json = "JSON", messages = "Messages" }
+  local names = { cancel = "Cancel", csv = "CSV", json = "JSON", messages = "Messages", discard = "Discard",
+    script = changes == 1 and "Script 1 Change" or string.format("Script %d Changes", changes) }
   local pad, height = common.round(10 * SCALE), self:footer_height()
   local x = self.position.x + self.size.x - common.round(4 * SCALE) - style.scrollbar_size
   local y = self.position.y + self.size.y - height
@@ -206,6 +233,10 @@ function Results:press_footer_button(b)
     open_text(require("plugins.sql_server.export").json(self), "json")
   elseif b.id == "messages" then
     show_messages(self)
+  elseif b.id == "script" then
+    self:script_changes()
+  elseif b.id == "discard" then
+    self:discard_changes()
   elseif b.id == "limit" then
     local items = {}
     for _, limit in ipairs(LIMITS) do
@@ -224,11 +255,26 @@ function Results:on_mouse_pressed(button, x, y, clicks)
     if b and button == "left" then return self:press_footer_button(b) end
     return true
   end
+  if button == "left" and (clicks or 1) >= 2 then
+    local target = self:hit_test(x, y)
+    if target.kind == "cell" then
+      self:select_cell(target.display_row, target.column, false)
+      return self:edit_cell()
+    end
+  end
   if button ~= "right" then return Preview.on_mouse_pressed(self, button, x, y, clicks) end
-  local row, column = self:cell_at(x, y)
-  if row and not self:cell_is_selected(row, column) then self:select_cell(row, column, false) end
+  local target = self:hit_test(x, y)
+  if target.kind == "cell" and not self:cell_is_selected(target.display_row, target.column) then
+    self:select_cell(target.display_row, target.column, false)
+  end
   return require("core.context_menu").open(x, y, {
     { label = "Copy", command = "tabular_data:copy_selection" },
+    { label = "Edit Cell", command = "sql_server:edit_cell" },
+    { label = "Set to NULL", command = "sql_server:set_cell_null" },
+    { label = "Delete Rows", command = "sql_server:delete_rows" },
+    { label = "Script Changes", command = "sql_server:script_changes" },
+    { label = "Discard Changes", command = "sql_server:discard_changes" },
+    "-",
     { label = "Previous Result", command = "sql_server:previous_result" },
     { label = "Next Result", command = "sql_server:next_result" },
     { label = "View as CSV", command = "sql_server:view_as_csv" },
@@ -237,6 +283,89 @@ function Results:on_mouse_pressed(button, x, y, clicks)
     { label = "Go to Error", command = "sql_server:results_go_to_error" },
     { label = "Cancel SQL", command = "sql_server:cancel" },
   }, { button = button })
+end
+
+-- The cell at the selection focus, with its source row.
+function Results:focus_cell()
+  local focus = self.selection_focus
+  local row = focus and self:source_row(focus.row)
+  if row then return row, focus.column, focus.row end
+end
+
+-- Runs action(info) once SQL Server has described the result, or warns.
+function Results:with_edit_info(action)
+  local sql = require "plugins.sql_server"
+  return require("plugins.sql_server.edit").prepare(sql, self, function(info)
+    if not self.closed then action(info) end
+  end)
+end
+
+function Results:set_value(row, column, value)
+  local original = row.cells[column]
+  local edits = self.edits[row] or {}
+  if value == original then edits[column] = nil else edits[column] = value end
+  self.edits[row] = next(edits) and edits or nil
+  core.redraw = true
+end
+
+function Results:edit_cell()
+  local row, column, display_row = self:focus_cell()
+  if not row then return false end
+  return self:with_edit_info(function(info)
+    if not info.columns[column].editable then
+      core.warn("Column %s is not a column of %s that can change.", self.model.headers[column], info.table); return
+    end
+    local value = self:cell_value(display_row, column)
+    if value and value:find("[\r\n]") then core.warn("Edit values with line breaks in a script."); return end
+    core.global_prompt_bar:enter(self.model.headers[column], {
+      text = value or "",
+      submit = function(text) if self.edits then self:set_value(row, column, text) end end,
+    })
+  end)
+end
+
+function Results:set_cells_null()
+  local row1, column1, row2, column2 = self:selection_bounds()
+  if not row1 then return false end
+  return self:with_edit_info(function(info)
+    for display_row = row1, row2 do
+      local row = self:source_row(display_row)
+      for column = column1, column2 do
+        if info.columns[column].editable then self:set_value(row, column, false) end
+      end
+    end
+  end)
+end
+
+function Results:delete_rows()
+  local row1, _, row2 = self:selection_bounds()
+  if not row1 then return false end
+  return self:with_edit_info(function()
+    for display_row = row1, row2 do
+      local row = self:source_row(display_row)
+      self.deletes[row] = not self.deletes[row] or nil
+    end
+    core.redraw = true
+  end)
+end
+
+function Results:script_changes()
+  local edit = require "plugins.sql_server.edit"
+  if not self.edit_info or edit.change_count(self) == 0 then return false end
+  local sql = require "plugins.sql_server"
+  local c = self.source_buffer and sql.connection_for(self.source_buffer)
+  local editor = sql.new_query(c and c.id)
+  if not editor then return false end
+  editor.buffer:text_input(edit.script(self))
+  editor.buffer:set_selection(1, 1)
+  core.log_quiet("SQL Server: scripted %d result change(s)", edit.change_count(self))
+  return true
+end
+
+function Results:discard_changes()
+  self.edits, self.deletes = {}, {}
+  core.redraw = true
+  return true
 end
 
 function Results:duplicate()
@@ -254,6 +383,22 @@ command.add(Results, {
   ["sql_server:next_result"] = function(view) view:show_result((view.result_index or 0) + 1) end,
   ["sql_server:previous_result"] = function(view) view:show_result((view.result_index or 2) - 1) end,
   ["sql_server:messages"] = show_messages,
+})
+command.add(function()
+  local view = core.active_view
+  return view and view:is(Results) and view.edits ~= nil and view.selection_focus ~= nil, view
+end, {
+  ["sql_server:edit_cell"] = function(view) return view:edit_cell() end,
+  ["sql_server:set_cell_null"] = function(view) return view:set_cells_null() end,
+  ["sql_server:delete_rows"] = function(view) return view:delete_rows() end,
+})
+command.add(function()
+  local view = core.active_view
+  return view and view:is(Results) and view.edits ~= nil
+    and require("plugins.sql_server.edit").change_count(view) > 0, view
+end, {
+  ["sql_server:script_changes"] = function(view) return view:script_changes() end,
+  ["sql_server:discard_changes"] = function(view) return view:discard_changes() end,
 })
 command.add(function()
   local view = core.active_view

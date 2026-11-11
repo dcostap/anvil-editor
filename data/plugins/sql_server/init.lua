@@ -271,7 +271,7 @@ function M.run(editor, opts)
   run.view, view.source_buffer = view, buffer
   buffer.sql_execution, active_runs[run] = run, true
   buffer.sql_error_line = nil
-  view:begin_run(function() cancel_run(run) end, opts.explain)
+  view:begin_run(function() cancel_run(run) end, opts.explain, text)
   buffer:add_metadata_listener("sql_execution", function(_, event)
     if event.kind == "close" then run.closed = true; cancel_run(run) end
   end)

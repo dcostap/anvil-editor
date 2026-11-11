@@ -381,6 +381,10 @@ function Preview:cell_value(display_row, column)
   return row.cells[column]
 end
 
+---A cell's background and text color, or nil for the defaults. Subclasses
+---mark cells, such as pending edits.
+function Preview:cell_style(display_row, column) end
+
 function Preview:clear_selection()
   local changed = self.selection_anchor ~= nil or self.selection_focus ~= nil
   self.selection_anchor = nil
@@ -954,13 +958,15 @@ function Preview:draw_body()
       local hovered = self.hover_target and self.hover_target.kind == "cell"
         and self.hover_target.display_row == display_row
         and self.hover_target.column == column
+      local background, color = self:cell_style(display_row, column)
       if selected then
         renderer.draw_rect(x, y, width, row_height, style.selection)
       elseif hovered then
         renderer.draw_rect(x, y, width, row_height, style.line_highlight)
       end
+      if background then renderer.draw_rect(x, y, width, row_height, background) end
       draw_text_clipped(
-        font, style.text, display_text(self:cell_value(display_row, column), self.model.missing_label),
+        font, color or style.text, display_text(self:cell_value(display_row, column), self.model.missing_label),
         x + scaled(CELL_PADDING), y,
         math.max(0, width - scaled(CELL_PADDING * 2)), row_height
       )

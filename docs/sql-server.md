@@ -60,6 +60,14 @@ The default row limit is 1,000 per table. The execution timeout is 30 seconds af
 
 Batches are limited to 256 KiB. Each run holds at most 16 result records, 128 columns per table, 262,144 cells, and 8 MiB of value text. A cell holds at most 32,768 UTF-16 units. A warning marks incomplete results. A row limit discards extra rows and continues to later results. A total result limit stops result reading. Later statements can already have run; these limits are not write protection.
 
+## Edit results
+
+The values of a result can change before you write them to the table. Use **SQL Server: Edit Cell** (F2, Enter or a double-click), **Set to NULL** and **Delete Rows** (Delete) in the results View or its Context Menu. The first edit asks SQL Server to describe the run's SQL with `sp_describe_first_result_set` in browse mode. That call runs no statement and opens no transaction. It uses the Query's SQL Session, so temporary tables and the current database stay the same.
+
+A result can change when it is the only result of its run and a column comes from a table. The table must have a primary key or a unique key, and the result must include all its key columns. Only columns of that table can change. Computed columns, columns of other joined tables, binary and spatial values, and values with line breaks cannot change here.
+
+Changed cells show in the accent color, and deleted rows show in the error color. The footer shows **Script N Changes** and **Discard**. A new run discards the edits. **SQL Server: Script Changes** opens a new SQL Query on the same connection with one `UPDATE` or `DELETE` for each row, in one transaction. Each statement finds its row by the key values that the result showed. Values are Unicode string literals, and SQL Server converts them to the column's type. A statement that does not change exactly one row stops the script, and `XACT_ABORT` rolls back its earlier statements. **The script does not run by itself.** Read it, then run it as other SQL. Anvil does not compare the other columns, so a change that another user made after your run can be overwritten.
+
 ## Connections and persistence
 
 Connection settings belong to the current Project on this PC. Scratch has its own saved connections; it does not share them with other Projects. Its Dialog title shows **Project Databases — Scratch**. Each open query remembers its connection. Workspace restore and Untitled recovery keep that identity. Save As keeps it while the query remains open or saved in the Workspace. Opening a saved SQL file without its Workspace state requires choosing its connection again.
@@ -104,6 +112,8 @@ For execution, `com/onseven/dbvis/o/f/l.java` supplies the reference for multipl
 
 The `GO` delimiter follows `SQLAllowGo` in `com/onseven/dbvis/d/e.java` and `com/onseven/dbvis/lb/i.java`. Auto Commit for each editor follows `com/onseven/dbvis/i/d.java`. The Commit, Roll Back or Cancel question follows `PendingTransactionsProps` in `com/onseven/dbvis/hb/e/b/b/ec.java`. SQL Server explain uses `SET SHOWPLAN_ALL`, as `com/onseven/dbvis/db/vb/c.java` does.
 
+Result editing follows `TableEditableCommitter` in `com/onseven/dbvis/bc/j/b/c.java` and `com/onseven/dbvis/bc/j/b/d.java`: each edit must affect exactly one row, and the key columns identify it (`TableEditableResultDialog.keyColumnChooser` in `com/onseven/dbvis/bc/j/b/s.java`). DbVisualizer commits the edits itself, in batches (`InlineEditorCommitBatchSize` in `com/onseven/dbvis/nb/s.java`). Anvil writes them to a script instead, and the user runs it.
+
 ## Tests
 
 Default UI tests replace the database boundary at `plugins.sql_server.backend` with fixed metadata and execution replies. The real Dialog, Editor, persistence, completion, navigation, and result View run unchanged. They need no SQL Server, driver, credentials, or network access. Runtime input tests reject invalid batches before a connection opens.
@@ -117,7 +127,7 @@ meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_def
 meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/sql_server.lua
 ```
 
-The real-server test is opt-in. It needs an existing LocalDB installation and Microsoft ODBC Driver 18 or 17. It creates a uniquely named instance and a database in a private temporary folder. It checks metadata, escaped identifiers, unchanged table data, and connection-value isolation. Execution checks cover multiple results, update counts, exact values, Unicode, embedded NUL, limits, errors, and cancellation. Session checks cover `GO` batches and error lines, temporary tables between runs, Auto Commit off, Commit and Roll Back, Explain Plan, a session after a cancelled run, and the rollback when a session closes. It then deletes its instance and files. It never reads user connection settings or connects to another instance.
+The real-server test is opt-in. It needs an existing LocalDB installation and Microsoft ODBC Driver 18 or 17. It creates a uniquely named instance and a database in a private temporary folder. It checks metadata, escaped identifiers, unchanged table data, and connection-value isolation. Execution checks cover multiple results, update counts, exact values, Unicode, embedded NUL, limits, errors, and cancellation. Session checks cover `GO` batches and error lines, temporary tables between runs, Auto Commit off, Commit and Roll Back, Explain Plan, a session after a cancelled run, and the rollback when a session closes. Result edit checks cover the browse-mode description of a result, a scripted update, and the rollback of a script whose row is gone. It then deletes its instance and files. It never reads user connection settings or connects to another instance.
 
 ```sh
 ANVIL_SQL_INTEGRATION=1 meson test -C build-windows-x86_64 anvil:sql-server-integration --print-errorlogs

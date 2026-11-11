@@ -249,6 +249,80 @@ test.describe("SQL Queries", function()
     test.equal(core.active_view.buffer.lines[2], '3,"two\n')
   end)
 
+  test.it("scripts result edits by the table's key in a new Query and runs nothing", function(context)
+    local editor = connected_query(context)
+    local submitted = {}
+    local describe_headers = { "name", "is_hidden", "source_schema", "source_table", "source_column",
+      "is_part_of_unique_key", "is_updateable", "system_type_name" }
+    local function described(name, column, key, hidden, updateable, type)
+      return { cells = { name, hidden and "1" or "0", "sales", "customers", column, key and "1" or "0",
+        updateable and "1" or "0", type }, source_line1 = 1, source_line2 = 1 }
+    end
+    local function row(...) return { cells = { ... }, source_line1 = 1, source_line2 = 1 } end
+    require("plugins.sql_server.backend").execute = function(_, text, callback)
+      submitted[#submitted + 1] = text
+      if #submitted == 2 then
+        callback({ messages = {}, results = { { headers = describe_headers, column_count = 8, distinct_values = {}, rows = {
+          described("id", "id", true, false, false, "int"), described("who", "name", false, false, true, "nvarchar(80)"),
+          row("n", "0", false, false, false, "0", "0", "int") } } } })
+      else
+        callback({ messages = {}, results = { { headers = { "id", "who", "n" }, column_count = 3, distinct_values = {},
+          rows = { row("1", "Ada", "3"), row("2", "Bea", "3"), row("3", false, "0") } } } })
+      end
+      return { cancel = function() end }
+    end
+    local text = "SELECT id, name AS who, LEN(name) n FROM sales.customers WHERE city = 'Lisbon'"
+    editor.buffer:text_input(text)
+    editor.buffer:set_selection(1, 1, 1, #text + 1)
+    test.ok(command.perform("sql_server:run_selection"))
+    local result = editor.buffer.sql_execution.view
+    panes.focus(panes.pane_for_view(result))
+    result:select_cell(2, 2, false)
+    test.ok(command.perform("sql_server:edit_cell"))
+    test.equal(submitted[2], "EXEC sys.sp_describe_first_result_set @tsql = N'SELECT id, name AS who, LEN(name) n "
+      .. "FROM sales.customers WHERE city = ''Lisbon''', @params = NULL, @browse_information_mode = 1;")
+    test.equal(core.active_view, core.global_prompt_bar)
+    test.equal(core.global_prompt_bar:get_text(), "Bea")
+    core.global_prompt_bar:set_text("Bea O'Neil")
+    core.global_prompt_bar:submit()
+    test.equal(core.active_view, result)
+    test.equal(result:cell_value(2, 2), "Bea O'Neil")
+    result:select_cell(1, 3, false)
+    command.perform("sql_server:edit_cell")
+    test.equal(core.active_view, result)
+    result:select_cell(3, 1, false)
+    test.ok(command.perform("sql_server:delete_rows"))
+    result:select_cell(1, 2, false)
+    test.ok(command.perform("sql_server:set_cell_null"))
+    test.equal(result:cell_value(1, 2), false)
+    local labels = {}
+    for _, b in ipairs(result:footer_buttons()) do labels[#labels + 1] = b.label end
+    test.equal(labels[1], "Script 3 Changes")
+    test.ok(command.perform("sql_server:script_changes"))
+    local script = core.active_view
+    test.not_equal(script, result)
+    test.equal(require("plugins.sql_server").connection_for(script.buffer), require("plugins.sql_server").connection_for(editor.buffer))
+    test.equal(script.buffer:get_text(1, 1, math.huge, math.huge), table.concat({
+      "-- Changes to [sales].[customers] from SQL Results. Review them, then run this script.",
+      "SET XACT_ABORT ON;",
+      "BEGIN TRANSACTION;",
+      "UPDATE [sales].[customers] SET [name] = NULL WHERE [id] = N'1';",
+      "IF @@ROWCOUNT <> 1 THROW 50001, N'Row 1 changed or no longer exists.', 1;",
+      "UPDATE [sales].[customers] SET [name] = N'Bea O''Neil' WHERE [id] = N'2';",
+      "IF @@ROWCOUNT <> 1 THROW 50001, N'Row 2 changed or no longer exists.', 1;",
+      "DELETE FROM [sales].[customers] WHERE [id] = N'3';",
+      "IF @@ROWCOUNT <> 1 THROW 50001, N'Row 3 changed or no longer exists.', 1;",
+      "COMMIT TRANSACTION;",
+      "",
+    }, "\n"))
+    test.equal(#submitted, 2)
+
+    local _, reason = require("plugins.sql_server.edit").analyze({ column_count = 1 }, { results = { {
+      headers = describe_headers, rows = { described("id", "id", true, true, false, "int"),
+        described("who", "name", false, false, true, "nvarchar(80)") } } } })
+    test.equal(reason, "Include the key column [id] to edit this result.")
+  end)
+
   test.it("adjusts the Query's row limit from the result footer for the next run", function(context)
     local editor = connected_query(context)
     local context_menu = require "core.context_menu"
