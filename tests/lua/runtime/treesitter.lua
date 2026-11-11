@@ -1052,6 +1052,7 @@ class VendorThing
 
   test.it("Tree-sitter workspace symbol async query waits while an open Buffer overlay is pending", function()
     symbol_index.reset_for_tests()
+    local original_buffers = core.buffers
     local root = USERDIR .. PATHSEP .. "treesitter-symbol-async-pending-overlay-"
       .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
     mkdir(root)
@@ -1065,6 +1066,29 @@ class VendorThing
       limit = 10,
       refresh_after_seconds = 0,
     })
+    test.is_nil(request)
+    test.equal(reason, "overlay-indexing")
+    test.equal(status, "pending")
+
+    -- An edited Buffer hides its disk symbols. Its overlay starts when the new parse ends.
+    index.open_buffer_jobs[path] = nil
+    core.buffers = {
+      {
+        abs_filename = path,
+        filename = path,
+        lines = { "class PendingOverlayThing\n" },
+        treesitter = { status = "parsing" },
+        get_change_id = function() return 2 end,
+        is_dirty = function() return true end,
+        on_close = function() end,
+      },
+    }
+    request, reason, status = symbol_index.workspace_symbols_async("PendingOverlayThing", {
+      root = root,
+      limit = 10,
+      refresh_after_seconds = 0,
+    })
+    core.buffers = original_buffers
     test.is_nil(request)
     test.equal(reason, "overlay-indexing")
     test.equal(status, "pending")
