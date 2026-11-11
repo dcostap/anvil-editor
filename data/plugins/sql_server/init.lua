@@ -212,11 +212,30 @@ function M.with_connection(view, action)
   return require("plugins.sql_server.connection").with_connection(M, view, action)
 end
 
+-- A Query's row limit: nil uses the configured limit, a number replaces it, and
+-- false turns it off up to the native maximum.
 M.ROW_LIMIT_MAX = 100000
 function M.row_limit(buffer)
   if buffer.sql_row_limit == false then return M.ROW_LIMIT_MAX end
-  return config.plugins.sql_server.max_rows
+  return buffer.sql_row_limit or config.plugins.sql_server.max_rows
 end
+local function row_limit_message(buffer)
+  core.status_bar:show_message("i", require("core.style").text, buffer.sql_row_limit == false
+    and string.format("Row limit off. Results stop at %d rows.", M.ROW_LIMIT_MAX)
+    or string.format("Row limit %d. Run again to apply it.", M.row_limit(buffer)))
+  core.redraw = true
+  return true
+end
+command.add(function(buffer, limit)
+  return type(buffer) == "table" and buffer.lines ~= nil and (limit == false
+    or type(limit) == "number" and limit % 1 == 0 and limit >= 1 and limit <= M.ROW_LIMIT_MAX), buffer, limit
+end, {
+  ["sql_server:set_row_limit"] = function(buffer, limit)
+    if limit == config.plugins.sql_server.max_rows then limit = nil end
+    buffer.sql_row_limit = limit
+    return row_limit_message(buffer)
+  end,
+})
 
 -- Runs the selection, or the whole Buffer with opts.whole_buffer. With
 -- opts.explain, SQL Server returns estimated plans and runs nothing.
@@ -376,11 +395,7 @@ end, {
   end),
   ["sql_server:toggle_row_limit"] = command.palette(function(view)
     view.buffer.sql_row_limit = view.buffer.sql_row_limit ~= false and false or nil
-    core.status_bar:show_message("i", require("core.style").text, view.buffer.sql_row_limit == false
-      and string.format("Row limit off. Results stop at %d rows.", M.ROW_LIMIT_MAX)
-      or string.format("Row limit %d", config.plugins.sql_server.max_rows))
-    core.redraw = true
-    return true
+    return row_limit_message(view.buffer)
   end),
   ["sql_server:disconnect"] = command.palette(function(view)
     local c = M.connection_for(view.buffer)
@@ -499,7 +514,10 @@ do
         table.insert(parts, style.warn)
         table.insert(parts, s.transaction_count and " · Transaction Open" or " · Transaction Unknown")
       end
-      if view.buffer.sql_row_limit == false then table.insert(parts, style.dim); table.insert(parts, " · No Row Limit") end
+      if view.buffer.sql_row_limit == false then table.insert(parts, style.dim); table.insert(parts, " · No Row Limit")
+      elseif view.buffer.sql_row_limit then
+        table.insert(parts, style.dim); table.insert(parts, " · Row Limit " .. view.buffer.sql_row_limit)
+      end
       return parts
     end,
     tooltip = function(_, view)

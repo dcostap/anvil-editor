@@ -178,6 +178,88 @@ test.describe("SQL Queries", function()
     test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "-- not selected\nSELECT name FROM sales.customers\n-- not selected")
   end)
 
+  test.it("views the shown rows of a result as CSV and JSON text in new Editors", function(context)
+    local editor = connected_query(context)
+    require("plugins.sql_server.backend").execute = function(_, _, callback)
+      callback({ results = { {
+        headers = { "id", "note", "id" }, column_count = 3,
+        rows = {
+          { cells = { "1", 'say "hi", ok', "x" }, source_line1 = 1, source_line2 = 1 },
+          { cells = { "2", false, "" }, source_line1 = 2, source_line2 = 2 },
+          { cells = { "3", "two\nlines\0", "\t" }, source_line1 = 3, source_line2 = 3 },
+        },
+        distinct_values = {},
+      } }, affected_rows = {}, messages = {} })
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("SELECT 1")
+    editor.buffer:set_selection(1, 1, 1, 9)
+    test.ok(command.perform("sql_server:run_selection"))
+    local Results = require "plugins.sql_server.results"
+    local result
+    for _, pane in ipairs(panes.ordered()) do
+      for _, view in ipairs(panes.views(pane)) do
+        if view:extends(Results) then result = view end
+      end
+    end
+    panes.focus(panes.pane_for_view(result))
+    test.ok(command.perform("sql_server:view_as_csv"))
+    local csv = core.active_view
+    test.not_equal(csv, result)
+    test.not_ok(csv.buffer.read_only)
+    test.equal(csv.buffer:get_text(1, 1, math.huge, math.huge),
+      'id,note,id\n1,"say ""hi"", ok",x\n2,,""\n3,"two\nlines\0","\t"\n')
+    panes.focus(panes.pane_for_view(result))
+    test.ok(command.perform("sql_server:view_as_json"))
+    test.equal(core.active_view.buffer:get_text(1, 1, math.huge, math.huge), table.concat({
+      "[",
+      '  {"id": "1", "note": "say \\"hi\\", ok", "id (2)": "x"},',
+      '  {"id": "2", "note": null, "id (2)": ""},',
+      '  {"id": "3", "note": "two\\nlines\\u0000", "id (2)": "\\t"}',
+      "]", "",
+    }, "\n"))
+    test.equal(core.active_view.buffer.syntax.name, "JSON")
+    repeat result:cycle_sort(1) until result:cell_value(1, 1) == "3"
+    panes.focus(panes.pane_for_view(result))
+    test.ok(command.perform("sql_server:view_as_csv"))
+    test.equal(core.active_view.buffer.lines[2], '3,"two\n')
+  end)
+
+  test.it("adjusts the Query's row limit from the result footer for the next run", function(context)
+    local editor = connected_query(context)
+    local context_menu = require "core.context_menu"
+    local limits = {}
+    require("plugins.sql_server.backend").execute = function(_, _, callback, settings)
+      limits[#limits + 1] = settings.max_rows
+      callback({ results = { { headers = { "id" }, column_count = 1, distinct_values = {},
+        rows = { { cells = { "1" }, source_line1 = 1, source_line2 = 1 } } } }, affected_rows = {}, messages = {} })
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("SELECT 1")
+    editor.buffer:set_selection(1, 1, 1, 9)
+    test.ok(command.perform("sql_server:run_selection"))
+    local result = editor.buffer.sql_execution.view
+    local function press(label)
+      for _, b in ipairs(result:footer_buttons()) do
+        if b.label == label then return result:on_mouse_pressed("left", b.x + 1, b.y + 1, 1) end
+      end
+      error("no footer button " .. label)
+    end
+    test.equal(limits[1], 1000)
+    test.ok(press("Limit 1,000"))
+    test.ok(context_menu.is_open())
+    test.same(context_menu.labels(), { "Limit 100", "Limit 1,000", "Limit 10,000", "No Row Limit" })
+    test.ok(context_menu.choose("Limit 100"))
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(limits[2], 100)
+    test.ok(press("Limit 100"))
+    test.ok(context_menu.choose("No Row Limit"))
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(limits[3], require("plugins.sql_server").ROW_LIMIT_MAX)
+    test.ok(press("JSON"))
+    test.equal(core.active_view.buffer:get_text(1, 1, math.huge, math.huge), '[\n  {"id": "1"}\n]\n')
+  end)
+
   test.it("runs nothing at a caret unless Run Buffer is explicit, and reuses its results", function(context)
     local editor = connected_query(context)
     local replies, submitted = {}, {}
