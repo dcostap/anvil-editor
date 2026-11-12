@@ -1178,6 +1178,7 @@ function Preview:draw_body()
   local body_height = math.max(0, self.size.y - header_height)
   local first_row, last_row = self:visible_row_range()
   local first_column, last_column = self:visible_column_range()
+  local kinds = self.model.column_kinds or {}
 
   for display_row = first_row, last_row do
     local y = body_y + (display_row - 1) * row_height - self.scroll.y
@@ -1203,10 +1204,15 @@ function Preview:draw_body()
         renderer.draw_rect(x, y, width, row_height, style.line_highlight)
       end
       if background then renderer.draw_rect(x, y, width, row_height, background) end
+      -- A missing value, such as NULL, is dim, so it differs from its label
+      -- as text. Numbers align at the right, so their digits line up.
+      local value = self:cell_value(display_row, column)
       draw_text_clipped(
-        font, color or style.text, display_text(self:cell_value(display_row, column), self.model.missing_label),
+        font, color or (value == false and style.dim or style.text),
+        display_text(value, self.model.missing_label),
         x + scaled(CELL_PADDING), y,
-        math.max(0, width - scaled(CELL_PADDING * 2)), row_height
+        math.max(0, width - scaled(CELL_PADDING * 2)), row_height,
+        kinds[column] == "number" and value ~= false and "right" or "left"
       )
       renderer.draw_rect(x + width - 1, y, 1, row_height, style.divider)
       if self.selection_focus and self.selection_focus.row == display_row

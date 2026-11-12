@@ -1001,6 +1001,41 @@ test.describe("SQL Queries", function()
     test.equal(column(2), "-10 -2.5 0.75 10 100000000000000000000 100000000000000000001 1E+3 9")
   end)
 
+  test.it("draws NULL apart from the text NULL, and numbers at the right of their cells", function()
+    local Results = require "plugins.sql_server.results"
+    local result = { headers = { "n", "t" }, column_kinds = { "number", "text" }, column_count = 2,
+      missing_label = "NULL", rows = {
+        { cells = { "7", false }, source_line1 = 1, source_line2 = 1 },
+        { cells = { "12345", "NULL" }, source_line1 = 2, source_line2 = 2 },
+      } }
+    result.distinct_values = require("plugins.tabular_data_preview.parser").distinct_values(result)
+    local view = Results("Test")
+    panes.place(function() return view end, { placement = "new", focus = true })
+    view:complete({ results = { result } })
+    view.position, view.size = { x = 0, y = 0 }, { x = 600, y = 300 }
+    local drawn, saved = {}, { renderer.draw_text, renderer.draw_rect, renderer.set_clip_rect }
+    renderer.draw_text = function(font, text, x, y, color)
+      drawn[#drawn + 1] = { text = text, x = x, y = y, color = color }
+      return x + font:get_width(text)
+    end
+    renderer.draw_rect = function() end
+    renderer.set_clip_rect = function() end
+    local ok, err = pcall(function() view:draw_body() end)
+    renderer.draw_text, renderer.draw_rect, renderer.set_clip_rect = saved[1], saved[2], saved[3]
+    test.ok(ok, err)
+    local function find(text, row)
+      local _, y, _, h = view:cell_screen_rect(row, 1)
+      for _, call in ipairs(drawn) do
+        if call.text == text and call.y >= y and call.y < y + h then return call end
+      end
+    end
+    local null, text_null = test.not_nil(find("NULL", 1)), test.not_nil(find("NULL", 2))
+    test.not_equal(table.concat(null.color, ","), table.concat(text_null.color, ","))
+    local font = require("core.style").code_font
+    local seven, large = test.not_nil(find("7", 1)), test.not_nil(find("12345", 2))
+    test.equal(seven.x + font:get_width("7"), large.x + font:get_width("12345"))
+  end)
+
   test.it("opens a table definition and returns to the same Untitled Query", function(context)
     local editor = connected_query(context)
     editor.buffer:text_input("SELECT * FROM sales.customers")
