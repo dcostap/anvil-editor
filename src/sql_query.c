@@ -347,8 +347,8 @@ int sql_query_check(const char *sql, size_t length, unsigned max_rows, unsigned 
   int units = 0;
   if (!max_rows || max_rows > SQL_QUERY_ROW_LIMIT || timeout_seconds > SQL_QUERY_TIMEOUT_MAX)
     snprintf(error, size, "Invalid SQL execution limits.");
-  else if (!sql || !length || length > 256 * 1024 || memchr(sql, 0, length))
-    snprintf(error, size, "SQL text must be 1 byte to 256 KiB, without NUL characters.");
+  else if (!sql || !length || length > SQL_QUERY_TEXT_LIMIT || memchr(sql, 0, length))
+    snprintf(error, size, "SQL text must be 1 byte to 64 MiB, without NUL characters.");
   else if (length > INT_MAX || !(units = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, sql, (int)length, NULL, 0)))
     snprintf(error, size, "SQL text contains invalid UTF-8.");
   else return 1;
@@ -365,10 +365,12 @@ static int run_text(SQLHDBC dbc, const char *sql, size_t length, int split, int 
   int success = 0, explaining = 0, complete = 0;
   if (!sql_query_check(sql, length, max_rows, timeout_seconds, out->error, sizeof(out->error))) goto done;
   int units = 0;
-  batches = malloc(SQL_BATCH_LIMIT * sizeof(*batches));
+  /* Each batch before the last takes at least 4 bytes, such as "x\nGO". */
+  size_t capacity = length / 4 + 1 < SQL_BATCH_LIMIT ? length / 4 + 1 : SQL_BATCH_LIMIT;
+  batches = malloc(capacity * sizeof(*batches));
   if (!batches) goto done;
   int count = 1;
-  if (split) count = sql_batch_split(sql, length, batches, SQL_BATCH_LIMIT);
+  if (split) count = sql_batch_split(sql, length, batches, capacity);
   else batches[0] = (SqlBatch){ 0, length, 1, 1 };
   if (count < 0) {
     snprintf(out->error, sizeof(out->error), "The SQL has more than %d batches or an invalid GO count.", SQL_BATCH_LIMIT);

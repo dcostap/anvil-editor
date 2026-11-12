@@ -2,7 +2,7 @@
 #define ANVIL_SQL_BATCH_H
 #include <stddef.h>
 
-#define SQL_BATCH_LIMIT 1024
+#define SQL_BATCH_LIMIT 100000
 #define SQL_BATCH_REPEAT_LIMIT 1000
 
 typedef struct {

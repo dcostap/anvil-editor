@@ -30,7 +30,7 @@ Module source comes from SQL Server. CREATE and ALTER generation changes its ope
 
 Use **SQL Server: Run Selection** (Ctrl+Enter) in a SQL Query. It runs the primary selection and does nothing when that selection is empty. **SQL Server: Run Buffer** explicitly runs the whole Buffer. Neither selects a statement at the caret. An edit, caret move, or focus change while a connection starts cancels the pending execution request.
 
-A line with only `GO` ends a batch, as in SSMS. `GO 3` runs the batch three times. `GO` in a string, a quoted name or a comment is text. A failed batch does not stop the next batch. A run holds at most 1,024 batches, and a count is at most 1,000.
+A line with only `GO` ends a batch, as in SSMS. `GO 3` runs the batch three times. `GO` in a string, a quoted name or a comment is text. A failed batch does not stop the next batch. A run holds at most 100,000 batches, and a count is at most 1,000.
 
 **SQL can change database data, even when selected from a read-only definition.** Cancellation does not undo committed changes.
 
@@ -62,7 +62,7 @@ With two or more cells selected, the footer shows their aggregates in the place 
 
 The default row limit is 1,000 per table. A run has no timeout by default, as in DbVisualizer. It sets no query timeout; only its calls on the event thread time out (`com/onseven/dbvis/jdbc/b/g.java`). Cancel stops a run. **SQL Server: Set Timeout** sets a timeout in seconds for one Query, and 0 removes it. Set `config.plugins.sql_server.max_rows` from 1 to 100,000, and `config.plugins.sql_server.timeout_seconds` from 0 (none) to 86,400. Metadata reads, Table Design and the result edit check keep their own short timeouts.
 
-Batches are limited to 256 KiB. Each run keeps at most 16 results, 262,144 values and 8 MiB of value text. A value holds at most 32,768 UTF-16 units. A limit only cuts what the run keeps: the SQL still runs to its end. A result after the 16th shows only a message, and a result past the value limits shows its first rows. A warning marks incomplete results. After the row limit, SQL Server still sends the rest of the result, and Anvil discards it. A very large result over a slow network can take a long time; Cancel stops it.
+The text of one run is limited to 64 MiB, which only guards memory. DbVisualizer also runs very large scripts and only offers to skip its own preprocessing (`ExecutorHandler.RecommendSingleStatementProcessing` in `com/onseven/dbvis/o/c/h.java`); Anvil's only preprocessing is the `GO` split. Completion stops above 256 KiB of text, and SQL History skips a run above 64 KiB. Each run keeps at most 16 results, 262,144 values and 8 MiB of value text. A value holds at most 32,768 UTF-16 units. A limit only cuts what the run keeps: the SQL still runs to its end. A result after the 16th shows only a message, and a result past the value limits shows its first rows. A warning marks incomplete results. After the row limit, SQL Server still sends the rest of the result, and Anvil discards it. A very large result over a slow network can take a long time; Cancel stops it.
 
 ## Edit results
 

@@ -5,7 +5,7 @@ local options = { server = "must-not-connect.invalid", database = "unused", inte
 test.describe("SQL execution input", function()
   test.it("refuses invalid batches before opening a connection", function()
     test.skip_if(PLATFORM ~= "Windows", "ODBC execution requires Windows")
-    for _, text in ipairs({ "", "SELECT\0 1", "\255", string.rep("x", 256 * 1024 + 1) }) do
+    for _, text in ipairs({ "", "SELECT\0 1", "\255", string.rep("x", 64 * 1024 * 1024 + 1) }) do
       local result = native.execute(options, text, { max_rows = 1000, timeout = 30 })
       test.ok(result.error:find("SQL text", 1, true))
       test.same(result.results, {})

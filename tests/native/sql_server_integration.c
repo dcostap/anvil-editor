@@ -110,6 +110,21 @@ static int execution_checks(SqlServerOptions *options) {
   CHECK(result.error[0] && !result.cancelled);
   sql_query_free(&result);
 
+  /* A large generated script with a GO after each statement runs to its end. */
+  {
+    size_t size = 2100 * 160 + 64, used = 0;
+    char *script = malloc(size);
+    CHECK(script);
+    for (int i = 1; i <= 2100; ++i)
+      used += (size_t)snprintf(script + used, size - used, "-- %0120d\nDECLARE @n int = %d\nGO\n", 0, i);
+    used += (size_t)snprintf(script + used, size - used, "PRINT N'after large'\n");
+    CHECK(used > 256 * 1024);
+    int ran = run_once(options, script, 1000, 0, NULL, NULL, &result);
+    free(script);
+    CHECK(ran && has_message(&result, "after large"));
+    sql_query_free(&result);
+  }
+
   /* A timeout of 0 means none. */
   sql = "WAITFOR DELAY '00:00:02'; SELECT N'waited' AS value";
   CHECK(run_once(options, sql, 1000, 0, NULL, NULL, &result));

@@ -595,7 +595,7 @@ test.describe("SQL Queries", function()
     test.equal(runs, 4)
   end)
 
-  test.it("runs without a time limit unless the Query sets one", function(context)
+  test.it("runs a large script without a time limit unless the Query sets one", function(context)
     local editor = connected_query(context)
     local backend = require "plugins.sql_server.backend"
     local settings
@@ -616,6 +616,12 @@ test.describe("SQL Queries", function()
     editor.buffer:set_selection(1, 1, 1, math.huge)
     test.ok(command.perform("sql_server:run_selection"))
     test.equal(settings.timeout, 45)
+    local script = string.rep("PRINT N'" .. string.rep("x", 100) .. "'\nGO\n", 3000)
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    editor.buffer:text_input(script)
+    settings = nil
+    test.ok(command.perform("sql_server:run_buffer"))
+    test.ok(#script > 256 * 1024 and test.not_nil(settings).timeout == 45)
   end)
 
   test.it("adjusts the Query's row limit from the result footer for the next run", function(context)

@@ -273,6 +273,9 @@ end, {
   end,
 })
 
+-- The native limit of a run's text.
+M.TEXT_LIMIT = 64 * 1024 * 1024
+
 -- A Query's timeout in seconds: nil uses the configured timeout, and 0 means none.
 M.TIMEOUT_MAX = 86400
 function M.timeout(buffer)
@@ -309,9 +312,9 @@ function M.run(editor, opts)
   local bytes = col2 - col1
   for line = line1, line2 - 1 do
     bytes = bytes + #buffer.lines[line]
-    if bytes > 256 * 1024 then break end
+    if bytes > M.TEXT_LIMIT then break end
   end
-  if bytes > 256 * 1024 then core.error("SQL exceeds the 256 KiB batch limit."); return false end
+  if bytes > M.TEXT_LIMIT then core.error("SQL exceeds the 64 MiB limit of a run."); return false end
   local text = buffer:get_text(line1, col1, line2, col2)
   if not text:find("%S") then return false end
   return M.with_connection(editor, function(c)
