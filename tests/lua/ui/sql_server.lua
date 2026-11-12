@@ -809,6 +809,42 @@ test.describe("SQL Queries", function()
     test.equal(c.catalog, reply)
   end)
 
+  test.it("reloads a waiting schema change when its session ends", function(context)
+    local editor, c = connected_query(context)
+    local backend = require "plugins.sql_server.backend"
+    context.original_close = backend.close_session
+    backend.close_session = function() end
+    local reads = 0
+    backend.read_schema = function(_, callback)
+      reads = reads + 1
+      callback({ database = "AnvilTest", default_schema = "dbo", case_sensitive = false, objects = {} })
+      return { cancel = function() end }
+    end
+    local reply
+    backend.execute = function(_, _, done)
+      done(reply)
+      return { cancel = function() end }
+    end
+    -- The CREATE commits before the transaction opens, so the table stays
+    -- when the session ends.
+    reply = { session = 7, results = {}, messages = {}, transaction_count = 1, schema_changed = true }
+    editor.buffer:text_input("CREATE TABLE sales.notes (body nvarchar(max)); BEGIN TRANSACTION")
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(reads, 0)
+    reply = { session_lost = true, results = {}, messages = {}, error = "The connection to SQL Server was lost." }
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(reads, 1)
+
+    reply = { session = 8, results = {}, messages = {}, transaction_count = 1, schema_changed = true }
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(reads, 1)
+    require("plugins.sql_server.session").close(editor.buffer)
+    test.equal(reads, 2)
+  end)
+
   test.it("stops completion in a Query whose session moved to another database", function(context)
     local editor = connected_query(context)
     local backend = require "plugins.sql_server.backend"

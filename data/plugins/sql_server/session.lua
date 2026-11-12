@@ -10,6 +10,16 @@ local sessions = setmetatable({}, { __mode = "k" })
 
 local function changed() core.redraw = true end
 
+-- An ending session rolls back its open transaction, but a schema change that
+-- committed before the transaction opened stays. So a reload that waited for
+-- the transaction runs now, unless the connection itself ended.
+local function reload_pending(s)
+  if s.schema_pending and s.generation == s.connection.generation then
+    s.schema_pending = nil
+    require("plugins.sql_server").refresh_schema(s.connection.id)
+  end
+end
+
 function M.get(buffer) return sessions[buffer] end
 
 -- The session ID for a run, or nil to open a new session.
@@ -25,6 +35,7 @@ function M.close(buffer)
   sessions[buffer] = nil
   buffer:remove_metadata_listener("sql_session")
   backend.close_session(s.id)
+  reload_pending(s)
   core.log_quiet("SQL Server: closed session connection=%s open_transactions=%s", s.connection.id, tostring(s.transaction_count))
   changed()
 end
@@ -33,7 +44,7 @@ end
 function M.adopt(buffer, c, generation, data, keep)
   local s = sessions[buffer]
   if data.session_lost then
-    if s then sessions[buffer] = nil; buffer:remove_metadata_listener("sql_session") end
+    if s then sessions[buffer] = nil; buffer:remove_metadata_listener("sql_session"); reload_pending(s) end
     changed()
     return
   end
@@ -99,10 +110,7 @@ function M.end_transaction(buffer, commit, done)
     if sessions[buffer] == s then
       s.transaction_count = count
       if ended then sessions[buffer] = nil; buffer:remove_metadata_listener("sql_session") end
-      if s.schema_pending and (count == 0 or ended) then
-        s.schema_pending = nil
-        require("plugins.sql_server").refresh_schema(s.connection.id)
-      end
+      if count == 0 or ended then reload_pending(s) end
     end
     core.log_quiet("SQL Server: %s connection=%s ok=%s", commit and "commit" or "rollback", s.connection.id, tostring(count ~= nil))
     if error then core.error("%s", error) end
