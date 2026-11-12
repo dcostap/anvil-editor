@@ -20,4 +20,9 @@ int sql_batch_split(const char *text, size_t length, SqlBatch *out, size_t capac
  * Such a statement must start its batch. Writes the name without its schema
  * or quotes and returns 1, or returns 0. */
 int sql_batch_module(const char *text, size_t length, char *name, size_t size);
+/* Reports SQL that can change the catalog: CREATE, ALTER or DROP of a table,
+ * view, procedure, function, trigger, schema, synonym, type or sequence,
+ * sp_rename, and SELECT ... INTO a permanent table. Temporary objects do not
+ * count. A false report only costs a catalog read. */
+int sql_batch_changes_schema(const char *text, size_t length);
 #endif

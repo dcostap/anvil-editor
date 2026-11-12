@@ -41,6 +41,17 @@ int main(void) {
   assert(!sql_batch_module("CREATE PROCEDURE", 16, name, sizeof(name)));
   assert(!sql_batch_module("", 0, name, sizeof(name)));
   assert(!sql_batch_module("CREATE PROCEDURE abcdef AS", 26, name, 4));
+
+  const char *changes[] = { "CREATE TABLE sales.notes (id int)", "create or alter procedure [p] as select 1",
+    "ALTER TABLE t ADD c int", "DROP VIEW IF EXISTS dbo.v", "EXEC sys.sp_rename 'a', 'b'",
+    "SELECT * INTO backup_orders FROM sales.orders", "PRINT 1\nGO\nCREATE SCHEMA audit" };
+  for (size_t i = 0; i < sizeof(changes) / sizeof(changes[0]); ++i)
+    assert(sql_batch_changes_schema(changes[i], strlen(changes[i])));
+  const char *same[] = { "CREATE TABLE #t (id int)", "DROP TABLE IF EXISTS #t", "INSERT INTO dbo.t VALUES (1)",
+    "SELECT 'CREATE TABLE x' AS text", "-- DROP TABLE t\nSELECT 1", "/* ALTER /* VIEW */ v */ SELECT 1",
+    "FETCH NEXT FROM c INTO @a", "SELECT 1 INTO #copy", "CREATE INDEX ix ON t (c)", "MERGE INTO t USING s ON 1 = 0", "" };
+  for (size_t i = 0; i < sizeof(same) / sizeof(same[0]); ++i)
+    assert(!sql_batch_changes_schema(same[i], strlen(same[i])));
   puts("SQL batches passed");
   return 0;
 }

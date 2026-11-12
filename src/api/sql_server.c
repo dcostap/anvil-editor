@@ -1,4 +1,5 @@
 #include "api.h"
+#include "../sql_batch.h"
 #include "../sql_context.h"
 #include "../sql_server.h"
 #include "../sql_query.h"
@@ -256,6 +257,8 @@ static int execute_query(lua_State *L) {
   if (token) anvil_worker_cancel_token_release(token);
   push_result(L, result);
   if (!result->session_lost) { lua_pushinteger(L, session); lua_setfield(L, -2, "session"); }
+  /* Explain runs nothing, so it changes no catalog. */
+  boolean(L, "schema_changed", !explain && sql_batch_changes_schema(sql, length));
   sql_query_free(result);
   return 1;
 }

@@ -137,3 +137,57 @@ int sql_batch_module(const char *s, size_t n, char *name, size_t size) {
     else return 1;
   }
 }
+
+static int is_word(const char *w, const char *const *words) {
+  for (int i = 0; words[i]; ++i) if (!strcmp(w, words[i])) return 1;
+  return 0;
+}
+
+int sql_batch_changes_schema(const char *s, size_t n) {
+  static const char *const verbs[] = { "CREATE", "ALTER", "DROP", NULL };
+  static const char *const kinds[] = { "TABLE", "VIEW", "PROC", "PROCEDURE", "FUNCTION", "TRIGGER", "SCHEMA",
+    "SYNONYM", "TYPE", "SEQUENCE", NULL };
+  /* After a verb, after its object kind, or after INTO: the next name decides. */
+  enum { NONE, VERB, NAME } state = NONE;
+  char previous[16] = "";
+  size_t p = 0;
+  for (;;) {
+    p = skip_space(s, n, p);
+    if (p >= n) return 0;
+    char c = s[p];
+    if (c == '\'' || c == '[' || c == '"') {
+      if (c != '\'' && state == NAME) return 1;
+      char close = c == '[' ? ']' : c;
+      for (++p; p < n; ++p)
+        if (s[p] == close) {
+          if (p + 1 < n && s[p + 1] == close) ++p;
+          else { ++p; break; }
+        }
+      state = NONE; previous[0] = 0;
+      continue;
+    }
+    if (!word_char(c)) { ++p; state = NONE; previous[0] = 0; continue; }
+    size_t start = p;
+    while (p < n && word_char(s[p])) ++p;
+    char w[16] = "";
+    if (p - start < sizeof(w))
+      for (size_t i = start; i < p; ++i) w[i - start] = (char)toupper((unsigned char)s[i]);
+    if (state == NAME) {
+      if (!strcmp(w, "IF") || !strcmp(w, "EXISTS")) continue;
+      if (s[start] != '#' && s[start] != '@') return 1;
+      state = NONE;
+    } else if (state == VERB && (!strcmp(w, "OR") || !strcmp(w, "ALTER"))) {
+      continue;
+    } else if (state == VERB && is_word(w, kinds)) {
+      state = NAME;
+      continue;
+    } else if (is_word(w, verbs)) {
+      state = VERB;
+    } else if (!strcmp(w, "SP_RENAME")) {
+      return 1;
+    } else {
+      state = !strcmp(w, "INTO") && strcmp(previous, "INSERT") && strcmp(previous, "MERGE") ? NAME : NONE;
+    }
+    memcpy(previous, w, sizeof(previous));
+  }
+}

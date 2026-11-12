@@ -595,6 +595,38 @@ test.describe("SQL Queries", function()
     test.equal(runs, 4)
   end)
 
+  test.it("reloads the catalog in place after SQL that changes the schema", function(context)
+    local editor, c = connected_query(context)
+    local backend = require "plugins.sql_server.backend"
+    context.original_close = backend.close_session
+    local closed, reads = {}, 0
+    backend.close_session = function(id) closed[#closed + 1] = id end
+    local grown = { database = "AnvilTest", default_schema = "dbo", case_sensitive = false, objects = {
+      schema.objects[1], { schema = "sales", name = "notes", kind = "table", columns = { { name = "body", type = "nvarchar(max)" } } } } }
+    backend.read_schema = function(_, callback)
+      reads = reads + 1
+      callback(grown)
+      return { cancel = function() end }
+    end
+    local changed = true
+    backend.execute = function(_, _, done)
+      done({ session = 7, results = {}, messages = {}, transaction_count = 0, schema_changed = changed })
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("CREATE TABLE sales.notes (body nvarchar(max))")
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(reads, 1)
+    test.equal(c.state, "Ready")
+    test.equal(c.catalog, grown)
+    test.equal(require("plugins.sql_server.session").get(editor.buffer).id, 7)
+    test.same(closed, {})
+    changed = false
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(reads, 1)
+  end)
+
   test.it("runs a large script without a time limit unless the Query sets one", function(context)
     local editor = connected_query(context)
     local backend = require "plugins.sql_server.backend"

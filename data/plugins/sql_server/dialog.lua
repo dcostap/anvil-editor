@@ -115,6 +115,7 @@ function Databases:new()
     if not c then return end
     local password = self.password:get_text()
     self.password:set_text("")
+    if c.state == "Ready" then sql.refresh_schema(c.id); return end
     sql.after_transactions(c.id, function() sql.connect(c.id, password) end)
   end }
   self.disconnect_button = Button { label = "Disconnect", on_click = function()

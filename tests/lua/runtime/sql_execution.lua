@@ -53,6 +53,7 @@ test.describe("SQL execution input", function()
     reply = {}
     backend.execute(connection, copy, function(value) reply.value = value end)
     test.equal(await(reply).error, nil)
+    test.ok(reply.value.schema_changed)
     reply = {}
     backend.read_definition(connection, { schema = "roundtrip", name = "child" }, function(value, err)
       reply.value = value or { error = err }
