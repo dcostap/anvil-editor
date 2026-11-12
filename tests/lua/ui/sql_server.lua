@@ -153,6 +153,37 @@ test.describe("SQL Queries", function()
     test.equal(submitted, nil)
   end)
 
+  test.it("connects the Project's connections when it opens and asks once for a SQL login's password", function(context)
+    local _, c = connected_query(context)
+    local sql = require "plugins.sql_server"
+    local passwords = {}
+    require("plugins.sql_server.backend").read_schema = function(options, callback)
+      passwords[#passwords + 1] = options.password or "none"
+      callback(schema)
+      return { cancel = function() end }
+    end
+    local login = test.not_nil(sql.add_connection())
+    context.second_connection_id = login.id
+    test.ok(sql.update(login.id, "name", "Login Connection"))
+    test.ok(sql.update(login.id, "server", "login-test.invalid"))
+    test.ok(sql.update(login.id, "database", "AnvilTest"))
+    test.ok(sql.update(login.id, "user", "tester"))
+    test.ok(sql.update(login.id, "integrated", false))
+    sql.disconnect(c.id)
+    sql.connect_on_open()
+    local deadline = system.get_time() + 10
+    while not dialog.current() and system.get_time() < deadline do coroutine.yield(0.01) end
+    local card = test.not_nil(dialog.current())
+    test.equal(card.title, "Login Connection")
+    test.equal(c.state, "Ready")
+    test.equal(login.state, "Disconnected")
+    card:on_modal_text_input("pw-test")
+    test.ok(card:confirm())
+    test.equal(dialog.current(), nil)
+    test.equal(login.state, "Ready")
+    test.same(passwords, { "none", "pw-test" })
+  end)
+
   test.it("completes a column through the normal popup using the table alias", function(context)
     local editor = connected_query(context)
     editor.buffer:text_input("SELECT c.na FROM sales.customers AS c")

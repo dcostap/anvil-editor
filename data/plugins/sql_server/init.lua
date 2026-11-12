@@ -529,8 +529,46 @@ function core.set_project(...)
   load_generation = load_generation + 1
   loaded, loading, M.connections = false, false, {}
   changed()
-  return set_project(...)
+  local result = set_project(...)
+  if result then M.connect_on_open() end
+  return result
 end
+-- A Project connects its connections when it opens. Windows authentication
+-- connects at once, also in a background Project. A SQL login asks for its
+-- password once, when the Project shows and no other Dialog is open. A failed
+-- connect only sets the connection's state.
+local open_generation = 0
+function M.connect_on_open()
+  if not config.plugins.sql_server.connect_on_open then return end
+  open_generation = open_generation + 1
+  local generation = open_generation
+  core.add_thread(function()
+    while core.workspace_restored == false do coroutine.yield(0.05) end
+    M.load()
+    while not loaded and not M.load_error and generation == open_generation do coroutine.yield(0.05) end
+    if generation ~= open_generation or not loaded then return end
+    local logins = {}
+    for _, c in ipairs(M.connections) do
+      if c.state == "Disconnected" and c.server ~= "" and c.database ~= "" then
+        if c.integrated then M.connect(c.id) else logins[#logins + 1] = c end
+      end
+    end
+    core.log_quiet("SQL Server: connecting on open connections=%d logins=%d", #M.connections, #logins)
+    local dialog = require "core.ui.dialog"
+    for _, c in ipairs(logins) do
+      while generation == open_generation and (dialog.current() or not system.window_should_render(core.window)) do
+        coroutine.yield(0.1)
+      end
+      if generation ~= open_generation then return end
+      if M.find(c.id) == c and c.state == "Disconnected" then
+        require("plugins.sql_server.connection").password_prompt(c, function(password)
+          if M.find(c.id) == c and c.state ~= "Connecting" then M.connect(c.id, password) end
+        end)
+      end
+    end
+  end)
+end
+M.connect_on_open()
 -- The SQL Query's connection and transaction state, like the SQL Commander
 -- status of DbVisualizer. A click chooses the connection.
 do
@@ -543,6 +581,10 @@ do
       local c = M.connection_for(view.buffer)
       if not c then return { style.dim, "No SQL connection" } end
       local parts = { c.state == "Ready" and style.text or style.dim, c.name }
+      if c.state ~= "Ready" then
+        table.insert(parts, c.state == "Failed" and style.error or style.dim)
+        table.insert(parts, " · " .. c.state)
+      end
       local s = session.get(view.buffer)
       if view.buffer.sql_auto_commit == false then table.insert(parts, style.dim); table.insert(parts, " · Auto Commit Off") end
       if s and s.transaction_count ~= 0 then
