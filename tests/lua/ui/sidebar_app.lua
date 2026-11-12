@@ -17,7 +17,7 @@ local function restore(target, saved)
 end
 
 -- Seam: real Sidebar startup and keyboard events. Only the native Window and shell are replaced.
-local function with_sidebar(custom, run)
+local function with_sidebar(custom, run, display)
   local saved = {core = copy(core), system = copy(system), renwindow = copy(renwindow),
     style = copy(style), commands = copy(command.map), keymap = copy(keymap), userdir = USERDIR, scale = SCALE,
     font_group = renderer.font.group}
@@ -40,6 +40,7 @@ local function with_sidebar(custom, run)
       requests[#requests + 1] = {route = route, path = path, request = assert(loadstring("return " .. text))()}
       return true
     end
+    if display then system.get_scale = function() return display.scale end end
     system.poll_event = function() end
     system.wait_event = function() end
     system.window_should_render = function() return false end
@@ -71,6 +72,25 @@ local function with_sidebar(custom, run)
   test.ok(test.remove_tree(folder))
   assert(ok, err)
 end
+
+test.describe("Sidebar application display scale", function()
+  test.it("sizes its fonts by the display scale also when it starts at a scale other than 1", function()
+    -- The editor's interface fonts at scale 1.
+    local editor = {text = style.font:get_size() / SCALE, icon = style.icon_font:get_size() / SCALE}
+    local display, sizes = {scale = 2.25}, {}
+    with_sidebar(nil, function()
+      sizes.large = {text = style.font:get_size(), icon = style.icon_font:get_size()}
+      display.scale = 1
+      core.run_step()
+      sizes.normal = {text = style.font:get_size(), icon = style.icon_font:get_size()}
+    end, display)
+    for _, kind in ipairs {"text", "icon"} do
+      test.ok(math.abs(sizes.large[kind] - 2.25 * editor[kind]) < 0.01 and math.abs(sizes.normal[kind] - editor[kind]) < 0.01,
+        ("%s size %g at scale 2.25 and %g at scale 1, editor %g"):format(kind, sizes.large[kind], sizes.normal[kind],
+          editor[kind]))
+    end
+  end)
+end)
 
 test.describe("Sidebar application keyboard routing", function()
   for _, source in ipairs {"default", "custom"} do

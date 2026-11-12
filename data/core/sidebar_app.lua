@@ -4,9 +4,9 @@ local saved_event = core.on_event
 local surfaces, current = {}, nil
 -- The surface whose Context Menu is open. One menu is open at a time.
 local menu_surface
-local SidebarView, context_menu, font, icon_font, base_font_size, base_icon_size
--- The text and menu icon fonts at each scale.
-local fonts, style = {}, nil
+local SidebarView, context_menu
+-- The style fonts that the Sidebar draws, each with its size at scale 1, and their copies at each scale.
+local base_fonts, fonts, style = nil, {}, nil
 local color_theme = require "core.color_theme"
 local storage = require "core.storage"
 local zoom = require "core.zoom"
@@ -190,12 +190,13 @@ local function activate(id)
   core.redraw = surface.redraw
   local scale = system.get_scale(surface.window) * interface_zoom
   SCALE = scale
-  if font then
+  if base_fonts then
     if not fonts[scale] then
-      fonts[scale] = {text = font:copy(base_font_size * scale), icon = icon_font:copy(base_icon_size * scale)}
+      fonts[scale] = {}
+      for key, base in pairs(base_fonts) do fonts[scale][key] = base.font:copy(base.size * scale) end
       core.log_quiet("Sidebar font created: scale=%g", scale)
     end
-    style.font, style.menu_icon_font = fonts[scale].text, fonts[scale].icon
+    for key, scaled in pairs(fonts[scale]) do style[key] = scaled end
   end
   if surface.scale ~= scale then
     surface.view.scroll = surface.view.scroll * scale / surface.scale
@@ -550,6 +551,8 @@ function core.init()
   end
   keymap.add {["alt+r"] = "sidebar:return"}
   if core.session_log then core.session_log:flush() end
+  -- `require "core"` made the style fonts at the startup SCALE, before the Sidebar knew its Window's scale.
+  local style_scale = SCALE
   local window = renwindow.create("Sidebar", 240, 600)
   core.window, core.active_window = window, window
   SCALE = system.get_scale(window)
@@ -568,18 +571,17 @@ function core.init()
   load_wallpaper()
   -- Terminal titles carry spinners and symbols the text font lacks. The editor's fallbacks draw them.
   local font_fallbacks = require "core.font_fallbacks"
-  font = font_fallbacks.group(style.font, font_fallbacks.load(style.font:get_size(), "Sidebar"))
+  local font = font_fallbacks.group(style.font, font_fallbacks.load(style.font:get_size(), "Sidebar"))
   -- A blended surface keeps one alpha per pixel. Subpixel text would lose the backdrop in some channels and show
   -- dark coloured outlines over a bright wallpaper. Copies at other scales keep this antialiasing.
   if system.is_surface_transparent() then
     font = font:copy(font:get_size(), {antialiasing = "grayscale"})
-    style.font = font
     core.log_quiet("Sidebar font uses grayscale antialiasing on a transparent surface")
   end
-  base_font_size = font:get_size() / SCALE
-  icon_font = style.menu_icon_font
-  base_icon_size = icon_font:get_size() / SCALE
-  fonts[SCALE] = {text = font, icon = icon_font}
+  base_fonts = {}
+  for key, base in pairs {font = font, icon_font = style.icon_font, menu_icon_font = style.menu_icon_font} do
+    base_fonts[key] = {font = base, size = base:get_size() / style_scale}
+  end
   local id = system.get_anvil_window_id()
   add_surface(id, window)
   activate(id)
