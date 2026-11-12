@@ -82,6 +82,20 @@ test.describe("SQL execution input", function()
       reply.value = value or { error = err }
     end)
     test.equal(await(reply).create, copy)
+    -- A table whose CHECK definition is longer than one value has no source.
+    local values = {}
+    for i = 1, 4000 do values[i] = tostring(i) end
+    reply = {}
+    backend.execute(connection, "CREATE TABLE roundtrip.long_check (x int CONSTRAINT CK_long CHECK (x IN ("
+      .. table.concat(values, ",") .. ")))", function(value) reply.value = value end)
+    test.equal(await(reply).error, nil)
+    reply = {}
+    backend.read_definition(connection, { schema = "roundtrip", name = "long_check" }, function(value, err)
+      reply.value = value or { error = err }
+    end)
+    local long = await(reply)
+    test.equal(long.create, nil)
+    test.equal(long.error, "Definition metadata exceeds its size limit.")
     for _, object in ipairs({ "renamed_names", "list_customers", "long_text" }) do
       reply = {}
       backend.read_definition(connection, { schema = "sales", name = object }, function(value, err)

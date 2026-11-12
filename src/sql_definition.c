@@ -205,6 +205,10 @@ int sql_definition_read(const SqlServerOptions *options, const char *schema, con
     SqlQueryTable *t=&rows.tables[i];
     for (size_t j=0; j<t->row_count*t->column_count; ++j) {
       SqlQueryCell *cell=&t->cells[j];
+      /* A cut value, such as a long CHECK definition, would make an incomplete script. */
+      if (cell->cut) {
+        snprintf(out->error, sizeof(out->error), "Definition metadata exceeds its size limit."); goto done;
+      }
       if (cell->text && memchr(cell->text,0,cell->length)) {
         snprintf(out->error,sizeof(out->error),"Definition metadata contains a NUL character."); goto done;
       }
