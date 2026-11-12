@@ -338,6 +338,17 @@ function Results:set_value(row, column, value)
   core.redraw = true
 end
 
+-- True when Anvil keeps only the start of the cell's value (`row.cut`) and no
+-- edit replaced it. Edits and scripts must not use such a value.
+function Results:is_cut(row, column)
+  local edits = self.edits and self.edits[row]
+  return row.cut ~= nil and row.cut[column] == true and not (edits and edits[column] ~= nil)
+end
+
+function Results:cut_message(column)
+  return string.format("Anvil has only the first 32,768 characters of a value in %s.", self.model.headers[column])
+end
+
 function Results:edit_cell()
   local row, column, display_row = self:focus_cell()
   if not row then return false end
@@ -345,6 +356,7 @@ function Results:edit_cell()
     if not info.columns[column].editable then
       core.warn("Column %s is not a column of %s that can change.", self.model.headers[column], info.table); return
     end
+    if self:is_cut(row, column) then core.warn("%s Change it with SQL.", self:cut_message(column)); return end
     local value = self:cell_value(display_row, column)
     if value and value:find("[\r\n]") then core.warn("Edit values with line breaks in a script."); return end
     core.global_prompt_bar:enter(self.model.headers[column], {
@@ -361,10 +373,10 @@ function Results:view_cell()
   if not row then return false end
   local value = self:cell_value(display_row, column)
   if value == false then core.warn("The value is NULL."); return false end
-  local edited = self.edits and self.edits[row] and self.edits[row][column] ~= nil
+  local cut = self:is_cut(row, column)
   local first = value:match("^%s*(.)")
   open_text(value, (first == "{" or first == "[") and "json" or first == "<" and "xml" or nil)
-  if row.cut and row.cut[column] and not edited then
+  if cut then
     core.warn("SQL Server sent more of this value. Anvil keeps its first 32,768 characters.")
   end
   return true
@@ -419,13 +431,26 @@ function Results:script_rows(kind)
   if not row1 then return false end
   return self:with_edit_info(function()
     local edit = require "plugins.sql_server.edit"
-    local text, reason
+    local text, reason, note
     if kind == "insert" then text, reason = edit.insert_script(self, row1, row2)
-    else text, reason = edit.select_script(self, row1, column1, row2, column2) end
+    else text, reason, note = edit.select_script(self, row1, column1, row2, column2) end
     if not text then core.warn("%s", reason); return end
     core.log_quiet("SQL Server: scripted %d result row(s) as %s", row2 - row1 + 1, kind)
     self:open_script(text)
+    if note then core.warn("%s", note) end
   end)
+end
+
+-- Opens an export of the shown rows, and warns when it holds cut values.
+function Results:export(text, mode)
+  local opened = open_text(text, mode)
+  for display_row = 1, self:row_count() do
+    if self:source_row(display_row).cut then
+      core.warn("Anvil has only the first 32,768 characters of some values.")
+      break
+    end
+  end
+  return opened
 end
 
 function Results:discard_changes()
@@ -480,10 +505,10 @@ command.add(function()
   return view and view:is(Results) and view.model.column_count > 0, view
 end, {
   ["sql_server:view_as_csv"] = function(view)
-    return open_text(require("plugins.sql_server.export").csv(view), "csv")
+    return view:export(require("plugins.sql_server.export").csv(view), "csv")
   end,
   ["sql_server:view_as_json"] = function(view)
-    return open_text(require("plugins.sql_server.export").json(view), "json")
+    return view:export(require("plugins.sql_server.export").json(view), "json")
   end,
 })
 command.add(function()

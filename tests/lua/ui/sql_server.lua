@@ -501,6 +501,55 @@ test.describe("SQL Queries", function()
     test.equal(reason, "Include the key column [id] to edit this result.")
   end)
 
+  test.it("does not edit or script a value that Anvil cut, and warns when it exports one", function(context)
+    local editor = connected_query(context)
+    local describe_headers = { "name", "is_hidden", "source_schema", "source_table", "source_column",
+      "is_part_of_unique_key", "is_updateable", "system_type_name" }
+    local function described(name, key, updateable, type)
+      return { cells = { name, "0", "sales", "customers", name, key and "1" or "0", updateable and "1" or "0", type },
+        source_line1 = 1, source_line2 = 1 }
+    end
+    local runs = 0
+    require("plugins.sql_server.backend").execute = function(_, _, callback)
+      runs = runs + 1
+      if runs == 2 then
+        callback({ messages = {}, results = { { headers = describe_headers, column_count = 8, distinct_values = {}, rows = {
+          described("id", true, false, "int"), described("doc", false, true, "nvarchar(max)") } } } })
+      else
+        callback({ messages = {}, results = { { headers = { "id", "doc" }, column_count = 2, distinct_values = {}, rows = {
+          { cells = { "1", string.rep("x", 32768) }, cut = { [2] = true }, source_line1 = 1, source_line2 = 1 },
+          { cells = { "2", "short" }, source_line1 = 1, source_line2 = 1 } } } } })
+      end
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("SELECT id, doc FROM sales.customers")
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    local result = editor.buffer.sql_execution.view
+    local warnings = {}
+    context.original_warn = core.warn
+    core.warn = function(format, ...) warnings[#warnings + 1] = string.format(format, ...) end
+    local cut = "Anvil has only the first 32,768 characters of a value in doc."
+    panes.focus(panes.pane_for_view(result))
+    result:select_cell(1, 2, false)
+    command.perform("sql_server:edit_cell")
+    test.equal(core.active_view, result)
+    test.equal(warnings[1], cut .. " Change it with SQL.")
+    result:select_cell(1, 1, false)
+    result:select_cell(2, 2, true)
+    command.perform("sql_server:script_rows_as_insert")
+    test.equal(core.active_view, result)
+    test.equal(warnings[2], cut .. " Script these rows with SQL.")
+    test.ok(command.perform("sql_server:script_rows_as_select"))
+    test.equal(core.active_view.buffer:get_text(1, 1, math.huge, math.huge),
+      "SELECT *\nFROM [sales].[customers]\nWHERE ([id] = N'1')\n   OR ([id] = N'2' AND [doc] = N'short');\n")
+    test.equal(warnings[3], cut .. " The SELECT leaves it out.")
+    panes.focus(panes.pane_for_view(result))
+    test.ok(command.perform("sql_server:view_as_csv"))
+    test.equal(warnings[4], "Anvil has only the first 32,768 characters of some values.")
+    core.warn = context.original_warn
+  end)
+
   test.it("designs a table in a Dialog and opens its ALTER script in a new Query that runs nothing", function(context)
     local editor = connected_query(context)
     local reads = 0

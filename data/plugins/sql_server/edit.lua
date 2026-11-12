@@ -131,8 +131,11 @@ function M.insert_script(results, row1, row2)
       if display_row > row1 then lines[#lines] = lines[#lines]:gsub(",$", ";") end
       lines[#lines + 1] = "INSERT INTO " .. target .. " (" .. table.concat(names, ", ") .. ") VALUES"
     end
-    local values = {}
-    for i, column in ipairs(columns) do values[i] = literal(results:cell_value(display_row, column)) end
+    local values, row = {}, results:source_row(display_row)
+    for i, column in ipairs(columns) do
+      if results:is_cut(row, column) then return nil, results:cut_message(column) .. " Script these rows with SQL." end
+      values[i] = literal(results:cell_value(display_row, column))
+    end
     lines[#lines + 1] = "    (" .. table.concat(values, ", ") .. "),"
   end
   lines[#lines] = lines[#lines]:gsub(",$", ";")
@@ -140,15 +143,18 @@ function M.insert_script(results, row1, row2)
 end
 
 -- A SELECT of the table's rows that have the selected cells' values, as the
--- server sent them. Each selected row adds its own condition.
+-- server sent them. Each selected row adds its own condition. A value that
+-- Anvil cut stays out, and the third result tells it.
 function M.select_script(results, row1, column1, row2, column2)
   local info = results.edit_info
   local target = quote(info.schema) .. "." .. quote(info.table)
-  local conditions = {}
+  local conditions, note = {}, nil
   for display_row = row1, row2 do
     local row, parts = results:source_row(display_row), {}
     for column = column1, column2 do
-      if info.columns[column].comparable then
+      if row.cut and row.cut[column] then
+        note = note or results:cut_message(column) .. " The SELECT leaves it out."
+      elseif info.columns[column].comparable then
         local value = row.cells[column]
         parts[#parts + 1] = quote(info.columns[column].column) .. (value == false and " IS NULL" or " = " .. literal(value))
       end
@@ -156,7 +162,7 @@ function M.select_script(results, row1, column1, row2, column2)
     if #parts == 0 then return nil, string.format("No selected column is a column of %s.", target) end
     conditions[#conditions + 1] = "(" .. table.concat(parts, " AND ") .. ")"
   end
-  return "SELECT *\nFROM " .. target .. "\nWHERE " .. table.concat(conditions, "\n   OR ") .. ";\n"
+  return "SELECT *\nFROM " .. target .. "\nWHERE " .. table.concat(conditions, "\n   OR ") .. ";\n", nil, note
 end
 
 -- Calls done(info) when SQL Server described the result. The describe call
