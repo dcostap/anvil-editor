@@ -719,6 +719,29 @@ test.describe("SQL Queries", function()
     test.equal(reads, 1)
   end)
 
+  test.it("reloads the catalog after a cancelled run of SQL that changes the schema", function(context)
+    local editor = connected_query(context)
+    local backend = require "plugins.sql_server.backend"
+    context.original_close = backend.close_session
+    backend.close_session = function() end
+    local reads, finish = 0, nil
+    backend.read_schema = function(_, callback)
+      reads = reads + 1
+      callback(schema)
+      return { cancel = function() end }
+    end
+    backend.execute = function(_, _, done)
+      finish = done
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("CREATE TABLE sales.a (x int)\nGO\nWAITFOR DELAY '01:00'")
+    editor.buffer:set_selection(1, 1, 3, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.ok(command.perform("sql_server:cancel"))
+    finish({ session = 7, results = {}, messages = {}, cancelled = true, transaction_count = 0, schema_changed = true })
+    test.equal(reads, 1)
+  end)
+
   test.it("reads the catalog once more after a schema change during a reload", function(context)
     local editor, c = connected_query(context)
     local backend = require "plugins.sql_server.backend"

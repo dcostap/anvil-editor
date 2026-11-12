@@ -391,8 +391,11 @@ function M.run(editor, opts)
     run.active, run.handle, active_runs[run] = false, nil, nil
     buffer:remove_metadata_listener("sql_execution")
     session.adopt(buffer, c, run.generation, data, not run.closed and M.connection_for(buffer) == c)
+    -- A cancelled run keeps schema_changed: its earlier batches can have
+    -- committed a change.
     if run.cancelled or c.generation ~= run.generation then
-      data = { cancelled = true, messages = data.messages, transaction_count = data.transaction_count }
+      data = { cancelled = true, messages = data.messages, transaction_count = data.transaction_count,
+        schema_changed = data.schema_changed }
     end
     if data.error_line then M.set_error_line(buffer, line1 + data.error_line - 1) end
     if c.generation == run.generation then session.schema_check(buffer, c, data.schema_changed) end
