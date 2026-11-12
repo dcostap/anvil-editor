@@ -279,6 +279,14 @@ SCENARIOS["markdown-open"] = dict(
     window_width=900, window_height=560, open_sections=5,
 )
 SCENARIOS["markdown-open-long"] = dict(SCENARIOS["markdown-open"], open_sections=24)
+# Selected source ranges, folded gaps, and note cards in one Code Tour.
+SCENARIOS["code-tour"] = {
+    "start_line": 1,
+    "window_width": 1200,
+    "window_height": 760,
+    "visual": True,
+    "paced": False,
+}
 # Footnote cards beside a Live Preview lane, including two references on one line.
 SCENARIOS["markdown-footnotes"] = {
     "fixture": "markdown-footnotes",

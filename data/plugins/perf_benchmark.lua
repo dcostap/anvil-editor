@@ -839,7 +839,12 @@ local function setup_scenario()
     core.on_event("dropmoved", core.title_bar.position.x + 20 * SCALE,
       core.title_bar.position.y + core.title_bar.size.y / 2)
   end
-  if benchmark.scenario == "renderer-primitives" then
+  if benchmark.scenario == "code-tour" then
+    view = require("core.code_tour").open({title = "How the renderer handles rows", entries = {
+      {path = benchmark.fixture, line = 5, end_line = 12, text = "These are the **inputs** for this section."},
+      {path = benchmark.fixture, line = 30, end_line = 36, text = "The next section uses the same Buffer. Expand the fold to read the code between them."},
+    }}, {placement = "current", focus = true}, function(_, err) assert(not err, err) end)
+  elseif benchmark.scenario == "renderer-primitives" then
     view = open_primitive_view()
   elseif benchmark.scenario == "glyph-cache-growth" then
     view = open_glyph_cache_view()
@@ -1109,6 +1114,10 @@ local function setup_scenario()
 end
 
 local function scenario_is_ready()
+  if benchmark.scenario == "code-tour" then
+    assert(not benchmark.view.error, benchmark.view.error)
+    return benchmark.view:get_focus_view() ~= nil
+  end
   if benchmark.workload then return benchmark.workload:setup_ready() end
   local view = benchmark.view
   if not view then return false end

@@ -126,6 +126,7 @@ Steering and interruption return `delivered` after Pi accepts them. A steering r
 | `snooze` | Set or remove Snooze for a Terminal's Pane; default to the caller's Terminal. |
 | `open_file` | Open a file at a line in a new Pane or split. |
 | `diff_open` | Open a Git diff in a new Pane or split, with Diff Notes on its lines. |
+| `code_open` | Open a Code Tour of editable file ranges, with optional notes. |
 | `terminal_start` | Open a shell, optionally with a structured executable and argument list. |
 | `terminal` | Read terminal text, send literal input, or close a Terminal View. |
 | `pi_start` | Start an independent interactive Pi with explicit model choices. |
@@ -143,6 +144,23 @@ Tool schemas describe their required fields. Terminal launch currently requires 
 `pane` with `action: "move"` and `target_project` moves the Pane to the end of that Project as a new Pane Group. The target must have a control endpoint. The source exports the Pane. Its Terminal Sessions keep running, and a moved Pi keeps its conversation. The source closes its copy after the target confirms, and attaches the Terminals again when the target refuses. The reply is `accepted`. Inspect the target's `workspace_state` for the new Pane ID. `focus: true` also selects the target Project.
 
 `diff_open` opens a Commit Diff View from `base` (default `HEAD`) to `head`, or to the working tree when `head` is omitted. Revisions cannot start with `-` or hold spaces. Each note names a file `path`, absolute or relative to the Project, a `side` (`new` by default, or `old`), a `line`, an optional `end_line` and its `text`. The text is one paragraph of inline Markdown. A note on the old side of a renamed file can name the old path. The same `base` and `head` keep their View, which takes the new title and notes. Poll `operation_read` with the returned `operation`. A `ready` result gives the `pane`, the changed `files` and the `unplaced` note paths that the diff does not show. Lines past a file's end move to its last line. Notes move with edits in the comparison, and the Workspace saves them with the View.
+
+`code_open` opens a Code Tour without a Git comparison. Give it `entries`, an optional `title`, and the usual placement and focus options. Each entry has `path`, `line`, optional `end_line`, and optional `text` in inline Markdown. Paths can be absolute or relative to the Project. Lines start at 1, and ranges include both ends. Files must exist, contain text, and contain the requested ranges. A failed load opens no Pane. Poll `operation_read` with the returned `operation`; a `ready` result gives the `pane`.
+
+The left list follows the supplied order. Point of Interest navigation moves between entries, including repeated visits to one file. The right side shows the selected file. Ranges in that file stay visible; gaps of two or more lines fold. Expand a fold to read more code. A note appears below its range. An entry inside another range can explain only part of that range.
+
+The Tour uses the real Buffers, including unsaved text. Edits and saves work as in an Editor. Ranges and notes follow edits while the Tour stays open. A removed range is marked and skipped, not attached to unrelated code. Workspace state keeps the paths, current line ranges, notes, and selected entry. Restore uses those line numbers in the current files; it does not track edits made while Anvil was closed. Each call opens a new Tour; a retry with the same `request_id` keeps its result. A Tour cannot move to another Project.
+
+```json
+{
+  "title": "How requests reach the host",
+  "entries": [
+    {"path": "src/client.c", "line": 40, "end_line": 58, "text": "The client sends the **request** here."},
+    {"path": "src/host.c", "line": 90, "end_line": 112}
+  ],
+  "request_id": "request-tour"
+}
+```
 
 For `terminal_start`, readiness describes the shell, not the optional program. Read its Terminal output to check program startup. `pi_start` also waits for Pi's control connection.
 

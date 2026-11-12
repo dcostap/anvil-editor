@@ -839,6 +839,9 @@ _Avoid_: diffviewer
 A note that an agent writes on a line or a range of lines of one side of a Diff View. The Diff View shows it in a card below the range's last line, in the look of a Footnote card. The noted lines stay visible when unchanged lines fold.
 _Avoid_: comment, annotation, review comment
 
+**Code Tour**:
+An ordered selection of file ranges that explains related code. Each range can have a note. The reader moves between ranges, also across files, and can expand the code between them. A Code Tour shows editable source text, not a comparison.
+
 **Unified Diff**:
 A single text surface showing unchanged lines once, with removed lines before added lines in each change block.
 It shows line numbers from both sources and permits selection and copying.

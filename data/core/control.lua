@@ -97,6 +97,11 @@ tool("diff_open", "Open a Git diff for the user in a new Pane or a split, with D
     notes = {type = "array", maxItems = 64, items = object({path = string_schema(32768), side = choice("new", "old"),
       line = {type = "integer"}, end_line = {type = "integer"}, text = string_schema(4000)}, {"path", "line", "text"})}},
   {"request_id"}, false)
+tool("code_open", "Open a Code Tour of editable file ranges, with optional notes. Entries follow the supplied order, also across files. Each entry has path, line, optional end_line and optional text (inline Markdown). Other lines fold. Files must exist and contain text. Keeps focus unless requested. Returns an operation ID; operation_read reports readiness or failure.",
+  placement {title = string_schema(200), entries = {type = "array", maxItems = 64,
+    items = object({path = string_schema(32768), line = {type = "integer"},
+      end_line = {type = "integer"}, text = string_schema(4000)}, {"path", "line"})}},
+  {"entries", "request_id"}, false)
 tool("terminal_start", "Open a Terminal Session, optionally running an executable with literal arguments. Structured program launch uses PowerShell on Windows. Returns an operation ID; query operation_read for readiness.",
   placement {cwd = string_schema(32768), executable = string_schema(4096), args = {type = "array", items = string_schema(4096), maxItems = 64}},
   {"cwd", "request_id"}, false)
@@ -104,7 +109,7 @@ tool("pi_start", "Start an independent interactive Pi in a new Terminal Pane. Sp
   placement {cwd = string_schema(32768), provider = string_schema(), model = string_schema(),
     thinking = choice("off", "minimal", "low", "medium", "high", "xhigh", "max"), task = string_schema(32768)},
   {"cwd", "provider", "model", "thinking", "request_id"}, false)
-tool("operation_read", "Read the progress or failure of a started Terminal, Pi or diff. A ready Pi result includes its conversation instance and initial task ID.",
+tool("operation_read", "Read the progress or failure of a started Terminal, Pi, diff or Code Tour. A ready Pi result includes its conversation instance and initial task ID.",
   {operation = id}, {"operation"}, true)
 tool("terminal", "Read bounded terminal text, send literal terminal input, or close a Terminal View. Close approves the calling agent's own running Terminal; other sessions keep normal confirmation. Self-close can stop the agent before the reply arrives. Use agent_send for Pi tasks.",
   {action = choice("read", "input", "close"), terminal = id, text = string_schema(32768), request_id = id},
@@ -239,6 +244,26 @@ function M:diff_open(args)
       result.files, result.unplaced = protocol_json.array(opened.files), protocol_json.array(opened.unplaced)
     end
     core.log_quiet("Control: diff %s status=%s", operation, result.status)
+  end)
+  return result
+end
+
+function M:code_open(args)
+  local place = place_options(args)
+  assert(#args.entries > 0, "A Code Tour needs at least one entry")
+  local entries = {}
+  for _, entry in ipairs(args.entries) do
+    assert(not entry.end_line or entry.end_line >= entry.line, "An entry's end_line must not be before its line")
+    entries[#entries + 1] = {path = common.is_absolute_path(entry.path) and entry.path
+      or self.project .. PATHSEP .. entry.path, line = entry.line, end_line = entry.end_line, text = entry.text}
+  end
+  local operation = net.random_token()
+  local result = {operation = operation, status = "opening"}
+  self.jobs[operation] = {result = result}
+  require("core.code_tour").open({title = args.title, entries = entries}, place, function(view, err)
+    result.status, result.error = view and "ready" or "failed", err
+    result.pane = view and panes.pane_for_view(view).id or nil
+    core.log_quiet("Control: Code Tour %s status=%s", operation, result.status)
   end)
   return result
 end
