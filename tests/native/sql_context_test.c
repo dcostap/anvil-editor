@@ -142,6 +142,27 @@ int main(void) {
   assert(c.mode == SQL_CONTEXT_COLUMN && sources_are(&c, "customers t"));
   parse_after(&c, text, "USING ");
   assert(c.mode == SQL_CONTEXT_TABLE);
+  /* MERGE's VALUES takes the source's columns. */
+  parse_after(&c, text, "VALUES (s.");
+  assert(c.mode == SQL_CONTEXT_COLUMN && !strcmp(c.qualifier, "s") && sources_are(&c, "customers t,staging s"));
+  /* OUTPUT is not an alias, a table hint does not hide the column list, and a
+   * target that FROM names again is one source. */
+  text = "DELETE FROM sales.orders OUTPUT deleted.";
+  parse_after(&c, text, "deleted.");
+  assert(c.mode == SQL_CONTEXT_COLUMN && !strcmp(c.qualifier, "deleted") && sources_are(&c, "orders"));
+  text = "INSERT INTO sales.customers WITH (TABLOCK) (id, na";
+  parse_after(&c, text, "(id, na");
+  assert(c.mode == SQL_CONTEXT_COLUMN && sources_are(&c, "customers"));
+  text = "UPDATE sales.customers SET na = 1 FROM sales.customers JOIN sales.orders o ON o.customer_id = id";
+  parse_after(&c, text, "SET na");
+  assert(c.mode == SQL_CONTEXT_COLUMN && sources_are(&c, "customers,orders o"));
+  /* FOR SYSTEM_TIME keeps the alias after it. */
+  text = "SELECT h. FROM sales.customers FOR SYSTEM_TIME ALL AS h";
+  parse_after(&c, text, "SELECT h.");
+  assert(sources_are(&c, "customers h"));
+  text = "SELECT h. FROM sales.customers FOR SYSTEM_TIME BETWEEN '2020' AND DATEADD(day, 1, @at) h JOIN sales.orders o ON 1 = 1";
+  parse_after(&c, text, "SELECT h.");
+  assert(sources_are(&c, "customers h,orders o"));
   /* A CTE or a temporary table can be the target. */
   text = "WITH old AS (SELECT id, total FROM sales.orders) DELETE FROM old WHERE to";
   parse_after(&c, text, "WHERE to");

@@ -41,7 +41,7 @@ static int is_name(Token t) { return t.kind == IDENT || t.kind == QUOTED; }
 static int reserved(const char *s, Token t) {
   static const char *words[] = { "SELECT", "FROM", "WHERE", "JOIN", "LEFT", "RIGHT", "INNER", "OUTER",
     "FULL", "CROSS", "ON", "GROUP", "ORDER", "HAVING", "UNION", "EXCEPT", "INTERSECT", "OFFSET",
-    "FETCH", "WITH", "AS", "SET", "VALUES", "INTO", "FOR", "OPTION", "APPLY", NULL };
+    "FETCH", "WITH", "AS", "SET", "VALUES", "INTO", "FOR", "OPTION", "APPLY", "OUTPUT", NULL };
   for (int i = 0; words[i]; ++i) if (word(s, t, words[i])) return 1;
   return 0;
 }
@@ -290,10 +290,34 @@ static size_t skip_source(const char *s, Token *ts, size_t i, size_t end, size_t
   }
   return last;
 }
+/* The last token of a value at i: a literal, a variable, or a call. */
+static size_t value_end(Token *ts, size_t i, size_t end) {
+  if (ts[i].kind=='(') return closing(ts,i,end);
+  if (i+1<end && ts[i+1].kind=='(') return closing(ts,i+1,end);
+  return i;
+}
+/* The last token of a temporal clause after the table name at i:
+ * FOR SYSTEM_TIME ALL, AS OF v, FROM v TO v, BETWEEN v AND v or
+ * CONTAINED IN (v, v). Returns i without one. */
+static size_t system_time_end(const char *s, Token *ts, size_t i, size_t end) {
+  size_t k=i+3;
+  if (k>=end || !word(s,ts[i+1],"FOR") || !word(s,ts[i+2],"SYSTEM_TIME")) return i;
+  if (word(s,ts[k],"ALL")) return k;
+  if (word(s,ts[k],"AS") && k+2<end && word(s,ts[k+1],"OF")) return value_end(ts,k+2,end);
+  if ((word(s,ts[k],"FROM") || word(s,ts[k],"BETWEEN")) && k+1<end) {
+    k=value_end(ts,k+1,end);
+    if (k+2<end && (word(s,ts[k+1],"TO") || word(s,ts[k+1],"AND"))) return value_end(ts,k+2,end);
+    return k;
+  }
+  if (word(s,ts[k],"CONTAINED") && k+2<end && word(s,ts[k+1],"IN") && ts[k+2].kind=='(') return closing(ts,k+2,end);
+  return k;
+}
 /* Sets the mode at the caret and reads the sources of a scope's FROM, JOIN,
  * APPLY and USING lists. Tokens deeper than the scope belong to subqueries and calls.
+ * In a MERGE, VALUES takes the source's columns.
  * Returns 0 on failure. Unsupported sources leave no context. */
-static int read_scope(const char *s, Token *ts, size_t begin, size_t end, int scope, size_t caret, SqlContext *out) {
+static int read_scope(const char *s, Token *ts, size_t begin, size_t end, int scope, size_t caret, int merge,
+                      SqlContext *out) {
   static const char *column_words[]={ "WHERE", "ON", "GROUP", "ORDER", "HAVING", "SET", "OUTPUT", "WHEN", "THEN", NULL };
   int source_list=0, expect_source=0;
   for (size_t i=begin; i<end; ++i) {
@@ -308,7 +332,7 @@ static int read_scope(const char *s, Token *ts, size_t begin, size_t end, int sc
     for (int k=0; column_words[k]; ++k) if (word(s,t,column_words[k])) column_word=1;
     if (column_word || word(s,t,"VALUES")) {
       source_list=expect_source=0;
-      if (t.end<=caret) out->mode=column_word ? SQL_CONTEXT_COLUMN : SQL_CONTEXT_NONE;
+      if (t.end<=caret) out->mode=column_word || merge ? SQL_CONTEXT_COLUMN : SQL_CONTEXT_NONE;
       continue;
     }
     if (t.kind==',' && source_list) {
@@ -347,6 +371,7 @@ static int read_scope(const char *s, Token *ts, size_t begin, size_t end, int sc
     int read=read_name(s,ts,&i,end,&src);
     if (!read) return 0;
     if (read<0 || (i+1<end && ts[i+1].kind=='(')) { i=skip_source(s,ts,at,end,caret,out); expect_source=0; continue; }
+    i=system_time_end(s,ts,i,end);
     if (i+1<end && word(s,ts[i+1],"AS")) ++i;
     if (i+1<end && is_name(ts[i+1]) && !reserved(s,ts[i+1])) {
       ++i;
@@ -390,6 +415,8 @@ static int read_statement(const char *s, Token *ts, size_t begin, size_t end, si
     /* INSERT [INTO] target (columns), or MERGE's WHEN NOT MATCHED THEN INSERT (columns). */
     for (size_t k=insert ? i : begin; (insert || merge) && k<end; ++k) {
       if (ts[k].depth!=scope) continue;
+      /* A table hint, such as WITH (TABLOCK), comes before the column list. */
+      if (insert && word(s,ts[k],"WITH") && k+1<end && ts[k+1].kind=='(') { k=closing(ts,k+1,end); continue; }
       size_t open=insert ? k : k+1;
       if (!insert && !(word(s,ts[k],"INSERT") && k>begin && word(s,ts[k-1],"THEN"))) continue;
       if (open<end && ts[open].kind=='(') {
@@ -399,12 +426,15 @@ static int read_statement(const char *s, Token *ts, size_t begin, size_t end, si
       if (insert) break;
     }
   }
-  if (!read_scope(s,ts,i,end,scope,caret,out)) return 0;
-  /* UPDATE c ... FROM sales.customers c names its target by a FROM alias. */
-  if (!merge && out->count>1 && !out->sources[0].schema[0])
+  if (!read_scope(s,ts,i,end,scope,caret,merge,out)) return 0;
+  /* UPDATE c ... FROM sales.customers c names its target by a FROM alias.
+   * UPDATE sales.customers ... FROM sales.customers names the same table. */
+  if (!merge && out->count>1)
     for (size_t k=1; k<out->count; ++k) {
-      const char *other=out->sources[k].alias[0] ? out->sources[k].alias : out->sources[k].name;
-      if (same_name(other,out->sources[0].name)) {
+      const SqlSource *target=&out->sources[0], *other=&out->sources[k];
+      int same=target->schema[0] ? same_name(other->schema,target->schema) && same_name(other->name,target->name)
+        : same_name(other->alias[0] ? other->alias : other->name,target->name);
+      if (same) {
         memmove(out->sources,out->sources+1,(out->count-1)*sizeof(*out->sources));
         --out->count;
         break;
@@ -519,7 +549,7 @@ int sql_context_parse(const char *s, size_t len, size_t caret, SqlContext *out) 
     if (!name(s, ts[prev - 1], ts[prev - 1].end, out->qualifier)) { ok = 0; goto done; }
   }
   if (dml) ok = read_statement(s, ts, begin, end, caret, out);
-  else { out->mode = SQL_CONTEXT_COLUMN; ok = read_scope(s, ts, begin, end, scope, caret, out); }
+  else { out->mode = SQL_CONTEXT_COLUMN; ok = read_scope(s, ts, begin, end, scope, caret, 0, out); }
 done:
   free(ts);
   if (!ok) { sql_context_free(out); memset(out, 0, sizeof(*out)); }
