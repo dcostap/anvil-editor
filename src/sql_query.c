@@ -451,7 +451,7 @@ int sql_query_read(const SqlServerOptions *options, const char *sql, size_t leng
   return ok;
 }
 
-typedef struct { SqlServerConnection connection; unsigned id; int busy, closing, autocommit; } Session;
+typedef struct { SqlServerConnection connection; unsigned id; int busy, closing, autocommit; ULONGLONG used; } Session;
 static Session sessions[SQL_SESSION_LIMIT];
 static SRWLOCK sessions_lock = SRWLOCK_INIT;
 static CONDITION_VARIABLE sessions_released = CONDITION_VARIABLE_INIT;
@@ -459,6 +459,18 @@ static unsigned session_serial;
 
 /* A cancelled job can still hold its session for a moment after the UI
  * moves on, so a new job waits a short time for it. */
+static ULONGLONG validation_idle = SQL_SESSION_VALIDATION_IDLE_MS;
+void sql_session_set_validation_idle(unsigned milliseconds) { validation_idle = milliseconds; }
+/* A connection is valid when SELECT 1 answers in 10 seconds. */
+static int validate(SQLHDBC dbc) {
+  SQLHSTMT statement = SQL_NULL_HSTMT;
+  if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &statement))) return 0;
+  SQLSetStmtAttrW(statement, SQL_ATTR_QUERY_TIMEOUT, (SQLPOINTER)(SQLULEN)10, 0);
+  SQLRETURN rc = SQLExecDirectW(statement, (SQLWCHAR *)L"SELECT 1", SQL_NTS);
+  int ok = SQL_SUCCEEDED(rc) && SQL_SUCCEEDED(SQLFetch(statement));
+  SQLFreeHandle(SQL_HANDLE_STMT, statement);
+  return ok;
+}
 static Session *acquire(unsigned id, int *missing) {
   Session *found = NULL;
   *missing = 0;
@@ -481,7 +493,7 @@ static void release(Session *s, int close) {
   SqlServerConnection connection = {0};
   AcquireSRWLockExclusive(&sessions_lock);
   if (close || s->closing) { connection = s->connection; memset(s, 0, sizeof(*s)); }
-  else s->busy = 0;
+  else { s->busy = 0; s->used = GetTickCount64(); }
   ReleaseSRWLockExclusive(&sessions_lock);
   WakeAllConditionVariable(&sessions_released);
   sql_server_close(&connection);
@@ -497,7 +509,7 @@ unsigned sql_session_open(const SqlServerOptions *options, char error[256]) {
     if (sessions[i].id) continue;
     if (!++session_serial) ++session_serial;
     id = session_serial;
-    sessions[i] = (Session){ connection, id, 0, 0, 1 };
+    sessions[i] = (Session){ connection, id, 0, 0, 1, GetTickCount64() };
     break;
   }
   ReleaseSRWLockExclusive(&sessions_lock);
@@ -523,6 +535,11 @@ int sql_session_execute(unsigned id, int autocommit, int explain, const char *sq
   int lost = 0, ok = 0;
   SQLHDBC dbc = s->connection.dbc;
   autocommit = autocommit != 0;
+  if (GetTickCount64() - s->used >= validation_idle && !validate(dbc)) {
+    lost = 1; out->idle_lost = 1;
+    snprintf(out->error, sizeof(out->error), "The idle SQL session was lost. The server rolled back any open transaction.");
+    goto done;
+  }
   if (autocommit != s->autocommit) {
     int open = transaction_count(dbc, NULL, &lost);
     if (autocommit && open != 0) {
@@ -611,4 +628,5 @@ int sql_session_end_transaction(unsigned id, int commit, int *count, int *ended,
   snprintf(error, 256, "SQL Server connections currently require Windows."); return 0;
 }
 void sql_session_close(unsigned id) { (void)id; }
+void sql_session_set_validation_idle(unsigned milliseconds) { (void)milliseconds; }
 #endif

@@ -363,8 +363,25 @@ function M.run(editor, opts)
   buffer:add_metadata_listener("sql_execution", function(_, event)
     if event.kind == "close" then run.closed = true; cancel_run(run) end
   end)
+  local previous = session.get(buffer)
+  local start
   local function finish(data)
     if not run.active then return end
+    -- The session was gone before any SQL was sent. Without an open transaction,
+    -- nothing that the user can see is lost, so a new session runs the SQL.
+    if data.idle_lost and not run.cancelled and not run.retried and c.generation == run.generation
+        and previous and previous.transaction_count == 0 then
+      run.retried, run.handle = true, nil
+      session.adopt(buffer, c, run.generation, data, false)
+      core.log_quiet("SQL Server: idle session lost connection=%s; running on a new session", c.id)
+      start()
+      return
+    end
+    if run.retried then
+      data.messages = data.messages or {}
+      table.insert(data.messages, 1, { text = "The idle SQL session was lost, so a new session ran the SQL. "
+        .. "Its temporary tables and SET options are gone." })
+    end
     run.active, run.handle, active_runs[run] = false, nil, nil
     buffer:remove_metadata_listener("sql_execution")
     session.adopt(buffer, c, run.generation, data, not run.closed and M.connection_for(buffer) == c)
@@ -383,12 +400,15 @@ function M.run(editor, opts)
       c.id, tostring(data.cancelled == true), tostring(data.error ~= nil), tostring(opts.explain == true),
       system.get_time() - run.started)
   end
-  local handle, err = backend.execute(M.connection_options(c), text, finish, {
-    session = session.for_run(buffer, c), autocommit = buffer.sql_auto_commit ~= false,
-    explain = opts.explain, max_rows = M.row_limit(buffer), timeout = M.timeout(buffer) })
-  if not handle then finish({ error = err or "Could not start SQL execution." })
-  elseif run.active then run.handle = handle; if run.cancelled then handle:cancel() end end
-  return handle ~= nil
+  function start()
+    local handle, err = backend.execute(M.connection_options(c), text, finish, {
+      session = session.for_run(buffer, c), autocommit = buffer.sql_auto_commit ~= false,
+      explain = opts.explain, max_rows = M.row_limit(buffer), timeout = M.timeout(buffer) })
+    if not handle then finish({ error = err or "Could not start SQL execution." })
+    elseif run.active and not run.handle then run.handle = handle; if run.cancelled then handle:cancel() end end
+    return handle ~= nil
+  end
+  return start()
   end)
 end
 function M.new_query(id)

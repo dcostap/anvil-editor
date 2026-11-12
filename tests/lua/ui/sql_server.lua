@@ -664,6 +664,42 @@ test.describe("SQL Queries", function()
     test.ok(autocomplete.is_open())
   end)
 
+  test.it("runs again on a new session when the idle session is gone, unless a transaction was open", function(context)
+    local editor = connected_query(context)
+    local backend = require "plugins.sql_server.backend"
+    local session = require "plugins.sql_server.session"
+    local calls, open = {}, 0
+    backend.execute = function(_, _, done, settings)
+      calls[#calls + 1] = settings.session or "new"
+      if settings.session == 7 then
+        done({ session_lost = true, idle_lost = true, results = {}, messages = {},
+          error = "The idle SQL session was lost. The server rolled back any open transaction." })
+      else
+        done({ session = 7, results = {}, messages = { { text = "(1 row affected)" } }, transaction_count = open })
+      end
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("UPDATE sales.customers SET name = N'x' WHERE id = 1")
+    local function run()
+      editor.buffer:set_selection(1, 1, 1, math.huge)
+      test.ok(command.perform("sql_server:run_selection"))
+    end
+    run()
+    run()
+    test.same(calls, { "new", 7, "new" })
+    test.equal(session.get(editor.buffer).id, 7)
+    local results = editor.buffer.sql_results
+    test.equal(results:messages_text(), "The idle SQL session was lost, so a new session ran the SQL. "
+      .. "Its temporary tables and SET options are gone.\n(1 row affected)")
+    open = 1
+    run()
+    calls = {}
+    run()
+    test.same(calls, { 7 })
+    test.equal(session.get(editor.buffer), nil)
+    test.ok(results:messages_text():find("rolled back", 1, true))
+  end)
+
   test.it("runs a large script without a time limit unless the Query sets one", function(context)
     local editor = connected_query(context)
     local backend = require "plugins.sql_server.backend"

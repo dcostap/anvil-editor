@@ -40,7 +40,8 @@ typedef struct {
   size_t count;
   SqlQueryMessage *messages;
   size_t message_count, message_capacity, message_bytes;
-  int cancelled, limited, session_lost;
+  /* idle_lost: the session was gone before the run, so no SQL was sent. */
+  int cancelled, limited, session_lost, idle_lost;
   /* @@TRANCOUNT after the run, or -1 when it is unknown. */
   int transaction_count;
   /* The session's database after the run, such as after USE, or empty. */
@@ -68,7 +69,9 @@ unsigned sql_session_open(const SqlServerOptions *options, char error[256]);
 /* Splits the text at GO lines and runs each batch. A failed batch does not stop
  * later batches. With explain, SHOWPLAN_ALL returns plans instead of running SQL.
  * Auto Commit cannot turn on while a transaction is open. A lost connection
- * closes the session and sets session_lost. */
+ * closes the session and sets session_lost. A session that was idle for the
+ * validation time first runs SELECT 1, like DbVisualizer's connection
+ * validation. When that fails, the run sends no SQL and sets idle_lost. */
 int sql_session_execute(unsigned id, int autocommit, int explain, const char *sql, size_t length,
                         unsigned max_rows, unsigned timeout_seconds,
                         SqlQueryCancelled cancelled, void *context, SqlQueryResult *out);
@@ -77,4 +80,7 @@ int sql_session_execute(unsigned id, int autocommit, int explain, const char *sq
 int sql_session_end_transaction(unsigned id, int commit, int *transaction_count, int *ended, char error[256]);
 /* Closes the connection. The server rolls back an open transaction. */
 void sql_session_close(unsigned id);
+#define SQL_SESSION_VALIDATION_IDLE_MS 60000
+/* Sets the idle time before a run validates its session. Only tests change it. */
+void sql_session_set_validation_idle(unsigned milliseconds);
 #endif

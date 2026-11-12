@@ -167,6 +167,7 @@ static void push_result(lua_State *L, SqlQueryResult *result) {
   boolean(L, "cancelled", result->cancelled);
   boolean(L, "limited", result->limited);
   boolean(L, "session_lost", result->session_lost);
+  boolean(L, "idle_lost", result->idle_lost);
   if (result->transaction_count >= 0) {
     lua_pushinteger(L, result->transaction_count); lua_setfield(L, -2, "transaction_count");
   }

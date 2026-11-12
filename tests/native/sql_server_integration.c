@@ -207,6 +207,28 @@ static int session_checks(SqlServerOptions *options) {
   CHECK(run_once(options, sql, 1000, 30, NULL, NULL, &result));
   CHECK(!strcmp(result.tables[0].cells[0].text, "0"));
   sql_query_free(&result);
+
+  /* An idle session that the server dropped fails before its SQL is sent. A
+   * live idle session runs. */
+  sql_session_set_validation_idle(0);
+  session = sql_session_open(options, error);
+  CHECK(session);
+  sql = "SELECT @@SPID AS spid";
+  CHECK(sql_session_execute(session, 1, 0, sql, strlen(sql), 1000, 30, NULL, NULL, &result));
+  char kill[64];
+  snprintf(kill, sizeof(kill), "KILL %s", result.tables[0].cells[0].text);
+  sql_query_free(&result);
+  CHECK(run_once(options, kill, 1000, 30, NULL, NULL, &result));
+  sql_query_free(&result);
+  sql = "INSERT sales.customers ([na]]me]) VALUES (N'After idle')";
+  int ran = sql_session_execute(session, 1, 0, sql, strlen(sql), 1000, 30, NULL, NULL, &result);
+  sql_session_set_validation_idle(SQL_SESSION_VALIDATION_IDLE_MS);
+  CHECK(!ran && result.session_lost && result.idle_lost);
+  sql_query_free(&result);
+  sql = "SELECT COUNT(*) AS n FROM sales.customers WHERE [na]]me] = N'After idle'";
+  CHECK(run_once(options, sql, 1000, 30, NULL, NULL, &result));
+  CHECK(!strcmp(result.tables[0].cells[0].text, "0"));
+  sql_query_free(&result);
   return 1;
 }
 
