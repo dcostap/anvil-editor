@@ -272,8 +272,26 @@ static int read_name(const char *s, Token *ts, size_t *at, size_t end, SqlSource
   *at=i;
   return i+1<end && ts[i+1].kind=='.' ? -1 : 1;
 }
-/* Sets the mode at the caret and reads the sources of a scope's FROM, JOIN and
- * USING lists. Tokens deeper than the scope belong to subqueries and calls.
+/* Skips a source that needs more metadata: a table-valued function, OPENJSON
+ * with its WITH list, a VALUES list, or a name with more parts. Its alias and
+ * column names go too. The caret in its arguments is a column position.
+ * Returns the index of its last token. */
+static size_t skip_source(const char *s, Token *ts, size_t i, size_t end, size_t caret, SqlContext *out) {
+  size_t last=i;
+  while (i<end) {
+    size_t open=ts[i].kind=='(' ? i : word(s,ts[i],"WITH") && i+1<end && ts[i+1].kind=='(' ? i+1 : end;
+    if (open<end) {
+      size_t close=closing(ts,open,end);
+      if (caret>ts[open].start && (close==end || caret<=ts[close].start)) out->mode=SQL_CONTEXT_COLUMN;
+      if (close==end) return end-1;
+      i=close;
+    } else if (!(ts[i].kind=='.' || word(s,ts[i],"AS") || (is_name(ts[i]) && !reserved(s,ts[i])))) break;
+    last=i++;
+  }
+  return last;
+}
+/* Sets the mode at the caret and reads the sources of a scope's FROM, JOIN,
+ * APPLY and USING lists. Tokens deeper than the scope belong to subqueries and calls.
  * Returns 0 on failure. Unsupported sources leave no context. */
 static int read_scope(const char *s, Token *ts, size_t begin, size_t end, int scope, size_t caret, SqlContext *out) {
   static const char *column_words[]={ "WHERE", "ON", "GROUP", "ORDER", "HAVING", "SET", "OUTPUT", "WHEN", "THEN", NULL };
@@ -281,7 +299,7 @@ static int read_scope(const char *s, Token *ts, size_t begin, size_t end, int sc
   for (size_t i=begin; i<end; ++i) {
     Token t=ts[i];
     if (t.depth!=scope) continue;
-    if (word(s,t,"FROM") || word(s,t,"JOIN") || word(s,t,"USING")) {
+    if (word(s,t,"FROM") || word(s,t,"JOIN") || word(s,t,"APPLY") || word(s,t,"USING")) {
       source_list=expect_source=1;
       if (t.end<=caret) out->mode=SQL_CONTEXT_TABLE;
       continue;
@@ -322,14 +340,13 @@ static int read_scope(const char *s, Token *ts, size_t begin, size_t end, int sc
       i=at;
       continue;
     }
-    if (!is_name(t) || reserved(s,t)) {
-      /* Table-valued expressions need more metadata. */
-      out->mode=SQL_CONTEXT_NONE; out->count=0; return 1;
-    }
+    if (t.kind=='(') { i=skip_source(s,ts,i,end,caret,out); expect_source=0; continue; }
+    if (!is_name(t) || reserved(s,t)) { out->mode=SQL_CONTEXT_NONE; out->count=0; return 1; }
     SqlSource src={0};
+    size_t at=i;
     int read=read_name(s,ts,&i,end,&src);
     if (!read) return 0;
-    if (read<0 || (i+1<end && ts[i+1].kind=='(')) { out->mode=SQL_CONTEXT_NONE; out->count=0; return 1; }
+    if (read<0 || (i+1<end && ts[i+1].kind=='(')) { i=skip_source(s,ts,at,end,caret,out); expect_source=0; continue; }
     if (i+1<end && word(s,ts[i+1],"AS")) ++i;
     if (i+1<end && is_name(ts[i+1]) && !reserved(s,ts[i+1])) {
       ++i;
