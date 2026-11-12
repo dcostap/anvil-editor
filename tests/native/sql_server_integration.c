@@ -81,6 +81,17 @@ static int execution_checks(SqlServerOptions *options) {
   CHECK(result.error_line == 4 && result.count == 1 && !strcmp(result.tables[0].cells[0].text, "after"));
   sql_query_free(&result);
 
+  /* An error inside a called procedure names its own line, not a Query line.
+   * An error in the batch that creates the procedure keeps its Query line. */
+  sql = "CREATE OR ALTER PROCEDURE sales.fail_late AS\nBEGIN\n  SELECT 1/0 AS n\nEND\nGO\n\nEXEC sales.fail_late\n";
+  CHECK(!run_once(options, sql, 1000, 30, NULL, NULL, &result));
+  CHECK(result.error_line == 0 && has_message(&result, "Procedure fail_late, Line 3\n"));
+  sql_query_free(&result);
+  sql = "SELECT 1 AS n\nGO\nCREATE OR ALTER PROCEDURE sales.fail_early AS\nSELECT nam FROM sales.customers\n";
+  CHECK(!run_once(options, sql, 1000, 30, NULL, NULL, &result));
+  CHECK(result.error_line == 4 && has_message(&result, "Procedure fail_early, Line 4\n"));
+  sql_query_free(&result);
+
   sql = "SELECT FROM";
   CHECK(!run_once(options, sql, 1000, 30, NULL, NULL, &result));
   CHECK(result.error[0] && !result.cancelled);

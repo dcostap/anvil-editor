@@ -279,6 +279,20 @@ function M.timeout(buffer)
   return buffer.sql_timeout or config.plugins.sql_server.timeout_seconds
 end
 
+-- The line of the last run's error moves with edits, as a range marker.
+function M.set_error_line(buffer, line)
+  if buffer.sql_error then require("core.range_marker").remove(buffer.sql_error) end
+  buffer.sql_error = nil
+  if not line then return end
+  line = math.max(1, math.min(line, #buffer.lines))
+  buffer.sql_error = require("core.range_marker").new(buffer, { line1 = line, col1 = 1, line2 = line,
+    col2 = #buffer.lines[line], kind = "sql_error" })
+end
+function M.error_line(buffer)
+  local range = buffer.sql_error and buffer.sql_error:range()
+  return range and range.line1
+end
+
 -- Runs the selection, or the whole Buffer with opts.whole_buffer. With
 -- opts.explain, SQL Server returns estimated plans and runs nothing.
 function M.run(editor, opts)
@@ -312,7 +326,7 @@ function M.run(editor, opts)
   end
   run.view, view.source_buffer = view, buffer
   buffer.sql_execution, active_runs[run] = run, true
-  buffer.sql_error_line = nil
+  M.set_error_line(buffer, nil)
   view:begin_run(function() cancel_run(run) end, opts.explain, text)
   buffer:add_metadata_listener("sql_execution", function(_, event)
     if event.kind == "close" then run.closed = true; cancel_run(run) end
@@ -325,7 +339,7 @@ function M.run(editor, opts)
     if run.cancelled or c.generation ~= run.generation then
       data = { cancelled = true, messages = data.messages, transaction_count = data.transaction_count }
     end
-    if data.error_line then buffer.sql_error_line = math.min(line1 + data.error_line - 1, #buffer.lines) end
+    if data.error_line then M.set_error_line(buffer, line1 + data.error_line - 1) end
     if buffer.sql_execution == run and not view.closed then view:complete(data) end
     if not opts.explain then
       require("plugins.sql_server.history").record(storage_key, { text = text, connection = c.id, name = c.name,
@@ -493,10 +507,10 @@ end, {
 })
 command.add(function()
   local view = core.active_view
-  return M.is_sql(view) and view.buffer.sql_error_line ~= nil, view
+  return M.is_sql(view) and M.error_line(view.buffer) ~= nil, view
 end, {
   ["sql_server:go_to_error"] = command.palette(function(view)
-    local line = math.min(view.buffer.sql_error_line, #view.buffer.lines)
+    local line = M.error_line(view.buffer)
     view.buffer:set_selection(line, 1)
     view:scroll_to_line(line, true)
     return true

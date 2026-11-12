@@ -24,6 +24,23 @@ int main(void) {
   assert(split("A\nGO\nB\nGO\nC", b, 2) == -1);
   text = "SELECT N'unterminated\nGO\n";
   assert(split(text, b, 8) == 1 && b[0].end == strlen(text));
+
+  char name[129];
+  text = "-- note\n/* a /* nested */ b */\ncreate OR ALTER procedure [sales].[fail]]s] AS SELECT 1";
+  assert(sql_batch_module(text, strlen(text), name, sizeof(name)) && !strcmp(name, "fail]s"));
+  text = "ALTER FUNCTION dbo.total(@x int) RETURNS int AS BEGIN RETURN @x END";
+  assert(sql_batch_module(text, strlen(text), name, sizeof(name)) && !strcmp(name, "total"));
+  text = "CREATE PROC \"quoted\" AS SELECT 1";
+  assert(sql_batch_module(text, strlen(text), name, sizeof(name)) && !strcmp(name, "quoted"));
+  text = "CREATE TRIGGER t_audit ON sales.customers AFTER INSERT AS SELECT 1";
+  assert(sql_batch_module(text, strlen(text), name, sizeof(name)) && !strcmp(name, "t_audit"));
+  text = "SELECT 1; CREATE PROCEDURE p AS SELECT 1";
+  assert(!sql_batch_module(text, strlen(text), name, sizeof(name)));
+  text = "CREATE TABLE p (id int)";
+  assert(!sql_batch_module(text, strlen(text), name, sizeof(name)));
+  assert(!sql_batch_module("CREATE PROCEDURE", 16, name, sizeof(name)));
+  assert(!sql_batch_module("", 0, name, sizeof(name)));
+  assert(!sql_batch_module("CREATE PROCEDURE abcdef AS", 26, name, 4));
   puts("SQL batches passed");
   return 0;
 }

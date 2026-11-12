@@ -465,7 +465,7 @@ end, {
 command.add(function()
   local view = core.active_view
   local buffer = view and view:is(Results) and view.source_buffer
-  return buffer and buffer.sql_error_line ~= nil, view, buffer
+  return buffer and require("plugins.sql_server").error_line(buffer) ~= nil, view, buffer
 end, {
   ["sql_server:results_go_to_error"] = function(_, buffer)
     for _, editor in ipairs(core.get_views_referencing_buffer(buffer)) do

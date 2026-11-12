@@ -1,5 +1,6 @@
 #include "sql_batch.h"
 #include <ctype.h>
+#include <string.h>
 
 static int blank(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\f' || c == '\v'; }
 
@@ -73,4 +74,66 @@ int sql_batch_split(const char *s, size_t n, SqlBatch *out, size_t capacity) {
   }
   if (!add(out, capacity, &count, s, start, n, 1, start_line)) return -1;
   return (int)count;
+}
+
+/* Skips whitespace and comments. Block comments nest in T-SQL. */
+static size_t skip_space(const char *s, size_t n, size_t p) {
+  for (;;) {
+    while (p < n && isspace((unsigned char)s[p])) ++p;
+    if (p + 1 < n && s[p] == '-' && s[p + 1] == '-') {
+      while (p < n && s[p] != '\n') ++p;
+    } else if (p + 1 < n && s[p] == '/' && s[p + 1] == '*') {
+      int depth = 1;
+      for (p += 2; p < n && depth; ++p) {
+        if (p + 1 < n && s[p] == '/' && s[p + 1] == '*') { ++depth; ++p; }
+        else if (p + 1 < n && s[p] == '*' && s[p + 1] == '/') { --depth; ++p; }
+      }
+    } else return p;
+  }
+}
+
+static int word_char(char c) { return isalnum((unsigned char)c) || c == '_' || c == '@' || c == '#' || c == '$' || (c & 0x80); }
+
+/* Takes the keyword at p and moves p past it and the space after it. */
+static int keyword(const char *s, size_t n, size_t *p, const char *word) {
+  size_t length = strlen(word);
+  if (*p + length > n) return 0;
+  for (size_t i = 0; i < length; ++i)
+    if (toupper((unsigned char)s[*p + i]) != word[i]) return 0;
+  if (*p + length < n && word_char(s[*p + length])) return 0;
+  *p = skip_space(s, n, *p + length);
+  return 1;
+}
+
+int sql_batch_module(const char *s, size_t n, char *name, size_t size) {
+  size_t p = skip_space(s, n, 0);
+  if (!keyword(s, n, &p, "CREATE") && !keyword(s, n, &p, "ALTER")) return 0;
+  if (keyword(s, n, &p, "OR") && !keyword(s, n, &p, "ALTER")) return 0;
+  if (!keyword(s, n, &p, "PROCEDURE") && !keyword(s, n, &p, "PROC") && !keyword(s, n, &p, "FUNCTION") &&
+      !keyword(s, n, &p, "TRIGGER")) return 0;
+  /* Each part of the name replaces the previous part, so the last part stays. */
+  for (;;) {
+    size_t used = 0;
+    if (p < n && (s[p] == '[' || s[p] == '"')) {
+      char close = s[p] == '[' ? ']' : '"';
+      for (++p;; ++p) {
+        if (p == n) return 0;
+        if (s[p] == close) {
+          if (p + 1 < n && s[p + 1] == close) ++p;
+          else { ++p; break; }
+        }
+        if (used + 1 == size) return 0;
+        name[used++] = s[p];
+      }
+    } else {
+      while (p < n && word_char(s[p])) {
+        if (used + 1 == size) return 0;
+        name[used++] = s[p++];
+      }
+    }
+    if (!used) return 0;
+    name[used] = 0;
+    if (p < n && s[p] == '.') ++p;
+    else return 1;
+  }
 }

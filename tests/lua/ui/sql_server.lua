@@ -776,7 +776,7 @@ test.describe("SQL Queries", function()
     test.same(closed, { 7 })
   end)
 
-  test.it("shows server messages in order and moves the caret to the line of an error", function(context)
+  test.it("shows server messages in order and moves the caret to the line of an error after edits", function(context)
     local editor = connected_query(context)
     require("plugins.sql_server.backend").execute = function(_, _, callback)
       callback({ results = {}, error = "Line 3: Invalid column name 'nam'.", error_line = 3, messages = {
@@ -790,6 +790,9 @@ test.describe("SQL Queries", function()
     test.equal(results:messages_text(), "first\nMsg 207, Level 16, State 1, Line 3\nInvalid column name 'nam'.")
     test.ok(command.perform("sql_server:go_to_error"))
     test.equal(select(1, editor.buffer:get_selection()), 4)
+    editor.buffer:insert(1, 1, "-- added\n")
+    test.ok(command.perform("sql_server:go_to_error"))
+    test.equal(select(1, editor.buffer:get_selection()), 5)
   end)
 
   test.it("shows every row of the next result without the previous result's filter", function()

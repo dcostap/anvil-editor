@@ -16,4 +16,8 @@ typedef struct {
  * block comments is text. Batches with only whitespace are omitted.
  * Returns the batch count, or -1 for too many batches or an invalid count. */
 int sql_batch_split(const char *text, size_t length, SqlBatch *out, size_t capacity);
+/* Names the procedure, function or trigger that a batch creates or alters.
+ * Such a statement must start its batch. Writes the name without its schema
+ * or quotes and returns 1, or returns 0. */
+int sql_batch_module(const char *text, size_t length, char *name, size_t size);
 #endif
