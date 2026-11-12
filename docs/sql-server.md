@@ -62,7 +62,7 @@ With two or more cells selected, the footer shows their aggregates in the place 
 
 The default row limit is 1,000 per table. The execution timeout is 30 seconds after login. Set `config.plugins.sql_server.max_rows` from 1 to 100,000, and `config.plugins.sql_server.timeout_seconds` from 1 to 300.
 
-Batches are limited to 256 KiB. Each run holds at most 16 result records, 128 columns per table, 262,144 cells, and 8 MiB of value text. A cell holds at most 32,768 UTF-16 units. A warning marks incomplete results. A row limit discards extra rows and continues to later results. A total result limit stops result reading. Later statements can already have run; these limits are not write protection.
+Batches are limited to 256 KiB. Each run keeps at most 16 results, 262,144 values and 8 MiB of value text. A value holds at most 32,768 UTF-16 units. A limit only cuts what the run keeps: the SQL still runs to its end. A result after the 16th shows only a message, and a result past the value limits shows its first rows. A warning marks incomplete results. After the row limit, SQL Server still sends the rest of the result, and Anvil discards it. A very large result over a slow network can take a long time; Cancel stops it.
 
 ## Edit results
 

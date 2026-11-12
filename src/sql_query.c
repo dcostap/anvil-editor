@@ -196,10 +196,17 @@ typedef struct {
   int lost;
 } Run;
 
-/* Returns 0 when the run must stop: a limit, a lost connection or a failure. */
+/* Returns 0 when the run must stop: a lost connection or a failure. A result
+ * limit only cuts what the run keeps. SQLMoreResults then discards the rest of
+ * the result, so the later statements of the batch still run. */
 static int read_result(Run *run, SQLHSTMT statement, SQLSMALLINT columns, unsigned base_line) {
   SqlQueryResult *out = run->out;
-  if (out->count == SQL_QUERY_RESULT_LIMIT || columns > 128) { out->limited = 1; return 0; }
+  if (out->count == SQL_QUERY_RESULT_LIMIT || columns > SQL_QUERY_COLUMN_LIMIT) {
+    out->limited = 1;
+    add_message(out, out->count == SQL_QUERY_RESULT_LIMIT ? "(Result not shown. A run shows at most 16 results.)"
+                                                           : "(Result not shown. It has more than 4,096 columns.)", 0, 0);
+    return 1;
+  }
   SqlQueryTable *t = &out->tables[out->count++];
   t->column_count = (size_t)columns;
   t->columns = calloc((size_t)columns, sizeof(char *));
@@ -211,6 +218,7 @@ static int read_result(Run *run, SQLHSTMT statement, SQLSMALLINT columns, unsign
     t->columns[column] = utf8(name, name_length, NULL);
     if (!t->columns[column]) return 0;
   }
+  int cut = 0;
   for (;;) {
     if (stopped(run->watch)) return 0;
     SQLRETURN rc = SQLFetch(statement);
@@ -219,7 +227,7 @@ static int read_result(Run *run, SQLHSTMT statement, SQLSMALLINT columns, unsign
       collect(out, SQL_HANDLE_STMT, statement, base_line, stopped(run->watch), &run->lost);
     if (!SQL_SUCCEEDED(rc)) { if (run->lost || stopped(run->watch)) return 0; break; }
     if (t->row_count == run->max_rows) { t->truncated = 1; break; }
-    if (run->cells + (size_t)columns > RESULT_CELLS) { out->limited = 1; return 0; }
+    if (run->cells + (size_t)columns > RESULT_CELLS || run->bytes > RESULT_BYTES) { cut = 1; break; }
     if (t->row_count == t->capacity) {
       size_t capacity = t->capacity ? t->capacity * 2 : 16;
       SqlQueryCell *p = realloc(t->cells, capacity * (size_t)columns * sizeof(*p));
@@ -233,11 +241,18 @@ static int read_result(Run *run, SQLHSTMT statement, SQLSMALLINT columns, unsign
         collect(out, SQL_HANDLE_STMT, statement, base_line, stopped(run->watch), &run->lost);
         return 0;
       }
-      if (run->bytes > RESULT_BYTES) { out->limited = 1; return 0; }
+      if (run->bytes > RESULT_BYTES) { cut = 1; break; }
     }
+    /* A row that passes the text limit is not kept. */
+    if (cut) break;
     ++t->row_count; run->cells += (size_t)columns;
   }
-  if (t->truncated) {
+  if (cut) {
+    out->limited = t->truncated = 1;
+    char text[128];
+    snprintf(text, sizeof(text), "(%zu rows shown. A run keeps at most 262,144 values and 8 MiB of text.)", t->row_count);
+    add_message(out, text, 0, 0);
+  } else if (t->truncated) {
     char text[128];
     snprintf(text, sizeof(text), "(%zu rows shown. The row limit stopped the read.)", t->row_count);
     add_message(out, text, 0, 0);
@@ -323,7 +338,7 @@ static int run_text(SQLHDBC dbc, const char *sql, size_t length, int split, int 
   HANDLE thread = NULL;
   SqlBatch *batches = NULL;
   Run run = { out, &watch, max_rows, 0, 0, 0 };
-  int success = 0, explaining = 0;
+  int success = 0, explaining = 0, complete = 0;
   if (!sql_query_check(sql, length, max_rows, timeout_seconds, out->error, sizeof(out->error))) goto done;
   int units = 0;
   batches = malloc(SQL_BATCH_LIMIT * sizeof(*batches));
@@ -357,6 +372,7 @@ static int run_text(SQLHDBC dbc, const char *sql, size_t length, int split, int 
     }
     free(text);
   }
+  complete = 1;
 finish:
   success = !stopped(&watch) && !run.lost && !out->error[0];
 done:
@@ -368,7 +384,8 @@ done:
     else { out->cancelled = 1; out->error[0] = 0; out->error_line = 0; }
   }
   if (statement) {
-    if (out->limited) SQLCancel(statement);
+    /* A run that stopped early must not wait while the driver reads the rest. */
+    if (!complete) SQLCancel(statement);
     SQLFreeHandle(SQL_HANDLE_STMT, statement);
   }
   if (explaining && !run.lost) run_fixed(dbc, L"SET SHOWPLAN_ALL OFF", out, &run.lost);

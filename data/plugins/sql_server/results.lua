@@ -53,7 +53,7 @@ function Results:messages_text()
   for _, message in ipairs(data.messages or {}) do lines[#lines + 1] = message.text end
   if data.cancelled then lines[#lines + 1] = "SQL cancelled. Committed changes remain." end
   if data.error and not (data.messages and #data.messages > 0) then lines[#lines + 1] = data.error end
-  if data.limited then lines[#lines + 1] = "A result limit stopped the run. Later statements may not have run." end
+  if data.limited then lines[#lines + 1] = "A result limit cut the shown results. Later statements still ran." end
   if data.transaction_count and data.transaction_count > 0 then
     lines[#lines + 1] = string.format("Open transactions: %d. Commit or roll back.", data.transaction_count)
   end
@@ -67,7 +67,7 @@ function Results:show_result(index)
   self.filters, self.sort = {}, nil
   self.scroll.x, self.scroll.y, self.scroll.to.x, self.scroll.to.y = 0, 0, 0, 0
   self:publish_model(model, index)
-  self.result_warning = self.data.error or (self.data.limited and "Result limit reached. Later statements may not have run.") or model.warning
+  self.result_warning = self.data.error or (self.data.limited and "Result limit reached. Some results are cut.") or model.warning
   self.title = string.format("%s %d/%d · %s", self.kind or "SQL Results", index, #self.data.results, self.connection_name)
   core.redraw = true
   return true

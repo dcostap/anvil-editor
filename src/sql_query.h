@@ -3,6 +3,8 @@
 #include <stdbool.h>
 #include "sql_server.h"
 #define SQL_QUERY_RESULT_LIMIT 16
+/* SQL Server's own limit for the columns of a SELECT. */
+#define SQL_QUERY_COLUMN_LIMIT 4096
 #define SQL_SESSION_LIMIT 64
 /* The largest row limit. The cell and byte limits of a run still apply. */
 #define SQL_QUERY_ROW_LIMIT 100000

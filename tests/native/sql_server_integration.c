@@ -47,6 +47,27 @@ static int execution_checks(SqlServerOptions *options) {
   CHECK(result.tables[1].truncated && result.tables[1].cells[0].length == 32768);
   sql_query_free(&result);
 
+  /* A result limit cuts only what the run keeps. The later statements still run. */
+  static char many[2048], wide_select[8192];
+  many[0] = 0;
+  for (int i = 0; i < 18; ++i) strcat(many, "SELECT 1 AS n; ");
+  strcat(many, "PRINT N'after many';");
+  CHECK(run_once(options, many, 1000, 30, NULL, NULL, &result));
+  CHECK(result.count == SQL_QUERY_RESULT_LIMIT && result.limited && has_message(&result, "after many"));
+  sql_query_free(&result);
+  strcpy(wide_select, "SELECT 0 AS c0");
+  for (int i = 1; i < 300; ++i) sprintf(wide_select + strlen(wide_select), ", %d AS c%d", i, i);
+  strcat(wide_select, "; PRINT N'after wide';");
+  CHECK(run_once(options, wide_select, 1000, 30, NULL, NULL, &result));
+  CHECK(result.count == 1 && result.tables[0].column_count == 300 && !result.limited && has_message(&result, "after wide"));
+  sql_query_free(&result);
+  sql = "SELECT TOP (300) REPLICATE(CAST(N'x' AS nvarchar(max)), 32768) AS big FROM sys.all_objects; "
+        "SELECT N'kept' AS value; PRINT N'after big';";
+  CHECK(run_once(options, sql, 1000, 30, NULL, NULL, &result));
+  CHECK(result.count == 2 && result.limited && result.tables[0].truncated && result.tables[0].row_count == 256);
+  CHECK(has_message(&result, "after big"));
+  sql_query_free(&result);
+
   sql = "UPDATE sales.customers SET [na]]me] = N'unchanged' WHERE 1=0; SELECT id FROM sales.customers";
   CHECK(run_once(options, sql, 1000, 30, NULL, NULL, &result));
   CHECK(result.count == 1 && result.tables[0].row_count == 1 && has_message(&result, "(0 rows affected)"));
