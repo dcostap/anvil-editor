@@ -287,13 +287,13 @@ function Results:on_mouse_pressed(button, x, y, clicks)
       return self:edit_cell()
     end
   end
-  if button ~= "right" then return Preview.on_mouse_pressed(self, button, x, y, clicks) end
-  local target = self:hit_test(x, y)
-  if target.kind == "cell" and not self:cell_is_selected(target.display_row, target.column) then
-    self:select_cell(target.display_row, target.column, false)
-  end
-  return require("core.context_menu").open(x, y, {
-    { label = "Copy", command = "tabular_data:copy_selection" },
+  return Preview.on_mouse_pressed(self, button, x, y, clicks)
+end
+
+function Results:cell_menu_items()
+  local items = Preview.cell_menu_items(self)
+  for _, item in ipairs {
+    "-",
     { label = "View Cell", command = "sql_server:view_cell" },
     { label = "Edit Cell", command = "sql_server:edit_cell" },
     { label = "Set to NULL", command = "sql_server:set_cell_null" },
@@ -310,7 +310,8 @@ function Results:on_mouse_pressed(button, x, y, clicks)
     { label = "Messages", command = "sql_server:messages" },
     { label = "Go to Error", command = "sql_server:results_go_to_error" },
     { label = "Cancel SQL", command = "sql_server:cancel" },
-  }, { button = button })
+  } do items[#items + 1] = item end
+  return items
 end
 
 -- The cell at the selection focus, with its source row.

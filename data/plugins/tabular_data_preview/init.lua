@@ -544,10 +544,16 @@ local function tsv_value(value)
   return text
 end
 
-function Preview:selection_text()
+-- The selection as TSV, with a line of column names first when `headers`.
+function Preview:selection_text(headers)
   local row1, column1, row2, column2 = self:selection_bounds()
   if not row1 then return nil end
   local lines = {}
+  if headers then
+    local names = {}
+    for column = column1, column2 do names[#names + 1] = tsv_value(self.model.headers[column]) end
+    lines[1] = table.concat(names, "\t")
+  end
   for row = row1, row2 do
     local cells = {}
     for column = column1, column2 do
@@ -573,6 +579,61 @@ function Preview:copy_selection()
   return true
 end
 
+function Preview:copy_with_headers()
+  if not self:selection_bounds() then return false end
+  self:copy_text(self:selection_text(true), "cells with column names")
+  return true
+end
+
+local function markdown_value(value)
+  local text = value == false and "" or tostring(value or "")
+  return (text:gsub("|", "\\|"):gsub("\r?\n", "<br>"):gsub("\r", "<br>"))
+end
+
+-- The selection as a Markdown table, with the column names as its header.
+function Preview:copy_as_markdown()
+  local row1, column1, row2, column2 = self:selection_bounds()
+  if not row1 then return false end
+  local function line(value_at)
+    local cells = {}
+    for column = column1, column2 do cells[#cells + 1] = " " .. markdown_value(value_at(column)) .. " " end
+    return "|" .. table.concat(cells, "|") .. "|"
+  end
+  local lines = { line(function(column) return self.model.headers[column] end) }
+  lines[2] = string.rep("|---", column2 - column1 + 1) .. "|"
+  for row = row1, row2 do
+    lines[#lines + 1] = line(function(column) return self:cell_value(row, column) end)
+  end
+  self:copy_text(table.concat(lines, "\n"), "cells as Markdown")
+  return true
+end
+
+-- Each selected column's values on one line, separated by commas. Missing
+-- and empty values stay out.
+function Preview:copy_as_comma_list()
+  local row1, column1, row2, column2 = self:selection_bounds()
+  if not row1 then return false end
+  local lines = {}
+  for column = column1, column2 do
+    local values = {}
+    for row = row1, row2 do
+      local value = self:cell_value(row, column)
+      if value and value ~= "" then values[#values + 1] = tostring(value) end
+    end
+    lines[#lines + 1] = table.concat(values, ", ")
+  end
+  self:copy_text(table.concat(lines, "\n"), "cells as a comma list")
+  return true
+end
+
+function Preview:copy_column_name(column)
+  column = column or self.selection_focus and self.selection_focus.column
+  local name = column and self.model and self.model.headers[column]
+  if not name then return false end
+  self:copy_text(name, "column name")
+  return true
+end
+
 function Preview:cycle_sort(column)
   if not self.model or not self.model.headers[column] then return false end
   if not self.sort or self.sort.column ~= column then
@@ -584,6 +645,57 @@ function Preview:cycle_sort(column)
   end
   self:rebuild_display_rows("sort")
   return true
+end
+
+-- Sorts by `column` in `direction`, or removes the sort without a direction.
+function Preview:set_sort(column, direction)
+  if not self.model or not self.model.headers[column] then return false end
+  self.sort = direction and { column = column, direction = direction } or nil
+  self:rebuild_display_rows("sort")
+  return true
+end
+
+-- Removes the sort and all filters.
+function Preview:reset_view()
+  if not self.model then return false end
+  self.sort, self.filters = nil, {}
+  self:rebuild_display_rows("reset")
+  return true
+end
+
+function Preview:focus_column()
+  return self.selection_focus and self.selection_focus.column
+end
+
+function Preview:header_menu_items(column)
+  return {
+    { label = "Sort Ascending", command = "tabular_data:sort_ascending", args = { column } },
+    { label = "Sort Descending", command = "tabular_data:sort_descending", args = { column } },
+    { label = "Reset Sorting", command = "tabular_data:reset_sorting" },
+    "-",
+    { label = "Filter…", command = "tabular_data:filter_column", args = { column } },
+    { label = "Select Column", command = "tabular_data:select_column", args = { column } },
+    "-",
+    { label = "Copy Column Name", command = "tabular_data:copy_column_name", args = { column } },
+  }
+end
+
+-- The cell menu. Subclasses add their own items.
+function Preview:cell_menu_items()
+  return {
+    { label = "Copy", command = "tabular_data:copy_selection" },
+    { label = "Copy with Column Names", command = "tabular_data:copy_with_headers" },
+    { label = "Copy As", items = {
+      { label = "Markdown Table", command = "tabular_data:copy_as_markdown" },
+      { label = "Comma List", command = "tabular_data:copy_as_comma_list" },
+    } },
+    "-",
+    { label = "Select Row", command = "tabular_data:select_row" },
+    { label = "Select Column", command = "tabular_data:select_column" },
+    { label = "Select All", command = "tabular_data:select_all" },
+    "-",
+    { label = "Reset Sorting and Filters", command = "tabular_data:reset_view" },
+  }
 end
 
 function Preview:toggle_filter_value(column, value)
@@ -882,20 +994,22 @@ function Preview:on_mouse_pressed(button, x, y, clicks)
   if self:scrollbar_overlaps_point(x, y) then return false end
   local target = self:hit_test(x, y)
   if button == "right" then
+    local items
     if target.kind == "cell" then
       if not self:cell_is_selected(target.display_row, target.column) then
         self:select_cell(target.display_row, target.column, false)
       end
-      self:copy_selection()
-      return true
-    elseif target.kind == "header" or target.kind == "header_filter" then
-      self:copy_text(self.model.headers[target.column], "header")
-      return true
+      items = self:cell_menu_items()
     elseif target.kind == "source_row" then
-      self:copy_text(self:source_line_label(target.display_row), "source row")
-      return true
+      if not self:cell_is_selected(target.display_row, 1) then
+        self:select_span("rows", target.display_row)
+      end
+      items = self:cell_menu_items()
+    elseif target.kind == "header" or target.kind == "header_filter" then
+      items = self:header_menu_items(target.column)
     end
-    return false
+    if not items then return false end
+    return require("core.context_menu").open(x, y, items, { button = button })
   end
   if button ~= "left" then return false end
   if target.kind == "column_divider" then
@@ -1256,10 +1370,31 @@ command.add(Preview, {
   ["tabular_data:extend_up"] = function(view) return view:move_selection(-1, 0, true) end,
   ["tabular_data:extend_down"] = function(view) return view:move_selection(1, 0, true) end,
   ["tabular_data:copy_selection"] = function(view) return view:copy_selection() end,
+  ["tabular_data:copy_with_headers"] = function(view) return view:copy_with_headers() end,
+  ["tabular_data:copy_as_markdown"] = function(view) return view:copy_as_markdown() end,
+  ["tabular_data:copy_as_comma_list"] = function(view) return view:copy_as_comma_list() end,
+  ["tabular_data:copy_column_name"] = function(view, column) return view:copy_column_name(column) end,
   ["tabular_data:select_all"] = function(view) return view:select_all_cells() end,
   ["tabular_data:clear_selection"] = function(view) return view:clear_selection() end,
   ["tabular_data:select_row"] = function(view) return view:select_row() end,
-  ["tabular_data:select_column"] = function(view) return view:select_column() end,
+  ["tabular_data:select_column"] = function(view, column)
+    if column then return view:select_span("columns", column) end
+    return view:select_column()
+  end,
+  ["tabular_data:sort_ascending"] = function(view, column)
+    return view:set_sort(column or view:focus_column(), "ascending")
+  end,
+  ["tabular_data:sort_descending"] = function(view, column)
+    return view:set_sort(column or view:focus_column(), "descending")
+  end,
+  ["tabular_data:reset_sorting"] = function(view)
+    return view.sort ~= nil and view:set_sort(view.sort.column, nil)
+  end,
+  ["tabular_data:reset_view"] = function(view) return view:reset_view() end,
+  ["tabular_data:filter_column"] = function(view, column)
+    column = column or view:focus_column()
+    return column ~= nil and view:open_filter_prompt(column)
+  end,
 })
 
 -- Moves to an edge of the table or one page away. Each move has a `select_to`
@@ -1299,6 +1434,7 @@ keymap.add {
   ["shift+up"] = "tabular_data:extend_up",
   ["shift+down"] = "tabular_data:extend_down",
   ["ctrl+c"] = "tabular_data:copy_selection",
+  ["ctrl+shift+c"] = "tabular_data:copy_with_headers",
   ["ctrl+a"] = "tabular_data:select_all",
   ["escape"] = "tabular_data:clear_selection",
   ["shift+space"] = "tabular_data:select_row",
