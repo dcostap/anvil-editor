@@ -55,6 +55,21 @@ function M.adopt(buffer, c, generation, data, keep)
   changed()
 end
 
+-- After SQL that changed the schema, the connection reads its catalog again.
+-- Inside an open transaction the read waits until the transaction ends,
+-- because the transaction's locks would block it. A session that closes rolls
+-- its transaction back, so it needs no read.
+function M.schema_check(buffer, c, schema_changed)
+  local s = sessions[buffer]
+  local open = s and s.connection == c and s.transaction_count ~= 0
+  if schema_changed and open then
+    s.schema_pending = true
+  elseif schema_changed or (s and s.schema_pending and not open) then
+    if s then s.schema_pending = nil end
+    require("plugins.sql_server").refresh_schema(c.id)
+  end
+end
+
 function M.close_connection(c)
   local buffers = {}
   for buffer, s in pairs(sessions) do if s.connection == c then buffers[#buffers + 1] = buffer end end
@@ -84,6 +99,10 @@ function M.end_transaction(buffer, commit, done)
     if sessions[buffer] == s then
       s.transaction_count = count
       if ended then sessions[buffer] = nil; buffer:remove_metadata_listener("sql_session") end
+      if s.schema_pending and (count == 0 or ended) then
+        s.schema_pending = nil
+        require("plugins.sql_server").refresh_schema(s.connection.id)
+      end
     end
     core.log_quiet("SQL Server: %s connection=%s ok=%s", commit and "commit" or "rollback", s.connection.id, tostring(count ~= nil))
     if error then core.error("%s", error) end

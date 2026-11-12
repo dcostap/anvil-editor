@@ -193,7 +193,8 @@ function M.connect(id, password)
   return handle ~= nil
 end
 -- Reads the catalog again while the connection stays Ready. SQL Sessions, their
--- transactions and temporary tables stay. A failed read keeps the old catalog.
+-- transactions and temporary tables stay. A failed read, also one that reports
+-- a metadata error, keeps the old catalog.
 function M.refresh_schema(id)
   local c = M.find(id)
   if not c or c.state ~= "Ready" or c.refreshing then return false end
@@ -205,9 +206,10 @@ function M.refresh_schema(id)
     done = true
     if M.find(id) ~= c or c.generation ~= generation then return end
     c.refreshing = nil
-    if catalog then c.catalog = catalog; changed() end
+    local ok = catalog ~= nil and catalog.metadata_error == nil
+    if ok then c.catalog = catalog; changed() end
     core.log_quiet("SQL Server: metadata refresh connection=%s ok=%s objects=%s error=%s", id,
-      tostring(catalog ~= nil), catalog and #catalog.objects or 0, tostring(error ~= nil))
+      tostring(ok), catalog and #catalog.objects or 0, tostring(error ~= nil or not ok))
   end
   local handle = backend.read_schema(options, finish)
   if handle and not done then c.refreshing = handle end
@@ -389,7 +391,7 @@ function M.run(editor, opts)
       data = { cancelled = true, messages = data.messages, transaction_count = data.transaction_count }
     end
     if data.error_line then M.set_error_line(buffer, line1 + data.error_line - 1) end
-    if data.schema_changed and c.generation == run.generation then M.refresh_schema(c.id) end
+    if c.generation == run.generation then session.schema_check(buffer, c, data.schema_changed) end
     if buffer.sql_execution == run and not view.closed then view:complete(data) end
     if not opts.explain then
       require("plugins.sql_server.history").record(storage_key, { text = text, connection = c.id, name = c.name,

@@ -670,6 +670,43 @@ test.describe("SQL Queries", function()
     test.equal(reads, 1)
   end)
 
+  test.it("keeps the catalog when a reload fails, and reloads after an open transaction ends", function(context)
+    local editor, c = connected_query(context)
+    local original = c.catalog
+    local backend = require "plugins.sql_server.backend"
+    context.original_end, context.original_close = backend.end_transaction, backend.close_session
+    backend.close_session = function() end
+    local reads, reply = 0, { objects = {}, metadata_error = "Lock request time out period exceeded." }
+    backend.read_schema = function(_, callback)
+      reads = reads + 1
+      callback(reply)
+      return { cancel = function() end }
+    end
+    local count = 0
+    backend.execute = function(_, _, done)
+      done({ session = 7, results = {}, messages = {}, transaction_count = count, schema_changed = true })
+      return { cancel = function() end }
+    end
+    backend.end_transaction = function(_, _, callback)
+      callback(0)
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("CREATE TABLE sales.notes (body nvarchar(max))")
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(reads, 1)
+    test.equal(c.catalog, original)
+
+    count = 1
+    reply = { database = "AnvilTest", default_schema = "dbo", case_sensitive = false, objects = { schema.objects[1] } }
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(reads, 1)
+    test.ok(command.perform("sql_server:commit"))
+    test.equal(reads, 2)
+    test.equal(c.catalog, reply)
+  end)
+
   test.it("stops completion in a Query whose session moved to another database", function(context)
     local editor = connected_query(context)
     local backend = require "plugins.sql_server.backend"
