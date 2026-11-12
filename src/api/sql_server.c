@@ -170,6 +170,7 @@ static void push_result(lua_State *L, SqlQueryResult *result) {
   if (result->transaction_count >= 0) {
     lua_pushinteger(L, result->transaction_count); lua_setfield(L, -2, "transaction_count");
   }
+  if (result->database[0]) text(L, "database", result->database);
   lua_newtable(L);
   int tables = 0;
   for (size_t i = 0; i < result->count; ++i) {

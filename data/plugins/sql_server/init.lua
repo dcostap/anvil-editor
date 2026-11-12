@@ -295,6 +295,13 @@ end, {
   end,
 })
 
+-- The database that a Query's session moved to with USE, or nil. The catalog
+-- describes only the connection's database.
+function M.other_database(buffer)
+  local c, s = M.connection_for(buffer), session.get(buffer)
+  if c and s and s.connection == c and s.database and s.database:lower() ~= c.database:lower() then return s.database end
+end
+
 -- The native limit of a run's text.
 M.TEXT_LIMIT = 64 * 1024 * 1024
 
@@ -687,6 +694,8 @@ do
         table.insert(parts, style.warn); table.insert(parts, " · No Metadata")
       end
       local s = session.get(view.buffer)
+      local database = M.other_database(view.buffer)
+      if database then table.insert(parts, style.warn); table.insert(parts, " · Database " .. database) end
       if view.buffer.sql_auto_commit == false then table.insert(parts, style.dim); table.insert(parts, " · Auto Commit Off") end
       if s and s.transaction_count ~= 0 then
         table.insert(parts, style.warn)

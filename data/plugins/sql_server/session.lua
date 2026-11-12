@@ -5,7 +5,7 @@
 local core = require "core"
 local backend = require "plugins.sql_server.backend"
 local M = {}
--- Buffer -> { id, connection, generation, transaction_count, busy }
+-- Buffer -> { id, connection, generation, transaction_count, database, busy }
 local sessions = setmetatable({}, { __mode = "k" })
 
 local function changed() core.redraw = true end
@@ -51,6 +51,7 @@ function M.adopt(buffer, c, generation, data, keep)
     end)
   end
   s.transaction_count = data.transaction_count
+  s.database = data.database or s.database
   changed()
 end
 

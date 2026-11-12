@@ -152,7 +152,14 @@ static int session_checks(SqlServerOptions *options) {
   sql_query_free(&result);
   sql = "SELECT COUNT(*) AS n FROM #scratch";
   CHECK(sql_session_execute(session, 1, 0, sql, strlen(sql), 1000, 30, NULL, NULL, &result));
-  CHECK(result.count == 1 && !strcmp(result.tables[0].cells[0].text, "1"));
+  CHECK(result.count == 1 && !strcmp(result.tables[0].cells[0].text, "1") && !strcmp(result.database, "AnvilTest"));
+  sql_query_free(&result);
+  sql = "USE master";
+  CHECK(sql_session_execute(session, 1, 0, sql, strlen(sql), 1000, 30, NULL, NULL, &result));
+  CHECK(!strcmp(result.database, "master"));
+  sql_query_free(&result);
+  sql = "USE AnvilTest";
+  CHECK(sql_session_execute(session, 1, 0, sql, strlen(sql), 1000, 30, NULL, NULL, &result));
   sql_query_free(&result);
 
   sql = "INSERT sales.customers ([na]]me]) VALUES (N'Pending')";

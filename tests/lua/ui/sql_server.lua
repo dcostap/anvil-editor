@@ -627,6 +627,43 @@ test.describe("SQL Queries", function()
     test.equal(reads, 1)
   end)
 
+  test.it("stops completion in a Query whose session moved to another database", function(context)
+    local editor = connected_query(context)
+    local backend = require "plugins.sql_server.backend"
+    local database = "master"
+    backend.execute = function(_, _, done)
+      done({ session = 7, results = {}, messages = {}, transaction_count = 0, database = database })
+      return { cancel = function() end }
+    end
+    local function status()
+      local item = core.status_bar:get_item("sql:connection")
+      local text = ""
+      for _, part in ipairs(item.get_item(item, editor)) do if type(part) == "string" then text = text .. part end end
+      return text
+    end
+    local function completes()
+      editor.buffer:set_selection(2, math.huge)
+      autocomplete.trigger()
+      local open = autocomplete.is_open()
+      autocomplete.close()
+      return open
+    end
+    editor.buffer:text_input("USE master\nSELECT c.na FROM sales.customers AS c")
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.ok(status():find(" · Database master", 1, true))
+    editor.buffer:set_selection(2, #"SELECT c.na" + 1)
+    autocomplete.trigger()
+    test.not_ok(autocomplete.is_open())
+    database = "ANVILTEST"
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.not_ok(status():find("Database", 1, true))
+    editor.buffer:set_selection(2, #"SELECT c.na" + 1)
+    autocomplete.trigger()
+    test.ok(autocomplete.is_open())
+  end)
+
   test.it("runs a large script without a time limit unless the Query sets one", function(context)
     local editor = connected_query(context)
     local backend = require "plugins.sql_server.backend"

@@ -324,15 +324,24 @@ static int run_fixed(SQLHDBC dbc, const wchar_t *text, SqlQueryResult *out, int 
   SQLFreeHandle(SQL_HANDLE_STMT, statement);
   return rc == SQL_NO_DATA || SQL_SUCCEEDED(rc);
 }
-static int transaction_count(SQLHDBC dbc, int *lost) {
+/* Reads @@TRANCOUNT, and the session's current database into `database` when
+ * it is not NULL. A database name has at most 128 UTF-16 units. */
+static int transaction_count(SQLHDBC dbc, char database[SQL_QUERY_DATABASE_BYTES], int *lost) {
   SQLHSTMT statement = SQL_NULL_HSTMT;
   SQLINTEGER count = -1;
-  SQLLEN length = 0;
+  SQLLEN length = 0, name_bytes = 0;
+  SQLWCHAR name[129] = {0};
   if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &statement))) return -1;
-  SQLRETURN rc = SQLExecDirectW(statement, (SQLWCHAR *)L"SELECT @@TRANCOUNT", SQL_NTS);
+  SQLRETURN rc = SQLExecDirectW(statement, (SQLWCHAR *)L"SELECT @@TRANCOUNT, DB_NAME()", SQL_NTS);
   if (SQL_SUCCEEDED(rc) && SQL_SUCCEEDED(SQLFetch(statement)) &&
-      SQL_SUCCEEDED(SQLGetData(statement, 1, SQL_C_SLONG, &count, sizeof(count), &length))) {}
-  else {
+      SQL_SUCCEEDED(SQLGetData(statement, 1, SQL_C_SLONG, &count, sizeof(count), &length))) {
+    if (database && SQL_SUCCEEDED(SQLGetData(statement, 2, SQL_C_WCHAR, name, sizeof(name), &name_bytes)) &&
+        name_bytes > 0 && name_bytes < (SQLLEN)sizeof(name)) {
+      char *text = utf8(name, (int)(name_bytes / sizeof(SQLWCHAR)), NULL);
+      if (text && strlen(text) < SQL_QUERY_DATABASE_BYTES) strcpy(database, text);
+      free(text);
+    }
+  } else {
     SqlQueryResult ignored = {0};
     collect(&ignored, SQL_HANDLE_STMT, statement, 0, NULL, 0, lost);
     sql_query_free(&ignored);
@@ -515,7 +524,7 @@ int sql_session_execute(unsigned id, int autocommit, int explain, const char *sq
   SQLHDBC dbc = s->connection.dbc;
   autocommit = autocommit != 0;
   if (autocommit != s->autocommit) {
-    int open = transaction_count(dbc, &lost);
+    int open = transaction_count(dbc, NULL, &lost);
     if (autocommit && open != 0) {
       snprintf(out->error, sizeof(out->error), "Commit or roll back the open transaction before Auto Commit turns on.");
       out->transaction_count = open;
@@ -531,7 +540,7 @@ int sql_session_execute(unsigned id, int autocommit, int explain, const char *sq
     s->autocommit = autocommit;
   }
   ok = run_text(dbc, sql, length, 1, explain, max_rows, timeout_seconds, cancelled, context, out, &lost);
-  if (!lost) out->transaction_count = transaction_count(dbc, &lost);
+  if (!lost) out->transaction_count = transaction_count(dbc, out->database, &lost);
 done:
   if (lost) {
     out->session_lost = 1; ok = 0;
@@ -551,7 +560,7 @@ int sql_session_end_transaction(unsigned id, int commit, int *count, int *ended,
   int lost = 0;
   SQLHDBC dbc = s->connection.dbc;
   run_fixed(dbc, commit ? L"WHILE @@TRANCOUNT > 0 COMMIT TRANSACTION" : L"IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION", &messages, &lost);
-  if (!lost) *count = transaction_count(dbc, &lost);
+  if (!lost) *count = transaction_count(dbc, NULL, &lost);
   *ended = lost;
   if (lost) snprintf(error, 256, "The connection to SQL Server was lost. The server rolled back any open transaction.");
   else if (messages.error[0]) snprintf(error, 256, "%.255s", messages.error);

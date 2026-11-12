@@ -6,6 +6,8 @@
 /* SQL Server's own limit for the columns of a SELECT. */
 #define SQL_QUERY_COLUMN_LIMIT 4096
 #define SQL_SESSION_LIMIT 64
+/* Room for a database name: 128 UTF-16 units as UTF-8, and its NUL. */
+#define SQL_QUERY_DATABASE_BYTES 385
 /* The largest SQL text of one run. It only guards memory. */
 #define SQL_QUERY_TEXT_LIMIT (64 * 1024 * 1024)
 /* The largest timeout in seconds. 0 means no timeout. */
@@ -41,6 +43,8 @@ typedef struct {
   int cancelled, limited, session_lost;
   /* @@TRANCOUNT after the run, or -1 when it is unknown. */
   int transaction_count;
+  /* The session's database after the run, such as after USE, or empty. */
+  char database[SQL_QUERY_DATABASE_BYTES];
   /* The first error, for a status line. */
   char error[512];
   unsigned error_line;

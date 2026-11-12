@@ -46,7 +46,7 @@ local function context(view, sql)
   local buffer = view and view.buffer
   if not buffer then return end
   local c = sql.connection_for(buffer)
-  if not c or not c.catalog then return end
+  if not c or not c.catalog or sql.other_database(buffer) then return end
   local line, col, line2, col2 = buffer:get_selection()
   if line ~= line2 or col ~= col2 then return end
   local previous = cache[buffer]
