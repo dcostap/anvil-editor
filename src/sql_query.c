@@ -462,15 +462,40 @@ static unsigned session_serial;
  * moves on, so a new job waits a short time for it. */
 static ULONGLONG validation_idle = SQL_SESSION_VALIDATION_IDLE_MS;
 void sql_session_set_validation_idle(unsigned milliseconds) { validation_idle = milliseconds; }
-/* A connection is valid when SELECT 1 answers in 10 seconds. */
-static int validate(SQLHDBC dbc) {
+/* True when a diagnostic record of the statement has SQLSTATE class 08: the
+ * connection is gone. */
+static int connection_error(SQLHSTMT statement) {
+  SQLWCHAR state[6], text[SQL_MAX_MESSAGE_LENGTH];
+  SQLINTEGER native = 0;
+  SQLSMALLINT length = 0;
+  for (SQLSMALLINT i = 1; SQL_SUCCEEDED(SQLGetDiagRecW(SQL_HANDLE_STMT, statement, i, state, &native, text,
+                                                      SQL_MAX_MESSAGE_LENGTH, &length)); ++i)
+    if (state[0] == L'0' && state[1] == L'8') return 1;
+  return 0;
+}
+/* The idle check sends SELECT 1. Only a connection error means that the
+ * session is lost. A slow answer, or no row because of a session option such
+ * as NOEXEC, keeps the session. The probe stops after 10 seconds or when the
+ * user cancels. Returns 1 for a live session, 0 for a lost one and -1 after a
+ * cancel. */
+static int validate(SQLHDBC dbc, SqlQueryCancelled cancelled, void *context) {
   SQLHSTMT statement = SQL_NULL_HSTMT;
-  if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &statement))) return 0;
+  if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &statement))) return 1;
   SQLSetStmtAttrW(statement, SQL_ATTR_QUERY_TIMEOUT, (SQLPOINTER)(SQLULEN)10, 0);
+  QueryWatch watch = {0};
+  watch.statement = statement; watch.cancelled = cancelled; watch.context = context;
+  watch.deadline = GetTickCount64() + 10000;
+  watch.stop = CreateEventW(NULL, TRUE, FALSE, NULL);
+  HANDLE thread = watch.stop ? CreateThread(NULL, 0, watch_query, &watch, 0, NULL) : NULL;
+  /* A dropped connection can report its error on the execute or on the fetch. */
   SQLRETURN rc = SQLExecDirectW(statement, (SQLWCHAR *)L"SELECT 1", SQL_NTS);
-  int ok = SQL_SUCCEEDED(rc) && SQL_SUCCEEDED(SQLFetch(statement));
+  if (SQL_SUCCEEDED(rc)) rc = SQLFetch(statement);
+  int lost = rc == SQL_ERROR && connection_error(statement);
+  if (thread) { SetEvent(watch.stop); WaitForSingleObject(thread, INFINITE); CloseHandle(thread); }
+  if (watch.stop) CloseHandle(watch.stop);
   SQLFreeHandle(SQL_HANDLE_STMT, statement);
-  return ok;
+  if (lost) return 0;
+  return stopped(&watch) && !watch.timed_out ? -1 : 1;
 }
 static Session *acquire(unsigned id, int *missing) {
   Session *found = NULL;
@@ -536,10 +561,14 @@ int sql_session_execute(unsigned id, int autocommit, int explain, const char *sq
   int lost = 0, ok = 0;
   SQLHDBC dbc = s->connection.dbc;
   autocommit = autocommit != 0;
-  if (GetTickCount64() - s->used >= validation_idle && !validate(dbc)) {
-    lost = 1; out->idle_lost = 1;
-    snprintf(out->error, sizeof(out->error), "The idle SQL session was lost. The server rolled back any open transaction.");
-    goto done;
+  if (GetTickCount64() - s->used >= validation_idle) {
+    int valid = validate(dbc, cancelled, context);
+    if (valid < 0) { out->cancelled = 1; goto done; }
+    if (!valid) {
+      lost = 1; out->idle_lost = 1;
+      snprintf(out->error, sizeof(out->error), "The idle SQL session was lost. The server rolled back any open transaction.");
+      goto done;
+    }
   }
   if (autocommit != s->autocommit) {
     int open = transaction_count(dbc, NULL, &lost);

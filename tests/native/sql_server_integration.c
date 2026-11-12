@@ -215,6 +215,14 @@ static int session_checks(SqlServerOptions *options) {
   sql_session_set_validation_idle(0);
   session = sql_session_open(options, error);
   CHECK(session);
+  /* With NOEXEC ON the probe returns no row, but the session is live. */
+  sql = "SET NOEXEC ON";
+  CHECK(sql_session_execute(session, 1, 0, sql, strlen(sql), 1000, 30, NULL, NULL, &result));
+  sql_query_free(&result);
+  sql = "SET NOEXEC OFF;\nSELECT 1 AS one";
+  CHECK(sql_session_execute(session, 1, 0, sql, strlen(sql), 1000, 30, NULL, NULL, &result));
+  CHECK(!result.idle_lost && result.count == 1 && !strcmp(result.tables[0].cells[0].text, "1"));
+  sql_query_free(&result);
   sql = "SELECT @@SPID AS spid";
   CHECK(sql_session_execute(session, 1, 0, sql, strlen(sql), 1000, 30, NULL, NULL, &result));
   char kill[64];
