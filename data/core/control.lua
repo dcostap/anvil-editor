@@ -92,6 +92,11 @@ local function placement(extra)
 end
 tool("open_file", "Open a file at a line in a new Pane or a split. Keep the user's focus unless requested.",
   placement {path = string_schema(32768), line = {type = "integer"}, col = {type = "integer"}}, {"path", "request_id"}, false)
+tool("diff_open", "Open a Git diff for the user in a new Pane or a split, with Diff Notes on its lines. base is a revision (default HEAD); head is a revision, or the working tree when omitted. Each note has a path (absolute, or relative to the Project), a side (new by default, or old), a line and an optional end_line on that side, and text: one paragraph of inline Markdown. The same base and head keep their View and take the new notes. Returns an operation ID; operation_read gives the changed files and the note paths that the diff does not show.",
+  placement {base = string_schema(256), head = string_schema(256), title = string_schema(200),
+    notes = {type = "array", maxItems = 64, items = object({path = string_schema(32768), side = choice("new", "old"),
+      line = {type = "integer"}, end_line = {type = "integer"}, text = string_schema(4000)}, {"path", "line", "text"})}},
+  {"request_id"}, false)
 tool("terminal_start", "Open a Terminal Session, optionally running an executable with literal arguments. Structured program launch uses PowerShell on Windows. Returns an operation ID; query operation_read for readiness.",
   placement {cwd = string_schema(32768), executable = string_schema(4096), args = {type = "array", items = string_schema(4096), maxItems = 64}},
   {"cwd", "request_id"}, false)
@@ -99,7 +104,7 @@ tool("pi_start", "Start an independent interactive Pi in a new Terminal Pane. Sp
   placement {cwd = string_schema(32768), provider = string_schema(), model = string_schema(),
     thinking = choice("off", "minimal", "low", "medium", "high", "xhigh", "max"), task = string_schema(32768)},
   {"cwd", "provider", "model", "thinking", "request_id"}, false)
-tool("operation_read", "Read startup progress or failure. A ready Pi result includes its conversation instance and initial task ID.",
+tool("operation_read", "Read the progress or failure of a started Terminal, Pi or diff. A ready Pi result includes its conversation instance and initial task ID.",
   {operation = id}, {"operation"}, true)
 tool("terminal", "Read bounded terminal text, send literal terminal input, or close a Terminal View. Close approves the calling agent's own running Terminal; other sessions keep normal confirmation. Self-close can stop the agent before the reply arrives. Use agent_send for Pi tasks.",
   {action = choice("read", "input", "close"), terminal = id, text = string_schema(32768), request_id = id},
@@ -203,6 +208,39 @@ function M:open_file(args)
   if view == false then return {status = "confirmation_required"} end
   assert(view, err)
   return {pane = panes.pane_for_view(view).id, status = "completed"}
+end
+
+-- A revision is a Git argument. It must not read as an option or hold spaces.
+local function revision(value, name)
+  assert(not value:find("^%-") and not value:find("[%s%c]"), "Invalid " .. name)
+  return value
+end
+
+function M:diff_open(args)
+  local place = place_options(args)
+  local left, right = revision(args.base or "HEAD", "base"), args.head and revision(args.head, "head")
+  local notes = {}
+  for _, note in ipairs(args.notes or {}) do
+    assert(not note.end_line or note.end_line >= note.line, "A note's end_line must not be before its line")
+    local path = common.is_absolute_path(note.path) and note.path or self.project .. PATHSEP .. note.path
+    notes[#notes + 1] = {path = path, side = note.side == "old" and 1 or 2, line = note.line,
+      end_line = note.end_line, text = note.text}
+  end
+  local operation = net.random_token()
+  local result = {operation = operation, status = "opening"}
+  self.jobs[operation] = {result = result}
+  local project = core.root_project()
+  if not (project and common.path_equals(project.path, self.project)) then project = {path = self.project} end
+  require("plugins.git_view").open_diff(project, {
+    left = left, right = right, title = args.title, notes = notes, place = place,
+  }, function(opened)
+    result.status, result.error, result.pane = opened.error and "failed" or "ready", opened.error, opened.pane
+    if not opened.error then
+      result.files, result.unplaced = protocol_json.array(opened.files), protocol_json.array(opened.unplaced)
+    end
+    core.log_quiet("Control: diff %s status=%s", operation, result.status)
+  end)
+  return result
 end
 
 local function quote_argument(value)

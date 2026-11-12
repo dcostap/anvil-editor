@@ -269,6 +269,66 @@ test.describe("Agent editor control", function()
     assert(ok, err)
   end)
 
+  test.it("opens a Git diff with Diff Notes and reports note paths outside the diff", function()
+    local process = require "core.process"
+    local git = require("plugins.git.backend").git_path()
+    local root = USERDIR .. PATHSEP .. "control-diff-" .. system.get_process_id()
+    local function run(...)
+      local proc = process.start({git, "-C", root:gsub("\\", "/"), ...},
+        {stdin = process.REDIRECT_DISCARD, stdout = process.REDIRECT_PIPE, stderr = process.REDIRECT_PIPE})
+      test.equal(proc:wait(process.WAIT_INFINITE, 0.01), 0, proc:read_stderr(65536))
+    end
+    local function write(text)
+      local file = assert(io.open(root .. PATHSEP .. "a.txt", "wb"))
+      file:write(text)
+      file:close()
+    end
+    require("core.common").mkdirp(root)
+    local ok, err = pcall(function()
+      run("init")
+      run("config", "user.name", "Anvil Test")
+      run("config", "user.email", "anvil@example.test")
+      run("config", "core.autocrlf", "false")
+      write("one\ntwo\nthree\n")
+      run("add", "-A")
+      run("commit", "-m", "Initial")
+      write("one\ntwo changed\nthree\n")
+      control = require("core.control").new(root)
+      test.equal(pcall(function()
+        control:call("diff_open", {base = "--output=x", request_id = "option"}, "test-client")
+      end), false, "A revision cannot read as a Git option")
+      local result = control:call("diff_open", {title = "Second line", request_id = "diff", notes = {
+        {path = "a.txt", line = 2, text = "Explains the **change**"},
+        {path = "missing.txt", line = 1, text = "Not in this diff"},
+      }}, "test-client")
+      local deadline = system.get_time() + 20
+      while control:call("operation_read", {operation = result.operation}, "test-client").status == "opening" do
+        test.ok(system.get_time() < deadline, "The diff did not open")
+        coroutine.yield(0.02)
+      end
+      test.equal(result.status, "ready", result.error)
+      test.same(result.files, {"a.txt"})
+      test.same(result.unplaced, {"missing.txt"})
+      local view = panes.find(result.pane).current_view
+      local comparison = view:ensure_diff_view(view:model_tab())
+      comparison.size.x, comparison.size.y = 1000, 1000
+      deadline = system.get_time() + 5
+      while comparison.updater_idx do
+        test.ok(system.get_time() < deadline, "The comparison did not finish")
+        coroutine.yield(0.01)
+      end
+      comparison:update()
+      comparison:update()
+      local side = comparison.buffer_view_b
+      local _, y2 = side:get_line_screen_position(2, 1)
+      local _, y3 = side:get_line_screen_position(3, 1)
+      test.ok(y3 - y2 > side:get_line_height() * 2, "The note's card follows the changed line")
+      comparison:on_close()
+    end)
+    test.ok(test.remove_tree(root))
+    assert(ok, err)
+  end)
+
   test.it("sends a task once to the selected Pi instance and keeps its result", function()
     control:exchange("terminal-b", {instance = "pi-one", session = "session.jsonl", busy = false,
       receipts = {}, tasks = {}})

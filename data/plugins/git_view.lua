@@ -344,6 +344,82 @@ local function when_model_ready(view, action)
   end)
 end
 
+-- Diff Notes by the repository path of their file. A note on the old side
+-- of a renamed file can name its old path.
+local function notes_by_path(root, notes)
+  local by_path = {}
+  for _, note in ipairs(notes or {}) do
+    local path = common.relative_path(root, common.normalize_path(note.path)):gsub("\\", "/")
+    by_path[path] = by_path[path] or {}
+    table.insert(by_path[path], { side = note.side, line = note.line, end_line = note.end_line, text = note.text })
+  end
+  return by_path
+end
+
+-- Keep the notes of changed files. Return the changed paths and the paths of
+-- the notes that this diff does not show.
+local function attach_notes(tab, by_path)
+  local files, unplaced, notes = {}, {}, {}
+  for _, record in ipairs(tab.changed_files or {}) do
+    local path = record.new_path or record.path or record.old_path
+    files[#files + 1] = path
+    for _, alias in ipairs { path, record.old_path } do
+      for _, note in ipairs(by_path[alias] or {}) do
+        notes[path] = notes[path] or {}
+        table.insert(notes[path], note)
+      end
+      by_path[alias] = nil
+    end
+  end
+  for path in pairs(by_path) do unplaced[#unplaced + 1] = path end
+  table.sort(unplaced)
+  tab.notes = next(notes) and notes or nil
+  tab.diff_view_seen_generation = nil
+  return files, unplaced
+end
+
+---Open a Commit Diff View from revision `request.left` to `request.right`, or
+---to the working tree when `right` is nil, with Diff Notes. Each note has an
+---absolute `path`, a `side` (1 old, 2 new), `line`, `end_line` and `text`.
+---`request.place` holds `panes.place` options. `done(result)` runs after the
+---changed files load: `{ pane, files, unplaced }`, or `{ error }`. The same
+---range keeps its View and takes the new notes and title.
+function git_view.open_diff(project, request, done)
+  local session
+  for _, candidate in pairs(panes.git_sessions) do
+    if candidate.project_key == project_key(project) and candidate.git_view then session = candidate; break end
+  end
+  local view
+  if session then view = session.git_view else session, view = git_view.open_log(project, { focus = false }) end
+  if not view then return done({ error = "The Git View could not start" }) end
+  when_model_ready(view, function(v)
+    local git = v.model
+    if not git.repo then return done({ error = "This Project is not in a Git repository" }) end
+    local by_path = notes_by_path(git.repo.root, request.notes)
+    local right = request.right or git.backend.WORKING_TREE
+    local subject = request.title or (request.left .. " → " .. (request.right or "working tree"))
+    local tab_view
+    local tab, err = git:open_commit_diff({ kind = "commit_range", left = request.left, right = right, subject = subject },
+      function(_, load_err, ready)
+        if load_err then return done({ error = load_err.message or load_err.kind or tostring(load_err) }) end
+        local files, unplaced = attach_notes(ready, by_path)
+        core.log_quiet("Git View: diff %s..%s shows %d file(s); %d note path(s) not in it",
+          request.left, right, #files, #unplaced)
+        local pane = tab_view and panes.pane_for_view(tab_view)
+        done({ pane = pane and pane.id, files = files, unplaced = unplaced })
+        core.redraw = true
+      end)
+    if not tab then return done({ error = err and (err.message or err.kind) or "The diff could not open" }) end
+    tab.title = "Diff " .. subject
+    tab_view = git_view.ensure_tab_view(session, tab, false)
+    if not panes.pane_for_view(tab_view) then
+      panes.place(function() return tab_view end, request.place)
+    elseif request.place.focus then
+      activate_git_tab_view(session, tab_view)
+    end
+  end)
+end
+
 function git_view.save_state(session)
   if not session or not session.git_view or not session.git_view.model then return nil end
   return {

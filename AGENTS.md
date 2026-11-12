@@ -839,6 +839,8 @@ The `project` tool opens or unloads a Project in the caller's Window. Open sends
 A background Project has no first frame, so the shell keeps it Starting. The direct route also delivers to a Starting Project whose runtime is ready.
 Run `ui/agent_control.lua`, `ui/pane_transfer.lua` and the `agent-projects` and `launch-terminal-move` shell probes after changes.
 
+The `diff_open` tool opens a Commit Diff View of a revision range (`git_view.open_diff`) with Diff Notes. The notes go in the Diff View request beside the patch, never inside it, so the patch stays valid. The Git tab keeps them by file path and saves them in its state. `plugins.diff.notes` places each note's card below its range in both layouts, keeps the other side level with a spacer row, and keeps noted lines out of folds. Range markers move the notes with edits. `core.markdown.note_card` draws the card for both Footnotes and Diff Notes. Run `ui/diffview_notes.lua`, `ui/agent_control.lua`, `ui/markdown_footnotes.lua` and `runtime/git_view_model.lua` after changes. Check the `markdown-footnotes*` render scenarios after changes to the card.
+
 See [agent control](docs/agent-control.md) for tools, discovery, security, and limits. Run `runtime/net_server.lua`, `ui/agent_control.lua`, `ui/control_transport.lua`, and `ui/control_pi.lua` after changes. Also run `node --test tests/pi-control.test.cjs tests/agent-sessions.test.cjs`.
 
 `ui/control_pi.lua` runs real Pi TUI sessions against a local scripted model server. It uses no provider, API key, or inference. Keep these checks isolated from user sessions and settings.
