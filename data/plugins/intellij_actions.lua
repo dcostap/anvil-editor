@@ -18,39 +18,6 @@ local function can_edit(dv, reason)
   return not (dv and dv.can_edit) or dv:can_edit(reason, { warn = true })
 end
 
-local function clone_caret_intellij(dv, direction)
-  local TextView = require "core.textview"
-  local buffer = dv.buffer
-  local idx = buffer.last_selection or 1
-  local line, col = buffer:get_selection_idx(idx)
-  if not line then return false end
-  if line + direction < 1 or line + direction > #buffer.lines then return false end
-
-  local translate = direction < 0
-    and TextView.translate.previous_line
-    or TextView.translate.next_line
-  local target_line, target_col = translate(buffer, line, col, dv)
-
-  local existing_idx
-  for i, l, c in buffer:get_selections(true) do
-    if i ~= idx and l == target_line and c == target_col then
-      existing_idx = i
-      break
-    end
-  end
-
-  if existing_idx and #buffer.selections > 4 then
-    -- IntelliJ-like toggle while walking through carets: move to the target
-    -- by removing the caret we came from when the target already has a caret.
-    buffer:remove_selection(idx)
-    buffer.last_selection = existing_idx > idx and existing_idx - 1 or existing_idx
-  else
-    buffer:add_selection(target_line, target_col, target_line, target_col)
-  end
-  core.blink_reset()
-  return true
-end
-
 local function selection_key(line, col)
   return line .. ":" .. col
 end
@@ -78,17 +45,10 @@ local function clone_caret_until_edge_intellij(dv, direction)
     while target_line + direction >= 1 and target_line + direction <= #buffer.lines do
       target_line, target_col = translate(buffer, target_line, target_col, dv)
       local key = selection_key(target_line, target_col)
-      if existing[key] then
-        -- Existing-caret toggling is uncommon for the bulk edge command and is
-        -- subtle because removing the previous caret changes the walk origin.
-        -- Keep that path exact and only use the fast path for pure additions.
-        while clone_caret_intellij(dv, direction) do
-          changed = true
-        end
-        return
+      if not existing[key] then
+        existing[key] = true
+        additions[#additions + 1] = { target_line, target_col }
       end
-      existing[key] = true
-      additions[#additions + 1] = { target_line, target_col }
     end
 
     if #additions == 0 then return end
@@ -132,12 +92,6 @@ command.add(function()
   local TextView = require "core.textview"
   return core.active_view and core.active_view:extends(TextView), core.active_view
 end, {
-  ["editor:clone_caret_above"] = command.palette(function(dv)
-    clone_caret_intellij(dv, -1)
-  end, { keywords = { "add", "cursor", "cursors", "above", "multi" } }),
-  ["editor:clone_caret_below"] = command.palette(function(dv)
-    clone_caret_intellij(dv, 1)
-  end, { keywords = { "add", "cursor", "cursors", "below", "multi" } }),
   ["editor:clone_carets_to_top"] = command.palette(function(dv)
     clone_caret_until_edge_intellij(dv, -1)
   end, { keywords = { "add", "cursor", "cursors", "to", "top", "first", "multi" } }),
@@ -1394,8 +1348,8 @@ end, {
 })
 
 keymap.add({
-  ["ctrl+alt+n"] = "editor:clone_caret_above",
-  ["ctrl+alt+m"] = "editor:clone_caret_below",
+  ["ctrl+alt+n"] = "editor:create_cursor_previous_line",
+  ["ctrl+alt+m"] = "editor:create_cursor_next_line",
   ["ctrl+alt+shift+n"] = "editor:clone_carets_to_top",
   ["ctrl+alt+shift+m"] = "editor:clone_carets_to_bottom",
   ["alt+w"] = "editor:move_to_matching_bracket_with_history",

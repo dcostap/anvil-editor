@@ -930,8 +930,22 @@ local function buffer_can_overlay_project_index(buffer)
     and not buffer.disable_treesitter
 end
 
+-- A dirty Buffer hides its disk symbols at once, but its overlay starts only when its new parse ends.
+local function overlay_waits_for_parse(buffer, index)
+  if not buffer_should_suppress_disk(buffer) or not buffer_can_overlay_project_index(buffer) then return false end
+  local status = buffer.treesitter and buffer.treesitter.status
+  if status ~= "stale" and status ~= "queued" and status ~= "parsing" then return false end
+  local path = buffer_path(buffer)
+  return path ~= nil and common.path_belongs_to(path, index.root)
+end
+
 local function has_pending_open_buffer_overlay(index)
-  return index and index.open_buffer_jobs and next(index.open_buffer_jobs) ~= nil
+  if not index then return false end
+  if index.open_buffer_jobs and next(index.open_buffer_jobs) ~= nil then return true end
+  for _, buffer in pairs(core.buffers or {}) do
+    if overlay_waits_for_parse(buffer, index) then return true end
+  end
+  return false
 end
 
 ---Return paths whose disk records must not answer queries.

@@ -95,6 +95,7 @@ Run `ui/terminal_pi_prepared.lua`, `ui/terminal_prepared.lua` and `runtime/termi
 Pane History is the order of the Panes that the user visited across Projects in one Window. Each Window has its own history. `pane:history_back` and `pane:history_forward` move through it; `pane:history_oldest` and `pane:history_newest` go to its ends.
 Each observed Pane focus counts as a visit. A history move adds no visit. When the user leaves a Pane that a move showed, that Pane goes again at the end, so no visit is lost.
 Returning to the same Pane after another Window had focus keeps the history position, including its Forward entries.
+The Panes of one Pane Group are one place. Consecutive visits to one Pane Group make one entry, for the last Pane that the user visited there. A focus change inside the current entry's Pane Group keeps the history position. Moves skip entries in the current Pane's group.
 The combined history compresses repeated consecutive Pane sequences, such as A → B → A → B, into their later copy. It preserves the current position. Pane identity includes its Project, so equal IDs in different Projects stay distinct.
 Each Project keeps its last 40 visits (`core.pane_history`) and sends them as `history` in its Pane report. Each entry has the Pane ID and the time in milliseconds. A move entry also names the entry that it showed (`to`). A move to another Project sends that name in its `focus` Pane request.
 Moves skip closed, Snoozed and Dormant Panes. Visits are not saved across restarts. Run `ui/global_pane_history.lua`, `ui/recent_panes.lua` and `ui/pane_requests.lua` after changes.
@@ -113,7 +114,7 @@ The host also reports a command that runs inside the shell, such as `Start-Sleep
 It ignores marks without the nonce, so a nested shell or TUI cannot end a running command.
 Run the `Terminal busy status` tests in `ui/terminal_quit.lua` after changes.
 
-The PowerShell prompt clears stale mouse, focus, paste and extended keyboard modes after a crashed program.
+The PowerShell prompt clears stale mouse, focus, paste, appearance report and extended keyboard modes after a crashed program.
 It sends control sequences through ConPTY before the custom prompt runs, and shows the cursor again.
 It keeps terminal text, scrollback and ConPTY's input mode. It does not send a full terminal reset.
 Existing shells need a new Terminal Session to load the updated integration.
@@ -838,6 +839,8 @@ The `project` tool opens or unloads a Project in the caller's Window. Open sends
 A background Project has no first frame, so the shell keeps it Starting. The direct route also delivers to a Starting Project whose runtime is ready.
 Run `ui/agent_control.lua`, `ui/pane_transfer.lua` and the `agent-projects` and `launch-terminal-move` shell probes after changes.
 
+The `diff_open` tool opens a Commit Diff View of a revision range (`git_view.open_diff`) with Diff Notes. The notes go in the Diff View request beside the patch, never inside it, so the patch stays valid. The Git tab keeps them by file path and saves them in its state. `plugins.diff.notes` places each note's card below its range in both layouts, keeps the other side level with a spacer row, and keeps noted lines out of folds. Range markers move the notes with edits. `core.markdown.note_card` draws the card for both Footnotes and Diff Notes. Run `ui/diffview_notes.lua`, `ui/agent_control.lua`, `ui/markdown_footnotes.lua` and `runtime/git_view_model.lua` after changes. Check the `markdown-footnotes*` render scenarios after changes to the card.
+
 See [agent control](docs/agent-control.md) for tools, discovery, security, and limits. Run `runtime/net_server.lua`, `ui/agent_control.lua`, `ui/control_transport.lua`, and `ui/control_pi.lua` after changes. Also run `node --test tests/pi-control.test.cjs tests/agent-sessions.test.cjs`.
 
 `ui/control_pi.lua` runs real Pi TUI sessions against a local scripted model server. It uses no provider, API key, or inference. Keep these checks isolated from user sessions and settings.
@@ -992,6 +995,7 @@ Whole lines, and complete lines pasted at column 1, go where a new line belongs 
 After pasted complete lines, the rest of the caret's line keeps its indentation.
 Markdown keeps the indentation of pasted whole lines, because lists and quotes own it.
 Text from outside this process with one line for each caret pastes one line at each caret, in document order. A last newline does not count as a line.
+In a switch block, `block_indent` puts a case label at the previous label's indentation, and other lines one level inside the label above them. In Go and Odin, the first label goes at the switch's indentation. Smart Backspace, paste and Move Lines use this rule.
 Move Lines shifts the moved lines, and the line that they pass, by the change of their brace block indentation (`block_indent`). A move inside one block changes no indentation, so hanging indentation keeps its offset. Languages without brace blocks keep their indentation. One undo reverts the move and the shift.
 Auto-Indent Lines (`editor:auto_indent_lines`) moves the lines of each selection as a paste of them would go: the first line with text takes the indentation of its place, and the other lines keep their shape. Markdown keeps its indentation.
 Paste as Plain Text (`core:paste_as_plain_text`) pastes like Paste, but changes no indentation and escapes nothing in a string.
@@ -1511,6 +1515,7 @@ Run `runtime/terminal_native.lua` and `ui/terminal.lua` after key input changes.
 A Terminal View reports light/dark appearance changes to programs that enable mode 2031.
 It sends the report after applying all new colors, so programs can query the new palette.
 After reconnecting, the Controller reports its current appearance once the saved screen and subscription are restored. The program can still have colors from before the disconnect.
+A revived screen turns off the old program's report modes, including mode 2031, because the new shell did not ask for reports. Otherwise the report reaches the new prompt as typed text.
 Run `runtime/terminal_native.lua` and `runtime/terminal_pi_appearance.lua` after changes. The Pi test uses a local scripted model and no inference. Set `ANVIL_TEST_PI` and `ANVIL_TEST_NODE` if Meson did not find them at configuration.
 
 Terminal Views display static Kitty graphics through Ghostty's image API.

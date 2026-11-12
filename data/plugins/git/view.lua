@@ -2140,6 +2140,7 @@ function GitView:ensure_diff_view(tab, transition_trace)
     },
     content_titles = { left = tab.left_name, right = tab.right_name },
     editable_policy = "content",
+    notes = tab.notes and selected_file_path and tab.notes[selected_file_path] or nil,
     auto_reveal_first_change = presentation == nil,
     user_data = {
       transition_trace = transition_trace,

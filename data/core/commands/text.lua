@@ -344,26 +344,110 @@ local function set_primary_selection(buffer)
   end
 end
 
-local function split_cursor(dv, direction)
-  local new_cursors = {}
-  local dv_translate = direction < 0
-    and TextView.translate.previous_line
-    or TextView.translate.next_line
-  for _, line1, col1 in dv.buffer:get_selections() do
-    if line1 + direction >= 1 and line1 + direction <= #dv.buffer.lines then
-      table.insert(new_cursors, { dv_translate(dv.buffer, line1, col1, dv) })
+-- Clone Caret follows IntelliJ. The first press clones each caret to the next
+-- line in `direction`. A repeated press clones only the newest carets (the
+-- front), so each caret grows its own column. A press in the opposite
+-- direction removes the front. A clone keeps its caret's selection and skips
+-- lines too short to hold it. Each column keeps the horizontal position of the
+-- caret that started it. A press is repeated while the carets are unchanged.
+local clone_chains = setmetatable({}, { __mode = "k" })
+
+local function same_list(a, b)
+  if #a ~= #b then return false end
+  for i = 1, #a do
+    if a[i] ~= b[i] then return false end
+  end
+  return true
+end
+
+local function clone_target(dv, caret, direction)
+  local buffer = dv.buffer
+  local line1, col1, line2, col2 = caret[1], caret[2], caret[3], caret[4]
+  local selected = line1 ~= line2 or col1 ~= col2
+  local x1, x2 = caret.x1, caret.x2
+  while true do
+    local next_line1 = dv:fold_aware_line_move(line1, direction)
+    local next_line2 = line2 + next_line1 - line1
+    if next_line1 == line1 or next_line2 < 1 or next_line2 > #buffer.lines then return nil end
+    line1, line2 = next_line1, next_line2
+    local target_col1 = common.clamp(dv:get_x_offset_col(line1, x1), 1, #buffer.lines[line1])
+    local target_col2 = common.clamp(dv:get_x_offset_col(line2, x2), 1, #buffer.lines[line2])
+    if not selected or line1 ~= line2 or target_col1 ~= target_col2 then
+      return { line1, target_col1, line2, target_col2, x1 = x1, x2 = x2 }
     end
   end
-  -- add selections in the order that will leave the "last" added one as buffer.last_selection
-  local start, stop = 1, #new_cursors
-  if direction < 0 then
-    start, stop = #new_cursors, 1
+end
+
+local function clone_carets(dv, direction)
+  local buffer = dv.buffer
+  local old = buffer.selections
+  local chain = clone_chains[dv]
+  local repeated = chain and chain.buffer == buffer and same_list(chain.selections, old)
+
+  local carets, front = {}, 0
+  for i = 1, #old / 4 do
+    local j = (i - 1) * 4
+    local line1, col1, line2, col2 = old[j + 1], old[j + 2], old[j + 3], old[j + 4]
+    local saved = repeated and chain.carets[i]
+    local caret = {
+      line1, col1, line2, col2,
+      level = saved and saved.level or 0,
+      x1 = saved and saved.x1 or dv:get_caret_x_offset(line1, col1),
+      x2 = saved and saved.x2 or dv:get_caret_x_offset(line2, col2),
+    }
+    carets[i] = caret
+    if math.abs(caret.level) > math.abs(front) then front = caret.level end
   end
-  for i = start, stop, direction do
-    local v = new_cursors[i]
-    dv.buffer:add_selection(v[1], v[2])
+
+  local old_active = carets[buffer.last_selection]
+  local result, active = {}, nil
+  if front * direction < 0 then
+    for _, caret in ipairs(carets) do
+      if caret.level ~= front then result[#result + 1] = caret end
+    end
+  else
+    local taken = {}
+    for _, caret in ipairs(carets) do
+      result[#result + 1] = caret
+      taken[caret[1] .. ":" .. caret[2]] = true
+    end
+    for _, caret in ipairs(carets) do
+      if caret.level == front then
+        local clone = clone_target(dv, caret, direction)
+        local key = clone and clone[1] .. ":" .. clone[2]
+        if clone and not taken[key] then
+          taken[key] = true
+          clone.level = front + direction
+          result[#result + 1] = clone
+          active = clone
+        end
+      end
+    end
   end
+
+  table.sort(result, function(a, b)
+    local a_line, a_col = sort_positions(a[1], a[2], a[3], a[4])
+    local b_line, b_col = sort_positions(b[1], b[2], b[3], b[4])
+    if a_line ~= b_line then return a_line < b_line end
+    return a_col < b_col
+  end)
+  local selections, last_selection = {}, nil
+  for i, caret in ipairs(result) do
+    if caret == (active or old_active) then last_selection = i end
+  end
+  -- After a removal of the active caret, the new front's end is active.
+  last_selection = last_selection or (direction > 0 and 1 or #result)
+  for _, caret in ipairs(result) do
+    for k = 1, 4 do selections[#selections + 1] = caret[k] end
+  end
+  buffer:set_selection_list(selections, last_selection, { sanitized = true })
+  clone_chains[dv] = {
+    buffer = buffer,
+    selections = { table.unpack(buffer.selections) },
+    carets = result,
+  }
   core.blink_reset()
+  core.log_quiet("Clone caret %s: %d carets", direction < 0 and "above" or "below", #result)
 end
 
 local function apply_resolved_wrap_affinity(dv)
@@ -3267,14 +3351,12 @@ local commands = {
   end),
 
   ["editor:create_cursor_previous_line"] = command.palette(function(dv)
-    split_cursor(dv, -1)
-    dv.buffer:merge_cursors()
-  end),
+    clone_carets(dv, -1)
+  end, { keywords = { "add", "clone", "caret", "cursor", "above", "multi" } }),
 
   ["editor:create_cursor_next_line"] = command.palette(function(dv)
-    split_cursor(dv, 1)
-    dv.buffer:merge_cursors()
-  end)
+    clone_carets(dv, 1)
+  end, { keywords = { "add", "clone", "caret", "cursor", "below", "multi" } })
 }
 
 command.add(function(x, y, clicks)

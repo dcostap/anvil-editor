@@ -835,6 +835,10 @@ A visual comparison of two text sources, shown side by side or through a Unified
 Unified Diff is the default. Each Project retains its choice of layout for all Diff Views, independent of View width.
 _Avoid_: diffviewer
 
+**Diff Note**:
+A note that an agent writes on a line or a range of lines of one side of a Diff View. The Diff View shows it in a card below the range's last line, in the look of a Footnote card. The noted lines stay visible when unchanged lines fold.
+_Avoid_: comment, annotation, review comment
+
 **Unified Diff**:
 A single text surface showing unchanged lines once, with removed lines before added lines in each change block.
 It shows line numbers from both sources and permits selection and copying.

@@ -6,6 +6,7 @@ local linewrapping = require "core.linewrapping"
 local style = require "core.style"
 local TextView = require "core.textview"
 local translate = require "core.buffer.translate"
+local diff_notes = require "plugins.diff.notes"
 
 -- The Unified Diff edits one Diff Side's own Buffer. Changed lines of the
 -- other side appear as rows between its lines; they are not Buffer text.
@@ -260,6 +261,11 @@ function UnifiedView:new(parent)
       return group and group.rows
     end,
   }, { priority = 50 })
+  if #(parent.diff_notes or {}) > 0 then
+    diff_notes.install(self, function(placement, line)
+      return placement == "after" and self.note_rows and self.note_rows[line] or nil
+    end, function() return parent:note_generation() end)
+  end
   self:add_poi_provider("diff-view", { points_of_interest = function() return self.points end })
   self:add_fold_listener("diff-view", function(_, event, fold)
     if event == "expand" and fold.metadata then parent:expand_fold(fold.metadata.diff_fold) end
@@ -334,6 +340,37 @@ function UnifiedView:refresh_other_row_metrics()
   })
 end
 
+---Place each Diff Note's card after its last line: a line of this Buffer, or
+---a row of the other side's lines. An unchanged line of the other side shows
+---as its line in this Buffer.
+function UnifiedView:place_notes()
+  local list = self.diff_view_parent.diff_notes or {}
+  self.note_rows = {}
+  if #list == 0 then return end
+  local base_line_of = {}
+  for base_line, other_line in pairs(self.projection.base_other) do base_line_of[other_line] = base_line end
+  for _, note in ipairs(list) do
+    local row = diff_notes.row(note, self)
+    local line = note.buffer == self.buffer and note.line2 or base_line_of[note.line2]
+    local other_row = not line and note.buffer == self.other_surface.buffer and self.other_lines[note.line2]
+    if line then
+      self.note_rows[line] = self.note_rows[line] or {}
+      table.insert(self.note_rows[line], row)
+    elseif other_row then
+      local rows = other_row.group.rows
+      local at = 1
+      while rows[at] ~= other_row do at = at + 1 end
+      while rows[at + 1] and rows[at + 1].diff_note do at = at + 1 end
+      table.insert(rows, at + 1, row)
+    end
+  end
+  for _, boundary in ipairs(self.projection.boundaries) do
+    for index, row in ipairs(self.projection.groups[boundary].rows) do row.index = index end
+  end
+  self:invalidate_visual_rows(diff_notes.ROWS)
+  self:invalidate_visual_metrics(diff_notes.ROWS)
+end
+
 function UnifiedView:update()
   self:sync_other_surface()
   self:refresh_other_row_metrics()
@@ -350,7 +387,7 @@ function UnifiedView:set_projection(projection)
     group.rows = {}
     for _, line in ipairs(group.lines) do
       local row = {
-        id = tostring(line), other_line = line, group = group,
+        id = tostring(line), other_line = line, group = group, index = #group.rows + 1,
         draw = draw_other_row, draw_gutter = draw_other_row_gutter,
         hit_test = hit_other_row,
       }
@@ -358,6 +395,7 @@ function UnifiedView:set_projection(projection)
       self.other_lines[line] = row
     end
   end
+  self:place_notes()
   local line_count = #self.buffer.lines
   self.points = {}
   for _, block in ipairs(projection.blocks) do
@@ -661,7 +699,7 @@ function UnifiedView:get_source_screen_position(index, line, col)
   if index == self.base_index then return self:get_line_screen_position(line, col) end
   local row = self.other_lines[line]
   if not row then return nil end
-  local visual_row = group_first_row(self, row.group) + line - row.group.lines[1]
+  local visual_row = group_first_row(self, row.group) + row.index - 1
   local _, content_y = self:get_content_offset()
   local row_y = content_y + style.padding.y + self:get_visual_row_y_offset(visual_row)
   local surface = self:sync_other_surface()

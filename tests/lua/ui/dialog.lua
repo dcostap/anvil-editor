@@ -217,7 +217,7 @@ test.describe("Dialog with a layout body", function()
 
   test.before_each(function()
     panes.reset_for_tests()
-    saved = { core.root_panel.size.x, core.root_panel.size.y }
+    saved = { core.root_panel.size.x, core.root_panel.size.y, tooltip_delay = dialog.TOOLTIP_DELAY }
     core.root_panel.size.x, core.root_panel.size.y = 1000, 700
   end)
 
@@ -227,6 +227,7 @@ test.describe("Dialog with a layout body", function()
     for _ = 1, 3 do dialog.update() end
     panes.reset_for_tests()
     core.root_panel.size.x, core.root_panel.size.y = saved[1], saved[2]
+    dialog.TOOLTIP_DELAY = saved.tooltip_delay
   end)
 
   local function inside_card(instance, control)
@@ -411,6 +412,37 @@ test.describe("Dialog with a layout body", function()
     dialog.update()
     test.is_nil(instance:tooltip(), "the tooltip stays hidden until the pointer leaves")
     dialog.TOOLTIP_DELAY = delay
+  end)
+
+  test.it("shows the hovered segment's explanation without changing the selected value", function()
+    open_editor("behind")
+    local Segmented = require "core.ui.segmented"
+    local choice = Segmented {
+      value = "first", tooltip = "Choose a role",
+      options = {
+        { value = "first", label = "First", tooltip = "First explanation" },
+        { value = "second", label = "Second", tooltip = "Second explanation", enabled = false },
+        { value = "third", label = "Third" },
+      },
+    }
+    local instance = dialog.Dialog { title = "Tips", body = layout.Column { choice } }
+    instance:open()
+    dialog.TOOLTIP_DELAY = 0
+    dialog.update()
+    local y = choice.y + choice.h / 2
+    core.on_event("mousemoved", choice.x + choice.w / 6, y)
+    dialog.update()
+    test.equal(instance:tooltip(), "First explanation")
+    core.on_event("mousemoved", choice.x + choice.w / 2, y)
+    dialog.update()
+    test.equal(instance:tooltip(), "Second explanation", "a disabled choice can still explain its role")
+    core.on_event("mousemoved", choice.x + choice.w * 5 / 6, y)
+    dialog.update()
+    test.equal(instance:tooltip(), "Choose a role", "choices without a tooltip use the control's tooltip")
+    test.equal(choice.value, "first")
+    core.on_event("mousemoved", 0, 0)
+    dialog.update()
+    test.is_nil(instance:tooltip())
   end)
 
   test.it("shows each UI Gallery page and moves through them from its page list", function()

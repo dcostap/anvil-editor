@@ -500,6 +500,7 @@ test.describe("plugins.git.model", function()
     diff_tab.right_text = "large content must not persist"
     diff_tab.file_tree_collapsed = { src = true }
     diff_tab.file_scroll = 55
+    diff_tab.notes = { ["src/app.lua"] = { { side = 2, line = 4, end_line = 6, text = "Why this changed" } } }
     model.details_tree_collapsed = { abc123 = { src = true } }
     local state = model:get_state()
     local restored = Model.new({ path = "C:/repo" }, { backend = fake_backend("", log_output()), state = state })
@@ -509,6 +510,8 @@ test.describe("plugins.git.model", function()
     test.equal(restored:find_tab(diff_tab.id).right_text, nil)
     test.equal(restored:find_tab(diff_tab.id).file_tree_collapsed.src, true)
     test.equal(restored:find_tab(diff_tab.id).file_scroll, 55)
+    test.same(restored:find_tab(diff_tab.id).notes,
+      { ["src/app.lua"] = { { side = 2, line = 4, end_line = 6, text = "Why this changed" } } })
     test.equal(restored.details_tree_collapsed.abc123.src, true)
     test.equal(restored:find_tab(selection_tab.id).history_context.type, "selection")
     test.equal(restored:find_tab(selection_tab.id).history_context.start_line, 3)

@@ -64,6 +64,26 @@ local function clone_table(t)
   return copy
 end
 
+-- Diff Notes by changed file path: `{ side = 1|2, line, end_line, text }`.
+local function clone_notes(notes)
+  if type(notes) ~= "table" then return nil end
+  local copy = {}
+  for path, list in pairs(notes) do
+    if type(path) == "string" and type(list) == "table" then
+      local items = {}
+      for _, note in ipairs(list) do
+        if type(note) == "table" and (note.side == 1 or note.side == 2) and tonumber(note.line)
+            and type(note.text) == "string" then
+          items[#items + 1] = { side = note.side, line = tonumber(note.line),
+            end_line = tonumber(note.end_line) or tonumber(note.line), text = note.text }
+        end
+      end
+      if #items > 0 then copy[path] = items end
+    end
+  end
+  return next(copy) and copy or nil
+end
+
 local function clone_boolean_map(t)
   if type(t) ~= "table" then return nil end
   local copy = {}
@@ -178,6 +198,7 @@ function Model:get_state()
         selected_file_path = tab.selected_file_path or selected_file and changed_file_path(selected_file),
         file_scroll = tab.file_scroll,
         file_tree_collapsed = clone_boolean_map(tab.file_tree_collapsed),
+        notes = clone_notes(tab.notes),
       }
     elseif tab.kind == "file_history" then
       state.tabs[#state.tabs + 1] = {
@@ -232,6 +253,7 @@ function Model:apply_state(state)
         selected_file_path = saved.selected_file_path,
         file_scroll = tonumber(saved.file_scroll) or 0,
         file_tree_collapsed = clone_boolean_map(saved.file_tree_collapsed) or {},
+        notes = clone_notes(saved.notes),
         loading = false,
         loading_file = false,
         error = nil,

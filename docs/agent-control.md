@@ -125,10 +125,11 @@ Steering and interruption return `delivered` after Pi accepts them. A steering r
 | `project` | Open or unload a Project in the caller's Window. |
 | `snooze` | Set or remove Snooze for a Terminal's Pane; default to the caller's Terminal. |
 | `open_file` | Open a file at a line in a new Pane or split. |
+| `diff_open` | Open a Git diff in a new Pane or split, with Diff Notes on its lines. |
 | `terminal_start` | Open a shell, optionally with a structured executable and argument list. |
 | `terminal` | Read terminal text, send literal input, or close a Terminal View. |
 | `pi_start` | Start an independent interactive Pi with explicit model choices. |
-| `operation_read` | Read launch progress and readiness. |
+| `operation_read` | Read launch or diff progress and readiness. |
 | `agent_send` | Queue a task or steer active work. |
 | `agent_read` | Read agent status, live activity, a receipt, or a task result. |
 | `agent_transcript` | Read paged conversation text, summaries, and optional tool messages. |
@@ -140,6 +141,8 @@ Tool schemas describe their required fields. Terminal launch currently requires 
 `project` with `action: "open"` loads a folder in the caller's Window. The Window keeps its Selected Project unless `focus: true` selects the new Project. A Project that is already loaded stays in its Window. `action: "unload"` makes a Project Dormant through the normal close questions. The tool refuses Scratch and the Project that serves the call. Both actions return `accepted` when the shell has the request. The opened Project shows in the `projects` of `workspace_state` when its endpoint is ready.
 
 `pane` with `action: "move"` and `target_project` moves the Pane to the end of that Project as a new Pane Group. The target must have a control endpoint. The source exports the Pane. Its Terminal Sessions keep running, and a moved Pi keeps its conversation. The source closes its copy after the target confirms, and attaches the Terminals again when the target refuses. The reply is `accepted`. Inspect the target's `workspace_state` for the new Pane ID. `focus: true` also selects the target Project.
+
+`diff_open` opens a Commit Diff View from `base` (default `HEAD`) to `head`, or to the working tree when `head` is omitted. Revisions cannot start with `-` or hold spaces. Each note names a file `path`, absolute or relative to the Project, a `side` (`new` by default, or `old`), a `line`, an optional `end_line` and its `text`. The text is one paragraph of inline Markdown. A note on the old side of a renamed file can name the old path. The same `base` and `head` keep their View, which takes the new title and notes. Poll `operation_read` with the returned `operation`. A `ready` result gives the `pane`, the changed `files` and the `unplaced` note paths that the diff does not show. Lines past a file's end move to its last line. Notes move with edits in the comparison, and the Workspace saves them with the View.
 
 For `terminal_start`, readiness describes the shell, not the optional program. Read its Terminal output to check program startup. `pi_start` also waits for Pi's control connection.
 

@@ -1246,10 +1246,11 @@ static bool prepare_revival(GhosttyTerminal model, uint16_t rows) {
     ghostty_formatter_free(formatter);
     if (!ok) { free(alternate); return false; }
   }
-  /* Reset parser and app modes. Keep primary history. Do not replay binary bytes as VT. */
+  /* Reset parser and app modes. Keep primary history. Do not replay binary bytes as VT.
+     The new shell did not ask for reports, so turn off each mode that makes the terminal send input. */
   char reset[256];
   int n = snprintf(reset, sizeof(reset), "\030\033\\\033[?2026l\033[?1049l\033[!p"
-    "\033[?1000;1002;1003;1004;1005;1006;1015;2004l\033[>0u\033[0m\033[r\033[%u;1H\r\n", rows);
+    "\033[?9;1000;1002;1003;1004;1005;1006;1015;1016;2004;2031;2048l\033[>0u\033[0m\033[r\033[%u;1H\r\n", rows);
   ghostty_terminal_vt_write(model, (const uint8_t *)reset, n);
   if (alternate) {
     for (unsigned i = 0; i < rows; i++) ghostty_terminal_vt_write(model, (const uint8_t *)"\r\n", 2);
