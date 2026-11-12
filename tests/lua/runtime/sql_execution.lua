@@ -13,6 +13,23 @@ test.describe("SQL execution input", function()
     end
   end)
 
+  test.it("keeps a cancelled run's schema change and session in the worker's cancel message", function()
+    local worker = require "plugins.sql_server.worker"
+    local cancelled, sent = false, nil
+    local original = package.loaded.sql_server_native
+    package.loaded.sql_server_native = { execute = function()
+      cancelled = true
+      return { results = {}, messages = {}, cancelled = true, session = 7, transaction_count = 0, schema_changed = true }
+    end }
+    local ok, err = pcall(worker.run, { operation = "execute", options = {}, text = "CREATE TABLE a (x int)" },
+      { cancelled = function() return cancelled end, send = function(message) sent = message end })
+    package.loaded.sql_server_native = original
+    test.ok(ok, err)
+    test.equal(sent.type, "cancelled")
+    test.equal(sent.payload.value.session, 7)
+    test.equal(sent.payload.value.schema_changed, true)
+  end)
+
   test.it("carries real results and cancellation through the worker in the isolated probe", function()
     local server = os.getenv("ANVIL_SQL_TEST_SERVER")
     test.skip_if(os.getenv("ANVIL_SQL_INTEGRATION") ~= "1" or not server,

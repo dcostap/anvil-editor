@@ -13,10 +13,12 @@ function M.run(payload, context)
       if not model.distinct_values then break end
     end
     -- A cancelled job can send only a cancel message. It still names the
-    -- session, so the UI can use or close it.
+    -- session, so the UI can use or close it, and tells whether its SQL can
+    -- have changed the schema.
     if context.cancelled() then
       context.send { type = "cancelled", payload = { value = { cancelled = true, session = result.session,
-        session_lost = result.session_lost, transaction_count = result.transaction_count, messages = result.messages } } }
+        session_lost = result.session_lost, transaction_count = result.transaction_count, messages = result.messages,
+        schema_changed = result.schema_changed } } }
       return
     end
   elseif payload.operation == "end_transaction" then
