@@ -323,6 +323,23 @@ test.describe("SQL Queries", function()
     }, "\n"))
     test.equal(#submitted, 2)
 
+    panes.focus(panes.pane_for_view(result))
+    result:select_cell(1, 1, false)
+    result:select_cell(2, 3, true)
+    test.ok(command.perform("sql_server:script_rows_as_insert"))
+    test.equal(core.active_view.buffer:get_text(1, 1, math.huge, math.huge), table.concat({
+      "-- Rows of [sales].[customers] from SQL Results. Review them, then run this script.",
+      "INSERT INTO [sales].[customers] ([name]) VALUES",
+      "    (NULL),",
+      "    (N'Bea O''Neil');",
+      "",
+    }, "\n"))
+    panes.focus(panes.pane_for_view(result))
+    test.ok(command.perform("sql_server:script_rows_as_select"))
+    test.equal(core.active_view.buffer:get_text(1, 1, math.huge, math.huge),
+      "SELECT *\nFROM [sales].[customers]\nWHERE ([id] = N'1' AND [name] = N'Ada')\n   OR ([id] = N'2' AND [name] = N'Bea');\n")
+    test.equal(#submitted, 2)
+
     local _, reason = require("plugins.sql_server.edit").analyze({ column_count = 1 }, { results = { {
       headers = describe_headers, rows = { described("id", "id", true, true, false, "int"),
         described("who", "name", false, false, true, "nvarchar(80)") } } } })

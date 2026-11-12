@@ -297,6 +297,8 @@ function Results:on_mouse_pressed(button, x, y, clicks)
     { label = "Edit Cell", command = "sql_server:edit_cell" },
     { label = "Set to NULL", command = "sql_server:set_cell_null" },
     { label = "Delete Rows", command = "sql_server:delete_rows" },
+    { label = "Script Rows as INSERT", command = "sql_server:script_rows_as_insert" },
+    { label = "Script Rows as SELECT", command = "sql_server:script_rows_as_select" },
     { label = "Script Changes", command = "sql_server:script_changes" },
     { label = "Discard Changes", command = "sql_server:discard_changes" },
     "-",
@@ -375,17 +377,37 @@ function Results:delete_rows()
   end)
 end
 
-function Results:script_changes()
-  local edit = require "plugins.sql_server.edit"
-  if not self.edit_info or edit.change_count(self) == 0 then return false end
+-- A script opens in a new SQL Query on the result's connection and runs nothing.
+function Results:open_script(text)
   local sql = require "plugins.sql_server"
   local c = self.source_buffer and sql.connection_for(self.source_buffer)
   local editor = sql.new_query(c and c.id)
   if not editor then return false end
-  editor.buffer:text_input(edit.script(self))
+  editor.buffer:text_input(text)
   editor.buffer:set_selection(1, 1)
-  core.log_quiet("SQL Server: scripted %d result change(s)", edit.change_count(self))
   return true
+end
+
+function Results:script_changes()
+  local edit = require "plugins.sql_server.edit"
+  if not self.edit_info or edit.change_count(self) == 0 then return false end
+  core.log_quiet("SQL Server: scripted %d result change(s)", edit.change_count(self))
+  return self:open_script(edit.script(self))
+end
+
+-- Script Rows as INSERT or as SELECT, for the selected rows of the result's table.
+function Results:script_rows(kind)
+  local row1, column1, row2, column2 = self:selection_bounds()
+  if not row1 then return false end
+  return self:with_edit_info(function()
+    local edit = require "plugins.sql_server.edit"
+    local text, reason
+    if kind == "insert" then text, reason = edit.insert_script(self, row1, row2)
+    else text, reason = edit.select_script(self, row1, column1, row2, column2) end
+    if not text then core.warn("%s", reason); return end
+    core.log_quiet("SQL Server: scripted %d result row(s) as %s", row2 - row1 + 1, kind)
+    self:open_script(text)
+  end)
 end
 
 function Results:discard_changes()
@@ -418,6 +440,8 @@ end, {
   ["sql_server:edit_cell"] = function(view) return view:edit_cell() end,
   ["sql_server:set_cell_null"] = function(view) return view:set_cells_null() end,
   ["sql_server:delete_rows"] = function(view) return view:delete_rows() end,
+  ["sql_server:script_rows_as_insert"] = function(view) return view:script_rows("insert") end,
+  ["sql_server:script_rows_as_select"] = function(view) return view:script_rows("select") end,
 })
 command.add(function()
   local view = core.active_view

@@ -59,8 +59,10 @@ function M.analyze(model, data)
   if #info.keys == 0 then
     return nil, string.format("%s.%s has no primary key or unique key.", quote(target.schema), quote(target.table))
   end
+  -- A table column can find its rows; an editable column can also take a value.
   for i, entry in ipairs(visible) do
-    info.columns[i] = { column = entry.column, editable = same(entry) and entry.updateable and not binary(entry.type) }
+    local column = same(entry) and entry.column and not binary(entry.type)
+    info.columns[i] = { column = entry.column, editable = column and entry.updateable, comparable = column }
   end
   return info
 end
@@ -110,6 +112,51 @@ function M.script(results)
   end
   lines[#lines + 1] = "COMMIT TRANSACTION;"
   return table.concat(lines, "\n") .. "\n"
+end
+
+-- The selected rows as INSERT statements of their shown values, pending edits
+-- included. Identity, computed and other columns that cannot take a value stay
+-- out. SQL Server takes at most 1,000 rows in one VALUES list.
+function M.insert_script(results, row1, row2)
+  local info = results.edit_info
+  local target = quote(info.schema) .. "." .. quote(info.table)
+  local names, columns = {}, {}
+  for i, column in ipairs(info.columns) do
+    if column.editable then names[#names + 1] = quote(column.column); columns[#columns + 1] = i end
+  end
+  if #columns == 0 then return nil, string.format("No column of this result can take a value in %s.", target) end
+  local lines = { "-- Rows of " .. target .. " from SQL Results. Review them, then run this script." }
+  for display_row = row1, row2 do
+    if (display_row - row1) % 1000 == 0 then
+      if display_row > row1 then lines[#lines] = lines[#lines]:gsub(",$", ";") end
+      lines[#lines + 1] = "INSERT INTO " .. target .. " (" .. table.concat(names, ", ") .. ") VALUES"
+    end
+    local values = {}
+    for i, column in ipairs(columns) do values[i] = literal(results:cell_value(display_row, column)) end
+    lines[#lines + 1] = "    (" .. table.concat(values, ", ") .. "),"
+  end
+  lines[#lines] = lines[#lines]:gsub(",$", ";")
+  return table.concat(lines, "\n") .. "\n"
+end
+
+-- A SELECT of the table's rows that have the selected cells' values, as the
+-- server sent them. Each selected row adds its own condition.
+function M.select_script(results, row1, column1, row2, column2)
+  local info = results.edit_info
+  local target = quote(info.schema) .. "." .. quote(info.table)
+  local conditions = {}
+  for display_row = row1, row2 do
+    local row, parts = results:source_row(display_row), {}
+    for column = column1, column2 do
+      if info.columns[column].comparable then
+        local value = row.cells[column]
+        parts[#parts + 1] = quote(info.columns[column].column) .. (value == false and " IS NULL" or " = " .. literal(value))
+      end
+    end
+    if #parts == 0 then return nil, string.format("No selected column is a column of %s.", target) end
+    conditions[#conditions + 1] = "(" .. table.concat(parts, " AND ") .. ")"
+  end
+  return "SELECT *\nFROM " .. target .. "\nWHERE " .. table.concat(conditions, "\n   OR ") .. ";\n"
 end
 
 -- Calls done(info) when SQL Server described the result. The describe call

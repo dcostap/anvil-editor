@@ -70,6 +70,8 @@ A result can change when it is the only result of its run and a column comes fro
 
 Changed cells show in the accent color, and deleted rows show in the error color. The footer shows **Script N Changes** and **Discard**. A new run discards the edits. **SQL Server: Script Changes** opens a new SQL Query on the same connection with one `UPDATE` or `DELETE` for each row, in one transaction. Each statement finds its row by the key values that the result showed. Values are Unicode string literals, and SQL Server converts them to the column's type. A statement that does not change exactly one row stops the script, and `XACT_ABORT` rolls back its earlier statements. **The script does not run by itself.** Read it, then run it as other SQL. Anvil does not compare the other columns, so a change that another user made after your run can be overwritten.
 
+**Script Rows as INSERT** and **Script Rows as SELECT** in the Context Menu script the selected rows of the same table, also in a new SQL Query that runs nothing. They need the same describe call and the same kind of result. Script Rows as INSERT writes the rows' shown values, with pending edits, for each column that can change. Identity and computed columns stay out, so the rows get new identity values. It writes at most 1,000 rows in each `INSERT`. Script Rows as SELECT finds the table rows that have the selected cells' values as the server sent them: one condition for each selected row, joined with `OR`.
+
 ## SQL History
 
 Each run of a SQL Query goes into the Project's SQL History, with its connection, time, duration and status: OK, Error or Cancelled. The list shows a duration of 1 second or more. Explain Plan runs do not. **SQL Server: SQL History** lists the runs, newest first. Type to search their SQL. The chosen SQL opens in a new SQL Query on its connection, or without a connection when the connection is gone. **It does not run.** A run of the same SQL on the same connection as the newest entry counts in that entry, such as `×3`.
@@ -160,6 +162,8 @@ The `GO` delimiter follows `SQLAllowGo` in `com/onseven/dbvis/d/e.java` and `com
 Result editing follows `TableEditableCommitter` in `com/onseven/dbvis/bc/j/b/c.java` and `com/onseven/dbvis/bc/j/b/d.java`: each edit must affect exactly one row, and the key columns identify it (`TableEditableResultDialog.keyColumnChooser` in `com/onseven/dbvis/bc/j/b/s.java`). DbVisualizer commits the edits itself, in batches (`InlineEditorCommitBatchSize` in `com/onseven/dbvis/nb/s.java`). Anvil writes them to a script instead, and the user runs it.
 
 SQL History follows `HistoryGridPanel` in `com/onseven/dbvis/u/b/b.java` and `com/onseven/dbvis/u/c/b.java`: an entry keeps its connection, time, elapsed time and errors, and a run of the newest entry's SQL counts in that entry (`SQLHistoryIgnoreDuplicateEntries`, on by default in `dbvis.prefs`). DbVisualizer loads an entry into its SQL Commander. Anvil opens it in a new SQL Query.
+
+Script Rows follows the grid commands `script-insert-row-copy-command` (INSERT COPY INTO TABLE) and `script-select-star-from-where-command` (SELECT ALL WHERE) in `dbvis-actions.xml`.
 
 The cell aggregates follow DbVisualizer's Aggregates Viewer (`DataSetGridAggregation` texts; the counts in `com/onseven/dbvis/bc/e/l.java` and the metrics in `com/onseven/dbvis/bc/e/j.java`): Cells, Nulls, Sum, Avg, Min and Max for the selected cells. DbVisualizer also counts the cells of each type and shows a median and a standard deviation in a separate panel. Anvil shows the short list in the results footer.
 
