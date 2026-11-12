@@ -590,6 +590,29 @@ test.describe("SQL Queries", function()
     test.equal(runs, 4)
   end)
 
+  test.it("runs without a time limit unless the Query sets one", function(context)
+    local editor = connected_query(context)
+    local backend = require "plugins.sql_server.backend"
+    local settings
+    backend.execute = function(_, _, done, options)
+      settings = options
+      done({ results = {}, affected_rows = {}, messages = {} })
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("SELECT 1")
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(test.not_nil(settings).timeout, 0)
+    test.ok(command.perform("sql_server:set_timeout"))
+    test.equal(core.active_view, core.global_prompt_bar)
+    core.global_prompt_bar:set_text("45")
+    core.global_prompt_bar:submit()
+    test.equal(core.active_view, editor)
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(settings.timeout, 45)
+  end)
+
   test.it("adjusts the Query's row limit from the result footer for the next run", function(context)
     local editor = connected_query(context)
     local context_menu = require "core.context_menu"

@@ -321,7 +321,7 @@ static int transaction_count(SQLHDBC dbc, int *lost) {
 int sql_query_check(const char *sql, size_t length, unsigned max_rows, unsigned timeout_seconds,
                     char *error, size_t size) {
   int units = 0;
-  if (!max_rows || max_rows > SQL_QUERY_ROW_LIMIT || !timeout_seconds || timeout_seconds > 300)
+  if (!max_rows || max_rows > SQL_QUERY_ROW_LIMIT || timeout_seconds > SQL_QUERY_TIMEOUT_MAX)
     snprintf(error, size, "Invalid SQL execution limits.");
   else if (!sql || !length || length > 256 * 1024 || memchr(sql, 0, length))
     snprintf(error, size, "SQL text must be 1 byte to 256 KiB, without NUL characters.");
@@ -354,7 +354,8 @@ static int run_text(SQLHDBC dbc, const char *sql, size_t length, int split, int 
   if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &statement)) ||
       !SQL_SUCCEEDED(SQLSetStmtAttr(statement, SQL_ATTR_QUERY_TIMEOUT, (SQLPOINTER)(uintptr_t)timeout_seconds, 0))) goto done;
   watch.statement = statement; watch.cancelled = cancelled; watch.context = context;
-  watch.deadline = GetTickCount64() + (ULONGLONG)timeout_seconds * 1000;
+  /* A timeout of 0 means none, for ODBC and for the watch. */
+  watch.deadline = timeout_seconds ? GetTickCount64() + (ULONGLONG)timeout_seconds * 1000 : ~0ULL;
   watch.stop = CreateEventW(NULL, TRUE, FALSE, NULL);
   if (!watch.stop) goto done;
   thread = CreateThread(NULL, 0, watch_query, &watch, 0, NULL);

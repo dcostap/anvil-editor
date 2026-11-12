@@ -91,6 +91,12 @@ static int execution_checks(SqlServerOptions *options) {
   CHECK(result.error[0] && !result.cancelled);
   sql_query_free(&result);
 
+  /* A timeout of 0 means none. */
+  sql = "WAITFOR DELAY '00:00:02'; SELECT N'waited' AS value";
+  CHECK(run_once(options, sql, 1000, 0, NULL, NULL, &result));
+  CHECK(result.count == 1 && !strcmp(result.tables[0].cells[0].text, "waited"));
+  sql_query_free(&result);
+
   sql = "WAITFOR DELAY '00:00:20'; SELECT N'late' AS value";
   ULONGLONG started = GetTickCount64();
   CHECK(!run_once(options, sql, 1000, 30, cancel_after_start, &started, &result));

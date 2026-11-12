@@ -185,7 +185,7 @@ function M.prepare(sql, results, done)
       if not info then results.edit_error = reason; core.warn("%s", reason); return end
       results.edit_info = info
       done(info)
-    end, { session = session.for_run(buffer, c), autocommit = buffer.sql_auto_commit ~= false, max_rows = 4096 })
+    end, { session = session.for_run(buffer, c), autocommit = buffer.sql_auto_commit ~= false, max_rows = 4096, timeout = 30 })
   if not handle then results.describing = false; core.warn("%s", err or "Could not read the result's columns."); return false end
   return true
 end

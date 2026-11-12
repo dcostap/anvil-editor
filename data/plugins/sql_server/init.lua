@@ -273,6 +273,12 @@ end, {
   end,
 })
 
+-- A Query's timeout in seconds: nil uses the configured timeout, and 0 means none.
+M.TIMEOUT_MAX = 86400
+function M.timeout(buffer)
+  return buffer.sql_timeout or config.plugins.sql_server.timeout_seconds
+end
+
 -- Runs the selection, or the whole Buffer with opts.whole_buffer. With
 -- opts.explain, SQL Server returns estimated plans and runs nothing.
 function M.run(editor, opts)
@@ -332,7 +338,7 @@ function M.run(editor, opts)
   end
   local handle, err = backend.execute(M.connection_options(c), text, finish, {
     session = session.for_run(buffer, c), autocommit = buffer.sql_auto_commit ~= false,
-    explain = opts.explain, max_rows = M.row_limit(buffer) })
+    explain = opts.explain, max_rows = M.row_limit(buffer), timeout = M.timeout(buffer) })
   if not handle then finish({ error = err or "Could not start SQL execution." })
   elseif run.active then run.handle = handle; if run.cancelled then handle:cancel() end end
   return handle ~= nil
@@ -440,6 +446,25 @@ end, {
       core.status_bar:show_message("i", require("core.style").text, "Auto Commit on")
       core.redraw = true
     end)
+    return true
+  end),
+  ["sql_server:set_timeout"] = command.palette(function(view)
+    local buffer = view.buffer
+    local function seconds(text)
+      local n = tonumber(text)
+      return n and n % 1 == 0 and n >= 0 and n <= M.TIMEOUT_MAX and n or nil
+    end
+    core.global_prompt_bar:enter("Query Timeout in Seconds (0 for None)", {
+      text = tostring(M.timeout(buffer)), select_text = true,
+      validate = function(text) return seconds(text) ~= nil end,
+      submit = function(text)
+        local n = seconds(text)
+        buffer.sql_timeout = n ~= config.plugins.sql_server.timeout_seconds and n or nil
+        core.status_bar:show_message("i", require("core.style").text,
+          n == 0 and "No timeout. Run again to apply it." or string.format("Timeout %d s. Run again to apply it.", n))
+        core.redraw = true
+      end,
+    })
     return true
   end),
   ["sql_server:toggle_row_limit"] = command.palette(function(view)
@@ -627,6 +652,8 @@ do
         table.insert(parts, style.warn)
         table.insert(parts, s.transaction_count and " · Transaction Open" or " · Transaction Unknown")
       end
+      local timeout = M.timeout(view.buffer)
+      if timeout > 0 then table.insert(parts, style.dim); table.insert(parts, " · Timeout " .. timeout .. " s") end
       if view.buffer.sql_row_limit == false then table.insert(parts, style.dim); table.insert(parts, " · No Row Limit")
       elseif view.buffer.sql_row_limit then
         table.insert(parts, style.dim); table.insert(parts, " · Row Limit " .. view.buffer.sql_row_limit)

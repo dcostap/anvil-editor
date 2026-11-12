@@ -6,6 +6,8 @@
 /* SQL Server's own limit for the columns of a SELECT. */
 #define SQL_QUERY_COLUMN_LIMIT 4096
 #define SQL_SESSION_LIMIT 64
+/* The largest timeout in seconds. 0 means no timeout. */
+#define SQL_QUERY_TIMEOUT_MAX 86400
 /* The largest row limit. The cell and byte limits of a run still apply. */
 #define SQL_QUERY_ROW_LIMIT 100000
 

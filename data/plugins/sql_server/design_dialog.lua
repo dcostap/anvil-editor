@@ -631,7 +631,7 @@ local function open_table(sql, c, object, alive)
       core.log_quiet("SQL Server: Table Design read connection=%s ok=%s", c.id, tostring(design ~= nil))
       if not design then core.warn("%s", reason); return end
       open_design(sql, c, design)
-    end, { max_rows = 4096 })
+    end, { max_rows = 4096, timeout = 30 })
   if not handle then core.warn("%s", err or "Could not read the table."); return false end
   return true
 end

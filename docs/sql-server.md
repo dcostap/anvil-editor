@@ -10,7 +10,7 @@ A SQL Editor without its own connection uses the Project's only connection. Comp
 
 The Dialog has no separate database sidebar.
 
-The Status Bar of a SQL Editor shows its connection, and its state when it is not Ready, such as Connecting or Failed. It also shows Auto Commit Off, an open transaction and No Row Limit when they apply. A click chooses the connection.
+The Status Bar of a SQL Editor shows its connection, and its state when it is not Ready, such as Connecting or Failed. It also shows Auto Commit Off, an open transaction, a timeout and No Row Limit when they apply. A click chooses the connection.
 
 ## Database source
 
@@ -60,7 +60,7 @@ The results View has a footer with the row count and buttons: Cancel while the S
 
 With two or more cells selected, the footer shows their aggregates in the place of the row count: the cell count, the NULL count and, when each other cell is a number, Sum, Avg, Min and Max, such as `5 cells · 1 NULL · Sum 10.64 · Avg 2.66 · Min -2 · Max 12.3400`. Values are the server's text, and pending edits count. A sum of decimal text is exact while it has at most 15 digits. A larger sum, or a value with an exponent, shows `≈`. Min and Max keep the cell's text. A text column with digits in each cell, such as postal codes, also gets a Sum.
 
-The default row limit is 1,000 per table. The execution timeout is 30 seconds after login. Set `config.plugins.sql_server.max_rows` from 1 to 100,000, and `config.plugins.sql_server.timeout_seconds` from 1 to 300.
+The default row limit is 1,000 per table. A run has no timeout by default, as in DbVisualizer. It sets no query timeout; only its calls on the event thread time out (`com/onseven/dbvis/jdbc/b/g.java`). Cancel stops a run. **SQL Server: Set Timeout** sets a timeout in seconds for one Query, and 0 removes it. Set `config.plugins.sql_server.max_rows` from 1 to 100,000, and `config.plugins.sql_server.timeout_seconds` from 0 (none) to 86,400. Metadata reads, Table Design and the result edit check keep their own short timeouts.
 
 Batches are limited to 256 KiB. Each run keeps at most 16 results, 262,144 values and 8 MiB of value text. A value holds at most 32,768 UTF-16 units. A limit only cuts what the run keeps: the SQL still runs to its end. A result after the 16th shows only a message, and a result past the value limits shows its first rows. A warning marks incomplete results. After the row limit, SQL Server still sends the rest of the result, and Anvil discards it. A very large result over a slow network can take a long time; Cancel stops it.
 

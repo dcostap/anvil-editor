@@ -220,10 +220,10 @@ static int execute_query(lua_State *L) {
   const char *sql = luaL_checklstring(L, 2, &length);
   luaL_checktype(L, 3, LUA_TTABLE);
   lua_Integer session = setting(L, "session", 0);
-  lua_Integer max_rows = setting(L, "max_rows", 1000), timeout = setting(L, "timeout", 30);
+  lua_Integer max_rows = setting(L, "max_rows", 1000), timeout = setting(L, "timeout", 0);
   luaL_argcheck(L, session >= 0 && session <= 0xffffffffLL, 3, "invalid session");
   luaL_argcheck(L, max_rows > 0 && max_rows <= SQL_QUERY_ROW_LIMIT, 3, "invalid row limit");
-  luaL_argcheck(L, timeout > 0 && timeout <= 300, 3, "invalid timeout");
+  luaL_argcheck(L, timeout >= 0 && timeout <= SQL_QUERY_TIMEOUT_MAX, 3, "invalid timeout");
   int autocommit = flag(L, "autocommit", 1), explain = flag(L, "explain", 0);
   lua_getfield(L, 3, "token");
   const char *token_name = luaL_optstring(L, -1, NULL);

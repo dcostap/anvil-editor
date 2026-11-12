@@ -19,8 +19,8 @@ function M.read_schema(options, callback)
   })
 end
 local function execution_pool() return worker_pool.named("sql-execution", { worker_count = 2 }) end
--- Settings: session, autocommit, explain and max_rows. A result can name the
--- session that the run opened.
+-- Settings: session, autocommit, explain, max_rows and timeout (seconds, 0 for none). A
+-- result can name the session that the run opened.
 function M.execute(options, text, callback, settings)
   local config = require "core.config"
   settings = settings or {}
@@ -29,7 +29,7 @@ function M.execute(options, text, callback, settings)
     payload = { operation = "execute", options = options, text = text, session = settings.session,
       autocommit = settings.autocommit ~= false, explain = settings.explain == true,
       max_rows = settings.max_rows or config.plugins.sql_server.max_rows,
-      timeout_seconds = config.plugins.sql_server.timeout_seconds },
+      timeout_seconds = settings.timeout or config.plugins.sql_server.timeout_seconds },
     on_result = function(message) callback(message.payload.value) end,
     on_error = function() callback({ error = "SQL execution worker failed." }) end,
     on_cancelled = function(message)
