@@ -210,6 +210,15 @@ static int session_checks(SqlServerOptions *options) {
   CHECK(!strcmp(result.tables[0].cells[0].text, "0"));
   sql_query_free(&result);
 
+  /* Each row count is one result. A batch with more than 100,000 of them
+   * still runs to its end. */
+  sql = "SET NOCOUNT OFF; CREATE TABLE #many (x int); DECLARE @i int = 0;\n"
+        "WHILE @i < 100005 BEGIN SET @i += 1; UPDATE #many SET x = 1; END;\n"
+        "SELECT @i AS n";
+  CHECK(run_once(options, sql, 1000, 0, NULL, NULL, &result));
+  CHECK(result.count == 1 && !strcmp(result.tables[0].cells[0].text, "100005"));
+  sql_query_free(&result);
+
   /* An idle session that the server dropped fails before its SQL is sent. A
    * live idle session runs. */
   sql_session_set_validation_idle(0);

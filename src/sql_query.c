@@ -285,12 +285,12 @@ static int read_result(Run *run, SQLHSTMT statement, SQLSMALLINT columns, unsign
   return 1;
 }
 
-/* Runs one batch and reads all of its results. A statement error does not end
- * the batch: SQL Server can run the statements after it. */
+/* Runs one batch and reads all of its results, however many there are. A
+ * statement error does not end the batch: SQL Server can run the statements
+ * after it. Cancel and a timeout stop the loop. */
 static int run_batch(Run *run, SQLHSTMT statement, const SQLWCHAR *text, int units, unsigned base_line) {
   SQLRETURN rc = SQLExecDirectW(statement, (SQLWCHAR *)text, units);
-  int first = 1;
-  for (int guard = 0; guard < 100000; ++guard, first = 0) {
+  for (int first = 1;; first = 0) {
     if (stopped(run->watch)) return 0;
     if (rc == SQL_SUCCESS_WITH_INFO || rc == SQL_ERROR)
       collect(run->out, SQL_HANDLE_STMT, statement, base_line, run->module, stopped(run->watch), &run->lost);
