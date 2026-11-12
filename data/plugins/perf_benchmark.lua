@@ -1218,7 +1218,7 @@ local function scenario_is_ready()
     local Results = require "plugins.sql_server.results"
     if view:extends(Results) then view:select_cell(2, 2, false); return true end
     local model = { headers = { "id", "name", "city", "note" }, column_count = 4,
-      missing_label = "NULL", rows = {} }
+      column_kinds = { "number", "text", "text", "text" }, missing_label = "NULL", rows = {} }
     for i = 1, 100 do
       model.rows[i] = { cells = { tostring(i), "Customer " .. i, "Lisbon", i % 2 == 0 and "" or false },
         source_line1 = i, source_line2 = i }
