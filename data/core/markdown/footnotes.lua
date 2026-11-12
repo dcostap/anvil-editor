@@ -10,18 +10,14 @@
 -- column's width. Each card edits its footnote in place.
 local core = require "core"
 local style = require "core.style"
-local syntax = require "core.syntax"
-local Buffer = require "core.buffer"
-local TextView = require "core.textview"
 local file_context = require "core.file_context"
 local markdown_model = require "core.markdown.model"
+local note_card = require "core.markdown.note_card"
 local panes = require "core.panes"
 
 local footnotes = {}
 
-local NOTE_FONT_SCALE = 0.875
-local CARD_RADIUS = 5
--- Margin cards point left at their reference line.
+-- Margin cards stand beside their reference line.
 local CARD_WIDTH = 200
 local MIN_CARD_WIDTH = 160
 local MARGIN_GAP = 30
@@ -29,13 +25,10 @@ local EDGE_GAP = 12
 local CARD_SPACING = 8
 local LABEL_GAP = 6
 local MARGIN_PAD_X, MARGIN_PAD_Y = 9, 7
-local MARGIN_POINTER_LENGTH, MARGIN_POINTER_HALF = 8, 7
--- Inline cards point up at the block above them.
-local INLINE_PAD_X, INLINE_PAD_Y = 8, 5
-local INLINE_POINTER_LENGTH, INLINE_POINTER_HALF = 14, 10
-local INLINE_POINTER_X = 40
-local INLINE_TOP = INLINE_POINTER_LENGTH + 3
-local INLINE_BOTTOM = 4
+-- Inline cards stand below the block above them.
+local INLINE_PAD_X, INLINE_PAD_Y = note_card.INLINE_PAD_X, note_card.INLINE_PAD_Y
+local INLINE_TOP = note_card.INLINE_TOP
+local INLINE_BOTTOM = note_card.INLINE_BOTTOM
 local MAX_BLOCK_LINES = 200
 local MAX_DISPLAYS = 64
 local ROW_PROVIDER = "markdown.footnotes"
@@ -48,240 +41,12 @@ local PLACEHOLDER = "Write a footnote..."
 footnotes.nodes_for_line = nil
 footnotes.presents_formatting = nil
 
--- Note input --------------------------------------------------------------
-
-local NoteBuffer = Buffer:extend()
-
-function NoteBuffer:__tostring() return "FootnoteBuffer" end
-
--- A footnote's text stays on one line.
-function NoteBuffer:normalize_edit_text(text)
-  return (tostring(text or ""):gsub("\r?\n", " "))
-end
-
-function NoteBuffer:insert(line, col, text)
-  NoteBuffer.super.insert(self, line, col, self:normalize_edit_text(text))
-end
-
--- Note text: inline Markdown ----------------------------------------------
---
--- A note shows inline Markdown as Live Preview does: styled text without its
--- syntax. The native Markdown parser reads each note, as it reads documents.
--- While a note is edited, the syntax of the node at the caret shows.
-
-local NOTE_FORMAT_PROVIDER = "markdown.footnote-format"
-local NOTE_MODEL_LISTENER = "markdown.footnote-format"
--- A new card parses on the input thread so it never shows raw syntax.
-local NOTE_SETTLE_MS = 4
-local SPAN_FONTS = {
-  strong = "prose_strong_font",
-  emphasis = "prose_emphasis_font",
-  strong_emphasis = "prose_strong_emphasis_font",
-  code = "code_font",
-}
-local FORMATTING_NODES = {
-  strong = true, emphasis = true, strong_emphasis = true,
-  strikethrough = true, highlight = true, code = true,
-}
-local LINK_NODES = { link = true, image = true, wiki_link = true, embed = true }
--- An inline style's font at the note font's size.
-local function styled_font(base, span_type)
-  local source = style[SPAN_FONTS[span_type]]
-  local size = base:get_size()
-  -- Code keeps the size it has beside prose in the document.
-  if span_type == "code" then
-    size = size * source:get_size() / style.markdown_body_font:get_size()
-  end
-  return style.get_scaled_font(source, size)
-end
-
-local function reveal_col(view)
-  if core.active_view ~= view then return nil end
-  local _, col = view.buffer:get_selection()
-  return col
-end
-
--- The shown text of a link node: its label, or a wiki link's alias or target.
-local function link_text_range(source, node)
-  local attributes = node.attributes or {}
-  local range = attributes.link_text or attributes.image_alt or attributes.alias
-    or attributes.target or attributes.link_destination
-  if range and range.line1 == 1 and range.line2 == 1 then return range.col1, range.col2 end
-  return node.source.col1, node.source.col2
-end
-
-local function note_nodes(view)
-  local instance = view.note_model
-  if not instance then return nil end
-  return instance:nodes_for_lines(1, 1, { allow_pending_result = true })
-end
-
-local function note_render(view, source)
-  local nodes = note_nodes(view)
-  if not nodes then return nil end
-  local base = view:get_font()
-  local caret = reveal_col(view)
-  local bounds = { [1] = true, [#source + 1] = true }
-  local hidden, styled = {}, {}
-  local function mark(col1, col2, kind, revealed)
-    if col2 <= col1 then return end
-    bounds[col1], bounds[col2] = true, true
-    if kind == "syntax" and not revealed then
-      hidden[#hidden + 1] = { col1, col2 }
-    else
-      styled[#styled + 1] = { col1, col2, kind }
-    end
-  end
-  for _, node in ipairs(nodes) do
-    local range = node.source
-    if range.line1 == 1 and (range.line2 or 1) == 1
-      and (FORMATTING_NODES[node.type] or LINK_NODES[node.type])
-    then
-      local revealed = caret ~= nil and caret >= range.col1 and caret <= range.col2
-      if LINK_NODES[node.type] then
-        local col1, col2 = link_text_range(source, node)
-        mark(range.col1, col1, "syntax", revealed)
-        mark(col1, col2, "link")
-        mark(col2, range.col2, "syntax", revealed)
-      else
-        mark(range.col1, range.col2, node.type)
-        for _, marker in ipairs(node.marker_ranges or {}) do
-          if marker.line1 == 1 then mark(marker.col1, marker.col2, "syntax", revealed) end
-        end
-      end
-    end
-  end
-  local cols = {}
-  for col in pairs(bounds) do cols[#cols + 1] = col end
-  table.sort(cols)
-  local fragments = {}
-  for i = 1, #cols - 1 do
-    local col1, col2 = cols[i], cols[i + 1]
-    local is_hidden = false
-    for _, range in ipairs(hidden) do
-      if range[1] <= col1 and range[2] >= col2 then is_hidden = true break end
-    end
-    if is_hidden then
-      fragments[#fragments + 1] = { source_col1 = col1, source_col2 = col2, hidden = true }
-    else
-      local kinds = {}
-      for _, range in ipairs(styled) do
-        if range[1] <= col1 and range[2] >= col2 then kinds[range[3]] = true end
-      end
-      local bold = kinds.strong or kinds.strong_emphasis
-      local italic = kinds.emphasis or kinds.strong_emphasis
-      -- Revealed syntax keeps the plain note font.
-      local font = kinds.syntax and base
-        or kinds.code and styled_font(base, "code")
-        or bold and italic and styled_font(base, "strong_emphasis")
-        or bold and styled_font(base, "strong")
-        or italic and styled_font(base, "emphasis")
-        or base
-      fragments[#fragments + 1] = {
-        source_col1 = col1, source_col2 = col2,
-        text = source:sub(col1, col2 - 1),
-        font = font,
-        color = kinds.syntax and style.markdown_live_hidden_syntax
-          or kinds.link and style.markdown_live_link or style.text,
-        background = kinds.code and style.markdown_live_inline_code_bg
-          or kinds.highlight and style.markdown_live_highlight_bg or nil,
-        underline = kinds.link or nil,
-        strikethrough = kinds.strikethrough or nil,
-      }
-    end
-  end
-  return { fragments = fragments }
-end
-
-local note_format_provider = {
-  line_generation = function(_, view)
-    return table.concat({
-      tostring(view:get_font()), tostring(reveal_col(view) or 0),
-      tostring(view.note_model and view.note_model.generation or 0),
-    }, ":")
-  end,
-  render_line = function(_, view, _, context)
-    return note_render(view, context.source_text)
-  end,
-}
-
-local NoteInput = TextView:extend()
-
-function NoteInput:__tostring() return "FootnoteInput" end
-
-function NoteInput:new(owner)
-  NoteInput.super.new(self, NoteBuffer())
-  self.footnote_input = true
-  self.footnote_owner = owner
-  self.font = "markdown_body_font"
-  self.scrollable = false
-  self.hide_scrollbars = true
-  self.show_current_line_highlight = false
-  self.wrap_continuation_flush = true
-  self:set_wrapping_enabled(true)
-  self:add_line_render_provider(NOTE_FORMAT_PROVIDER, note_format_provider)
-  -- Markdown syntax makes the note a Markdown Model buffer. It has no file
-  -- name, so autosave never writes it to disk.
-  self.buffer:set_syntax(syntax.get("footnote.md"), "footnote")
-  self.note_model = markdown_model.get(self.buffer)
-  self.note_model:add_listener(NOTE_MODEL_LISTENER, function()
-    self:invalidate_line_render(NOTE_FORMAT_PROVIDER)
-    core.redraw = true
-  end)
-end
-
-function NoteInput:close_model()
-  if not self.note_model then return end
-  self.note_model = nil
-  markdown_model.close(self.buffer, "footnote closed")
-end
-
-function NoteInput:get_text()
-  return self.buffer:get_text(1, 1, math.huge, math.huge)
-end
-
-function NoteInput:set_text(text)
-  self.buffer:remove(1, 1, math.huge, math.huge)
-  self.buffer:insert(1, 1, text or "")
-  self.buffer:clear_undo_redo()
-  self.buffer:set_selection(1, math.huge, 1, math.huge)
-  self.note_model:settle(NOTE_SETTLE_MS)
-end
-
-function NoteInput:get_gutter_width() return 0, 0 end
-function NoteInput:draw_line_gutter() return self:get_line_height() end
-function NoteInput:draw_line_highlight() end
-function NoteInput:draw_scrollbar() end
-function NoteInput:draw_background() end
-function NoteInput:draw_content_left_edge() end
-function NoteInput:draw_soft_wrap_continuation_indicators() end
-
--- Notes read a step smaller than the prose they annotate.
-function NoteInput:get_font()
-  local base = style.markdown_body_font
-  return style.get_scaled_font(base, base:get_size() * NOTE_FONT_SCALE)
-end
-
--- Cards show and edit a note in the same wrapped shape.
-function NoteInput:compute_wrap_width()
-  return math.max(1, self.size.x)
-end
-
----Wrap the text to `width` and return its height. The view stays in place.
-function NoteInput:measure(width)
-  if self.size.x ~= width then self.size.x = width end
-  self:update_wrap_cache()
-  return math.max(1, self:get_total_visual_lines()) * self:get_line_height()
-end
-
----Place the text with its first row at (`x`, `top`), wrapped to `width`.
-function NoteInput:fit_card(x, top, width)
-  local height = self:measure(width)
-  -- The text view draws its first row one padding below its top.
-  self.position.x, self.position.y = x, top - style.padding.y
-  self.size.y = height + style.padding.y * 2
-  self.scroll.x, self.scroll.y, self.scroll.to.x, self.scroll.to.y = 0, 0, 0, 0
-  return height
+-- A note editor or display that knows its Live Preview view.
+local function new_input(owner)
+  local input = note_card.Text()
+  input.footnote_input = true
+  input.footnote_owner = owner
+  return input
 end
 
 -- Footnotes ---------------------------------------------------------------
@@ -290,7 +55,7 @@ end
 -- definition line. An inline footnote is `^[text]` and holds its own text.
 -- Both show the number that Pandoc gives them: their order in the document.
 
-local function scaled(value) return math.floor(value * SCALE + 0.5) end
+local scaled = note_card.scaled
 
 local function line_text(buffer, line)
   return (buffer.lines[line] or ""):gsub("\n$", "")
@@ -630,7 +395,7 @@ function footnotes.begin_edit(view, note, opts)
     return current.input
   end
   if current then end_edit(view, true) end
-  local input = NoteInput(view)
+  local input = new_input(view)
   file_context.exclude_content_view(input)
   input:set_text(note.text)
   view.__footnote_edit = { note = note, input = input, created = opts.created }
@@ -862,7 +627,7 @@ local function display_for(view, text)
   end
   local display = displays.views[text]
   if not display then
-    display = NoteInput(view)
+    display = new_input(view)
     display:set_text(text)
     displays.views[text] = display
     displays.count = displays.count + 1
@@ -1266,29 +1031,11 @@ end
 
 -- Drawing -----------------------------------------------------------------
 
-local function draw_pointer(card, color)
-  local x, y = card.x, card.y
-  if card.pointer == "up" then
-    local half, length = scaled(INLINE_POINTER_HALF), scaled(INLINE_POINTER_LENGTH)
-    local cx = x + scaled(INLINE_POINTER_X) + half
-    renderer.draw_poly({ { cx - half, y + 1 }, { cx, y - length }, { cx + half, y + 1 } }, color)
-    return
-  end
-  -- The pointer stays within the flat part of the card's edge.
-  local radius = scaled(CARD_RADIUS)
-  local half = math.min(scaled(MARGIN_POINTER_HALF), math.floor(card.h / 2) - radius)
-  local length = math.floor(scaled(MARGIN_POINTER_LENGTH) * half / scaled(MARGIN_POINTER_HALF))
-  local low, high = y + radius + half, y + card.h - radius - half
-  local tip_y = low <= high and math.max(low, math.min(high, card.reference_mid)) or y + math.floor(card.h / 2)
-  renderer.draw_poly({ { x + 1, tip_y - half }, { x - length, tip_y }, { x + 1, tip_y + half } }, color)
-end
-
 local function draw_card(card, hovered)
   local emphasized = card.editing or card.current or hovered
   local color = emphasized and style.markdown_footnote_card_active_bg
     or style.markdown_footnote_card_bg
-  draw_pointer(card, color)
-  renderer.draw_rounded_rect(card.x, card.y, card.w, card.h, scaled(CARD_RADIUS), color)
+  note_card.draw_frame(card, color)
   local text_view = card.text_view
   -- Cards that share a display view each place it before drawing.
   text_view.position.x, text_view.position.y = card.text_left, card.text_top
