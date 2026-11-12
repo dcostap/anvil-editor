@@ -3,6 +3,29 @@ local numbered = require "core.numbered_panes"
 
 -- Seam: the shared numbering and navigation API consumes Project reports and seen times.
 test.describe("Pending Pane numbers", function()
+  -- Most cases check the order. One case checks the hold of a new event.
+  local hold = numbered.HOLD
+  test.before_each(function() numbered.HOLD = 0 end)
+  test.after_each(function() numbered.HOLD = hold end)
+
+  test.it("keeps the shown numbers until a new pending event has waited its hold", function()
+    numbered.HOLD = 0.2
+    local projects = {{path = "C:/hold", panes = {
+      {id = "old", terminal = {session = "old", state = "running", bell = 10}},
+      {id = "new", terminal = {session = "new", state = "running"}}}}}
+    local function wait_until(time) while system.get_time() < (time or 0) do coroutine.yield(0.01) end end
+    local _, _, release = numbered.numbers(projects, {})
+    wait_until(release)
+    test.equal(numbered.target(projects, 1, {}).id, "old")
+    projects[1].panes[2].terminal.bell = 20
+    test.equal(numbered.target(projects, 1, {}).id, "old")
+    test.is_nil(numbered.target(projects, 2, {}))
+    _, _, release = numbered.numbers(projects, {})
+    wait_until(release)
+    test.equal(numbered.target(projects, 1, {}).id, "new")
+    test.equal(numbered.target(projects, 2, {}).id, "old")
+  end)
+
   test.it("gives each Window its own pending and recent numbers", function()
     local projects = {
       {path = "C:/A", window_id = 1, panes = {

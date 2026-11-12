@@ -276,7 +276,7 @@ The note ends when the Sidebar model shows new work after the wake: an agent tur
 Run `ui/snoozed_panes.lua`, `ui/sidebar_view.lua`, `ui/pending_panes.lua` and the `terminal-focus` shell probe after changes.
 
 Tabs show Pane numbers shared by the Projects in their Window, not Tab positions. Each Window has its own numbers. `core.numbered_panes` selects `core.pending_panes`.
-Unread Results and agents waiting for an answer get numbers 1 to 5, newest pending event first.
+Unread Results and agents waiting for an answer get numbers 1 to 5, newest pending event first. A new event takes its number after `pending_panes.HOLD` (0.25 s), so a number key still reaches the Pane that the user saw. The Sidebar and the Title Bar draw again at that time.
 The Sidebar passes its shared seen times. Projects read the persisted seen times with a short cache.
 Recent Panes fill unused numbers after Pending Panes, without duplicates. The current Pane gets no focus-history slot.
 `core.recent_panes` supplies the focus history. There is no numbering setting.

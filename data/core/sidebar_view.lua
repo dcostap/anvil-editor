@@ -797,7 +797,9 @@ function SidebarView:rebuild_rows()
     selected_projects[window.selected_project] = true
     if window.id == window_id then selected = window.selected_project end
   end
-  local numbers = numbered_panes.numbers(projects, self.seen, self.snoozes, window_id)
+  local numbers, _, numbers_release = numbered_panes.numbers(projects, self.seen, self.snoozes, window_id)
+  -- The rows change when a held pending event takes its number.
+  self.numbers_release = numbers_release
   -- The next Snooze time. The rows change then.
   self.next_snooze = nil
   for _, time in pairs(self.snoozes) do
@@ -1903,10 +1905,12 @@ function SidebarView:on_mouse_wheel(amount, height, y)
   if self.hover_y then self:update_hover() end
 end
 
--- Whether a minute passed since the last layout, so ages and groups need an update.
+-- Whether a minute passed since the last layout, so ages and groups need an update, or a held pending event
+-- takes its number.
 function SidebarView:refresh_ages()
   local now = os.time()
-  if math.floor(now / 60) == self.built_minute and not (self.next_snooze and now >= self.next_snooze) then
+  if math.floor(now / 60) == self.built_minute and not (self.next_snooze and now >= self.next_snooze)
+    and not (self.numbers_release and system.get_time() >= self.numbers_release) then
     return false
   end
   self:rebuild_rows()

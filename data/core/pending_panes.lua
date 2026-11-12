@@ -76,9 +76,41 @@ function pending.order(projects, seen, snoozes, window_id)
   return list
 end
 
+-- A new pending event waits HOLD seconds before it takes a number, so a number key that the user presses for the
+-- shown numbers still reaches the shown Pane. Each process times the events that it sees.
+pending.HOLD = 0.25
+local arrivals, arrival_count = {}, 0
+
+-- Removes the events that arrived less than HOLD ago.
+-- Returns the rest and the time when the next held event takes its number.
+local function hold(order)
+  local now, kept, release = system.get_time(), {}, nil
+  for _, item in ipairs(order) do
+    local event = pending.key(item.path, item.id) .. "@" .. item.since
+    local arrival = arrivals[event]
+    if not arrival then
+      arrival, arrival_count = {at = now}, arrival_count + 1
+      arrivals[event] = arrival
+    end
+    arrival.checked = now
+    if now - arrival.at >= pending.HOLD then
+      kept[#kept + 1] = item
+    else
+      release = math.min(release or math.huge, arrival.at + pending.HOLD)
+    end
+  end
+  if arrival_count > 256 then
+    for event, arrival in pairs(arrivals) do
+      if now - arrival.checked > 3600 then arrivals[event], arrival_count = nil, arrival_count - 1 end
+    end
+  end
+  return kept, release
+end
+
+-- Returns the numbers, the numbered order and the time when a held event takes its number.
 function pending.numbers(projects, seen, snoozes, window_id)
-  local order, numbers = pending.order(projects, seen, snoozes, window_id), {}
-  local included = {}
+  local order, release = hold(pending.order(projects, seen, snoozes, window_id))
+  local numbers, included = {}, {}
   for _, item in ipairs(order) do included[pending.key(item.path, item.id)] = true end
   -- Skip the current Pane before filtering duplicates. It can itself be pending.
   local history = recent.order(projects, window_id)
@@ -95,7 +127,7 @@ function pending.numbers(projects, seen, snoozes, window_id)
     local item = order[number]
     numbers[pending.key(item.path, item.id)] = number
   end
-  return numbers, order
+  return numbers, order, release
 end
 
 function pending.target(projects, number, seen, snoozes, window_id)
@@ -137,9 +169,20 @@ function pending.local_attention()
   return result
 end
 
+local redraw_at
+
 function pending.local_numbers()
   local projects, path = model()
-  local numbers, result = pending.numbers(projects), {}
+  local numbers, _, release = pending.numbers(projects)
+  -- Draw the held event's number when it takes it.
+  if release and release ~= redraw_at then
+    redraw_at = release
+    core.add_thread(function()
+      coroutine.yield(math.max(0, release - system.get_time()))
+      core.redraw = true
+    end)
+  end
+  local result = {}
   for _, pane in ipairs(projects[#projects].panes) do result[pane.id] = numbers[pending.key(path, pane.id)] end
   return result
 end

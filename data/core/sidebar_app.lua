@@ -764,6 +764,8 @@ function core.run_step()
       -- A new Peek moves the cursor's highlight, so the next frame draws at once.
       if visible and surface.view:update_peek(now) then core.redraw, surface.spin_at = true, now end
       if surface.view.peek_due then surface.spin_at = math.min(surface.spin_at or math.huge, surface.view.peek_due) end
+      local release = surface.view.numbers_release
+      if release then surface.spin_at = math.min(surface.spin_at or math.huge, release) end
       if not visible then surface.spin_at = nil end
       if surface.spin_at then spin_at = math.min(spin_at or math.huge, surface.spin_at) end
       if surface.view.next_snooze then

@@ -121,6 +121,8 @@ test.describe("Global title bar Pane entries", function()
   end)
 
   test.it("keeps Tab order while numbering pending Panes newest first", function()
+    local numbered, hold = require "core.numbered_panes", require("core.numbered_panes").HOLD
+    numbered.HOLD = 0
     local one = panes.create { factory = factory("alpha.lua") }
     local two = panes.split(one, "right", { factory = factory("beta.lua") })
     local three = panes.create { factory = factory("settings") }
@@ -141,6 +143,7 @@ test.describe("Global title bar Pane entries", function()
     test.equal(entries[1].label, "1 alpha.lua")
     test.equal(entries[2].label, "beta.lua")
     test.equal(entries[3].label, "2 settings")
+    numbered.HOLD = hold
   end)
 
   test.it("marks the active Pane and its visible group", function()

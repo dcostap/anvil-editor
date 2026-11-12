@@ -1799,6 +1799,10 @@ test.describe("Sidebar search editing", function()
 end)
 
 test.describe("Sidebar pending Pane numbers", function()
+  local numbered = require "core.numbered_panes"
+  local hold = numbered.HOLD
+  test.before_each(function() numbered.HOLD = 0 end)
+  test.after_each(function() numbered.HOLD = hold end)
   -- Two Projects in two Windows. `stamped` gives the Panes pending results.
   local function model(stamped)
     local function at(time) return stamped and time or nil end
