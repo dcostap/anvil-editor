@@ -54,6 +54,7 @@ test.describe("SQL Queries", function()
     if context.original_end then require("plugins.sql_server.backend").end_transaction = context.original_end end
     if context.original_close then require("plugins.sql_server.backend").close_session = context.original_close end
     if context.nag_show then core.nag_view.show = context.nag_show end
+    if context.original_warn then core.warn = context.original_warn end
     require("plugins.sql_server.backend").read_definition = context.original_definition
     if context.original_columns then require("plugins.sql_server.backend").read_columns = context.original_columns end
     if context.connection_id then require("plugins.sql_server").remove(context.connection_id) end
@@ -359,6 +360,48 @@ test.describe("SQL Queries", function()
     panes.focus(panes.pane_for_view(result))
     test.ok(command.perform("sql_server:view_as_csv"))
     test.equal(core.active_view.buffer.lines[2], '3,"two\n')
+  end)
+
+  test.it("views a cell's whole value in a text Pane, as JSON or XML when it is", function(context)
+    local editor = connected_query(context)
+    local long = string.rep("x", 40000)
+    require("plugins.sql_server.backend").execute = function(_, _, callback)
+      callback({ results = { {
+        headers = { "doc", "note" }, column_count = 2,
+        rows = {
+          { cells = { ' {"a": [1, 2]}', "two\nlines" }, source_line1 = 1, source_line2 = 1 },
+          { cells = { "<root><a/></root>", false }, source_line1 = 2, source_line2 = 2 },
+          { cells = { long, "" }, source_line1 = 3, source_line2 = 3, cut = { [1] = true } },
+        },
+        distinct_values = {},
+      } }, messages = {} })
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("SELECT 1")
+    editor.buffer:set_selection(1, 1, 1, 9)
+    test.ok(command.perform("sql_server:run_selection"))
+    local result = editor.buffer.sql_results
+    local function view(row, column)
+      panes.focus(panes.pane_for_view(result))
+      result:select_cell(row, column, false)
+      return command.perform("sql_server:view_cell")
+    end
+    test.ok(view(1, 1))
+    test.equal(core.active_view.buffer:get_text(1, 1, math.huge, math.huge), ' {"a": [1, 2]}')
+    test.equal(core.active_view.buffer.syntax.name, "JSON")
+    test.ok(view(1, 2))
+    test.equal(core.active_view.buffer:get_text(1, 1, math.huge, math.huge), "two\nlines")
+    test.ok(view(2, 1))
+    test.equal(core.active_view.buffer.syntax.name, "XML")
+    local warnings = {}
+    context.original_warn = core.warn
+    core.warn = function(format, ...) warnings[#warnings + 1] = string.format(format, ...) end
+    view(2, 2)
+    test.equal(core.active_view, result)
+    test.ok(view(3, 1))
+    core.warn = context.original_warn
+    test.equal(#core.active_view.buffer:get_text(1, 1, math.huge, math.huge), 40000)
+    test.same(warnings, { "The value is NULL.", "SQL Server sent more of this value. Anvil keeps its first 32,768 characters." })
   end)
 
   test.it("scripts result edits by the table's key in a new Query and runs nothing", function(context)

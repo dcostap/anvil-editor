@@ -199,6 +199,7 @@ static int read_value(SQLHSTMT statement, unsigned column, SqlQueryCell *out, in
   if (capped && used && text[used - 1] >= 0xd800 && text[used - 1] <= 0xdbff) --used;
   out->text = utf8(text, (int)used, &out->length);
   if (!out->text) goto done;
+  out->cut = (unsigned char)capped;
   *bytes += out->length;
   ok = 1;
 done:

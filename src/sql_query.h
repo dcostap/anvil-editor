@@ -15,9 +15,12 @@
 /* The largest row limit. The cell and byte limits of a run still apply. */
 #define SQL_QUERY_ROW_LIMIT 100000
 
+/* A cell's UTF-8 text, or NULL for SQL NULL. `cut` marks a value that had
+ * more than the 32,768 UTF-16 units that a cell keeps. */
 typedef struct {
   char *text;
   size_t length;
+  unsigned char cut;
 } SqlQueryCell;
 typedef struct {
   char **columns;

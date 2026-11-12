@@ -44,7 +44,8 @@ static int execution_checks(SqlServerOptions *options) {
   sql = "SELECT 1 AS id UNION ALL SELECT 2; SELECT REPLICATE(CAST(N'x' AS nvarchar(max)),40000) AS long_value";
   CHECK(run_once(options, sql, 1, 30, NULL, NULL, &result));
   CHECK(result.count == 2 && result.tables[0].row_count == 1 && result.tables[0].truncated);
-  CHECK(result.tables[1].truncated && result.tables[1].cells[0].length == 32768);
+  CHECK(result.tables[1].truncated && result.tables[1].cells[0].length == 32768 && result.tables[1].cells[0].cut);
+  CHECK(!result.tables[0].cells[0].cut);
   sql_query_free(&result);
 
   /* A result limit cuts only what the run keeps. The later statements still run. */
@@ -73,6 +74,7 @@ static int execution_checks(SqlServerOptions *options) {
         "SELECT N'kept' AS value; PRINT N'after big';";
   CHECK(run_once(options, sql, 1000, 30, NULL, NULL, &result));
   CHECK(result.count == 2 && result.limited && result.tables[0].truncated && result.tables[0].row_count == 256);
+  CHECK(result.tables[0].cells[0].length == 32768 && !result.tables[0].cells[0].cut);
   CHECK(has_message(&result, "after big"));
   sql_query_free(&result);
 

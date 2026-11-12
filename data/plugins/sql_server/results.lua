@@ -12,7 +12,7 @@ function Results:__tostring() return "SQLResults" end
 local function open_text(text, mode)
   local buffer = core.open_buffer()
   require("plugins.untitled_tabs").tag_buffer(buffer)
-  buffer:set_language_mode(mode, { reason = "SQL Result text" })
+  if mode then buffer:set_language_mode(mode, { reason = "SQL Result text" }) end
   buffer:insert(1, 1, text)
   buffer:clear_undo_redo()
   buffer:set_selection(1, 1)
@@ -294,6 +294,7 @@ function Results:on_mouse_pressed(button, x, y, clicks)
   end
   return require("core.context_menu").open(x, y, {
     { label = "Copy", command = "tabular_data:copy_selection" },
+    { label = "View Cell", command = "sql_server:view_cell" },
     { label = "Edit Cell", command = "sql_server:edit_cell" },
     { label = "Set to NULL", command = "sql_server:set_cell_null" },
     { label = "Delete Rows", command = "sql_server:delete_rows" },
@@ -350,6 +351,22 @@ function Results:edit_cell()
       submit = function(text) if self.edits then self:set_value(row, column, text) end end,
     })
   end)
+end
+
+-- Opens the focused cell's value in a new text Pane, as JSON or XML when it
+-- looks like either, like DbVisualizer's cell viewers.
+function Results:view_cell()
+  local row, column, display_row = self:focus_cell()
+  if not row then return false end
+  local value = self:cell_value(display_row, column)
+  if value == false then core.warn("The value is NULL."); return false end
+  local edited = self.edits and self.edits[row] and self.edits[row][column] ~= nil
+  local first = value:match("^%s*(.)")
+  open_text(value, (first == "{" or first == "[") and "json" or first == "<" and "xml" or nil)
+  if row.cut and row.cut[column] and not edited then
+    core.warn("SQL Server sent more of this value. Anvil keeps its first 32,768 characters.")
+  end
+  return true
 end
 
 function Results:set_cells_null()
@@ -432,6 +449,12 @@ command.add(Results, {
   ["sql_server:next_result"] = function(view) view:show_result((view.result_index or 0) + 1) end,
   ["sql_server:previous_result"] = function(view) view:show_result((view.result_index or 2) - 1) end,
   ["sql_server:messages"] = show_messages,
+})
+command.add(function()
+  local view = core.active_view
+  return view and view:is(Results) and view.selection_focus ~= nil and view:focus_cell() ~= nil, view
+end, {
+  ["sql_server:view_cell"] = function(view) return view:view_cell() end,
 })
 command.add(function()
   local view = core.active_view

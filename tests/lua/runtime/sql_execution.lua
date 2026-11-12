@@ -55,6 +55,12 @@ test.describe("SQL execution input", function()
     test.equal(await(reply).error, nil)
     test.ok(reply.value.schema_changed)
     reply = {}
+    backend.execute(connection, "SELECT REPLICATE(CAST(N'x' AS nvarchar(max)), 40000) AS a, N'b' AS b",
+      function(value) reply.value = value end)
+    local row = await(reply).results[1].rows[1]
+    test.same(row.cut, { [1] = true })
+    test.equal(#row.cells[1], 32768)
+    reply = {}
     backend.read_definition(connection, { schema = "roundtrip", name = "child" }, function(value, err)
       reply.value = value or { error = err }
     end)

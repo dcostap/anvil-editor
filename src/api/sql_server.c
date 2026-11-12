@@ -198,12 +198,21 @@ static void push_result(lua_State *L, SqlQueryResult *result) {
       lua_pushinteger(L, (lua_Integer)row + 1); lua_setfield(L, -2, "source_line1");
       lua_pushinteger(L, (lua_Integer)row + 1); lua_setfield(L, -2, "source_line2");
       lua_createtable(L, (int)t->column_count, 0);
+      int cut = 0;
       for (size_t col = 0; col < t->column_count; ++col) {
         SqlQueryCell *cell = &t->cells[row * t->column_count + col];
         if (cell->text) lua_pushlstring(L, cell->text, cell->length); else lua_pushboolean(L, 0);
         lua_rawseti(L, -2, (int)col + 1);
+        cut |= cell->cut;
       }
       lua_setfield(L, -2, "cells");
+      /* A row with a cut value names its columns: cut = { [column] = true }. */
+      if (cut) {
+        lua_newtable(L);
+        for (size_t col = 0; col < t->column_count; ++col)
+          if (t->cells[row * t->column_count + col].cut) { lua_pushboolean(L, 1); lua_rawseti(L, -2, (int)col + 1); }
+        lua_setfield(L, -2, "cut");
+      }
       lua_rawseti(L, -2, (int)row + 1);
     }
     lua_setfield(L, -2, "rows");
