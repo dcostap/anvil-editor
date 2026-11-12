@@ -698,8 +698,18 @@ function Preview:copy_as_markdown()
   return true
 end
 
--- Each selected column's values on one line, separated by commas. Missing
--- and empty values stay out.
+-- A value of a comma list. A value with a comma, a quote, a line break or
+-- space at an end is in double quotes, as in CSV, so it stays one value.
+-- DbVisualizer's list does not quote (QuoteTextData=None in ic/g_.java).
+local function list_value(value)
+  if value:find('[,"\r\n]') or value:find("^%s") or value:find("%s$") then
+    return '"' .. value:gsub('"', '""') .. '"'
+  end
+  return value
+end
+
+-- Each selected column's values, separated by commas, with a new line for
+-- each column. Missing and empty values stay out.
 function Preview:copy_as_comma_list()
   local row1, column1, row2, column2 = self:selection_bounds()
   if not row1 then return false end
@@ -708,7 +718,7 @@ function Preview:copy_as_comma_list()
     local values = {}
     for row = row1, row2 do
       local value = self:cell_value(row, column)
-      if value and value ~= "" then values[#values + 1] = tostring(value) end
+      if value and value ~= "" then values[#values + 1] = list_value(tostring(value)) end
     end
     lines[#lines + 1] = table.concat(values, ", ")
   end
