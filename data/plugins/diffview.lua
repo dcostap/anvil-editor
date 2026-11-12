@@ -15,6 +15,7 @@ local panes = require "core.panes"
 local diff_model = require "plugins.diff.model"
 local FragmentBuffer = require "plugins.diff.fragment_buffer"
 local UnifiedView = require "plugins.diff.unified_view"
+local diff_notes = require "plugins.diff.notes"
 
 ---Configuration options for `diffview` plugin.
 ---@class config.plugins.diffview
@@ -524,6 +525,7 @@ function DiffView:new(a, b, compare_type, names)
   self.side_buffers = { buffer_a, buffer_b }
   self.side_owns = { owns_a, owns_b }
   self.owned_buffers = { [buffer_a] = owns_a, [buffer_b] = owns_b }
+  self.diff_notes = diff_notes.create(self.side_buffers, self.request.notes)
   self.retained_buffers = {}
   local function retain_registered(buffer)
     local registry = core.buffer_registry
@@ -822,6 +824,7 @@ function DiffView:update_diff(scroll_source)
     self.a_changes = model.a_changes
     self.b_changes = model.b_changes
     self.diff_equal_blocks = model.equal_blocks
+    self:place_notes()
     self.unified_view:set_projection(projection)
     self:rebuild_diff_folds()
     self:refresh_core_gap_rows(true)
@@ -851,6 +854,35 @@ function DiffView:update_diff(scroll_source)
   core.threads[idx].diff_viewer = diff_updater_idx
   self.updater_idx = diff_updater_idx
   diff_updater_idx = diff_updater_idx + 1
+end
+
+---The index of the Diff Side that holds a Diff Note.
+function DiffView:note_side(note)
+  return note.buffer == self.side_buffers[1] and 1 or note.buffer == self.side_buffers[2] and 2 or nil
+end
+
+-- Card heights follow the width of the side that shows the card.
+function DiffView:note_generation()
+  return table.concat({ self.buffer_view_a.size.x, self.buffer_view_b.size.x, self.unified_view.size.x }, ":")
+end
+
+---Place the Diff Notes' rows on both sides after a diff update.
+function DiffView:place_notes()
+  if #self.diff_notes == 0 then return end
+  diff_notes.refresh_lines(self.diff_notes)
+  self.note_rows = diff_notes.place_sides(self.diff_notes, self.diff_model and self.diff_model.alignment,
+    { self.buffer_view_a, self.buffer_view_b }, function(note) return self:note_side(note) end)
+  for _, view in ipairs { self.buffer_view_a, self.buffer_view_b } do
+    view:invalidate_visual_rows(diff_notes.ROWS)
+    view:invalidate_visual_metrics(diff_notes.ROWS)
+  end
+end
+
+---The unchanged blocks that can fold: noted lines never fold.
+function DiffView:foldable_blocks()
+  return diff_notes.split_equal_blocks(self.diff_equal_blocks or {}, self.diff_notes, function(note)
+    return self:note_side(note) == 1 and "a" or "b"
+  end)
 end
 
 local function point_in_diff_side(view, x, y)
@@ -1393,7 +1425,7 @@ function DiffView:save_diff_fold_state()
   end
 
   if not next(by_identity) then
-    local candidates, fresh_identity_counts = diff_fold_candidates(self, self.diff_equal_blocks or {}, opts)
+    local candidates, fresh_identity_counts = diff_fold_candidates(self, self:foldable_blocks(), opts)
     for _, candidate in ipairs(candidates) do
       if fresh_identity_counts[candidate.identity] == 1 then by_identity[candidate.identity] = {
         identity = candidate.identity,
@@ -1464,7 +1496,7 @@ function DiffView:rebuild_diff_folds()
     context_lines = config.plugins.diffview.fold_context_lines or 6,
     min_lines = config.plugins.diffview.fold_min_lines or 16,
   }
-  local candidates, identity_counts = diff_fold_candidates(self, self.diff_equal_blocks or {}, opts)
+  local candidates, identity_counts = diff_fold_candidates(self, self:foldable_blocks(), opts)
   self.diff_fold_identity_counts = identity_counts
   local cache = self:fold_state_cache()
   local state_map = cache_state_map(cache, not self.folding_enabled)
@@ -1500,7 +1532,7 @@ function DiffView:expand_fold(fold)
     context_lines = config.plugins.diffview.fold_context_lines or 6,
     min_lines = config.plugins.diffview.fold_min_lines or 16,
   }
-  local _, identity_counts = diff_fold_candidates(self, self.diff_equal_blocks or {}, opts)
+  local _, identity_counts = diff_fold_candidates(self, self:foldable_blocks(), opts)
   if (identity_counts[fold.identity] or 0) == 1 then
     local cache = self:fold_state_cache()
     cache.default_expanded = not self.folding_enabled
@@ -1992,6 +2024,12 @@ function DiffView:install_view_integrations()
     side.view:add_edit_guard(provider_id, function()
       return self:side_edit_permission(side.is_a and 1 or 2)
     end)
+    if #self.diff_notes > 0 then
+      local index = side.is_a and 1 or 2
+      diff_notes.install(side.view, function(placement, line)
+        return diff_notes.rows_for(self.note_rows and self.note_rows[index], placement, line)
+      end, function() return self:note_generation() end)
+    end
     side.view.buffer:add_text_change_listener("diff-view-" .. side.id .. "-" .. tostring(self), {
       after_change = function()
         local reset = self.request.user_data and self.request.user_data.on_navigation_state_change
@@ -2039,6 +2077,7 @@ function DiffView:dispose_integrations()
     side.view:remove_fold_listener("diff-view")
     side.view:remove_edit_guard("diff-view")
     side.view:remove_visual_row_provider("diff-gaps")
+    diff_notes.uninstall(side.view)
     side.view.buffer:remove_text_change_listener("diff-view-" .. side.id .. "-" .. tostring(self))
   end
   self.diff_generation = (self.diff_generation or 0) + 1
@@ -2071,6 +2110,7 @@ function DiffView:dispose_owned_buffers(opts)
   opts = opts or {}
   self.owned_buffers_disposed = true
   self.unified_view:on_close()
+  diff_notes.dispose(self.diff_notes)
   if core.buffer_registry then
     for buffer in pairs(self.retained_buffers or {}) do
       core.buffer_registry:release(buffer, self)
