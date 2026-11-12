@@ -197,8 +197,14 @@ function M.bind(buffer, id)
   changed()
   return true
 end
+-- A SQL Editor without its own connection uses the Project's only connection.
+-- This only finds the connection. It never connects.
 function M.connection_for(buffer)
-  return buffer and M.find(buffer.sql_connection_id)
+  if not buffer then return end
+  local c = buffer.sql_connection_id and M.find(buffer.sql_connection_id)
+  if c or not (buffer.syntax and buffer.syntax.name == "SQL") then return c end
+  M.load()
+  if #M.connections == 1 then return M.connections[1] end
 end
 
 function M.is_sql(view)

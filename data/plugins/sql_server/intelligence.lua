@@ -44,7 +44,7 @@ local function source_object(state, source)
 end
 local function context(view, sql)
   local buffer = view and view.buffer
-  if not buffer or not buffer.sql_connection_id then return end
+  if not buffer then return end
   local c = sql.connection_for(buffer)
   if not c or not c.catalog then return end
   local line, col, line2, col2 = buffer:get_selection()

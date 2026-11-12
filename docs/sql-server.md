@@ -4,7 +4,9 @@
 
 Use **SQL Server: Manage** in Command Search to manage the current Project's connections. The Dialog title shows **Project Databases — <project name>**. The Connections list shows each connection's name, server, database and state. The form below it shows the selected connection: its state with Connect or Reload Schema and Disconnect, its fields, and Remove Connection. Select Add, enter the server and database, then select Connect. Connect checks access and loads metadata. Reload Schema loads metadata again. A change to a field disconnects the connection. An empty Dialog shows only Add Connection. Windows authentication hides the user and password fields.
 
-Open a `.sql` file, select SQL as an Untitled Buffer's Language Mode, or use **SQL Server: New Query**. All three use the normal Editor. Selecting SQL does not connect to a server. **SQL Server: Choose Connection** assigns a connection to the Editor. An explicit database command asks for a connection when none is assigned, then connects if needed. Queries use normal editing, Save As, completion, and symbol navigation.
+Open a `.sql` file, select SQL as an Untitled Buffer's Language Mode, or use **SQL Server: New Query**. All three use the normal Editor. Selecting SQL does not connect to a server. Queries use normal editing, Save As, completion, and symbol navigation.
+
+A SQL Editor without its own connection uses the Project's only connection. Completion works as soon as that connection is connected. The first explicit database command, such as Run Selection or Project Symbol Search, connects it if needed and keeps it for the Editor. The Editor keeps it when the Project adds another connection. When the Project has more than one connection, the first explicit command asks which one to use. **SQL Server: Choose Connection** changes an Editor's connection.
 
 The Dialog has no separate database sidebar.
 
@@ -14,7 +16,7 @@ The Status Bar of a SQL Editor shows its connection. It also shows Auto Commit O
 
 Symbol navigation reads the database object's source into a read-only SQL Editor. Back returns to the same Query. The definition inherits its connection and supports completion, navigation, and Run Selection. Table and view definitions include a SELECT example. Definitions are snapshots; reopening one reads it again. They are not saved in the Workspace.
 
-In a SQL Editor, **Project Symbol Search** searches that Buffer's database connection. It lists tables, views, procedures, and SQL functions. An empty query lists objects. Selecting a result opens the same source as symbol navigation. The first search can ask for a connection; opening SQL alone never does.
+In a SQL Editor, **Project Symbol Search** searches that Buffer's database connection. It lists tables, views, procedures, and SQL functions. An empty query lists objects. Selecting a result opens the same source as symbol navigation. The first search connects if needed; opening SQL alone never does.
 
 **SQL Server: Generate Select**, **Insert**, **Update**, **Delete**, **Create**, and **Alter** act on the database symbol at the caret. Each supported command opens an editable SQL Buffer with the same connection. UPDATE and DELETE templates start with a false predicate. INSERT and UPDATE values require editing. Only a generated SELECT runs at once, so its rows show below it. Set `config.plugins.sql_server.run_generated_select` to false to stop this.
 

@@ -61,6 +61,8 @@ function M.with_connection(sql, view, action)
   end
   local function use(connection)
     if not unchanged() then return false end
+    -- The first explicit action keeps the connection, also after the Project adds another.
+    if not buffer.sql_connection_id then sql.bind(buffer, connection.id) end
     if connection.state == "Ready" then return action(connection) end
     local function connect(password)
       if not unchanged() then return end

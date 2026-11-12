@@ -55,6 +55,7 @@ test.describe("SQL Queries", function()
     if context.nag_show then core.nag_view.show = context.nag_show end
     require("plugins.sql_server.backend").read_definition = context.original_definition
     if context.connection_id then require("plugins.sql_server").remove(context.connection_id) end
+    if context.second_connection_id then require("plugins.sql_server").remove(context.second_connection_id) end
     local open = dialog.current()
     if open then open:close() end
     panes.reset_for_tests()
@@ -107,14 +108,22 @@ test.describe("SQL Queries", function()
     test.equal(buffer:get_text(1, 1, math.huge, math.huge), "SELECT * FROM sales.customers")
   end)
 
-  test.it("chooses a connection when an ordinary SQL Editor first runs a selection", function(context)
+  test.it("uses the Project's only connection without asking, and asks when the Project has more", function(context)
     local _, c = connected_query(context)
     local sql = require "plugins.sql_server"
-    sql.disconnect(c.id)
     local editor = sql.new_query()
+    editor.buffer:text_input("SELECT c.na FROM sales.customers AS c")
+    editor.buffer:set_selection(1, #"SELECT c.na" + 1)
+    autocomplete.trigger()
+    test.ok(autocomplete.is_open())
+    test.equal(autocomplete.get_selected_suggestion().text, "name")
+    autocomplete.close()
+
+    sql.disconnect(c.id)
+    editor = sql.new_query()
     editor.buffer:text_input("SELECT 1")
     editor.buffer:set_selection(1, 1, 1, 9)
-    local submitted
+    local submitted, asked
     require("plugins.sql_server.backend").execute = function(_, text, callback)
       submitted = text
       callback({ results = {}, affected_rows = {} })
@@ -122,14 +131,26 @@ test.describe("SQL Queries", function()
     end
     test.ok(command.perform("sql_server:run_selection"))
     local deadline = system.get_time() + 10
+    while not submitted and system.get_time() < deadline do
+      asked = asked or core.active_view == core.global_prompt_bar
+      coroutine.yield(0.01)
+    end
+    test.equal(submitted, "SELECT 1")
+    test.not_ok(asked)
+    test.equal(core.active_view, editor)
+
+    local second = test.not_nil(sql.add_connection())
+    context.second_connection_id = second.id
+    test.equal(sql.connection_for(editor.buffer), c)
+    local other = sql.new_query()
+    test.equal(sql.connection_for(other.buffer), nil)
+    other.buffer:text_input("SELECT 2")
+    other.buffer:set_selection(1, 1, 1, 9)
+    submitted = nil
+    test.ok(command.perform("sql_server:run_selection"))
     while core.active_view ~= core.global_prompt_bar and system.get_time() < deadline do coroutine.yield(0.01) end
     test.equal(core.active_view, core.global_prompt_bar)
     test.equal(submitted, nil)
-    core.global_prompt_bar:submit()
-    while not submitted and system.get_time() < deadline do coroutine.yield(0.01) end
-    test.equal(submitted, "SELECT 1")
-    test.equal(sql.connection_for(editor.buffer), c)
-    test.equal(core.active_view, editor)
   end)
 
   test.it("completes a column through the normal popup using the table alias", function(context)
@@ -810,7 +831,7 @@ test.describe("SQL Queries", function()
       if not picker.closed and not picker.closing then picker.input:set_text("$customers"); picker:update() end
       coroutine.yield(0.01)
     end
-    test.ok(chose_connection)
+    test.not_ok(chose_connection)
     test.equal(sql.connection_for(editor.buffer), c)
     test.equal(test.not_nil(picker.results[1]).label, "sales.customers")
     picker:confirm()
