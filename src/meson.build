@@ -23,6 +23,7 @@ anvil_sources = [
     'sql_server.c',
     'sql_query.c',
     'sql_batch.c',
+    'sql_format.c',
     'sql_definition.c',
     'fuzzy.c',
     'git_status_index.c',
@@ -331,6 +332,10 @@ sql_batch_test = executable('sql_batch_test',
     ['../tests/native/sql_batch_test.c', 'sql_batch.c'],
     include_directories: include_directories('.'))
 test('sql-batch', sql_batch_test, env: anvil_test_env, suite: 'anvil')
+sql_format_test = executable('sql_format_test',
+    ['../tests/native/sql_format_test.c', 'sql_format.c'],
+    include_directories: include_directories('.'))
+test('sql-format', sql_format_test, env: anvil_test_env, suite: 'anvil')
 if host_machine.system() == 'windows'
     sql_server_integration = executable('sql_server_integration',
         ['../tests/native/sql_server_integration.c', 'sql_server.c', 'sql_query.c', 'sql_batch.c'],

@@ -74,6 +74,33 @@ Each run of a SQL Query goes into the Project's SQL History, with its connection
 
 The history belongs to the Project, as its connections do. Scratch has its own. It is saved as text in the user folder, so SQL that holds a secret stays on disk. `config.plugins.sql_server.history_entries` keeps the newest 500 entries; 0 turns the history off. SQL longer than 64 KiB is not kept. **SQL Server: Clear SQL History** deletes the Project's history.
 
+## Format SQL
+
+**SQL Server: Format SQL** formats the lines of the selection, or the whole Buffer when nothing is selected. The Editor's Context Menu also offers it. One undo reverts it. It uses DbVisualizer's default layout:
+
+```sql
+SELECT
+    c.id,
+    count(*) AS orders
+FROM
+    sales.customers c
+LEFT JOIN
+    sales.orders o
+ON
+    o.customer_id = c.id
+WHERE
+    c.active = 1
+AND c.region IN ('north', 'south')
+GROUP BY
+    c.id
+```
+
+Each main keyword starts a line, and its content goes one level deeper. Each list item gets its own line, and each `AND` and `OR` of a `WHERE`, `ON` or `HAVING` starts a line. `CASE` puts each `WHEN` and `ELSE` on its own line. A subquery goes one level deeper than its parenthesis. Reserved keywords become uppercase. Other names keep their case. The indentation is the Buffer's, not DbVisualizer's fixed 4 spaces.
+
+Only `SELECT`, `INSERT`, `UPDATE`, `DELETE` and `WITH` statements change, also inside `CREATE VIEW` and procedures. Other statements, such as `CREATE TABLE`, `DECLARE` and `MERGE`, keep their lines. Strings, quoted names, comments and `GO` lines stay as they are. Text from a comment that holds `FORMAT_OFF` to a comment that holds `FORMAT_ON` keeps its text and case.
+
+Format SQL changes only the whitespace between tokens and the case of reserved keywords. It reads the result again, and a statement whose tokens would change keeps its text. Format SQL runs nothing and needs no connection. It refuses a read-only Buffer and text above 4 MiB.
+
 ## Table Design
 
 **SQL Server: Design Table** opens the Table Design Dialog for the table at the caret. The table's Context Menu and **SQL Server: Symbol Actions** also offer it. **SQL Server: New Table** opens an empty design. The Dialog reads the table's columns, primary key, indexes, unique constraints, foreign keys and check constraints from the catalog, with a separate connection. The Query's SQL Session and transaction do not change.
@@ -132,6 +159,8 @@ Result editing follows `TableEditableCommitter` in `com/onseven/dbvis/bc/j/b/c.j
 
 SQL History follows `HistoryGridPanel` in `com/onseven/dbvis/u/b/b.java` and `com/onseven/dbvis/u/c/b.java`: an entry keeps its connection, time, elapsed time and errors, and a run of the newest entry's SQL counts in that entry (`SQLHistoryIgnoreDuplicateEntries`, on by default in `dbvis.prefs`). DbVisualizer loads an entry into its SQL Commander. Anvil opens it in a new SQL Query.
 
+Format SQL follows the default profile of DbVisualizer's formatter (`com/onseven/dbvis/objects/e/q.java`, which uses the SQLinForm library through `com/onseven/dbvis/kb/d.java`). The `Pretty*` keys in `dbvis.prefs` give the rules: `PrettyBreakAfterComma`, `PrettyBreakBeforeAndOr`, the `PrettyBreakAfter*` and `PrettyBreakFor*` clause and `CASE` keys, `PrettyKeywordCase=Keywords Uppercase`, and `PrettyNoFormattingBetween` with `FORMAT_OFF` and `FORMAT_ON`. Anvil's formatter is its own native module (`src/sql_format.c`), not SQLinForm, so its output can differ in details.
+
 Table Design follows the tabs of `TableDetailsPanelBuilder` in `com/onseven/dbvis/objects/e/c/b/b/z.java`: columns (`ab.java`), primary key (`e.java`), foreign keys with their delete and update actions (`fb.java`), indexes and unique constraints (`d.java`), and check constraints (`j.java` and `c.java`). DbVisualizer shows the script in its Dialog and can run it. Anvil opens the script in a SQL Query instead, and the user runs it.
 
 ## Tests
@@ -141,6 +170,7 @@ Default UI tests replace the database boundary at `plugins.sql_server.backend` w
 ```sh
 meson test -C build-windows-x86_64 anvil:sql-context
 meson test -C build-windows-x86_64 anvil:sql-batch
+meson test -C build-windows-x86_64 anvil:sql-format
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_context.lua
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_execution.lua
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_definitions.lua

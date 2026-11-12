@@ -418,6 +418,9 @@ end, {
   ["sql_server:expand_star"] = command.palette(function(view)
     return require("plugins.sql_server.intelligence").expand_star(view, M)
   end),
+  ["sql_server:format"] = command.palette(function(view)
+    return require("plugins.sql_server.format").format(view)
+  end),
 })
 command.add(function()
   local view = core.active_view
@@ -490,6 +493,9 @@ function Editor:context_menu(x, y)
     sql_items[#sql_items + 1] = { label = "Explain Selection", icon = icons.search, command = "sql_server:explain_selection" }
   end
   sql_items[#sql_items + 1] = { label = "Run Buffer", icon = icons.run, command = "sql_server:run_buffer" }
+  if not self.buffer.read_only then
+    sql_items[#sql_items + 1] = { label = "Format SQL", icon = icons.format, command = "sql_server:format" }
+  end
   sql_items[#sql_items + 1] = "-"
   for i, item in ipairs(sql_items) do table.insert(items, i, item) end
   return items

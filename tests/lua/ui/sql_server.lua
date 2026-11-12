@@ -728,6 +728,29 @@ test.describe("SQL Queries", function()
     test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "SELECT * FROM sales.customers")
   end)
 
+  test.it("formats the selected lines, or the Buffer without a selection, in one undo step", function()
+    local config = require "core.config"
+    test.ok(command.perform("sql_server:new_query"))
+    local editor = core.active_view
+    local i = config.tab_type == "hard" and "\t" or string.rep(" ", config.indent_size)
+    local original = "select a from t\nselect c from u where x = 1 and y = 2\n-- tail"
+    editor.buffer:text_input(original)
+    editor.buffer:set_selection(2, 3, 2, 12)
+    test.ok(command.perform("sql_server:format"))
+    test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "select a from t\nSELECT\n" .. i .. "c\nFROM\n" ..
+      i .. "u\nWHERE\n" .. i .. "x = 1\nAND y = 2\n-- tail")
+    editor.buffer:undo()
+    test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), original)
+    editor.buffer:set_selection(3, 1)
+    test.ok(command.perform("sql_server:format"))
+    test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "SELECT\n" .. i .. "a\nFROM\n" .. i .. "t\nSELECT\n" ..
+      i .. "c\nFROM\n" .. i .. "u\nWHERE\n" .. i .. "x = 1\nAND y = 2\n-- tail")
+    editor.buffer:undo()
+    editor.buffer.read_only = true
+    command.perform("sql_server:format")
+    test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), original)
+  end)
+
   test.it("does not navigate an unknown column to an unrelated table", function(context)
     local editor = connected_query(context)
     editor.buffer:text_input("SELECT missing FROM sales.customers")

@@ -3,6 +3,7 @@
 #include "../sql_server.h"
 #include "../sql_query.h"
 #include "../sql_definition.h"
+#include "../sql_format.h"
 #include "../worker_pool.h"
 #include <stdio.h>
 #include <string.h>
@@ -278,6 +279,19 @@ static int module_script(lua_State *L) {
   if (!script) lua_pushnil(L); else { lua_pushstring(L, script); free(script); }
   return 1;
 }
+static int format_sql(lua_State *L) {
+  size_t length, indent_length;
+  const char *source = luaL_checklstring(L, 1, &length);
+  const char *indent = luaL_checklstring(L, 2, &indent_length);
+  char *out;
+  size_t out_length;
+  if (!sql_format(source, length, indent, indent_length, &out, &out_length)) {
+    lua_pushnil(L); lua_pushliteral(L, "The SQL is too large to format."); return 2;
+  }
+  lua_pushlstring(L, out, out_length);
+  free(out);
+  return 1;
+}
 int luaopen_sql_server_native(lua_State *L) {
   luaL_newmetatable(L, "anvil.sql_definition");
   lua_pushcfunction(L, definition_gc); lua_setfield(L, -2, "__gc"); lua_pop(L, 1);
@@ -286,7 +300,7 @@ int luaopen_sql_server_native(lua_State *L) {
   luaL_newmetatable(L, "anvil.sql_query");
   lua_pushcfunction(L, query_gc); lua_setfield(L, -2, "__gc"); lua_pop(L, 1);
   const luaL_Reg functions[] = { {"context", context}, {"read_schema", read_schema}, {"execute", execute_query},
-    {"read_definition", read_definition}, {"module_script", module_script},
+    {"read_definition", read_definition}, {"module_script", module_script}, {"format", format_sql},
     {"end_transaction", end_transaction}, {"close_session", close_session}, {NULL, NULL} };
   luaL_newlib(L, functions); return 1;
 }
