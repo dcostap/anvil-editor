@@ -160,10 +160,35 @@ function Results:footer_buttons()
   return buttons
 end
 
+-- Two or more selected cells show their aggregates. A drag shows only the
+-- count, and the aggregates come when it ends.
+function Results:selection_summary()
+  local row1, column1, row2, column2 = self:selection_bounds()
+  if not row1 then return nil end
+  local count = (row2 - row1 + 1) * (column2 - column1 + 1)
+  if count < 2 then return nil end
+  if self.selection_drag then return string.format("%d cells", count) end
+  local key = string.format("%d:%d:%d:%d:%d", row1, column1, row2, column2, self.edit_revision or 0)
+  local cache = self.aggregate_cache
+  if cache and cache.key == key and cache.rows == self.display_rows then return cache.text end
+  local cells = {}
+  for display_row = row1, row2 do
+    for column = column1, column2 do
+      local value = self:cell_value(display_row, column)
+      cells[#cells + 1] = value == nil and false or value
+    end
+  end
+  local text = require("plugins.sql_server.aggregate").summary(cells)
+  self.aggregate_cache = { key = key, rows = self.display_rows, text = text }
+  return text
+end
+
 function Results:footer_summary()
   if self.cancel_query then return self.message, style.dim end
   if self.result_warning then return self.result_warning, style.warn end
   if self.model.column_count == 0 then return nil end
+  local selection = self:selection_summary()
+  if selection then return selection, style.text end
   local rows = self:row_count()
   local text = string.format("%d %s", rows, rows == 1 and "row" or "rows")
   if self.data and #self.data.results > 1 then
@@ -305,6 +330,7 @@ function Results:set_value(row, column, value)
   local edits = self.edits[row] or {}
   if value == original then edits[column] = nil else edits[column] = value end
   self.edits[row] = next(edits) and edits or nil
+  self.edit_revision = (self.edit_revision or 0) + 1
   core.redraw = true
 end
 
@@ -364,6 +390,7 @@ end
 
 function Results:discard_changes()
   self.edits, self.deletes = {}, {}
+  self.edit_revision = (self.edit_revision or 0) + 1
   core.redraw = true
   return true
 end

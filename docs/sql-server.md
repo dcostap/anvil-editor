@@ -56,6 +56,8 @@ Use **SQL Server: Cancel** from the Query or its results. Closing the results, c
 
 The results View has a footer with the row count and buttons: Cancel while the SQL runs, the Query's row limit, CSV, JSON and Messages. The row limit button chooses 100, 1,000 or 10,000 rows, or No Row Limit, for that Query. **SQL Server: Toggle Row Limit** turns the limit off or back to the default. Without a limit, results stop at 100,000 rows and the limits below. A change does not run the SQL again. The button shows in the warning color when the limit cut a result.
 
+With two or more cells selected, the footer shows their aggregates in the place of the row count: the cell count, the NULL count and, when each other cell is a number, Sum, Avg, Min and Max, such as `5 cells · 1 NULL · Sum 10.64 · Avg 2.66 · Min -2 · Max 12.3400`. Values are the server's text, and pending edits count. A sum of decimal text is exact while it has at most 15 digits. A larger sum, or a value with an exponent, shows `≈`. Min and Max keep the cell's text. A text column with digits in each cell, such as postal codes, also gets a Sum.
+
 The default row limit is 1,000 per table. The execution timeout is 30 seconds after login. Set `config.plugins.sql_server.max_rows` from 1 to 100,000, and `config.plugins.sql_server.timeout_seconds` from 1 to 300.
 
 Batches are limited to 256 KiB. Each run holds at most 16 result records, 128 columns per table, 262,144 cells, and 8 MiB of value text. A cell holds at most 32,768 UTF-16 units. A warning marks incomplete results. A row limit discards extra rows and continues to later results. A total result limit stops result reading. Later statements can already have run; these limits are not write protection.
@@ -159,6 +161,8 @@ Result editing follows `TableEditableCommitter` in `com/onseven/dbvis/bc/j/b/c.j
 
 SQL History follows `HistoryGridPanel` in `com/onseven/dbvis/u/b/b.java` and `com/onseven/dbvis/u/c/b.java`: an entry keeps its connection, time, elapsed time and errors, and a run of the newest entry's SQL counts in that entry (`SQLHistoryIgnoreDuplicateEntries`, on by default in `dbvis.prefs`). DbVisualizer loads an entry into its SQL Commander. Anvil opens it in a new SQL Query.
 
+The cell aggregates follow DbVisualizer's Aggregates Viewer (`DataSetGridAggregation` texts; the counts in `com/onseven/dbvis/bc/e/l.java` and the metrics in `com/onseven/dbvis/bc/e/j.java`): Cells, Nulls, Sum, Avg, Min and Max for the selected cells. DbVisualizer also counts the cells of each type and shows a median and a standard deviation in a separate panel. Anvil shows the short list in the results footer.
+
 Format SQL follows the default profile of DbVisualizer's formatter (`com/onseven/dbvis/objects/e/q.java`, which uses the SQLinForm library through `com/onseven/dbvis/kb/d.java`). The `Pretty*` keys in `dbvis.prefs` give the rules: `PrettyBreakAfterComma`, `PrettyBreakBeforeAndOr`, the `PrettyBreakAfter*` and `PrettyBreakFor*` clause and `CASE` keys, `PrettyKeywordCase=Keywords Uppercase`, and `PrettyNoFormattingBetween` with `FORMAT_OFF` and `FORMAT_ON`. Anvil's formatter is its own native module (`src/sql_format.c`), not SQLinForm, so its output can differ in details.
 
 Table Design follows the tabs of `TableDetailsPanelBuilder` in `com/onseven/dbvis/objects/e/c/b/b/z.java`: columns (`ab.java`), primary key (`e.java`), foreign keys with their delete and update actions (`fb.java`), indexes and unique constraints (`d.java`), and check constraints (`j.java` and `c.java`). DbVisualizer shows the script in its Dialog and can run it. Anvil opens the script in a SQL Query instead, and the user runs it.
@@ -175,6 +179,7 @@ meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_con
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_execution.lua
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_definitions.lua
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_table_design.lua
+meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_aggregate.lua
 meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/sql_server.lua
 ```
 
