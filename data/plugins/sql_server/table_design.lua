@@ -131,6 +131,9 @@ function M.from_results(schema, name, data)
   if #results < 6 then return nil, "SQL Server did not describe this table." end
   for _, r in ipairs(results) do
     if r.truncated then return nil, "This table has too many columns, keys or indexes to design here." end
+    for _, row in ipairs(r.rows or {}) do
+      if row.cut then return nil, "A definition in this table is longer than 32,768 characters." end
+    end
   end
   local design = { existing = true, schema = schema, name = name, columns = {}, indexes = {}, foreign_keys = {},
     checks = {}, primary_key = { key = "primary", kind = "primary", name = "PK_" .. name, columns = {} } }

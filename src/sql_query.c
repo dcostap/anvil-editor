@@ -177,7 +177,7 @@ static void collect(SqlQueryResult *out, SQLSMALLINT type, SQLHANDLE handle, uns
 
 /* Read text in chunks. This also preserves exact decimals and large integers.
  * ODBC represents binary values as hexadecimal when converted to SQL_C_WCHAR. */
-static int read_value(SQLHSTMT statement, unsigned column, SqlQueryCell *out, int *truncated, size_t *bytes) {
+static int read_value(SQLHSTMT statement, unsigned column, SqlQueryCell *out, size_t *bytes) {
   SQLWCHAR chunk[1024];
   SQLWCHAR *text = malloc((CELL_UNITS + 1) * sizeof(SQLWCHAR));
   if (!text) return 0;
@@ -192,7 +192,7 @@ static int read_value(SQLHSTMT statement, unsigned column, SqlQueryCell *out, in
     size_t n = length >= 0 && length < (SQLLEN)sizeof(chunk) ? (size_t)length / sizeof(SQLWCHAR) : 1023;
     size_t keep = n < CELL_UNITS - used ? n : CELL_UNITS - used;
     memcpy(text + used, chunk, keep * sizeof(SQLWCHAR)); used += keep;
-    if (keep < n || (used == CELL_UNITS && rc == SQL_SUCCESS_WITH_INFO)) { capped = *truncated = 1; break; }
+    if (keep < n || (used == CELL_UNITS && rc == SQL_SUCCESS_WITH_INFO)) { capped = 1; break; }
     if (rc == SQL_SUCCESS || n < 1023) break;
   }
   /* A capped value must not end between UTF-16 surrogate units. */
@@ -262,7 +262,7 @@ static int read_result(Run *run, SQLHSTMT statement, SQLSMALLINT columns, unsign
     }
     for (unsigned column = 0; column < (unsigned)columns; ++column) {
       SqlQueryCell *value = &t->cells[t->row_count * columns + column];
-      if (!read_value(statement, column + 1, value, &t->truncated, &run->bytes)) {
+      if (!read_value(statement, column + 1, value, &run->bytes)) {
         collect(out, SQL_HANDLE_STMT, statement, base_line, run->module, stopped(run->watch), &run->lost);
         return 0;
       }

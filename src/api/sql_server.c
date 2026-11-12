@@ -180,7 +180,11 @@ static void push_result(lua_State *L, SqlQueryResult *result) {
     lua_newtable(L);
     lua_pushinteger(L, (lua_Integer)t->column_count); lua_setfield(L, -2, "column_count");
     text(L, "missing_label", "NULL");
+    /* truncated means that a limit stopped the read; a cut value is only cut. */
+    int any_cut = 0;
+    for (size_t i = 0; !any_cut && t->cells && i < t->row_count * t->column_count; ++i) any_cut = t->cells[i].cut;
     if (t->truncated) text(L, "warning", "Row or cell limit reached. This result is incomplete.");
+    else if (any_cut) text(L, "warning", "Some values are longer than 32,768 characters. Anvil keeps their start.");
     boolean(L, "truncated", t->truncated);
     lua_newtable(L);
     for (size_t col = 0; col < t->column_count; ++col) {

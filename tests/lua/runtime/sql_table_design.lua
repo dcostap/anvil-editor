@@ -70,6 +70,12 @@ test.describe("SQL Table Design", function()
     local none, reason = design_model.from_results("sales", "probe", missing)
     test.equal(none, nil)
     test.equal(reason, "Table [sales].[probe] does not exist.")
+
+    local long = reply()
+    long.results[5].rows[1].cut = { [3] = true }
+    none, reason = design_model.from_results("sales", "probe", long)
+    test.equal(none, nil)
+    test.equal(reason, "A definition in this table is longer than 32,768 characters.")
   end)
 
   test.it("alters only what changed, and rebuilds what uses an altered column", function()
