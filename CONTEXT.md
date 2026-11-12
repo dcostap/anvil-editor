@@ -444,7 +444,7 @@ One of the Panes that had focus most recently before the current Pane, across Pr
 _Avoid_: Pane number, Tab number
 
 **Pending Pane**:
-A Pane with an Unread Result, an agent waiting for an answer, or an ended Snooze. The first five Pending Panes in each Anvil Window have numbers 1 to 5 across its Projects, oldest pending event first. Reading a result removes it from the queue. An agent waiting for an answer stays pending until it stops waiting.
+A Pane with an Unread Result, an agent waiting for an answer, or an ended Snooze. The first five Pending Panes in each Anvil Window have numbers 1 to 5 across its Projects, newest pending event first. Reading a result removes it from the queue. An agent waiting for an answer stays pending until it stops waiting.
 
 **Constrained Pane**:
 A Pane dedicated to one owner, such as a Git Log or commit comparison.

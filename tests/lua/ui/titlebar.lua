@@ -120,7 +120,7 @@ test.describe("Global title bar Pane entries", function()
     test.equal(saved.config.hide_tabs, false)
   end)
 
-  test.it("keeps Tab order while numbering pending Panes FIFO", function()
+  test.it("keeps Tab order while numbering pending Panes newest first", function()
     local one = panes.create { factory = factory("alpha.lua") }
     local two = panes.split(one, "right", { factory = factory("beta.lua") })
     local three = panes.create { factory = factory("settings") }
@@ -138,9 +138,9 @@ test.describe("Global title bar Pane entries", function()
     title:update()
     local entries = title:get_pane_entries()
     test.equal(#entries, 3)
-    test.equal(entries[1].label, "2 alpha.lua")
+    test.equal(entries[1].label, "1 alpha.lua")
     test.equal(entries[2].label, "beta.lua")
-    test.equal(entries[3].label, "1 settings")
+    test.equal(entries[3].label, "2 settings")
   end)
 
   test.it("marks the active Pane and its visible group", function()

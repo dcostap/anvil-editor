@@ -70,7 +70,7 @@ function pending.order(projects, seen, snoozes, window_id)
     end
   end
   table.sort(list, function(a, b)
-    if a.since ~= b.since then return a.since < b.since end
+    if a.since ~= b.since then return a.since > b.since end
     return pending.key(a.path, a.id) < pending.key(b.path, b.id)
   end)
   return list

@@ -1827,7 +1827,7 @@ test.describe("Sidebar pending Pane numbers", function()
     end
     test.same(numbers(), {a2 = 1})
     view:set_model(projects, 2)
-    test.same(numbers(), {b1 = 1, b2 = 2})
+    test.same(numbers(), {b2 = 1, b1 = 2})
   end)
 
   test.it("draws the numbers beside the Tabs, so they move no row content", function()

@@ -50,7 +50,7 @@ test.describe("Pending Pane numbers", function()
     test.same(targets(), {"pending", "older", "recent", "oldest", "last"})
   end)
 
-  test.it("numbers unread results and waiting agents FIFO across Projects", function()
+  test.it("numbers unread results and waiting agents newest first across Projects", function()
     local projects = {
       {path = "C:/A", panes = {
         {id = "read", terminal = {session = "read", state = "running"}},
@@ -64,12 +64,12 @@ test.describe("Pending Pane numbers", function()
     }
     local seen = {read = 6, wait = 40}
     local numbers = numbered.numbers(projects, seen)
-    test.equal(numbers[numbered.key("C:/B", "wait")], 1)
+    test.equal(numbers[numbered.key("C:/A", "new")], 1)
     test.equal(numbers[numbered.key("C:/A", "bell")], 2)
-    test.equal(numbers[numbered.key("C:/A", "new")], 3)
+    test.equal(numbers[numbered.key("C:/B", "wait")], 3)
     test.is_nil(numbers[numbered.key("C:/A", "read")])
     test.is_nil(numbers[numbered.key("C:/A", "text")])
-    test.equal(numbered.target(projects, 1, seen).id, "wait")
+    test.equal(numbered.target(projects, 1, seen).id, "new")
     seen.bell = 25
     projects[2].terminals[1].agent_state = "working"
     test.equal(numbered.target(projects, 1, seen).id, "new")
@@ -93,10 +93,10 @@ test.describe("Pending Pane numbers", function()
       end
       return table.concat(ids, ",")
     end
-    test.equal(targets(), "bell,due")
+    test.equal(targets(), "due,bell")
     -- A held result comes back at its Snooze time, not at its own older time.
     snoozes.held = 35
-    test.equal(targets(), "bell,held,due")
+    test.equal(targets(), "due,held,bell")
   end)
 
   test.it("removes a viewed result but keeps an agent waiting for an answer", function()
@@ -124,14 +124,14 @@ test.describe("Pending Pane numbers", function()
       projects[2].panes[#projects[2].panes + 1] = {
         id = "bell" .. n, terminal = {session = "b" .. n, state = "running", bell = 10 + n}}
     end
-    test.equal(numbered.target(projects, 5, {}).id, "bell4")
+    test.equal(numbered.target(projects, 5, {}).id, "bell1")
     test.is_nil(numbered.target(projects, 6, {}))
     local numbers = numbered.numbers(projects, {})
     test.is_nil(numbers[numbered.key("C:/A", "previous")])
     test.is_nil(numbers[numbered.key("C:/B", "remote")])
   end)
 
-  test.it("routes the numbered command to the oldest pending Pane in another Project", function()
+  test.it("routes the numbered command to the newest pending Pane in another Project", function()
     local core = require "core"
     local command = require "core.command"
     local old_model, old_request = core.project_sidebar, system.pane_request
@@ -148,7 +148,7 @@ test.describe("Pending Pane numbers", function()
       test.equal(#requests, 1)
       test.equal(requests[1][2], "C:/pending-number-test")
       local request = assert(load("return " .. requests[1][3], "=request", "t", {}))()
-      test.same(request, {action = "focus", pane = "old", feedback = "numbered"})
+      test.same(request, {action = "focus", pane = "new", feedback = "numbered"})
     end)
     core.project_sidebar, system.pane_request = old_model, old_request
     test.ok(ok, err)
