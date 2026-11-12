@@ -1533,6 +1533,8 @@ See [inline terminal images](tools/TERMINAL_IMAGES.md) for supported features an
 
 Current Anvil Ghostty patch:
 
+`subprojects/ghostty.wrap` pins libghostty-vt 1.0.1 (`vt-1.0.1`), which uses Zig 0.17.0. Library releases use `vt-*` tags, separate from Ghostty app releases.
+
 - `subprojects/packagefiles/ghostty-semantic-prompt-fresh-line-option.patch`
 - listed by `diff_files` in `subprojects/ghostty.wrap`
 - adds a libghostty-vt option for OSC 133 A during synchronized output

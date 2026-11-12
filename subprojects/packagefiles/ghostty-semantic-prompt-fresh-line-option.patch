@@ -1,11 +1,11 @@
 diff --git a/include/ghostty/vt/terminal.h b/include/ghostty/vt/terminal.h
-index b58655659..85f35f8ec 100644
+index bb887c01b..cf3668cac 100644
 --- a/include/ghostty/vt/terminal.h
 +++ b/include/ghostty/vt/terminal.h
-@@ -2780,6 +2780,19 @@ typedef enum GHOSTTY_ENUM_TYPED {
+@@ -2651,6 +2651,19 @@ typedef enum GHOSTTY_ENUM_TYPED {
     * Input type: GhosttyTerminalResizeWindowFn
     */
-   GHOSTTY_TERMINAL_OPT_RESIZE_WINDOW = 47,
+   GHOSTTY_TERMINAL_OPT_RESIZE_WINDOW = 48,
 +
 +  /**
 +   * Set whether OSC 133 A enforces its fresh-line action during synchronized
@@ -18,23 +18,23 @@ index b58655659..85f35f8ec 100644
 +   *
 +   * Input type: bool*
 +   */
-+  GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT_FRESH_LINE_IN_SYNCHRONIZED_OUTPUT = 48,
++  GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT_FRESH_LINE_IN_SYNCHRONIZED_OUTPUT = 49,
    GHOSTTY_TERMINAL_OPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
  } GhosttyTerminalOption;
  
 diff --git a/src/terminal/c/terminal.zig b/src/terminal/c/terminal.zig
-index 5f047f489..fd695c11d 100644
+index a5f6a3184..ffeccc271 100644
 --- a/src/terminal/c/terminal.zig
 +++ b/src/terminal/c/terminal.zig
-@@ -1485,6 +1485,7 @@ pub const Option = enum(c_int) {
-     xt_checksum_extension = 45,
-     program_status = 46,
-     resize_window = 47,
-+    semantic_prompt_fresh_line_in_synchronized_output = 48,
+@@ -1503,6 +1503,7 @@ pub const Option = enum(c_int) {
+     xt_checksum_extension = 46,
+     program_status = 47,
+     resize_window = 48,
++    semantic_prompt_fresh_line_in_synchronized_output = 49,
  
-     /// Input type expected for setting the option.
-     pub fn InType(comptime self: Option) type {
-@@ -1520,6 +1521,7 @@ pub const Option = enum(c_int) {
+     _,
+ 
+@@ -1540,6 +1541,7 @@ pub const Option = enum(c_int) {
              .title_report,
              .xt_checksum_report,
              .resize_pull_scrollback,
@@ -42,7 +42,7 @@ index 5f047f489..fd695c11d 100644
              => ?*const bool,
              .kitty_image_medium_temp_file => ?*const lib.String,
              .apc_max_bytes,
-@@ -1764,6 +1766,8 @@ fn setTyped(
+@@ -1789,6 +1791,8 @@ fn setTyped(
              if (value) |ptr| ptr.* else kitty_clipboard.max_write_size,
          .resize_pull_scrollback => wrapper.terminal.flags.resize_pull_scrollback =
              if (value) |ptr| ptr.* else true,
@@ -52,7 +52,7 @@ index 5f047f489..fd695c11d 100644
              const bits = if (value) |ptr| ptr.* else 0;
              const flags = std.math.cast(u5, bits) orelse return .invalid_value;
 diff --git a/src/terminal/stream_terminal.zig b/src/terminal/stream_terminal.zig
-index aa61fb9eb..796128d78 100644
+index 8a49a9764..3ffeb1c24 100644
 --- a/src/terminal/stream_terminal.zig
 +++ b/src/terminal/stream_terminal.zig
 @@ -43,6 +43,9 @@ pub const Handler = struct {
@@ -65,7 +65,7 @@ index aa61fb9eb..796128d78 100644
      /// True after an error prevented a terminal-owned semantic update.
      ///
      /// When an error happens during terminal processing, streams continue
-@@ -745,7 +748,18 @@ pub const Handler = struct {
+@@ -756,7 +759,18 @@ pub const Handler = struct {
              },
              .start_hyperlink => try self.terminal.screens.active.startHyperlink(value.uri, value.id),
              .end_hyperlink => self.terminal.screens.active.endHyperlink(),

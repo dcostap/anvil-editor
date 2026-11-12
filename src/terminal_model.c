@@ -216,20 +216,19 @@ bool anvil_terminal_model_text(GhosttyTerminal model, uint8_t **text, size_t *le
   GhosttyPoint start = { .tag = GHOSTTY_POINT_TAG_SCREEN, .value = { .coordinate = { .x = 0, .y = 0 } } };
   GhosttyPoint end = { .tag = GHOSTTY_POINT_TAG_SCREEN,
     .value = { .coordinate = { .x = (uint16_t)(cols - 1), .y = (uint32_t)(total_rows - 1) } } };
-  GhosttySelection selection = GHOSTTY_INIT_SIZED(GhosttySelection);
+  GhosttySelection selection = {0};
   if (ghostty_terminal_grid_ref(model, start, &selection.start) != GHOSTTY_SUCCESS ||
       ghostty_terminal_grid_ref(model, end, &selection.end) != GHOSTTY_SUCCESS) return false;
-  GhosttyTerminalSelectionFormatOptions options = GHOSTTY_INIT_SIZED(GhosttyTerminalSelectionFormatOptions);
-  options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN;
-  options.unwrap = false;
-  options.trim = true;
-  options.selection = &selection;
+  GhosttyFormatter formatter = NULL;
+  bool ok = ghostty_formatter_terminal_new(&terminal_allocator, &formatter, model) == GHOSTTY_SUCCESS &&
+    ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_SELECTION, &selection) == GHOSTTY_SUCCESS;
   size_t needed = 0;
-  GhosttyResult result = ghostty_terminal_selection_format_buf(model, options, NULL, 0, &needed);
-  if (result != GHOSTTY_OUT_OF_SPACE && result != GHOSTTY_SUCCESS) return false;
-  uint8_t *buffer = malloc(needed ? needed : 1);
-  if (!buffer) return false;
-  if (needed && ghostty_terminal_selection_format_buf(model, options, buffer, needed, &needed) != GHOSTTY_SUCCESS) {
+  GhosttyResult result = ok ? ghostty_formatter_format_buf(formatter, NULL, 0, &needed) : GHOSTTY_INVALID_VALUE;
+  ok = result == GHOSTTY_OUT_OF_SPACE || result == GHOSTTY_SUCCESS;
+  uint8_t *buffer = ok ? malloc(needed ? needed : 1) : NULL;
+  ok = buffer && (!needed || ghostty_formatter_format_buf(formatter, buffer, needed, &needed) == GHOSTTY_SUCCESS);
+  ghostty_formatter_free(formatter);
+  if (!ok) {
     free(buffer);
     return false;
   }

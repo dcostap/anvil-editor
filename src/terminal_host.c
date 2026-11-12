@@ -1234,12 +1234,14 @@ static bool prepare_revival(GhosttyTerminal model, uint16_t rows) {
   if (ghostty_terminal_get(model, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &screen) != GHOSTTY_SUCCESS) return false;
   if (screen == GHOSTTY_TERMINAL_SCREEN_ALTERNATE) {
     GhosttyFormatter formatter = NULL;
-    GhosttyFormatterTerminalOptions options = {
-      .size = sizeof(options), .emit = GHOSTTY_FORMATTER_FORMAT_VT, .trim = true,
-    };
+    GhosttyFormatterFormat emit = GHOSTTY_FORMATTER_FORMAT_VT;
+    GhosttyFormatterExtras extras = GHOSTTY_FORMATTER_EXTRAS_NONE;
     /* Ghostty's NULL default allocator crashes the host; use the allocator that owns the model. */
-    bool ok = ghostty_formatter_terminal_new(&terminal_allocator, &formatter, model, options) == GHOSTTY_SUCCESS &&
-      ghostty_formatter_format_buf(formatter, NULL, 0, &length) == GHOSTTY_OUT_OF_SPACE &&
+    bool ok = ghostty_formatter_terminal_new(&terminal_allocator, &formatter, model) == GHOSTTY_SUCCESS &&
+      ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_EMIT, &emit) == GHOSTTY_SUCCESS &&
+      ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_EXTRAS, &extras) == GHOSTTY_SUCCESS;
+    GhosttyResult result = ok ? ghostty_formatter_format_buf(formatter, NULL, 0, &length) : GHOSTTY_INVALID_VALUE;
+    ok = (result == GHOSTTY_SUCCESS || result == GHOSTTY_OUT_OF_SPACE) &&
       length <= ANVIL_TERMINAL_DISK_SNAPSHOT_LIMIT;
     if (ok) alternate = malloc(length ? length : 1);
     ok = ok && alternate && ghostty_formatter_format_buf(formatter, alternate, length, &length) == GHOSTTY_SUCCESS;

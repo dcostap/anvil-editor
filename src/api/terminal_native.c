@@ -221,7 +221,7 @@ static uint32_t color_value(GhosttyColorRgb color);
 static GhosttyResult update_terminal_render_state(TerminalSession *session) {
   session->render_pending = true;
   GhosttyTerminalModeConfig mode = {
-    .mode = GHOSTTY_MODE_SYNC_OUTPUT,
+    .mode = GHOSTTY_MODE_SYNCHRONIZED_OUTPUT,
     .value = false,
   };
   GhosttyResult result = ghostty_terminal_get(
@@ -711,8 +711,7 @@ static void terminal_desktop_notification(
 ) {
   (void)terminal;
   TerminalSession *session = (TerminalSession *)userdata;
-  if (!notification || notification->size <
-        offsetof(GhosttyTerminalDesktopNotification, body) + sizeof(notification->body) ||
+  if (!notification ||
       notification->title.len > TERMINAL_NOTIFICATION_MAX_BYTES ||
       notification->body.len > TERMINAL_NOTIFICATION_MAX_BYTES) return;
   char *title = (char *)HeapAlloc(
@@ -1431,10 +1430,10 @@ static TerminalColors read_terminal_colors(lua_State *L, int table_index) {
 
 static void report_terminal_color_scheme(TerminalSession *session) {
   if (session->viewer || !session->color_scheme_known) return;
-  GhosttyTerminalModeConfig mode = { .mode = GHOSTTY_MODE_COLOR_SCHEME_REPORT };
+  GhosttyTerminalModeConfig mode = { .mode = GHOSTTY_MODE_REPORT_COLOR_SCHEME };
   if (ghostty_terminal_get(session->terminal, GHOSTTY_TERMINAL_DATA_MODE, &mode)
       != GHOSTTY_SUCCESS || !mode.value) return;
-  char report[32];
+  uint8_t report[32];
   size_t length = 0;
   if (ghostty_color_scheme_report_encode(session->color_scheme, report,
       sizeof(report), &length) == GHOSTTY_SUCCESS) {
@@ -1452,7 +1451,7 @@ static int f_terminal_set_colors(lua_State *L) {
     update_terminal_render_state(session) == GHOSTTY_SUCCESS;
   if (ok) {
     GhosttyRenderStateDirty dirty = GHOSTTY_RENDER_STATE_DIRTY_FULL;
-    ghostty_render_state_set(session->render_state, GHOSTTY_RENDER_STATE_OPTION_DIRTY, &dirty);
+    ghostty_render_state_set(session->render_state, GHOSTTY_RENDER_STATE_OPT_DIRTY, &dirty);
     /* Programs must query the complete new palette, not the previous theme's colors. */
     if (had_color_scheme && previous_scheme != session->color_scheme) {
       report_terminal_color_scheme(session);
@@ -2140,7 +2139,7 @@ static int f_terminal_paste(lua_State *L) {
 
   size_t capacity = length + 16;
   char *input = (char *)HeapAlloc(GetProcessHeap(), 0, length ? length : 1);
-  char *encoded = (char *)HeapAlloc(GetProcessHeap(), 0, capacity);
+  uint8_t *encoded = (uint8_t *)HeapAlloc(GetProcessHeap(), 0, capacity);
   if (!input || !encoded) {
     if (input) HeapFree(GetProcessHeap(), 0, input);
     if (encoded) HeapFree(GetProcessHeap(), 0, encoded);
@@ -2581,16 +2580,17 @@ static int f_terminal_key(lua_State *L) {
     return 1;
   }
 
-  ghostty_key_encoder_setopt_from_terminal(session->key_encoder, session->terminal);
+  ghostty_key_encoder_set_from_terminal(session->key_encoder, session->terminal);
   ghostty_key_event_set_action(session->key_event, action);
   ghostty_key_event_set_key(session->key_event, key);
   ghostty_key_event_set_mods(session->key_event, mods);
   ghostty_key_event_set_consumed_mods(session->key_event, consumed_mods);
   ghostty_key_event_set_composing(session->key_event, false);
-  ghostty_key_event_set_utf8(session->key_event, event_text, event_text_length);
+  ghostty_key_event_set_utf8(session->key_event,
+    (GhosttyString){ .ptr = (const uint8_t *)event_text, .len = event_text_length });
   ghostty_key_event_set_unshifted_codepoint(session->key_event, unshifted_codepoint);
 
-  char encoded[128];
+  uint8_t encoded[128];
   size_t written = 0;
   GhosttyResult result = ghostty_key_encoder_encode(
     session->key_encoder, session->key_event, encoded, sizeof(encoded), &written
@@ -2616,13 +2616,13 @@ static int f_terminal_scroll(lua_State *L) {
     lua_pushboolean(L, false);
     return 1;
   }
-  GhosttyTerminalScrollViewport viewport = { .tag = GHOSTTY_SCROLL_VIEWPORT_DELTA };
+  GhosttyTerminalScrollViewport viewport = { .tag = GHOSTTY_TERMINAL_SCROLL_VIEWPORT_DELTA };
   if (lua_type(L, 2) == LUA_TSTRING) {
     const char *kind = lua_tostring(L, 2);
-    if (strcmp(kind, "top") == 0) viewport.tag = GHOSTTY_SCROLL_VIEWPORT_TOP;
-    else if (strcmp(kind, "bottom") == 0) viewport.tag = GHOSTTY_SCROLL_VIEWPORT_BOTTOM;
+    if (strcmp(kind, "top") == 0) viewport.tag = GHOSTTY_TERMINAL_SCROLL_VIEWPORT_TOP;
+    else if (strcmp(kind, "bottom") == 0) viewport.tag = GHOSTTY_TERMINAL_SCROLL_VIEWPORT_BOTTOM;
     else if (strcmp(kind, "row") == 0) {
-      viewport.tag = GHOSTTY_SCROLL_VIEWPORT_ROW;
+      viewport.tag = GHOSTTY_TERMINAL_SCROLL_VIEWPORT_ROW;
       viewport.value.row = (size_t)luaL_checkinteger(L, 3);
     } else {
       viewport.value.delta = (intptr_t)luaL_checkinteger(L, 3);
@@ -2649,7 +2649,7 @@ static int f_terminal_selection_gesture(lua_State *L) {
     lua_pushboolean(L, false);
     return 1;
   }
-  GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+  GhosttyGridRef ref = {0};
   if (!viewport_ref(session, col, row, &ref)) {
     lua_pushboolean(L, false);
     return 1;
@@ -2693,7 +2693,7 @@ static int f_terminal_selection_gesture(lua_State *L) {
       event, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_RECTANGLE, &rectangle
     );
   }
-  GhosttySelection selection = GHOSTTY_INIT_SIZED(GhosttySelection);
+  GhosttySelection selection = {0};
   GhosttyResult result = ghostty_selection_gesture_event(
     session->selection_gesture, session->terminal, event, &selection
   );
@@ -2740,7 +2740,7 @@ static int f_terminal_select(lua_State *L) {
     lua_pushboolean(L, false);
     return 1;
   }
-  GhosttySelection selection = GHOSTTY_INIT_SIZED(GhosttySelection);
+  GhosttySelection selection = {0};
   selection.rectangle = lua_toboolean(L, 6) != 0;
   bool ok = viewport_ref(session, start_x, start_y, &selection.start) &&
     viewport_ref(session, end_x, end_y, &selection.end) &&
@@ -2785,36 +2785,25 @@ static int f_terminal_selected_text(lua_State *L) {
     lua_pushnil(L);
     return 1;
   }
-  GhosttyTerminalSelectionFormatOptions options =
-    GHOSTTY_INIT_SIZED(GhosttyTerminalSelectionFormatOptions);
-  options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN;
-  options.unwrap = true;
-  options.trim = true;
-
+  GhosttySelection selection = {0};
+  if (ghostty_terminal_get(session->terminal, GHOSTTY_TERMINAL_DATA_SELECTION,
+      &selection) != GHOSTTY_SUCCESS) {
+    lua_pushnil(L);
+    return 1;
+  }
+  GhosttyFormatter formatter = NULL;
+  bool unwrap = true;
+  uint8_t *buffer = NULL;
   size_t length = 0;
-  GhosttyResult result = ghostty_terminal_selection_format_buf(
-    session->terminal, options, NULL, 0, &length
-  );
-  if (result == GHOSTTY_NO_VALUE) {
-    lua_pushnil(L);
-    return 1;
-  }
-  if (result != GHOSTTY_OUT_OF_SPACE || length == 0) {
-    lua_pushliteral(L, "");
-    return 1;
-  }
-
-  uint8_t *buffer = (uint8_t *)HeapAlloc(GetProcessHeap(), 0, length);
-  if (!buffer) {
-    lua_pushnil(L);
-    return 1;
-  }
-  result = ghostty_terminal_selection_format_buf(
-    session->terminal, options, buffer, length, &length
-  );
-  if (result == GHOSTTY_SUCCESS) lua_pushlstring(L, (const char *)buffer, length);
+  bool ok = ghostty_formatter_terminal_new(&terminal_allocator, &formatter,
+      session->terminal) == GHOSTTY_SUCCESS &&
+    ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_SELECTION, &selection) == GHOSTTY_SUCCESS &&
+    ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_UNWRAP, &unwrap) == GHOSTTY_SUCCESS &&
+    ghostty_formatter_format_alloc(formatter, &terminal_allocator, &buffer, &length) == GHOSTTY_SUCCESS;
+  ghostty_formatter_free(formatter);
+  if (ok) lua_pushlstring(L, buffer ? (const char *)buffer : "", length);
   else lua_pushnil(L);
-  HeapFree(GetProcessHeap(), 0, buffer);
+  ghostty_free(&terminal_allocator, buffer, length);
   return 1;
 }
 
@@ -2838,7 +2827,7 @@ static size_t terminal_cursor_byte_offset(
   uint16_t end = cursor_x;
   if (pending_wrap && end < session->cols) end++;
   for (uint16_t col = 0; col < end && col < session->cols; col++) {
-    GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+    GhosttyGridRef ref = {0};
     GhosttyPoint point = {
       .tag = GHOSTTY_POINT_TAG_SCREEN,
       .value = { .coordinate = { .x = col, .y = (uint32_t)screen_row } },
@@ -2920,7 +2909,7 @@ static void read_capture_style(
   TerminalSession *session, const GhosttyGridRef *ref, const GhosttyRenderStateColors *colors,
   TerminalCaptureStyleRun *run
 ) {
-  GhosttyStyle style = GHOSTTY_INIT_SIZED(GhosttyStyle);
+  GhosttyStyle style = {0};
   if (ghostty_grid_ref_style(ref, &style) != GHOSTTY_SUCCESS) {
     ghostty_style_default(&style);
   }
@@ -2931,7 +2920,7 @@ static void read_capture_style(
     style.bg_color, colors->background, colors
   );
   run->has_background = style.bg_color.tag != GHOSTTY_STYLE_COLOR_NONE;
-  if (style.inverse) {
+  if ((style.flags & GHOSTTY_STYLE_FLAG_INVERSE) != 0) {
     GhosttyColorRgb swap = foreground;
     foreground = background;
     background = swap;
@@ -2945,15 +2934,15 @@ static void read_capture_style(
   }
   TerminalInk ink = terminal_contrast_ink(
     &session->contrast, color_value(foreground), run->background,
-    style.invisible ? 0 : style.faint ? 140 : 255, codepoint
+    (style.flags & GHOSTTY_STYLE_FLAG_INVISIBLE) != 0 ? 0 : (style.flags & GHOSTTY_STYLE_FLAG_FAINT) != 0 ? 140 : 255, codepoint
   );
   run->foreground = ink.foreground;
   run->alpha = ink.alpha;
-  run->bold = style.bold;
-  run->italic = style.italic;
-  run->faint = style.faint;
-  run->underline = style.underline;
-  run->strikethrough = style.strikethrough;
+  run->bold = (style.flags & GHOSTTY_STYLE_FLAG_BOLD) != 0;
+  run->italic = (style.flags & GHOSTTY_STYLE_FLAG_ITALIC) != 0;
+  run->faint = (style.flags & GHOSTTY_STYLE_FLAG_FAINT) != 0;
+  run->underline = GHOSTTY_STYLE_UNDERLINE(style);
+  run->strikethrough = (style.flags & GHOSTTY_STYLE_FLAG_STRIKETHROUGH) != 0;
   if (style.underline_color.tag != GHOSTTY_STYLE_COLOR_NONE) {
     run->has_underline_color = true;
     uint32_t underline_color = color_value(capture_style_color(
@@ -3082,7 +3071,7 @@ static bool push_capture_styles(
 
     for (uint16_t col = 0;
          col < session->cols && byte_offset < line_length; col++) {
-      GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+      GhosttyGridRef ref = {0};
       GhosttyPoint point = {
         .tag = GHOSTTY_POINT_TAG_SCREEN,
         .value = { .coordinate = { .x = col, .y = (uint32_t)row } },
@@ -3293,7 +3282,7 @@ static int f_terminal_row_text(lua_State *L) {
   }
   size_t length = 0;
   for (uint16_t col = 0; col < session->cols && length < capacity; col++) {
-    GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+    GhosttyGridRef ref = {0};
     if (!viewport_ref(session, col, row, &ref)) continue;
     GhosttyCell cell = 0;
     GhosttyCellWide wide = GHOSTTY_CELL_WIDE_NARROW;
@@ -3407,7 +3396,7 @@ static bool find_in_row(
 ) {
   size_t length = 0;
   for (uint16_t col = 0; col < session->cols; col++) {
-    GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+    GhosttyGridRef ref = {0};
     GhosttyPoint point = {
       .tag = GHOSTTY_POINT_TAG_SCREEN,
       .value = { .coordinate = { .x = col, .y = screen_row } },
@@ -3605,14 +3594,14 @@ static int f_terminal_mouse(lua_State *L) {
   size.screen_height = session->rows * session->cell_height;
   size.cell_width = session->cell_width;
   size.cell_height = session->cell_height;
-  ghostty_mouse_encoder_setopt_from_terminal(session->mouse_encoder, session->terminal);
+  ghostty_mouse_encoder_set_from_terminal(session->mouse_encoder, session->terminal);
   bool wheel = button == GHOSTTY_MOUSE_BUTTON_FOUR || button == GHOSTTY_MOUSE_BUTTON_FIVE;
   if (!wheel && action == GHOSTTY_MOUSE_ACTION_PRESS) session->mouse_button_pressed = true;
   if (!wheel && action == GHOSTTY_MOUSE_ACTION_RELEASE) session->mouse_button_pressed = false;
-  ghostty_mouse_encoder_setopt(
+  ghostty_mouse_encoder_set(
     session->mouse_encoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, &size
   );
-  ghostty_mouse_encoder_setopt(
+  ghostty_mouse_encoder_set(
     session->mouse_encoder, GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED,
     &session->mouse_button_pressed
   );
@@ -3624,7 +3613,7 @@ static int f_terminal_mouse(lua_State *L) {
     session->mouse_event, (GhosttyMousePosition){ .x = x, .y = y }
   );
 
-  char encoded[128];
+  uint8_t encoded[128];
   size_t written = 0;
   GhosttyResult result = ghostty_mouse_encoder_encode(
     session->mouse_encoder, session->mouse_event, encoded, sizeof(encoded), &written
@@ -3646,7 +3635,7 @@ static int f_terminal_hyperlink(lua_State *L) {
     lua_pushnil(L);
     return 1;
   }
-  GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+  GhosttyGridRef ref = {0};
   if (!viewport_ref(session, col, row, &ref)) {
     lua_pushnil(L);
     return 1;
@@ -3713,7 +3702,7 @@ static void push_cursor(lua_State *L, TerminalSession *session, GhosttyRenderSta
   bool blinking = false;
   uint16_t x = 0;
   uint16_t y = 0;
-  GhosttyRenderStateCursorVisualStyle style = GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK;
+  GhosttyCursorStyle style = GHOSTTY_CURSOR_STYLE_BLOCK;
   ghostty_render_state_get(session->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISIBLE, &visible);
   ghostty_render_state_get(
     session->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_HAS_VALUE, &in_viewport
@@ -3736,9 +3725,9 @@ static void push_cursor(lua_State *L, TerminalSession *session, GhosttyRenderSta
   set_integer_field(L, "y", y);
   set_integer_field(L, "color", color_value(colors->cursor_has_value ? colors->cursor : colors->foreground));
   const char *style_name = "block";
-  if (style == GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR) style_name = "bar";
-  else if (style == GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE) style_name = "underline";
-  else if (style == GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW) style_name = "hollow";
+  if (style == GHOSTTY_CURSOR_STYLE_BAR) style_name = "bar";
+  else if (style == GHOSTTY_CURSOR_STYLE_UNDERLINE) style_name = "underline";
+  else if (style == GHOSTTY_CURSOR_STYLE_BLOCK_HOLLOW) style_name = "hollow";
   lua_pushstring(L, style_name);
   lua_setfield(L, -2, "style");
 }
@@ -3804,7 +3793,7 @@ static void read_render_cell(
   GhosttyBuffer grapheme = { .ptr = utf8, .cap = sizeof(utf8), .len = 0 };
   GhosttyColorRgb foreground = colors->foreground;
   GhosttyColorRgb background = colors->background;
-  GhosttyStyle style = GHOSTTY_INIT_SIZED(GhosttyStyle);
+  GhosttyStyle style = {0};
   GhosttyCell raw_cell = 0;
   uint32_t codepoint = 0;
   GhosttyCellWide wide = GHOSTTY_CELL_WIDE_NARROW;
@@ -3832,7 +3821,7 @@ static void read_render_cell(
   cell->has_background = bg_result == GHOSTTY_SUCCESS;
   if (fg_result != GHOSTTY_SUCCESS) foreground = colors->foreground;
   if (bg_result != GHOSTTY_SUCCESS) background = colors->background;
-  if (style.inverse) {
+  if ((style.flags & GHOSTTY_STYLE_FLAG_INVERSE) != 0) {
     GhosttyColorRgb swap = foreground;
     foreground = background;
     background = swap;
@@ -3844,14 +3833,14 @@ static void read_render_cell(
   }
   cell->foreground = color_value(foreground);
   cell->background = color_value(background);
-  cell->bold = style.bold;
-  cell->italic = style.italic;
-  cell->faint = style.faint;
-  cell->blink = style.blink;
-  cell->overline = style.overline;
-  cell->invisible = style.invisible;
-  cell->strikethrough = style.strikethrough;
-  cell->underline = style.underline;
+  cell->bold = (style.flags & GHOSTTY_STYLE_FLAG_BOLD) != 0;
+  cell->italic = (style.flags & GHOSTTY_STYLE_FLAG_ITALIC) != 0;
+  cell->faint = (style.flags & GHOSTTY_STYLE_FLAG_FAINT) != 0;
+  cell->blink = (style.flags & GHOSTTY_STYLE_FLAG_BLINK) != 0;
+  cell->overline = (style.flags & GHOSTTY_STYLE_FLAG_OVERLINE) != 0;
+  cell->invisible = (style.flags & GHOSTTY_STYLE_FLAG_INVISIBLE) != 0;
+  cell->strikethrough = (style.flags & GHOSTTY_STYLE_FLAG_STRIKETHROUGH) != 0;
+  cell->underline = GHOSTTY_STYLE_UNDERLINE(style);
   if (style.underline_color.tag == GHOSTTY_STYLE_COLOR_RGB) {
     cell->underline_color_has_value = true;
     cell->underline_color = color_value(style.underline_color.value.rgb);
@@ -3876,7 +3865,7 @@ static void read_render_cell(
   }
   TerminalInk ink = terminal_contrast_ink(
     &session->contrast, cell->foreground, cell->background,
-    style.invisible ? 0 : style.faint ? 140 : 255, codepoint
+    (style.flags & GHOSTTY_STYLE_FLAG_INVISIBLE) != 0 ? 0 : (style.flags & GHOSTTY_STYLE_FLAG_FAINT) != 0 ? 140 : 255, codepoint
   );
   cell->foreground = ink.foreground;
   cell->alpha = ink.alpha;
@@ -4039,22 +4028,20 @@ static bool push_terminal_image(lua_State *L, GhosttyKittyGraphicsImage image,
     uint32_t source_x, uint32_t source_y, uint32_t source_width, uint32_t source_height) {
   uint32_t width = 0, height = 0;
   GhosttyKittyImageFormat format;
-  const uint8_t *pixels = NULL;
-  size_t length = 0;
+  GhosttyString pixels = {0};
   GhosttyKittyGraphicsImageData keys[] = {
-    GHOSTTY_KITTY_IMAGE_DATA_WIDTH, GHOSTTY_KITTY_IMAGE_DATA_HEIGHT,
-    GHOSTTY_KITTY_IMAGE_DATA_FORMAT, GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR,
-    GHOSTTY_KITTY_IMAGE_DATA_DATA_LEN,
+    GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_WIDTH, GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_HEIGHT,
+    GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_FORMAT, GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_PIXELS,
   };
-  void *values[] = { &width, &height, &format, &pixels, &length };
-  if (ghostty_kitty_graphics_image_get_multi(image, 5, keys, values, NULL) != GHOSTTY_SUCCESS)
+  void *values[] = { &width, &height, &format, &pixels };
+  if (ghostty_kitty_graphics_image_get_multi(image, 4, keys, values, NULL) != GHOSTTY_SUCCESS)
     return false;
   unsigned channels = format == GHOSTTY_KITTY_IMAGE_FORMAT_RGBA ? 4 :
     format == GHOSTTY_KITTY_IMAGE_FORMAT_RGB ? 3 :
     format == GHOSTTY_KITTY_IMAGE_FORMAT_GRAY_ALPHA ? 2 :
     format == GHOSTTY_KITTY_IMAGE_FORMAT_GRAY ? 1 : 0;
   if (!channels || !width || !height || width > INT_MAX / 4 || height > INT_MAX ||
-      (uint64_t)width * height * channels != length ||
+      (uint64_t)width * height * channels != pixels.len ||
       source_x > width || source_width > width - source_x ||
       source_y > height || source_height > height - source_y) return false;
   /* Crop before scaling so filtering cannot sample outside the source region. */
@@ -4062,7 +4049,7 @@ static bool push_terminal_image(lua_State *L, GhosttyKittyGraphicsImage image,
   if (!surface) return false;
   for (uint32_t y = 0; y < source_height; y++) {
     uint8_t *dst = (uint8_t *)surface->pixels + (size_t)y * surface->pitch;
-    const uint8_t *src = pixels + ((size_t)(y + source_y) * width + source_x) * channels;
+    const uint8_t *src = pixels.ptr + ((size_t)(y + source_y) * width + source_x) * channels;
     for (uint32_t x = 0; x < source_width; x++, src += channels, dst += 4) {
       dst[0] = src[0];
       dst[1] = channels < 3 ? src[0] : src[1];
@@ -4104,7 +4091,7 @@ static void push_terminal_images(lua_State *L, TerminalSession *session) {
         &info) != GHOSTTY_SUCCESS || !info.viewport_visible || !info.source_width || !info.source_height)
       continue;
     uint64_t generation = 0;
-    ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_IMAGE_DATA_GENERATION, &generation);
+    ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_GENERATION, &generation);
     char key[128];
     snprintf(key, sizeof(key), "%llu:%u:%u:%u:%u", (unsigned long long)generation,
       info.source_x, info.source_y, info.source_width, info.source_height);
@@ -4162,8 +4149,8 @@ static int f_terminal_image(lua_State *L) {
       ghostty_terminal_get(session->terminal, GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS,
         &graphics) == GHOSTTY_SUCCESS &&
       (image = ghostty_kitty_graphics_image(graphics, id)) &&
-      ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_IMAGE_DATA_WIDTH, &width) == GHOSTTY_SUCCESS &&
-      ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_IMAGE_DATA_HEIGHT, &height) == GHOSTTY_SUCCESS &&
+      ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_WIDTH, &width) == GHOSTTY_SUCCESS &&
+      ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_HEIGHT, &height) == GHOSTTY_SUCCESS &&
       push_terminal_image(L, image, 0, 0, width, height))
     return 1;
   lua_pushnil(L);
@@ -4315,7 +4302,7 @@ static int f_terminal_snapshot(lua_State *L) {
         }
         bool clean = false;
         ghostty_render_state_row_set(
-          session->row_iterator, GHOSTTY_RENDER_STATE_ROW_OPTION_DIRTY, &clean
+          session->row_iterator, GHOSTTY_RENDER_STATE_ROW_OPT_DIRTY, &clean
         );
         row_index++;
       }
@@ -4328,7 +4315,7 @@ static int f_terminal_snapshot(lua_State *L) {
     lua_setfield(L, -2, "rows");
     GhosttyRenderStateDirty clean = GHOSTTY_RENDER_STATE_DIRTY_FALSE;
     ghostty_render_state_set(
-      session->render_state, GHOSTTY_RENDER_STATE_OPTION_DIRTY, &clean
+      session->render_state, GHOSTTY_RENDER_STATE_OPT_DIRTY, &clean
     );
   }
   return 1;

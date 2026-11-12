@@ -18,13 +18,13 @@ static int compare(GhosttyTerminal a, GhosttyTerminal b) {
     CHECK(av == bv);
   }
   GhosttyFormatter fa = NULL, fb = NULL;
-  GhosttyFormatterTerminalOptions plain = {
-    .size = sizeof(plain), .emit = GHOSTTY_FORMATTER_FORMAT_PLAIN,
-  };
+  bool trim = false;
   uint8_t *at = NULL, *bt = NULL;
   size_t al = 0, bl = 0;
-  CHECK(ghostty_formatter_terminal_new(&terminal_allocator, &fa, a, plain) == GHOSTTY_SUCCESS);
-  CHECK(ghostty_formatter_terminal_new(&terminal_allocator, &fb, b, plain) == GHOSTTY_SUCCESS);
+  CHECK(ghostty_formatter_terminal_new(&terminal_allocator, &fa, a) == GHOSTTY_SUCCESS);
+  CHECK(ghostty_formatter_terminal_new(&terminal_allocator, &fb, b) == GHOSTTY_SUCCESS);
+  CHECK(ghostty_formatter_set(fa, GHOSTTY_FORMATTER_OPT_TRIM, &trim) == GHOSTTY_SUCCESS);
+  CHECK(ghostty_formatter_set(fb, GHOSTTY_FORMATTER_OPT_TRIM, &trim) == GHOSTTY_SUCCESS);
   CHECK(ghostty_formatter_format_alloc(fa, &terminal_allocator, &at, &al) == GHOSTTY_SUCCESS);
   CHECK(ghostty_formatter_format_alloc(fb, &terminal_allocator, &bt, &bl) == GHOSTTY_SUCCESS);
   CHECK(al == bl && memcmp(at, bt, al) == 0);
@@ -103,8 +103,9 @@ static int disk_bounds(void) {
   ghostty_terminal_get(restored, GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS, &kept);
   CHECK(before == after && kept <= before && kept > 0);
   GhosttyFormatter formatter = NULL;
-  GhosttyFormatterTerminalOptions plain = { .size = sizeof(plain), .emit = GHOSTTY_FORMATTER_FORMAT_PLAIN };
-  CHECK(ghostty_formatter_terminal_new(&terminal_allocator, &formatter, restored, plain) == GHOSTTY_SUCCESS);
+  bool trim = false;
+  CHECK(ghostty_formatter_terminal_new(&terminal_allocator, &formatter, restored) == GHOSTTY_SUCCESS);
+  CHECK(ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_TRIM, &trim) == GHOSTTY_SUCCESS);
   uint8_t *text = NULL; size_t text_length = 0;
   CHECK(ghostty_formatter_format_alloc(formatter, &terminal_allocator, &text, &text_length) == GHOSTTY_SUCCESS);
   CHECK(text_length >= strlen(tail));
