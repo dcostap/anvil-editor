@@ -130,6 +130,7 @@ function M.disconnect(id)
   session.close_connection(c)
   if c.job then c.job:cancel(); c.job = nil end
   if c.refreshing then c.refreshing:cancel(); c.refreshing = nil end
+  c.refresh_again = nil
   c.catalog, c.password, c.error, c.state = nil, nil, nil, "Disconnected"
   changed()
   core.log_quiet("SQL Server: disconnected connection=%s", c.id)
@@ -194,10 +195,12 @@ function M.connect(id, password)
 end
 -- Reads the catalog again while the connection stays Ready. SQL Sessions, their
 -- transactions and temporary tables stay. A failed read, also one that reports
--- a metadata error, keeps the old catalog.
+-- a metadata error, keeps the old catalog. A request during a read reads once
+-- more after it, because the read can have missed the change.
 function M.refresh_schema(id)
   local c = M.find(id)
-  if not c or c.state ~= "Ready" or c.refreshing then return false end
+  if not c or c.state ~= "Ready" then return false end
+  if c.refreshing then c.refresh_again = true; return true end
   local generation = c.generation
   local options = { server = c.server, database = c.database, user = c.user, password = passwords[c],
     integrated = c.integrated, trust_certificate = c.trust_certificate, encrypt = c.encrypt }
@@ -210,6 +213,7 @@ function M.refresh_schema(id)
     if ok then c.catalog = catalog; changed() end
     core.log_quiet("SQL Server: metadata refresh connection=%s ok=%s objects=%s error=%s", id,
       tostring(ok), catalog and #catalog.objects or 0, tostring(error ~= nil or not ok))
+    if c.refresh_again then c.refresh_again = nil; M.refresh_schema(id) end
   end
   local handle = backend.read_schema(options, finish)
   if handle and not done then c.refreshing = handle end

@@ -719,6 +719,36 @@ test.describe("SQL Queries", function()
     test.equal(reads, 1)
   end)
 
+  test.it("reads the catalog once more after a schema change during a reload", function(context)
+    local editor, c = connected_query(context)
+    local backend = require "plugins.sql_server.backend"
+    context.original_close = backend.close_session
+    backend.close_session = function() end
+    local pending = {}
+    backend.read_schema = function(_, callback)
+      pending[#pending + 1] = callback
+      return { cancel = function() end }
+    end
+    backend.execute = function(_, _, done)
+      done({ session = 7, results = {}, messages = {}, transaction_count = 0, schema_changed = true })
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("CREATE TABLE sales.a (x int)")
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(#pending, 1)
+    local first = { database = "AnvilTest", default_schema = "dbo", case_sensitive = false, objects = {} }
+    pending[1](first)
+    test.equal(c.catalog, first)
+    test.equal(#pending, 2)
+    local second = { database = "AnvilTest", default_schema = "dbo", case_sensitive = false, objects = { schema.objects[1] } }
+    pending[2](second)
+    test.equal(c.catalog, second)
+    test.equal(#pending, 2)
+  end)
+
   test.it("keeps the catalog when a reload fails, and reloads after an open transaction ends", function(context)
     local editor, c = connected_query(context)
     local original = c.catalog
