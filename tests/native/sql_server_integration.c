@@ -234,11 +234,22 @@ static int session_checks(SqlServerOptions *options) {
   sql_query_free(&result);
   sql = "SELECT @@SPID AS spid";
   CHECK(sql_session_execute(session, 1, 0, sql, strlen(sql), 1000, 30, NULL, NULL, &result));
-  char kill[64];
+  char kill[64], gone[128];
   snprintf(kill, sizeof(kill), "KILL %s", result.tables[0].cells[0].text);
+  snprintf(gone, sizeof(gone), "SELECT COUNT(*) AS n FROM sys.dm_exec_sessions WHERE session_id = %s AND session_id <> @@SPID",
+           result.tables[0].cells[0].text);
   sql_query_free(&result);
   CHECK(run_once(options, kill, 1000, 30, NULL, NULL, &result));
   sql_query_free(&result);
+  /* KILL can return before the server ends the session. A new connection can
+   * get the same session ID. */
+  for (int wait = 0;; ++wait) {
+    CHECK(wait < 100 && run_once(options, gone, 1000, 30, NULL, NULL, &result));
+    int alive = strcmp(result.tables[0].cells[0].text, "0") != 0;
+    sql_query_free(&result);
+    if (!alive) break;
+    Sleep(100);
+  }
   sql = "INSERT sales.customers ([na]]me]) VALUES (N'After idle')";
   int ran = sql_session_execute(session, 1, 0, sql, strlen(sql), 1000, 30, NULL, NULL, &result);
   sql_session_set_validation_idle(SQL_SESSION_VALIDATION_IDLE_MS);

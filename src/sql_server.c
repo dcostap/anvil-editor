@@ -104,6 +104,9 @@ int sql_server_open(const SqlServerOptions *o, int read_only, SqlServerConnectio
       !append_value(connection, sizeof(connection), "DATABASE", o->database) ||
       !append_value(connection, sizeof(connection), "TrustServerCertificate", o->trust_certificate ? "yes" : "no") ||
       !append_value(connection, sizeof(connection), "Trusted_Connection", o->integrated ? "yes" : "no") ||
+      /* The driver's own reconnect would hide a lost session, with its
+       * temporary tables. The session's idle check reports it instead. */
+      !append_value(connection, sizeof(connection), "ConnectRetryCount", "0") ||
       (!o->integrated && (!append_value(connection, sizeof(connection), "UID", o->user ? o->user : "") ||
                         !append_value(connection, sizeof(connection), "PWD", o->password ? o->password : "")))) {
     snprintf(error, 256, "Connection settings are too long."); goto done;
