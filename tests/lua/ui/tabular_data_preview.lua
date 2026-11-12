@@ -4,6 +4,7 @@ local command = require "core.command"
 local Editor = require "core.editor"
 local panes = require "core.panes"
 local Preview = require "plugins.tabular_data_preview"
+local style = require "core.style"
 local test = require "core.test"
 local view_icons = require "core.view_icons"
 
@@ -404,6 +405,36 @@ test.describe("Tabular Data Preview", function()
     local _, _, resized_second = view:column_screen_rect(2)
     test.equal(resized_first, first + 40)
     test.equal(resized_second, second)
+  end)
+
+  test.it("fits columns to their names and values", function()
+    local description = "a much longer description than the id"
+    write_file(path, "Id,Description\n1," .. description .. "\n2,short\n")
+    editor.buffer:reload()
+    command.perform("tabular_data:open_preview")
+    local view = remember(panes.active().current_view)
+    test.ok(wait_ready(view))
+    view.position = { x = 0, y = 0 }
+    view.size = { x = 900, y = 400 }
+    local _, _, id_width = view:column_screen_rect(1)
+    local _, _, description_width = view:column_screen_rect(2)
+    test.ok(id_width < description_width)
+    test.ok(description_width >= style.code_font:get_width(description))
+
+    local x, y = view:column_divider_screen_position(2)
+    test.ok(view:on_mouse_pressed("left", x, y, 1))
+    view:on_mouse_moved(x + 50, y, 50, 0)
+    view:on_mouse_released("left", x + 50, y)
+    x, y = view:column_divider_screen_position(2)
+    test.ok(view:on_mouse_pressed("left", x, y, 2))
+    view:on_mouse_released("left", x, y)
+    test.equal(select(3, view:column_screen_rect(2)), description_width)
+
+    view.column_widths[1], view.column_widths[2] = 300, 300
+    view:rebuild_column_offsets()
+    test.ok(command.perform("tabular_data:fit_all_columns"))
+    test.equal(select(3, view:column_screen_rect(1)), id_width)
+    test.equal(select(3, view:column_screen_rect(2)), description_width)
   end)
 
   test.it("restores its file and presentation state", function()

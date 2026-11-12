@@ -954,7 +954,7 @@ test.describe("SQL Queries", function()
     test.equal(select(1, editor.buffer:get_selection()), 5)
   end)
 
-  test.it("shows every row of the next result without the previous result's filter", function()
+  test.it("shows every row of the next result in fitted columns, without the previous result's filter", function()
     local Results = require "plugins.sql_server.results"
     local function model(names)
       local result = { headers = { "name" }, column_count = 1, rows = {} }
@@ -966,13 +966,17 @@ test.describe("SQL Queries", function()
     end
     local view = Results("Test")
     panes.place(function() return view end, { placement = "new", focus = true })
-    view:complete({ results = { model({ "Ada" }), model({ "Ada", "Bea" }) } })
+    local long = "Beatrice Alexandra Montgomery"
+    view:complete({ results = { model({ "Ada" }), model({ "Ada", long }) } })
+    local narrow = view.column_widths[1]
     test.ok(view:toggle_filter_value(1, "Ada"))
     test.ok(command.perform("sql_server:next_result"))
     test.equal(view:row_count(), 2)
-    test.equal(view:cell_value(2, 1), "Bea")
+    test.equal(view:cell_value(2, 1), long)
+    test.ok(view.column_widths[1] > narrow)
     test.ok(command.perform("sql_server:previous_result"))
     test.equal(view:row_count(), 1)
+    test.equal(view.column_widths[1], narrow)
   end)
 
   test.it("sorts a number column by value and a text column as text", function()

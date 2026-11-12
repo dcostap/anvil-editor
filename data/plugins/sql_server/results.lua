@@ -64,7 +64,7 @@ function Results:show_result(index)
   local model = self.data and self.data.results and self.data.results[index]
   if not model then return false end
   self.result_index = index
-  self.filters, self.sort = {}, nil
+  self.filters, self.sort, self.column_widths = {}, nil, {}
   self.scroll.x, self.scroll.y, self.scroll.to.x, self.scroll.to.y = 0, 0, 0, 0
   self:publish_model(model, index)
   self.result_warning = self.data.error or (self.data.limited and "Result limit reached. Some results are cut.") or model.warning

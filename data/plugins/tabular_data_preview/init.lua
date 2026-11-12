@@ -17,6 +17,12 @@ Preview.view_icon = view_icons.register("tabular_data", view_icons.file("preview
 
 local DEFAULT_COLUMN_WIDTH = 180
 local MIN_COLUMN_WIDTH = 72
+local MAX_FIT_WIDTH = 480
+local FIT_SAMPLE_ROWS = 500
+local FIT_MEASURED = 3
+-- A value longer than this many bytes fills MAX_FIT_WIDTH, so a fit does not
+-- measure long text.
+local FIT_TEXT_BYTES = 256
 local SOURCE_COLUMN_MIN_WIDTH = 64
 local CELL_PADDING = 8
 local DIVIDER_HIT_WIDTH = 5
@@ -258,6 +264,44 @@ function Preview:min_column_width()
   return scaled(MIN_COLUMN_WIDTH)
 end
 
+-- The width that shows a column's name, its sort and filter marks, and the
+-- values of its first FIT_SAMPLE_ROWS rows, up to MAX_FIT_WIDTH. Only the
+-- FIT_MEASURED longest values are measured, because a text measure is slow.
+function Preview:fit_width(column)
+  local font, padding = style.code_font, scaled(CELL_PADDING * 2)
+  local max_width = scaled(MAX_FIT_WIDTH)
+  local header = tostring(self.model.headers[column] or "") .. " ▲"
+  local width = font:get_width(header) + scaled(CELL_PADDING + FILTER_BUTTON_WIDTH)
+  local rows, missing = self.model.rows, self.model.missing_label
+  local longest, lengths = {}, {}
+  for index = 1, math.min(#rows, FIT_SAMPLE_ROWS) do
+    local value = rows[index].cells[column]
+    local length = value == false and #(missing or "") or #tostring(value or "")
+    if length > FIT_TEXT_BYTES then return max_width end
+    local place = #longest + 1
+    while place > 1 and lengths[place - 1] < length do place = place - 1 end
+    if place <= FIT_MEASURED then
+      table.insert(longest, place, value)
+      table.insert(lengths, place, length)
+      longest[FIT_MEASURED + 1], lengths[FIT_MEASURED + 1] = nil, nil
+    end
+  end
+  for _, value in ipairs(longest) do
+    width = math.max(width, font:get_width((display_text(value, missing))) + padding)
+  end
+  return common.round(math.max(self:min_column_width(), math.min(max_width, width)))
+end
+
+-- Fits one column, or all columns without `column`.
+function Preview:fit_columns(column)
+  if not self.model or self.model.column_count == 0 then return false end
+  local first, last = column or 1, column or self.model.column_count
+  for index = first, last do self.column_widths[index] = self:fit_width(index) end
+  self:rebuild_column_offsets()
+  core.redraw = true
+  return true
+end
+
 function Preview:rebuild_column_offsets()
   local offsets = { 0 }
   local total = 0
@@ -343,7 +387,7 @@ function Preview:publish_model(result, revision)
   self:apply_saved_state()
   if self.sort and self.sort.column > result.column_count then self.sort = nil end
   for column = 1, result.column_count do
-    self.column_widths[column] = self.column_widths[column] or self:default_column_width()
+    self.column_widths[column] = self.column_widths[column] or self:fit_width(column)
   end
   for column = result.column_count + 1, #self.column_widths do
     self.column_widths[column] = nil
@@ -677,6 +721,9 @@ function Preview:header_menu_items(column)
     { label = "Select Column", command = "tabular_data:select_column", args = { column } },
     "-",
     { label = "Copy Column Name", command = "tabular_data:copy_column_name", args = { column } },
+    "-",
+    { label = "Fit Column", command = "tabular_data:fit_column", args = { column } },
+    { label = "Fit All Columns", command = "tabular_data:fit_all_columns" },
   }
 end
 
@@ -1014,8 +1061,7 @@ function Preview:on_mouse_pressed(button, x, y, clicks)
   if button ~= "left" then return false end
   if target.kind == "column_divider" then
     if (clicks or 1) >= 2 then
-      self.column_widths[target.column] = self:default_column_width()
-      self:rebuild_column_offsets()
+      self:fit_columns(target.column)
     else
       self.column_drag = {
         column = target.column,
@@ -1391,6 +1437,11 @@ command.add(Preview, {
     return view.sort ~= nil and view:set_sort(view.sort.column, nil)
   end,
   ["tabular_data:reset_view"] = function(view) return view:reset_view() end,
+  ["tabular_data:fit_column"] = function(view, column)
+    column = column or view:focus_column()
+    return column ~= nil and view:fit_columns(column)
+  end,
+  ["tabular_data:fit_all_columns"] = function(view) return view:fit_columns() end,
   ["tabular_data:filter_column"] = function(view, column)
     column = column or view:focus_column()
     return column ~= nil and view:open_filter_prompt(column)
