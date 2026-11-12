@@ -10,7 +10,7 @@ void sql_query_free(SqlQueryResult *result) {
     SqlQueryTable *t = &result->tables[i];
     if (t->columns) for (size_t j = 0; j < t->column_count; ++j) free(t->columns[j]);
     if (t->cells) for (size_t j = 0; j < t->capacity * t->column_count; ++j) free(t->cells[j].text);
-    free(t->columns); free(t->cells);
+    free(t->columns); free(t->cells); free(t->numeric);
   }
   for (size_t i = 0; i < result->message_count; ++i) free(result->messages[i].text);
   free(result->messages);
@@ -230,13 +230,17 @@ static int read_result(Run *run, SQLHSTMT statement, SQLSMALLINT columns, unsign
   SqlQueryTable *t = &out->tables[out->count++];
   t->column_count = (size_t)columns;
   t->columns = calloc((size_t)columns, sizeof(char *));
-  if (!t->columns) return 0;
+  t->numeric = calloc((size_t)columns, 1);
+  if (!t->columns || !t->numeric) return 0;
   for (SQLSMALLINT column = 0; column < columns; ++column) {
     SQLWCHAR name[1024]; SQLSMALLINT name_length, type, decimals, nullable; SQLULEN size;
     if (!SQL_SUCCEEDED(SQLDescribeColW(statement, (SQLUSMALLINT)(column + 1), name, 1024,
                                       &name_length, &type, &size, &decimals, &nullable)) || name_length >= 1024) return 0;
     t->columns[column] = utf8(name, name_length, NULL);
     if (!t->columns[column]) return 0;
+    t->numeric[column] = type == SQL_TINYINT || type == SQL_SMALLINT || type == SQL_INTEGER || type == SQL_BIGINT ||
+                         type == SQL_DECIMAL || type == SQL_NUMERIC || type == SQL_REAL || type == SQL_FLOAT ||
+                         type == SQL_DOUBLE;
   }
   int cut = 0;
   for (;;) {

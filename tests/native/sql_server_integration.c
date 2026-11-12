@@ -60,6 +60,14 @@ static int execution_checks(SqlServerOptions *options) {
   strcat(wide_select, "; PRINT N'after wide';");
   CHECK(run_once(options, wide_select, 1000, 30, NULL, NULL, &result));
   CHECK(result.count == 1 && result.tables[0].column_count == 300 && !result.limited && has_message(&result, "after wide"));
+  CHECK(result.tables[0].numeric[0]);
+  sql_query_free(&result);
+  /* Number columns keep their type for sorting. */
+  sql = "SELECT CAST(1 AS bigint) AS a, CAST(1.5 AS decimal(38,4)) AS b, CAST(1 AS float) AS c, "
+        "CAST(1 AS money) AS d, N'1' AS e, CAST(1 AS bit) AS f, SYSDATETIME() AS g";
+  CHECK(run_once(options, sql, 1000, 30, NULL, NULL, &result));
+  CHECK(result.count == 1 && result.tables[0].column_count == 7);
+  CHECK(!memcmp(result.tables[0].numeric, "\1\1\1\1\0\0\0", 7));
   sql_query_free(&result);
   sql = "SELECT TOP (300) REPLICATE(CAST(N'x' AS nvarchar(max)), 32768) AS big FROM sys.all_objects; "
         "SELECT N'kept' AS value; PRINT N'after big';";

@@ -821,6 +821,28 @@ test.describe("SQL Queries", function()
     test.equal(view:row_count(), 1)
   end)
 
+  test.it("sorts a number column by value and a text column as text", function()
+    local Results = require "plugins.sql_server.results"
+    local values = { "10", "9", "-2.5", "-10", "0.75", "100000000000000000001", "100000000000000000000", "1E+3" }
+    local result = { headers = { "n", "t" }, column_kinds = { "number", "text" }, column_count = 2, rows = {} }
+    for i, value in ipairs(values) do
+      result.rows[i] = { cells = { value, value }, source_line1 = i, source_line2 = i }
+    end
+    result.distinct_values = require("plugins.tabular_data_preview.parser").distinct_values(result)
+    local view = Results("Test")
+    panes.place(function() return view end, { placement = "new", focus = true })
+    view:complete({ results = { result } })
+    local function column(index)
+      local shown = {}
+      for row = 1, view:row_count() do shown[row] = view:cell_value(row, index) end
+      return table.concat(shown, " ")
+    end
+    view:cycle_sort(1)
+    test.equal(column(1), "-10 -2.5 0.75 9 10 1E+3 100000000000000000000 100000000000000000001")
+    view:cycle_sort(2)
+    test.equal(column(2), "-10 -2.5 0.75 10 100000000000000000000 100000000000000000001 1E+3 9")
+  end)
+
   test.it("opens a table definition and returns to the same Untitled Query", function(context)
     local editor = connected_query(context)
     editor.buffer:text_input("SELECT * FROM sales.customers")

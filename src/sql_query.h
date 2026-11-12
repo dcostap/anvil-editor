@@ -20,6 +20,8 @@ typedef struct {
   SqlQueryCell *cells;
   size_t column_count, row_count, capacity;
   int truncated;
+  /* One flag for each column: 1 for an integer, decimal or floating-point type. */
+  unsigned char *numeric;
 } SqlQueryTable;
 /* Messages keep the order of the server's output, like SSMS's Messages tab:
  * PRINT text, warnings, errors and row counts. Line is a line of the submitted

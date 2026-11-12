@@ -184,6 +184,11 @@ static void push_result(lua_State *L, SqlQueryResult *result) {
       lua_pushstring(L, t->columns[col] ? t->columns[col] : ""); lua_rawseti(L, -2, (int)col + 1);
     }
     lua_setfield(L, -2, "headers");
+    lua_newtable(L);
+    for (size_t col = 0; col < t->column_count; ++col) {
+      lua_pushstring(L, t->numeric && t->numeric[col] ? "number" : "text"); lua_rawseti(L, -2, (int)col + 1);
+    }
+    lua_setfield(L, -2, "column_kinds");
     lua_createtable(L, (int)t->row_count, 0);
     for (size_t row = 0; row < t->row_count; ++row) {
       lua_createtable(L, 0, 3);
