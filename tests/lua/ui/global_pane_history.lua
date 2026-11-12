@@ -134,6 +134,37 @@ test.describe("Pane History", function()
     test.not_ok(require("core.pane_history").move("forward"))
   end)
 
+  test.it("counts the Panes of one Pane Group as one place", function()
+    local one = panes.create { factory = factory("one") }
+    local two = panes.split(one, "right", { factory = factory("two") })
+    local three = panes.create { factory = factory("three") }
+    visit(one)
+    visit(two)
+    visit(three)
+    move("back")
+    test.equal(panes.active(), two)
+    test.not_ok(require("core.pane_history").move("back"), "Back went to a Pane in the same Pane Group")
+    -- A focus change inside the group keeps the history position.
+    visit(one)
+    move("forward")
+    test.equal(panes.active(), three)
+  end)
+
+  test.it("goes back to the Pane that the user left in a Pane Group", function()
+    local one = panes.create { factory = factory("one") }
+    local two = panes.split(one, "right", { factory = factory("two") })
+    local three = panes.create { factory = factory("three") }
+    visit(three)
+    visit(one)
+    visit(two)
+    visit(one)
+    visit(three)
+    move("back")
+    test.equal(panes.active(), one)
+    move("back")
+    test.equal(panes.active(), three)
+  end)
+
   test.it("keeps the later cross-Project sequence and maps a history move to it", function()
     local list, current = require("core.pane_history").timeline({
       {path = "C:/Here", panes = {history = {

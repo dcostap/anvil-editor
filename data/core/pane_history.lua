@@ -53,6 +53,24 @@ function pane_history.entries()
   return log
 end
 
+-- The Panes of one Pane Group are one place in the history. Returns a function that gives the place of a Pane in the
+-- model `projects`. A Pane that no Project lists is its own place.
+local function places(projects)
+  local groups = {}
+  for _, project in ipairs(projects or {}) do
+    for _, item in ipairs(type(project.panes) == "table" and project.panes or {}) do
+      if type(item) == "table" and item.id ~= nil and item.group ~= nil then
+        groups[key(project.path, item.id)] = (common.path_compare_key(project.path) or project.path)
+          .. "\0\0" .. tostring(item.group)
+      end
+    end
+  end
+  return function(path, id)
+    local pane = key(path, id)
+    return groups[pane] or pane
+  end
+end
+
 local function find_repeated_panes(keys)
   for length = 1, math.floor(#keys / 2) do
     for start = 1, #keys - 2 * length + 1 do
@@ -68,9 +86,9 @@ local function find_repeated_panes(keys)
   end
 end
 
-local function compress_repetitions(list, current)
+local function compress_repetitions(list, current, place)
   local keys = {}
-  for index, entry in ipairs(list) do keys[index] = key(entry.path, entry.id) end
+  for index, entry in ipairs(list) do keys[index] = place(entry.path, entry.id) end
   while true do
     local start, length = find_repeated_panes(keys)
     if not start then return list, current end
@@ -86,7 +104,10 @@ end
 
 -- The Pane History in the Project Sidebar model `projects`, oldest first, as {path, id, at}, and the position of the
 -- current entry. When the user leaves a Pane that a move showed, that Pane goes again at the end, so no visit is lost.
+-- Consecutive visits to one Pane Group are one entry, for its last Pane. A focus change inside the Pane Group of the
+-- current entry keeps the history position.
 function pane_history.timeline(projects, window_id)
+  local place = places(projects)
   window_id = window_id or system.get_anvil_window_id()
   local entries = {}
   for _, project in ipairs(projects or {}) do
@@ -101,28 +122,32 @@ function pane_history.timeline(projects, window_id)
     end
   end
   table.sort(entries, function(a, b) return a.at < b.at end)
-  local list, index_of, current, moved = {}, {}, nil, nil
+  local list, index_of, current, moved, shown = {}, {}, nil, nil, nil
   local function add(path, id, at)
     local last = list[#list]
-    if not (last and key(last.path, last.id) == key(path, id)) then list[#list + 1] = {path = path, id = id, at = at} end
+    if not (last and place(last.path, last.id) == place(path, id)) then
+      list[#list + 1] = {path = path, id = id, at = at}
+    elseif key(last.path, last.id) ~= key(path, id) then
+      list[#list] = {path = path, id = id, at = at}
+    end
     index_of[at] = #list
   end
   for _, entry in ipairs(entries) do
     -- A move to an entry that its Project no longer keeps counts as a visit.
     local index = entry.to and index_of[entry.to]
     if index then
-      current, moved = index, entry.at
-    elseif current and key(list[current].path, list[current].id) == key(entry.path, entry.id) then
+      current, moved, shown = index, entry.at, entry
+    elseif current and place(list[current].path, list[current].id) == place(entry.path, entry.id) then
       -- Returning from another Window keeps this Window's history position.
-      moved = entry.at
+      moved, shown = entry.at, entry
     else
-      if current then add(list[current].path, list[current].id, moved) end
+      if current then add(shown.path, shown.id, moved) end
       current = nil
       add(entry.path, entry.id, entry.at)
     end
   end
   -- Replay moves before compression, so their original visit times still resolve.
-  return compress_repetitions(list, current or #list)
+  return compress_repetitions(list, current or #list, place)
 end
 
 -- This Project's view of all Projects: the last fetched Project Sidebar model, with this Project's live Panes and
@@ -138,7 +163,9 @@ local function model()
     if common.path_compare_key(item.path) ~= own and type(item.panes) == "table" then projects[#projects + 1] = item end
   end
   local items = {history = pane_history.entries()}
-  for _, pane in ipairs(panes.ordered()) do items[#items + 1] = {id = pane.id, snoozed = pane.group.snoozed} end
+  for _, pane in ipairs(panes.ordered()) do
+    items[#items + 1] = {id = pane.id, group = pane.group.id, snoozed = pane.group.snoozed}
+  end
   projects[#projects + 1] = {path = path, panes = items, window_id = system.get_anvil_window_id()}
   return projects, path
 end
@@ -155,6 +182,7 @@ local RANGES = {
 function pane_history.move(direction)
   local projects, path = model()
   local list, current = pane_history.timeline(projects)
+  local place = places(projects)
   local live = {}
   for _, project in ipairs(projects) do
     for _, item in ipairs(project.panes) do
@@ -162,12 +190,12 @@ function pane_history.move(direction)
     end
   end
   local active = require("core.panes").active()
-  local here = active and key(path, active.id)
+  local here = active and place(path, active.id)
   local first, last, step = RANGES[direction](current, #list)
   local target
   for index = first, last, step do
-    local item_key = key(list[index].path, list[index].id)
-    if live[item_key] and item_key ~= here then target = list[index]; break end
+    local item = list[index]
+    if live[key(item.path, item.id)] and place(item.path, item.id) ~= here then target = item; break end
   end
   if not target then
     core.log_quiet("Pane History %s: no Pane among %d entries at %d", direction, #list, current)
