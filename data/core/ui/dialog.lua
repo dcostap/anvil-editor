@@ -457,7 +457,7 @@ function Dialog:update_tooltip()
     local recent = self.tooltip_seen and now - self.tooltip_seen < TOOLTIP_GRACE
     self.tooltip_control, self.tooltip_since = control, recent and -math.huge or now
   end
-  local wanted = control and control.tooltip and control.enabled and not self.pressed_control
+  local wanted = control and control:get_tooltip() and control.enabled and not self.pressed_control
     and control ~= self.tooltip_dismissed and not overlay(self)
   self.tooltip_shown = wanted and now - self.tooltip_since >= dialog.TOOLTIP_DELAY or false
   if self.tooltip_shown then
@@ -470,7 +470,7 @@ end
 
 ---The text of the tooltip that shows, or nil.
 function Dialog:tooltip()
-  return self.tooltip_shown and self.tooltip_control.tooltip or nil
+  return self.tooltip_shown and self.tooltip_control:get_tooltip() or nil
 end
 
 local function draw_tooltip(self)

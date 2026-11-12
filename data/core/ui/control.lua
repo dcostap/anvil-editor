@@ -14,6 +14,7 @@ local layout = require "core.ui.layout"
 -- `hovered` is true while the pointer is over the control, and `pressed` while a press on it lasts.
 -- Each control takes a `tooltip` option: text that shows near it while the pointer rests on it. Give one to
 -- each button that has only an icon.
+-- Override `get_tooltip()` when different parts of a control need different explanations.
 -- A focused control can set `overlay` to a popup, such as a Select's list. The Dialog draws it above the card
 -- and gives it the pointer: contains(x, y), draw(), and the mouse methods above. A press outside the overlay
 -- and the control calls the control's cancel(), which closes the overlay. The overlay closes in on_blur().
@@ -52,6 +53,10 @@ end
 
 function Control:can_focus()
   return self.focusable and self.enabled and self.visible
+end
+
+function Control:get_tooltip()
+  return self.tooltip
 end
 
 ---The natural size, for layout.

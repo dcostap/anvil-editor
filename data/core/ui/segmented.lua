@@ -6,7 +6,9 @@ local surface = require "core.ui.surface"
 local Control = require "core.ui.control"
 
 -- A row of choices where one is on, such as a role. A click, or the editor's character moves, change it.
--- A highlight slides to the chosen segment. Another segment under the pointer lights up. Each option is `{ value = ..., label = "...", enabled = true }`.
+-- A highlight slides to the chosen segment. Another segment under the pointer lights up.
+-- Each option is `{ value = ..., label = "...", enabled = true, tooltip = "..." }`.
+-- An option's tooltip explains it on hover, including disabled choices. Otherwise, the control's tooltip applies.
 -- `on_change(value)` returns false to refuse the change.
 local Segmented = Control:extend()
 
@@ -109,6 +111,11 @@ function Segmented:on_mouse_moved(x, y)
     core.redraw = true
   end
   return true
+end
+
+function Segmented:get_tooltip()
+  local option = self.options[self.hover_index]
+  return option and option.tooltip or Segmented.super.get_tooltip(self)
 end
 
 function Segmented:draw(focused)

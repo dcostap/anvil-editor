@@ -23,6 +23,10 @@ function ProjectPathsDialog:__tostring() return "ProjectPathsDialog" end
 local VISIBLE_ROWS = 6
 
 local ROLE_ICONS = { root = ui.icons.home, external = ui.icons.link, vendored = ui.icons.package }
+local ROLE_TOOLTIPS = {
+  external = "Source outside the Root Project. Browse files and symbols; Usage Search skips it.",
+  vendored = "Dependency source inside or outside the Root Project. Usage Search includes it.",
+}
 
 local function role_color(role)
   if role == "external" then return style.project_path_external end
@@ -138,7 +142,9 @@ function ProjectPathsDialog:show_selected()
     for _, value in ipairs({ "external", "vendored" }) do
       local allowed = false
       for _, candidate in ipairs(paths.roles_for(entry.path)) do allowed = allowed or candidate == value end
-      options[#options + 1] = { value = value, label = paths.role_label(value), enabled = allowed }
+      options[#options + 1] = {
+        value = value, label = paths.role_label(value), enabled = allowed, tooltip = ROLE_TOOLTIPS[value],
+      }
     end
     -- The highlight slides between two entries with different roles. It starts again after the Root Project.
     if #role.options ~= #options then
