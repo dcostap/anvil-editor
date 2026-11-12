@@ -94,6 +94,15 @@ test.describe("Agent editor control", function()
         pane = panes.pane_for_view(view)
         if case.history then
           local Editor = require "core.editor"
+          -- A running host can still report shell startup as busy. Busy Terminals
+          -- open unrelated Views in a new Pane, not in Navigation History.
+          local idle_deadline = system.get_time() + 30
+          repeat
+            view:service_session(true)
+            if view.busy == false then break end
+            test.ok(system.get_time() < idle_deadline, "the shell did not become idle")
+            coroutine.yield(0.01)
+          until false
           view:mark_input_used()
           editor = panes.place(function() return Editor(core.open_buffer()) end, {pane = pane, placement = "current"})
           editor.buffer:insert(1, 1, "keep this text")
