@@ -250,7 +250,7 @@ function SidebarView:edit(name)
 end
 
 -- The Terminal menu's Snooze times, in hours.
-local SNOOZE_HOURS = {0.5, 1, 2, 3, 4, 12, 24}
+local SNOOZE_HOURS = {0.5, 1, 2, 3, 4, 12, 24, 48, 72, 120, 240}
 
 -- The Context Menu commands. Each takes the Sidebar View first, so the command list never offers them alone.
 command.add(function(view, ...)
@@ -300,7 +300,8 @@ function SidebarView:context_menu(row)
       end
       local times = {}
       for _, hours in ipairs(SNOOZE_HOURS) do
-        local label = hours < 1 and hours * 60 .. " Minutes" or hours == 1 and "1 Hour" or hours .. " Hours"
+        local label = hours < 1 and hours * 60 .. " Minutes" or hours == 1 and "1 Hour"
+          or hours >= 48 and hours / 24 .. " Days" or hours .. " Hours"
         times[#times + 1] = {label = label, command = "sidebar:snooze",
           args = {self, target, hours}}
       end
