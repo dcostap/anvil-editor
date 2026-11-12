@@ -5,6 +5,7 @@
 #include <string.h>
 
 #define CHECK(value) do { if (!(value)) { fprintf(stderr, "SQL execution check failed at line %d: %s\n", __LINE__, result.error); sql_query_free(&result); return 0; } } while (0)
+static bool cancel_now(void *context) { (void)context; return true; }
 static bool cancel_after_start(void *context) {
   return GetTickCount64() - *(ULONGLONG *)context > 1000;
 }
@@ -232,6 +233,20 @@ static int session_checks(SqlServerOptions *options) {
   sql = "SET NOEXEC OFF;\nSELECT 1 AS one";
   CHECK(sql_session_execute(session, 1, 0, sql, strlen(sql), 1000, 30, NULL, NULL, &result));
   CHECK(!result.idle_lost && result.count == 1 && !strcmp(result.tables[0].cells[0].text, "1"));
+  sql_query_free(&result);
+  /* A Cancel during the idle check sends no SQL, so the open transaction
+   * stays known. */
+  sql = "BEGIN TRANSACTION";
+  CHECK(sql_session_execute(session, 1, 0, sql, strlen(sql), 1000, 30, NULL, NULL, &result));
+  CHECK(result.transaction_count == 1);
+  sql_query_free(&result);
+  sql = "SELECT 1 AS one";
+  CHECK(!sql_session_execute(session, 1, 0, sql, strlen(sql), 1000, 30, cancel_now, NULL, &result));
+  CHECK(result.cancelled && !result.session_lost && result.count == 0 && result.transaction_count == 1);
+  sql_query_free(&result);
+  sql = "ROLLBACK";
+  CHECK(sql_session_execute(session, 1, 0, sql, strlen(sql), 1000, 30, NULL, NULL, &result));
+  CHECK(result.transaction_count == 0);
   sql_query_free(&result);
   sql = "SELECT @@SPID AS spid";
   CHECK(sql_session_execute(session, 1, 0, sql, strlen(sql), 1000, 30, NULL, NULL, &result));

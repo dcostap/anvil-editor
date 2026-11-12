@@ -452,7 +452,11 @@ int sql_query_read(const SqlServerOptions *options, const char *sql, size_t leng
   return ok;
 }
 
-typedef struct { SqlServerConnection connection; unsigned id; int busy, closing, autocommit; ULONGLONG used; } Session;
+/* `transaction_count` is the last @@TRANCOUNT that the session read, or -1.
+ * A run that sends no SQL reports it. */
+typedef struct {
+  SqlServerConnection connection; unsigned id; int busy, closing, autocommit, transaction_count; ULONGLONG used;
+} Session;
 static Session sessions[SQL_SESSION_LIMIT];
 static SRWLOCK sessions_lock = SRWLOCK_INIT;
 static CONDITION_VARIABLE sessions_released = CONDITION_VARIABLE_INIT;
@@ -479,6 +483,7 @@ static int connection_error(SQLHSTMT statement) {
  * user cancels. Returns 1 for a live session, 0 for a lost one and -1 after a
  * cancel. */
 static int validate(SQLHDBC dbc, SqlQueryCancelled cancelled, void *context) {
+  if (cancelled && cancelled(context)) return -1;
   SQLHSTMT statement = SQL_NULL_HSTMT;
   if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &statement))) return 1;
   SQLSetStmtAttrW(statement, SQL_ATTR_QUERY_TIMEOUT, (SQLPOINTER)(SQLULEN)10, 0);
@@ -515,11 +520,12 @@ static Session *acquire(unsigned id, int *missing) {
   ReleaseSRWLockExclusive(&sessions_lock);
   return found;
 }
-static void release(Session *s, int close) {
+/* A session that sent no SQL keeps its idle time, so its next run checks it. */
+static void release(Session *s, int close, int sent) {
   SqlServerConnection connection = {0};
   AcquireSRWLockExclusive(&sessions_lock);
   if (close || s->closing) { connection = s->connection; memset(s, 0, sizeof(*s)); }
-  else { s->busy = 0; s->used = GetTickCount64(); }
+  else { s->busy = 0; if (sent) s->used = GetTickCount64(); }
   ReleaseSRWLockExclusive(&sessions_lock);
   WakeAllConditionVariable(&sessions_released);
   sql_server_close(&connection);
@@ -535,7 +541,7 @@ unsigned sql_session_open(const SqlServerOptions *options, char error[256]) {
     if (sessions[i].id) continue;
     if (!++session_serial) ++session_serial;
     id = session_serial;
-    sessions[i] = (Session){ connection, id, 0, 0, 1, GetTickCount64() };
+    sessions[i] = (Session){ connection, id, 0, 0, 1, 0, GetTickCount64() };
     break;
   }
   ReleaseSRWLockExclusive(&sessions_lock);
@@ -558,12 +564,12 @@ int sql_session_execute(unsigned id, int autocommit, int explain, const char *sq
     snprintf(out->error, sizeof(out->error), missing ? "The SQL session has ended. Run again to open a new one." : "The SQL session is busy.");
     return 0;
   }
-  int lost = 0, ok = 0;
+  int lost = 0, ok = 0, sent = 1;
   SQLHDBC dbc = s->connection.dbc;
   autocommit = autocommit != 0;
   if (GetTickCount64() - s->used >= validation_idle) {
     int valid = validate(dbc, cancelled, context);
-    if (valid < 0) { out->cancelled = 1; goto done; }
+    if (valid < 0) { out->cancelled = 1; sent = 0; goto done; }
     if (!valid) {
       lost = 1; out->idle_lost = 1;
       snprintf(out->error, sizeof(out->error), "The idle SQL session was lost. The server rolled back any open transaction.");
@@ -593,8 +599,12 @@ done:
     out->session_lost = 1; ok = 0;
     if (!out->error[0] || out->cancelled)
       snprintf(out->error, sizeof(out->error), "The connection to SQL Server was lost. The server rolled back any open transaction.");
+  } else if (sent) {
+    s->transaction_count = out->transaction_count;
+  } else {
+    out->transaction_count = s->transaction_count;
   }
-  release(s, lost);
+  release(s, lost, sent);
   return ok;
 }
 
@@ -608,11 +618,12 @@ int sql_session_end_transaction(unsigned id, int commit, int *count, int *ended,
   SQLHDBC dbc = s->connection.dbc;
   run_fixed(dbc, commit ? L"WHILE @@TRANCOUNT > 0 COMMIT TRANSACTION" : L"IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION", &messages, &lost);
   if (!lost) *count = transaction_count(dbc, NULL, &lost);
+  s->transaction_count = *count;
   *ended = lost;
   if (lost) snprintf(error, 256, "The connection to SQL Server was lost. The server rolled back any open transaction.");
   else if (messages.error[0]) snprintf(error, 256, "%.255s", messages.error);
   sql_query_free(&messages);
-  release(s, lost);
+  release(s, lost, 1);
   return !error[0];
 }
 
