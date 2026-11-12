@@ -188,6 +188,30 @@ static int edit_checks(SqlServerOptions *options) {
   return 1;
 }
 
+/* The fixture's sales.customers columns. */
+static int fixture_columns(const SqlServerCatalog *catalog) {
+  int id = 0, label = 0;
+  for (size_t i = 0; i < catalog->count; ++i) {
+    const SqlServerColumn *c = &catalog->columns[i];
+    if (strcmp(c->schema, "sales") || strcmp(c->table, "customers")) continue;
+    if (!strcmp(c->name, "id") && !strcmp(c->type, "int") && c->identity && c->primary_key && !c->nullable) id = 1;
+    if (!strcmp(c->name, "na]me") && !strcmp(c->type, "nvarchar(80)") && c->nullable) label = 1;
+  }
+  return id && label;
+}
+/* A database over the column limit lists its objects, and each table reads its own columns. */
+static int lazy_column_checks(SqlServerOptions *options) {
+  SqlServerCatalog catalog;
+  int lazy = sql_server_read_schema_limit(options, 1, &catalog) && !catalog.columns_loaded && catalog.count == 0
+    && catalog.object_count > 0 && !catalog.metadata_error[0];
+  sql_server_catalog_free(&catalog);
+  if (!lazy) { fprintf(stderr, "A large catalog did not load its columns on demand.\n"); return 0; }
+  int read = sql_server_read_columns(options, "sales", "customers", &catalog) && fixture_columns(&catalog);
+  sql_server_catalog_free(&catalog);
+  if (!read) { fprintf(stderr, "One table's columns did not read.\n"); return 0; }
+  return 1;
+}
+
 int main(int argc, char **argv) {
   const char *prefix = "(localdb)\\AnvilTest_";
   if (argc != 2 || strncmp(argv[1], prefix, strlen(prefix))) {
@@ -198,17 +222,10 @@ int main(int argc, char **argv) {
   if (!sql_server_read_schema(&options, &catalog)) {
     fprintf(stderr, "%s\n", catalog.error); sql_server_catalog_free(&catalog); return 1;
   }
-  int id = 0, label = 0;
-  for (size_t i = 0; i < catalog.count; ++i) {
-    const SqlServerColumn *c = &catalog.columns[i];
-    if (strcmp(c->schema, "sales") || strcmp(c->table, "customers")) continue;
-    if (!strcmp(c->name, "id") && !strcmp(c->type, "int") && c->identity && c->primary_key && !c->nullable) id = 1;
-    if (!strcmp(c->name, "na]me") && !strcmp(c->type, "nvarchar(80)") && c->nullable) label = 1;
-  }
-  int valid = id && label && !strcmp(catalog.database, "AnvilTest");
+  int valid = catalog.columns_loaded && fixture_columns(&catalog) && !strcmp(catalog.database, "AnvilTest");
   sql_server_catalog_free(&catalog);
   if (!valid) { fprintf(stderr, "Metadata did not match the fixture.\n"); return 1; }
-  if (!execution_checks(&options) || !session_checks(&options) || !edit_checks(&options)) return 1;
+  if (!lazy_column_checks(&options) || !execution_checks(&options) || !session_checks(&options) || !edit_checks(&options)) return 1;
   options.database = "AnvilTest};DATABASE={master";
   int injected = sql_server_read_schema(&options, &catalog);
   sql_server_catalog_free(&catalog);

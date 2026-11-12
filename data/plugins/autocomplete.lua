@@ -2566,6 +2566,11 @@ function autocomplete.trigger()
   autocomplete.open()
 end
 
+---Show the completion again, as typing does, after a provider's data arrives later.
+function autocomplete.refresh()
+  show_autocomplete()
+end
+
 ---Manually close the completions list.
 function autocomplete.close()
   reset_suggestions()

@@ -64,9 +64,18 @@ local function context(view, sql)
   if not parsed then return end
   if parsed.start < offset - col + 1 or text:sub(offset + 1, parsed["end"]):find("[\r\n]") then return end
   local result = { revision = buffer.text_revision, line = line, col = col, offset = offset,
-    generation = sql.generation, parsed = parsed, catalog = c.catalog, text = text }
+    generation = sql.generation, parsed = parsed, catalog = c.catalog, connection = c, text = text }
   cache[buffer] = result
   return result
+end
+-- A table whose columns are not loaded reads them. Completion then opens again, if the caret
+-- has not moved.
+local function load_columns(view, sql, state, object)
+  sql.object_columns(state.connection, object, function()
+    if core.active_view ~= view or view.buffer.text_revision ~= state.revision then return end
+    local line, col = view.buffer:get_selection()
+    if line == state.line and col == state.col then autocomplete.refresh() end
+  end)
 end
 local function complete(view, sql)
   local state = context(view, sql)
@@ -108,7 +117,8 @@ local function complete(view, sql)
       local qualifier = source.alias ~= "" and source.alias or source.name
       if p.qualifier == "" or equal(catalog, p.qualifier, qualifier) then
         local t = source_object(state, source)
-        if t then
+        if t and not t.columns then load_columns(view, sql, state, t)
+        elseif t then
           local owner = t.local_source and t.name or t.schema .. "." .. t.name
           for _, column in ipairs(t.columns) do
             local inserted = quote(buffer, column.name)
@@ -224,7 +234,7 @@ function M.object_at(view, sql)
         return t
       end
       if p.mode == "column" and (p.qualifier == "" or equal(state.catalog, qualifier, p.qualifier)) then
-        for _, column in ipairs(t.columns) do
+        for _, column in ipairs(t.columns or {}) do
           if equal(state.catalog, column.name, symbol) then
             if candidate then return end -- An unqualified column belongs to more than one source.
             candidate = t
@@ -243,6 +253,25 @@ function M.expand_star(view, sql)
     local state = context(view, sql)
     if not state or not state.parsed.star then return false end
     local p, columns = state.parsed, {}
+    -- Read the columns that a large database did not load, then expand at the same caret.
+    local missing = {}
+    for _, source in ipairs(p.sources) do
+      local qualifier = source.alias ~= "" and source.alias or source.name
+      local object = (p.qualifier == "" or equal(state.catalog, p.qualifier, qualifier)) and source_object(state, source)
+      if object and not object.columns then missing[#missing + 1] = object end
+    end
+    if #missing > 0 then
+      local remaining = #missing
+      for _, object in ipairs(missing) do
+        sql.object_columns(state.connection, object, function()
+          remaining = remaining - 1
+          if remaining > 0 or view.closed or view.buffer.text_revision ~= state.revision then return end
+          local line, col = view.buffer:get_selection()
+          if line == state.line and col == state.col then M.expand_star(view, sql) end
+        end)
+      end
+      return true
+    end
     for _, source in ipairs(p.sources) do
       local qualifier = source.alias ~= "" and source.alias or source.name
       if p.qualifier == "" or equal(state.catalog, p.qualifier, qualifier) then

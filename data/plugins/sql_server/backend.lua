@@ -58,6 +58,15 @@ function M.close_session(session)
     payload = { operation = "close_session", session = session },
   })
 end
+-- The columns of one table or view, for a database with more columns than the catalog loads.
+function M.read_columns(options, object, callback)
+  return submit(worker_pool.named("sql-server", { worker_count = 1 }), {
+    kind = "plugins.sql_server.worker",
+    payload = { operation = "columns", options = options, schema = object.schema, name = object.name },
+    on_result = function(message) callback(message.payload.value, message.payload.error) end,
+    on_error = function() callback(nil, "SQL column worker failed.") end,
+  })
+end
 function M.read_definition(options, object, callback)
   return submit(worker_pool.named("sql-server", { worker_count = 1 }), {
     kind = "plugins.sql_server.worker",

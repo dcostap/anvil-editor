@@ -182,12 +182,42 @@ function M.connect(id, password)
     passwords[c] = catalog and not c.integrated and password or nil
     c.state = catalog and "Ready" or "Failed"
     changed()
-    core.log_quiet("SQL Server: metadata connection=%s state=%s", id, c.state)
+    core.log_quiet("SQL Server: metadata connection=%s state=%s objects=%s columns_loaded=%s truncated=%s metadata_error=%s",
+      id, c.state, catalog and #catalog.objects or 0, tostring(catalog and catalog.columns_loaded),
+      tostring(catalog and catalog.objects_truncated), tostring(catalog and catalog.metadata_error ~= nil))
   end
   local handle, err = backend.read_schema(options, finish)
   if not handle then finish(nil, err or "Could not start metadata read.")
   elseif c.state == "Connecting" then c.job = handle end
   return handle ~= nil
+end
+-- The columns of a catalog table or view. A database with more columns than the catalog loads
+-- reads each object's columns on first use: `done(columns)` then runs when they arrive, and not
+-- after a disconnect. A failed read gives no columns until the next connect.
+local column_waiters = setmetatable({}, { __mode = "k" })
+function M.object_columns(c, object, done)
+  if object.columns then
+    if done then done(object.columns) end
+    return object.columns
+  end
+  local waiters = column_waiters[object]
+  if waiters then
+    if done then waiters[#waiters + 1] = done end
+    return
+  end
+  waiters = { done }
+  column_waiters[object] = waiters
+  local catalog, generation = c.catalog, c.generation
+  local function finish(columns, error)
+    column_waiters[object] = nil
+    if c.catalog ~= catalog or c.generation ~= generation then return end
+    if not columns then core.log_quiet("SQL Server: column read failed connection=%s: %s", c.id, tostring(error)) end
+    object.columns = columns or {}
+    changed()
+    for _, fn in ipairs(waiters) do fn(object.columns) end
+  end
+  local handle, err = backend.read_columns(M.connection_options(c), object, finish)
+  if not handle then finish(nil, err) end
 end
 function M.bind(buffer, id)
   if not M.find(id) then return false end
@@ -588,6 +618,8 @@ do
       if c.state ~= "Ready" then
         table.insert(parts, c.state == "Failed" and style.error or style.dim)
         table.insert(parts, " · " .. c.state)
+      elseif c.catalog and c.catalog.metadata_error then
+        table.insert(parts, style.warn); table.insert(parts, " · No Metadata")
       end
       local s = session.get(view.buffer)
       if view.buffer.sql_auto_commit == false then table.insert(parts, style.dim); table.insert(parts, " · Auto Commit Off") end
@@ -603,7 +635,9 @@ do
     end,
     tooltip = function(_, view)
       local c = M.connection_for(view.buffer)
-      return c and (c.database .. " @ " .. c.server .. " · " .. c.state) or "Choose a SQL connection"
+      if not c then return "Choose a SQL connection" end
+      local text = c.database .. " @ " .. c.server .. " · " .. c.state
+      return c.catalog and c.catalog.metadata_error and (text .. " · " .. c.catalog.metadata_error) or text
     end,
     command = "sql_server:choose_connection",
   }

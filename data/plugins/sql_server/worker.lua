@@ -29,6 +29,9 @@ function M.run(payload, context)
   elseif payload.operation == "definition" then
     result, err = require("sql_server_native").read_definition(payload.options, payload.schema, payload.name, context.cancel_token_name)
     payload.options.password = nil
+  elseif payload.operation == "columns" then
+    result, err = require("sql_server_native").read_columns(payload.options, payload.schema, payload.name)
+    payload.options.password = nil
   elseif payload.operation == "schema" then
     result, err = require("sql_server_native").read_schema(payload.options)
     payload.options.password = nil

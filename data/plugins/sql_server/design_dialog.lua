@@ -314,14 +314,25 @@ function TableDesign:catalog_object(schema, name)
   end
 end
 
+-- The columns of a referenced table. A large database reads them on first use; the page then
+-- shows them when they arrive.
+function TableDesign:referenced_columns(object)
+  if object.columns then return object.columns end
+  self.sql.object_columns(self.connection, object, function()
+    if self.is_open then self:show_fk() end
+  end)
+  return {}
+end
+
 -- The referenced column for a new pair: the next primary key column, or a column with the same name.
 function TableDesign:reference_for(fk, column)
   local object = self:catalog_object(fk.ref_schema, fk.ref_table)
   if not object then return "" end
   local used = {}
   for _, name in ipairs(fk.ref_columns) do used[name] = true end
-  for _, ref in ipairs(object.columns) do if ref.primary_key and not used[ref.name] then return ref.name end end
-  for _, ref in ipairs(object.columns) do if ref.name:lower() == column.name:lower() then return ref.name end end
+  local columns = self:referenced_columns(object)
+  for _, ref in ipairs(columns) do if ref.primary_key and not used[ref.name] then return ref.name end end
+  for _, ref in ipairs(columns) do if ref.name:lower() == column.name:lower() then return ref.name end end
   return ""
 end
 
@@ -425,7 +436,7 @@ function TableDesign:show_fk_reference()
   local position = fk and column and index_of(fk.columns, column.key)
   local object = fk and self:catalog_object(fk.ref_schema, fk.ref_table)
   local options = {}
-  for i, ref in ipairs(object and object.columns or {}) do options[i] = { value = ref.name, label = ref.name } end
+  for i, ref in ipairs(object and self:referenced_columns(object) or {}) do options[i] = { value = ref.name, label = ref.name } end
   if position and fk.ref_columns[position] ~= "" and not object then
     options[1] = { value = fk.ref_columns[position], label = fk.ref_columns[position] }
   end

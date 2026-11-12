@@ -77,6 +77,12 @@ static SqlServerOptions read_options(lua_State *L) {
   lua_getfield(L, 1, "encrypt"); options.encrypt = lua_isnil(L, -1) || lua_toboolean(L, -1);
   return options;
 }
+static void push_column(lua_State *L, const SqlServerColumn *column) {
+  lua_newtable(L);
+  text(L, "name", column->name); text(L, "type", column->type);
+  boolean(L, "nullable", column->nullable); boolean(L, "identity", column->identity);
+  boolean(L, "primary_key", column->primary_key);
+}
 static int read_schema(lua_State *L) {
   SqlServerOptions options = read_options(L);
   SqlServerCatalog *c = lua_newuserdata(L, sizeof(*c));
@@ -89,26 +95,49 @@ static int read_schema(lua_State *L) {
   lua_newtable(L);
   text(L, "database", c->database); text(L, "default_schema", c->default_schema);
   boolean(L, "case_sensitive", c->case_sensitive);
+  boolean(L, "columns_loaded", c->columns_loaded);
+  boolean(L, "objects_truncated", c->objects_truncated);
+  if (c->metadata_error[0]) text(L, "metadata_error", c->metadata_error);
   lua_newtable(L);
   size_t column_index = 0;
   for (size_t i = 0; i < c->object_count; ++i) {
     SqlServerObject *object=&c->objects[i];
     lua_newtable(L);
     text(L,"schema",object->schema); text(L,"name",object->name); text(L,"kind",object->kind);
-    lua_newtable(L);
-    size_t index=0;
-    while (column_index<c->count) {
-      SqlServerColumn *column=&c->columns[column_index];
-      if (strcmp(object->schema,column->schema) || strcmp(object->name,column->table)) break;
+    /* A table or view without loaded columns has no columns field. */
+    int has_columns = c->columns_loaded || (strcmp(object->kind, "table") && strcmp(object->kind, "view"));
+    if (has_columns) {
       lua_newtable(L);
-      text(L, "name", column->name); text(L, "type", column->type);
-      boolean(L, "nullable", column->nullable); boolean(L, "identity", column->identity);
-      boolean(L, "primary_key", column->primary_key);
-      lua_rawseti(L,-2,++index); ++column_index;
+      size_t index=0;
+      while (column_index<c->count) {
+        SqlServerColumn *column=&c->columns[column_index];
+        if (strcmp(object->schema,column->schema) || strcmp(object->name,column->table)) break;
+        push_column(L, column);
+        lua_rawseti(L,-2,++index); ++column_index;
+      }
+      lua_setfield(L,-2,"columns");
     }
-    lua_setfield(L,-2,"columns"); lua_rawseti(L,-2,i+1);
+    lua_rawseti(L,-2,i+1);
   }
   lua_setfield(L, -2, "objects");
+  sql_server_catalog_free(c);
+  return 1;
+}
+static int read_columns(lua_State *L) {
+  size_t slen, nlen;
+  const char *schema = luaL_checklstring(L, 2, &slen), *name = luaL_checklstring(L, 3, &nlen);
+  luaL_argcheck(L, slen > 0 && slen <= 512 && strlen(schema) == slen, 2, "invalid object schema");
+  luaL_argcheck(L, nlen > 0 && nlen <= 512 && strlen(name) == nlen, 3, "invalid object name");
+  SqlServerOptions options = read_options(L);
+  SqlServerCatalog *c = lua_newuserdata(L, sizeof(*c));
+  memset(c, 0, sizeof(*c));
+  luaL_setmetatable(L, "anvil.sql_catalog");
+  if (!sql_server_read_columns(&options, schema, name, c)) {
+    lua_pushnil(L); lua_pushstring(L, c->error);
+    sql_server_catalog_free(c); return 2;
+  }
+  lua_createtable(L, (int)c->count, 0);
+  for (size_t i = 0; i < c->count; ++i) { push_column(L, &c->columns[i]); lua_rawseti(L, -2, (int)i + 1); }
   sql_server_catalog_free(c);
   return 1;
 }
@@ -299,7 +328,7 @@ int luaopen_sql_server_native(lua_State *L) {
   lua_pushcfunction(L, catalog_gc); lua_setfield(L, -2, "__gc"); lua_pop(L, 1);
   luaL_newmetatable(L, "anvil.sql_query");
   lua_pushcfunction(L, query_gc); lua_setfield(L, -2, "__gc"); lua_pop(L, 1);
-  const luaL_Reg functions[] = { {"context", context}, {"read_schema", read_schema}, {"execute", execute_query},
+  const luaL_Reg functions[] = { {"context", context}, {"read_schema", read_schema}, {"read_columns", read_columns}, {"execute", execute_query},
     {"read_definition", read_definition}, {"module_script", module_script}, {"format", format_sql},
     {"end_transaction", end_transaction}, {"close_session", close_session}, {NULL, NULL} };
   luaL_newlib(L, functions); return 1;

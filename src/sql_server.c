@@ -4,16 +4,19 @@
 #include <string.h>
 #include <stdint.h>
 
+static void free_columns(SqlServerCatalog *c) {
+  for (size_t i = 0; i < c->count; ++i) {
+    free(c->columns[i].schema); free(c->columns[i].table);
+    free(c->columns[i].name); free(c->columns[i].type);
+  }
+  free(c->columns); c->columns = NULL; c->count = 0;
+}
 void sql_server_catalog_free(SqlServerCatalog *c) {
   for (size_t i = 0; i < c->object_count; ++i) {
     free(c->objects[i].schema); free(c->objects[i].name); free(c->objects[i].kind);
   }
   free(c->objects);
-  for (size_t i = 0; i < c->count; ++i) {
-    free(c->columns[i].schema); free(c->columns[i].table);
-    free(c->columns[i].name); free(c->columns[i].type);
-  }
-  free(c->columns); free(c->database); free(c->default_schema);
+  free_columns(c); free(c->database); free(c->default_schema);
   memset(c, 0, sizeof(*c));
 }
 
@@ -134,13 +137,55 @@ void sql_server_close(SqlServerConnection *session) {
   memset(session, 0, sizeof(*session));
 }
 
-int sql_server_read_schema(const SqlServerOptions *o, SqlServerCatalog *out) {
-  memset(out, 0, sizeof(*out));
-  SqlServerConnection session = {0};
+#define COLUMN_SELECT \
+  L"SELECT s.name, o.name, c.name, " \
+  L"t.name + CASE WHEN t.name IN ('varchar','char','varbinary','binary','nvarchar','nchar') " \
+  L"THEN '(' + CASE WHEN c.max_length=-1 THEN 'max' ELSE CONVERT(varchar(10), " \
+  L"CASE WHEN t.name IN ('nvarchar','nchar') THEN c.max_length/2 ELSE c.max_length END) END + ')' " \
+  L"WHEN t.name IN ('decimal','numeric') THEN '(' + CONVERT(varchar(10),c.precision) + ',' + CONVERT(varchar(10),c.scale) + ')' " \
+  L"WHEN t.name IN ('time','datetime2','datetimeoffset') THEN '(' + CONVERT(varchar(10),c.scale) + ')' ELSE '' END, " \
+  L"CONVERT(nvarchar(1),c.is_nullable), CONVERT(nvarchar(1),c.is_identity), " \
+  L"CASE WHEN EXISTS (SELECT 1 FROM sys.indexes i JOIN sys.index_columns ic ON ic.object_id=i.object_id AND ic.index_id=i.index_id " \
+  L"WHERE i.object_id=o.object_id AND i.is_primary_key=1 AND ic.column_id=c.column_id) THEN N'1' ELSE N'0' END " \
+  L"FROM sys.objects o JOIN sys.schemas s ON s.schema_id=o.schema_id " \
+  L"JOIN sys.columns c ON c.object_id=o.object_id JOIN sys.types t ON t.user_type_id=c.user_type_id " \
+  L"WHERE o.type IN ('U','V') AND o.is_ms_shipped=0 AND c.is_hidden=0"
+
+/* 1 at the end of the rows, -1 at the limit, 0 on an error. */
+static int fetch_columns(SQLHSTMT stmt, SqlServerCatalog *out, size_t limit) {
+  size_t capacity = 0;
+  for (;;) {
+    SQLRETURN rc = SQLFetch(stmt);
+    if (rc == SQL_NO_DATA) return 1;
+    if (!SQL_SUCCEEDED(rc)) { sql_server_diagnostic(out->error, SQL_HANDLE_STMT, stmt, "Metadata read"); return 0; }
+    if (out->count == limit) return -1;
+    if (out->count == capacity) {
+      capacity = capacity ? capacity * 2 : 256;
+      SqlServerColumn *p = realloc(out->columns, capacity * sizeof(*p));
+      if (!p) return 0;
+      out->columns = p;
+    }
+    SqlServerColumn *c = &out->columns[out->count++];
+    memset(c, 0, sizeof(*c));
+    c->schema = cell(stmt, 1); c->table = cell(stmt, 2); c->name = cell(stmt, 3); c->type = cell(stmt, 4);
+    char *nullable = cell(stmt, 5), *identity = cell(stmt, 6), *key = cell(stmt, 7);
+    int valid = c->schema && c->table && c->name && c->type && nullable && identity && key;
+    c->nullable = nullable && !strcmp(nullable, "1");
+    c->identity = identity && !strcmp(identity, "1");
+    c->primary_key = key && !strcmp(key, "1");
+    free(nullable); free(identity); free(key);
+    if (!valid) return 0;
+  }
+}
+static char *copy_text(const char *s) {
+  char *p = malloc(strlen(s) + 1);
+  if (p) strcpy(p, s);
+  return p;
+}
+/* Reads the catalog on an open connection. 0 on a metadata error. */
+static int read_catalog(SQLHDBC dbc, size_t column_limit, SqlServerCatalog *out) {
   SQLHSTMT stmt = SQL_NULL_HSTMT;
   int success = 0;
-  if (!sql_server_open(o, 1, &session, out->error)) goto done;
-  SQLHDBC dbc = session.dbc;
   if (!execute(dbc, &stmt, L"SELECT DB_NAME(), SCHEMA_NAME(), CASE WHEN N'a'=N'A' THEN N'0' ELSE N'1' END", out)) goto done;
   if (!SQL_SUCCEEDED(SQLFetch(stmt))) goto done;
   out->database = cell(stmt, 1); out->default_schema = cell(stmt, 2);
@@ -156,7 +201,8 @@ int sql_server_read_schema(const SqlServerOptions *o, SqlServerCatalog *out) {
     SQLRETURN rc = SQLFetch(stmt);
     if (rc == SQL_NO_DATA) break;
     if (!SQL_SUCCEEDED(rc)) { sql_server_diagnostic(out->error, SQL_HANDLE_STMT, stmt, "Object read"); goto done; }
-    if (out->object_count == 10000) { snprintf(out->error,sizeof(out->error),"Database metadata exceeds 10000 objects."); goto done; }
+    /* Cancel, so the driver does not read the remaining rows. */
+    if (out->object_count == SQL_SERVER_OBJECT_LIMIT) { out->objects_truncated = 1; SQLCancel(stmt); break; }
     if (out->object_count == object_capacity) {
       object_capacity = object_capacity ? object_capacity * 2 : 256;
       SqlServerObject *p = realloc(out->objects,object_capacity*sizeof(*p));
@@ -168,48 +214,80 @@ int sql_server_read_schema(const SqlServerOptions *o, SqlServerCatalog *out) {
     if (!object->schema || !object->name || !object->kind) goto done;
   }
   SQLFreeHandle(SQL_HANDLE_STMT, stmt); stmt = SQL_NULL_HSTMT;
-  const wchar_t *query =
-    L"SELECT s.name, o.name, c.name, "
-    L"t.name + CASE WHEN t.name IN ('varchar','char','varbinary','binary','nvarchar','nchar') "
-    L"THEN '(' + CASE WHEN c.max_length=-1 THEN 'max' ELSE CONVERT(varchar(10), "
-    L"CASE WHEN t.name IN ('nvarchar','nchar') THEN c.max_length/2 ELSE c.max_length END) END + ')' "
-    L"WHEN t.name IN ('decimal','numeric') THEN '(' + CONVERT(varchar(10),c.precision) + ',' + CONVERT(varchar(10),c.scale) + ')' "
-    L"WHEN t.name IN ('time','datetime2','datetimeoffset') THEN '(' + CONVERT(varchar(10),c.scale) + ')' ELSE '' END, "
-    L"CONVERT(nvarchar(1),c.is_nullable), CONVERT(nvarchar(1),c.is_identity), "
-    L"CASE WHEN EXISTS (SELECT 1 FROM sys.indexes i JOIN sys.index_columns ic ON ic.object_id=i.object_id AND ic.index_id=i.index_id "
-    L"WHERE i.object_id=o.object_id AND i.is_primary_key=1 AND ic.column_id=c.column_id) THEN N'1' ELSE N'0' END "
-    L"FROM sys.objects o JOIN sys.schemas s ON s.schema_id=o.schema_id "
-    L"JOIN sys.columns c ON c.object_id=o.object_id JOIN sys.types t ON t.user_type_id=c.user_type_id "
-    L"WHERE o.type IN ('U','V') AND o.is_ms_shipped=0 AND c.is_hidden=0 ORDER BY s.name,o.name,c.column_id";
-  if (!execute(dbc, &stmt, query, out)) goto done;
-  size_t capacity = 0;
-  for (;;) {
-    SQLRETURN rc = SQLFetch(stmt);
-    if (rc == SQL_NO_DATA) break;
-    if (!SQL_SUCCEEDED(rc)) { sql_server_diagnostic(out->error, SQL_HANDLE_STMT, stmt, "Metadata read"); goto done; }
-    if (out->count == 50000) { snprintf(out->error, sizeof(out->error), "Database metadata exceeds 50000 columns."); goto done; }
-    if (out->count == capacity) {
-      capacity = capacity ? capacity * 2 : 256;
-      SqlServerColumn *p = realloc(out->columns, capacity * sizeof(*p));
-      if (!p) goto done;
-      out->columns = p;
-    }
-    SqlServerColumn *c = &out->columns[out->count++];
-    memset(c, 0, sizeof(*c));
-    c->schema = cell(stmt, 1); c->table = cell(stmt, 2); c->name = cell(stmt, 3); c->type = cell(stmt, 4);
-    char *nullable = cell(stmt, 5), *identity = cell(stmt, 6), *key = cell(stmt, 7);
-    int valid = c->schema && c->table && c->name && c->type && nullable && identity && key;
-    c->nullable = nullable && !strcmp(nullable, "1");
-    c->identity = identity && !strcmp(identity, "1");
-    c->primary_key = key && !strcmp(key, "1");
-    free(nullable); free(identity); free(key);
-    if (!valid) goto done;
+  /* A truncated object list cannot hold all columns, so each object reads its own. */
+  if (out->objects_truncated) { success = 1; goto done; }
+  if (!execute(dbc, &stmt, L"SELECT CONVERT(nvarchar(20), COUNT_BIG(*)) FROM sys.objects o JOIN sys.columns c ON c.object_id=o.object_id "
+      L"WHERE o.type IN ('U','V') AND o.is_ms_shipped=0 AND c.is_hidden=0", out)) goto done;
+  if (!SQL_SUCCEEDED(SQLFetch(stmt))) goto done;
+  char *count = cell(stmt, 1);
+  if (!count) goto done;
+  unsigned long long columns = strtoull(count, NULL, 10); free(count);
+  SQLFreeHandle(SQL_HANDLE_STMT, stmt); stmt = SQL_NULL_HSTMT;
+  if (columns > column_limit) { success = 1; goto done; }
+  if (!execute(dbc, &stmt, COLUMN_SELECT L" ORDER BY s.name,o.name,c.column_id", out)) goto done;
+  int fetched = fetch_columns(stmt, out, column_limit);
+  if (!fetched) goto done;
+  /* Columns added after the count. */
+  if (fetched < 0) { SQLCancel(stmt); free_columns(out); success = 1; goto done; }
+  out->columns_loaded = 1;
+  success = 1;
+done:
+  if (stmt != SQL_NULL_HSTMT) SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+  return success;
+}
+int sql_server_read_schema_limit(const SqlServerOptions *o, size_t column_limit, SqlServerCatalog *out) {
+  memset(out, 0, sizeof(*out));
+  SqlServerConnection session = {0};
+  if (!sql_server_open(o, 1, &session, out->error)) {
+    if (!out->error[0]) snprintf(out->error, sizeof(out->error), "Could not open SQL Server connection.");
+    return 0;
   }
+  if (!read_catalog(session.dbc, column_limit, out)) {
+    /* The login works, so Run still works. Completion and Symbol Search have no objects. */
+    char error[256];
+    snprintf(error, sizeof(error), "%s", out->error[0] ? out->error : "Could not read SQL Server metadata.");
+    sql_server_catalog_free(out);
+    snprintf(out->metadata_error, sizeof(out->metadata_error), "%s", error);
+    out->columns_loaded = 1;
+  }
+  if (!out->database) out->database = copy_text(o->database);
+  if (!out->default_schema) out->default_schema = copy_text("dbo");
+  sql_server_close(&session);
+  return 1;
+}
+int sql_server_read_schema(const SqlServerOptions *o, SqlServerCatalog *out) {
+  return sql_server_read_schema_limit(o, SQL_SERVER_COLUMN_LIMIT, out);
+}
+int sql_server_read_columns(const SqlServerOptions *o, const char *schema, const char *name, SqlServerCatalog *out) {
+  memset(out, 0, sizeof(*out));
+  SqlServerConnection session = {0};
+  SQLHSTMT stmt = SQL_NULL_HSTMT;
+  SQLWCHAR wide_schema[513], wide_name[513];
+  SQLLEN schema_length = SQL_NTS, name_length = SQL_NTS;
+  int success = 0;
+  if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, schema, -1, (wchar_t *)wide_schema, 513) ||
+      !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name, -1, (wchar_t *)wide_name, 513)) {
+    snprintf(out->error, sizeof(out->error), "Invalid object name."); return 0;
+  }
+  if (!sql_server_open(o, 1, &session, out->error)) goto done;
+  if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, session.dbc, &stmt)) ||
+      !SQL_SUCCEEDED(SQLSetStmtAttr(stmt, SQL_ATTR_QUERY_TIMEOUT, (SQLPOINTER)15, 0)) ||
+      !SQL_SUCCEEDED(SQLBindParameter(stmt, 1, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR, 128, 0, wide_schema, 0, &schema_length)) ||
+      !SQL_SUCCEEDED(SQLBindParameter(stmt, 2, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR, 128, 0, wide_name, 0, &name_length))) goto done;
+  if (!SQL_SUCCEEDED(SQLExecDirectW(stmt, (SQLWCHAR *)(COLUMN_SELECT L" AND s.name=? AND o.name=? ORDER BY c.column_id"), SQL_NTS))) {
+    sql_server_diagnostic(out->error, SQL_HANDLE_STMT, stmt, "Column read"); goto done;
+  }
+  /* SQL Server allows at most 30,000 columns in one table. */
+  if (fetch_columns(stmt, out, 30000) != 1) goto done;
+  out->columns_loaded = 1;
   success = 1;
 done:
   if (stmt != SQL_NULL_HSTMT) SQLFreeHandle(SQL_HANDLE_STMT, stmt);
   sql_server_close(&session);
-  if (!success && !out->error[0]) snprintf(out->error, sizeof(out->error), "Could not read complete SQL Server metadata.");
+  if (!success) {
+    free_columns(out);
+    if (!out->error[0]) snprintf(out->error, sizeof(out->error), "Could not read the columns.");
+  }
   return success;
 }
 #else
@@ -217,5 +295,11 @@ int sql_server_read_schema(const SqlServerOptions *o, SqlServerCatalog *out) {
   (void)o; memset(out, 0, sizeof(*out));
   snprintf(out->error, sizeof(out->error), "SQL Server connections currently require Windows.");
   return 0;
+}
+int sql_server_read_schema_limit(const SqlServerOptions *o, size_t column_limit, SqlServerCatalog *out) {
+  (void)column_limit; return sql_server_read_schema(o, out);
+}
+int sql_server_read_columns(const SqlServerOptions *o, const char *schema, const char *name, SqlServerCatalog *out) {
+  (void)schema; (void)name; return sql_server_read_schema(o, out);
 }
 #endif

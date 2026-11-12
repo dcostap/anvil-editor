@@ -127,7 +127,9 @@ Windows uses Microsoft ODBC Driver 18, or Driver 17 when 18 is absent. Windows a
 
 TLS defaults to certificate verification. Trust Certificate keeps encryption but accepts an unverified certificate. No Encryption is an explicit choice for servers such as LocalDB. Anvil never selects it after a failed encrypted connection.
 
-Metadata reads run on a worker. They use fixed SQL Server catalog queries, request read-only access, and close the connection afterward. Ready means that a metadata snapshot is available. Each Query's SQL Session is a separate connection. Completion reads that snapshot without network access. Disconnect and connection changes discard it. Late results cannot replace a newer connection state.
+Metadata reads run on a worker. They use fixed SQL Server catalog queries, request read-only access, and close the connection afterward. Ready means that the login works and a metadata snapshot is available. Each Query's SQL Session is a separate connection. Completion reads that snapshot without network access. Disconnect and connection changes discard it. Late results cannot replace a newer connection state.
+
+A database with more than 50,000 table and view columns loads only its list of objects. Each table's columns then load the first time completion, star expansion or Table Design needs them, and stay until the next connect. Completion opens again when they arrive, if the caret has not moved. The object list stops at 200,000 objects. When the login works but a metadata read fails, for example without permission, the connection is still Ready and SQL runs. The Status Bar then shows No Metadata, and its tooltip gives the reason. Completion and Symbol Search have no objects until Reload Schema succeeds.
 
 ## Supported SQL context
 
@@ -139,7 +141,7 @@ Unqualified table lookup follows the database user's default schema, then `dbo`.
 
 The Query text also defines Local Sources: CTEs of the caret's statement, derived tables, and the temporary tables and table variables of the whole text. Their columns come from the text: a column list, `CREATE TABLE #name (...)`, `DECLARE @name TABLE (...)`, or the names of a SELECT's columns, also `SELECT ... INTO #name`. A SELECT column has a name when it is a column, `expression AS name`, `expression name` or `name = expression`. Completion offers these columns and the names of CTEs, temporary tables and table variables. Expand Star uses them. A Local Source hides a database table with the same name, and Go to Definition does not open that table. A Local Source with `*` in its SELECT has no column list, so Expand Star refuses it.
 
-Cross-database references, table-valued function sources, correlated outer references, and temporary tables that another Query or an earlier text made are not supported. This is not a complete T-SQL parser or a Tree-sitter SQL grammar. Context reads stop above 256 KiB, 32,768 tokens, 64 nested SELECT scopes, 64 sources, 64 Local Sources, or 2,048 Local Source columns. Metadata reads stop above 10,000 objects or 50,000 columns.
+Cross-database references, table-valued function sources, correlated outer references, and temporary tables that another Query or an earlier text made are not supported. This is not a complete T-SQL parser or a Tree-sitter SQL grammar. Context reads stop above 256 KiB, 32,768 tokens, 64 nested SELECT scopes, 64 sources, 64 Local Sources, or 2,048 Local Source columns.
 
 ## Source reference
 
@@ -154,6 +156,7 @@ The selected completion path has these parts:
 - `com/onseven/dbvis/b/c/b/pb.java` supplies table candidates.
 - `com/onseven/dbvis/b/c/b/x.java` supplies column candidates.
 - `com/onseven/dbvis/b/c/b/gb.java` schedules background work and rejects obsolete results.
+- `com/onseven/dbvis/t/b/b_.java` (`MetaDataCacheWorker`) loads tables and columns on demand. Anvil reads one table's columns on first use only when a database is over its column limit.
 
 Anvil follows this context/provider structure for the supported cases. It does not port Swing, JDBC, or the complete product. Native ODBC and workers replace those platform boundaries. Existing Editors, completion providers, Dialog controls, and navigation supply the UI.
 
@@ -189,7 +192,7 @@ meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/sql_agg
 meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/sql_server.lua
 ```
 
-The real-server test is opt-in. It needs an existing LocalDB installation and Microsoft ODBC Driver 18 or 17. It creates a uniquely named instance and a database in a private temporary folder. It checks metadata, escaped identifiers, unchanged table data, and connection-value isolation. Execution checks cover multiple results, update counts, exact values, Unicode, embedded NUL, limits, errors, and cancellation. Session checks cover `GO` batches and error lines, temporary tables between runs, Auto Commit off, Commit and Roll Back, Explain Plan, a session after a cancelled run, and the rollback when a session closes. Result edit checks cover the browse-mode description of a result, a scripted update, and the rollback of a script whose row is gone. The Table Design check reads a table in a transaction, applies its `ALTER` script, and rolls back. It then deletes its instance and files. It never reads user connection settings or connects to another instance.
+The real-server test is opt-in. It needs an existing LocalDB installation and Microsoft ODBC Driver 18 or 17. It creates a uniquely named instance and a database in a private temporary folder. It checks metadata, the column reads of a catalog over its column limit, escaped identifiers, unchanged table data, and connection-value isolation. Execution checks cover multiple results, update counts, exact values, Unicode, embedded NUL, limits, errors, and cancellation. Session checks cover `GO` batches and error lines, temporary tables between runs, Auto Commit off, Commit and Roll Back, Explain Plan, a session after a cancelled run, and the rollback when a session closes. Result edit checks cover the browse-mode description of a result, a scripted update, and the rollback of a script whose row is gone. The Table Design check reads a table in a transaction, applies its `ALTER` script, and rolls back. It then deletes its instance and files. It never reads user connection settings or connects to another instance.
 
 ```sh
 ANVIL_SQL_INTEGRATION=1 meson test -C build-windows-x86_64 anvil:sql-server-integration --print-errorlogs

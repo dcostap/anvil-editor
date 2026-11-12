@@ -17,14 +17,15 @@ local schema = {
     } },
   },
 }
-local function connected_query(context)
+local function connected_query(context, catalog)
   local sql = require "plugins.sql_server"
   local backend = require "plugins.sql_server.backend"
   context.original_backend = backend.read_schema
   context.original_execute = backend.execute
   context.original_definition = backend.read_definition
+  context.original_columns = backend.read_columns
   backend.read_schema = function(_, callback)
-    callback(schema)
+    callback(catalog or schema)
     return { cancel = function() end }
   end
   backend.read_definition = function(_, object, callback)
@@ -54,6 +55,7 @@ test.describe("SQL Queries", function()
     if context.original_close then require("plugins.sql_server.backend").close_session = context.original_close end
     if context.nag_show then core.nag_view.show = context.nag_show end
     require("plugins.sql_server.backend").read_definition = context.original_definition
+    if context.original_columns then require("plugins.sql_server.backend").read_columns = context.original_columns end
     if context.connection_id then require("plugins.sql_server").remove(context.connection_id) end
     if context.second_connection_id then require("plugins.sql_server").remove(context.second_connection_id) end
     local open = dialog.current()
@@ -193,6 +195,59 @@ test.describe("SQL Queries", function()
     test.equal(autocomplete.get_selected_suggestion().text, "name")
     test.ok(command.perform("autocomplete:complete"))
     test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "SELECT c.name FROM sales.customers AS c")
+  end)
+
+  test.it("reads a large database's columns when completion needs them, and runs SQL without metadata", function(context)
+    local large = { database = "AnvilTest", default_schema = "dbo", case_sensitive = false, columns_loaded = false,
+      objects = { { schema = "sales", name = "customers", kind = "table" }, { schema = "dbo", name = "orders", kind = "table" } } }
+    local editor = connected_query(context, large)
+    local backend = require "plugins.sql_server.backend"
+    local requests = {}
+    backend.read_columns = function(_, object, callback)
+      requests[#requests + 1] = { name = object.schema .. "." .. object.name, callback = callback }
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("SELECT c.na FROM sales.customers AS c")
+    editor.buffer:set_selection(1, #"SELECT c.na" + 1)
+    autocomplete.trigger()
+    test.not_ok(autocomplete.is_open())
+    test.equal(#requests, 1)
+    test.equal(requests[1].name, "sales.customers")
+    autocomplete.trigger()
+    test.equal(#requests, 1)
+    requests[1].callback(schema.objects[1].columns)
+    test.ok(autocomplete.is_open())
+    test.equal(autocomplete.get_selected_suggestion().text, "name")
+    autocomplete.close()
+
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    editor.buffer:text_input("SELECT * FROM dbo.orders")
+    editor.buffer:set_selection(1, #"SELECT *" + 1)
+    test.ok(command.perform("sql_server:expand_star"))
+    test.equal(#requests, 2)
+    test.equal(requests[2].name, "dbo.orders")
+    requests[2].callback(schema.objects[2].columns)
+    test.equal(editor.buffer.lines[1], "SELECT customer_id FROM dbo.orders\n")
+
+    local sql = require "plugins.sql_server"
+    local c = sql.connection_for(editor.buffer)
+    sql.disconnect(c.id)
+    backend.read_schema = function(_, callback)
+      callback({ database = "AnvilTest", default_schema = "dbo", columns_loaded = true, objects = {},
+        metadata_error = "Metadata read failed (SQLSTATE 42000, error 229)." })
+      return { cancel = function() end }
+    end
+    test.ok(sql.connect(c.id))
+    test.equal(c.state, "Ready")
+    local submitted
+    backend.execute = function(_, text, done)
+      submitted = text
+      done({ results = {}, affected_rows = {}, messages = {} })
+      return { cancel = function() end }
+    end
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(submitted, "SELECT customer_id FROM dbo.orders")
   end)
 
   test.it("completes and expands the columns of CTEs and temporary tables, not of a table with the same name", function(context)
