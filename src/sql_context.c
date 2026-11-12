@@ -303,7 +303,7 @@ static size_t system_time_end(const char *s, Token *ts, size_t i, size_t end) {
   size_t k=i+3;
   if (k>=end || !word(s,ts[i+1],"FOR") || !word(s,ts[i+2],"SYSTEM_TIME")) return i;
   if (word(s,ts[k],"ALL")) return k;
-  if (word(s,ts[k],"AS") && k+2<end && word(s,ts[k+1],"OF")) return value_end(ts,k+2,end);
+  if (word(s,ts[k],"AS") && k+1<end && word(s,ts[k+1],"OF")) return k+2<end ? value_end(ts,k+2,end) : k+1;
   if ((word(s,ts[k],"FROM") || word(s,ts[k],"BETWEEN")) && k+1<end) {
     k=value_end(ts,k+1,end);
     if (k+2<end && (word(s,ts[k+1],"TO") || word(s,ts[k+1],"AND"))) return value_end(ts,k+2,end);
@@ -404,6 +404,11 @@ static int read_statement(const char *s, Token *ts, size_t begin, size_t end, si
     if (read<=0) return read==0 ? 0 : 1;
     ++i;
     if (merge) {
+      /* A table hint, such as WITH (HOLDLOCK), comes before the alias. */
+      if (i+1<end && word(s,ts[i],"WITH") && ts[i+1].kind=='(') {
+        size_t close=closing(ts,i+1,end);
+        i=close==end ? end : close+1;
+      }
       if (i<end && word(s,ts[i],"AS")) ++i;
       if (i<end && is_name(ts[i]) && !reserved(s,ts[i]) && !word(s,ts[i],"USING")) {
         if (!name(s,ts[i],ts[i].end,target.alias)) return 0;
@@ -426,14 +431,44 @@ static int read_statement(const char *s, Token *ts, size_t begin, size_t end, si
       if (insert) break;
     }
   }
+  /* OUTPUT ... INTO table (columns): the caret in the name is a table
+   * position, and its column list offers only that table's columns. */
+  int output=0;
+  for (size_t k=i; k<end && ts[k].start<caret; ++k) {
+    if (ts[k].depth!=scope) continue;
+    if (word(s,ts[k],"OUTPUT")) { output=1; continue; }
+    if (!output || !word(s,ts[k],"INTO")) continue;
+    size_t at=k+1;
+    if (at>=end || caret<=ts[at].start) { out->mode=SQL_CONTEXT_TABLE; out->count=0; return 1; }
+    if (!is_name(ts[at])) break;
+    SqlSource into={0};
+    int read=read_name(s,ts,&at,end,&into);
+    if (read<=0) return read==0 ? 0 : 1;
+    if (caret<=ts[at].end) { out->mode=SQL_CONTEXT_TABLE; out->count=0; return 1; }
+    if (at+1<end && ts[at+1].kind=='(') {
+      size_t close=closing(ts,at+1,end);
+      if (caret>ts[at+1].start && (close==end || caret<=ts[close].start)) {
+        link_local(&into,out);
+        out->sources[0]=into;
+        out->count=1;
+        out->mode=SQL_CONTEXT_COLUMN;
+        return 1;
+      }
+    }
+    break;
+  }
   if (!read_scope(s,ts,i,end,scope,caret,merge,out)) return 0;
-  /* UPDATE c ... FROM sales.customers c names its target by a FROM alias.
-   * UPDATE sales.customers ... FROM sales.customers names the same table. */
+  /* The target names the FROM entry with its exposed name: the alias, or
+   * else the table name without its schema, as SQL Server binds it. So
+   * UPDATE c ... FROM sales.customers c, UPDATE customers ... FROM
+   * sales.customers and UPDATE dbo.customers ... FROM customers each name one
+   * table. A target with a schema does not name an alias. */
   if (!merge && out->count>1)
     for (size_t k=1; k<out->count; ++k) {
       const SqlSource *target=&out->sources[0], *other=&out->sources[k];
-      int same=target->schema[0] ? same_name(other->schema,target->schema) && same_name(other->name,target->name)
-        : same_name(other->alias[0] ? other->alias : other->name,target->name);
+      int same=other->alias[0] ? !target->schema[0] && same_name(other->alias,target->name)
+        : same_name(other->name,target->name)
+          && (!target->schema[0] || !other->schema[0] || same_name(other->schema,target->schema));
       if (same) {
         memmove(out->sources,out->sources+1,(out->count-1)*sizeof(*out->sources));
         --out->count;

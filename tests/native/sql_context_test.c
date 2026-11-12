@@ -163,6 +163,28 @@ int main(void) {
   text = "SELECT h. FROM sales.customers FOR SYSTEM_TIME BETWEEN '2020' AND DATEADD(day, 1, @at) h JOIN sales.orders o ON 1 = 1";
   parse_after(&c, text, "SELECT h.");
   assert(sources_are(&c, "customers h,orders o"));
+  /* An unfinished AS OF is not an alias. */
+  text = "SELECT h. FROM sales.customers FOR SYSTEM_TIME AS OF ";
+  parse_after(&c, text, "SELECT h.");
+  assert(sources_are(&c, "customers"));
+  /* A MERGE table hint keeps the alias after it. */
+  text = "MERGE INTO sales.customers WITH (HOLDLOCK) AS tgt USING sales.staging s ON tgt.";
+  parse_after(&c, text, "ON tgt.");
+  assert(c.mode == SQL_CONTEXT_COLUMN && sources_are(&c, "customers tgt,staging s"));
+  /* An UPDATE target names the FROM entry whose exposed name (its alias, or
+   * else its table name) it has, with or without a schema, as in SQL Server. */
+  text = "UPDATE sales.customers SET na = 1 FROM customers JOIN sales.orders o ON o.customer_id = id";
+  parse_after(&c, text, "SET na");
+  assert(sources_are(&c, "customers,orders o"));
+  text = "UPDATE customers SET na = 1 FROM sales.customers c";
+  parse_after(&c, text, "SET na");
+  assert(sources_are(&c, "customers,customers c"));
+  /* OUTPUT INTO names its own table. */
+  text = "DELETE FROM sales.orders OUTPUT deleted.id INTO dbo.archive (i";
+  parse_after(&c, text, "(i");
+  assert(c.mode == SQL_CONTEXT_COLUMN && sources_are(&c, "archive"));
+  parse_after(&c, text, "INTO ");
+  assert(c.mode == SQL_CONTEXT_TABLE);
   /* A CTE or a temporary table can be the target. */
   text = "WITH old AS (SELECT id, total FROM sales.orders) DELETE FROM old WHERE to";
   parse_after(&c, text, "WHERE to");
