@@ -1086,6 +1086,10 @@ void anvil_hosted_surface_test_memory_release_failure(void) {
   if (hosted.active && SDL_getenv("ANVIL_SURFACE_FAULT_PROBE"))
     SDL_SetAtomicInt(&test_memory_release_failure, 1);
 }
+void anvil_hosted_surface_test_window_size(void) {
+  if (!hosted.active || !SDL_getenv("ANVIL_SURFACE_FAULT_PROBE") || !view->window) return;
+  SDL_SetWindowSize(view->window, view->config.pixel_w + 12, view->config.pixel_h + 40);
+}
 
 bool anvil_hosted_surface_show_dialog(uint32_t id, SDL_FileDialogType type, SDL_PropertiesID props, SDL_DialogFileCallback callback, void *userdata) {
   size_t index = SDL_arraysize(hosted.dialogs);
@@ -1491,6 +1495,12 @@ bool anvil_hosted_surface_is_window(SDL_Window *window) {
     if (item->window == window) { view = item; return true; }
   return false;
 }
+bool anvil_hosted_surface_window_size(SDL_Window *window, int *w, int *h) {
+  if (!anvil_hosted_surface_is_window(window) || view->config.pixel_w <= 0 || view->config.pixel_h <= 0) return false;
+  *w = view->config.pixel_w;
+  *h = view->config.pixel_h;
+  return true;
+}
 static void remove_view(HostedView *item) {
   HostedView **link = &views;
   while (*link && *link != item) link = &(*link)->next;
@@ -1814,11 +1824,15 @@ void anvil_hosted_surface_dialog_result_failed(void) {}
 void anvil_hosted_surface_render_failed(const char *cause) { (void)cause; }
 void anvil_hosted_surface_test_packet(bool stale) { (void)stale; }
 void anvil_hosted_surface_test_memory_release_failure(void) {}
+void anvil_hosted_surface_test_window_size(void) {}
 bool anvil_hosted_surface_show_dialog(uint32_t id, SDL_FileDialogType type, SDL_PropertiesID props, SDL_DialogFileCallback callback, void *userdata) {
   (void)id; (void)type; (void)props; (void)callback; (void)userdata; return false;
 }
 void anvil_hosted_surface_register_window(SDL_Window *window) { (void)window; }
 bool anvil_hosted_surface_is_window(SDL_Window *window) { (void)window; return false; }
+bool anvil_hosted_surface_window_size(SDL_Window *window, int *w, int *h) {
+  (void)window; (void)w; (void)h; return false;
+}
 void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, int width, int height) {
   (void)window; (void)name; (void)width; (void)height;
 }

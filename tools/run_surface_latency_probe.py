@@ -149,7 +149,7 @@ def main() -> int:
         "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window", "recovery", "shell-empty", "shell-sidebar",
         "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs",
         "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close",
-        "fault-alloc", "fault-event", "fault-open", "fault-acquire", "fault-present", "fault-resize",
+        "fault-alloc", "fault-event", "fault-window-size", "fault-open", "fault-acquire", "fault-present", "fault-resize",
         "fault-write", "fault-pipe", "fault-busy", "fault-stale", "fault-malformed", "fault-device",
         "fault-startup", "fault-release", "fault-project-release", "fault-pipe-force-close",
         "probe-exit-error", "startup-reader", "startup-writer", "startup-timer", "restart-startup-timer",

@@ -610,6 +610,10 @@ On Windows, shell and direct mode read the monitor's content scale through `src/
 
 `plugins.scale` keeps the chosen interface and text Zoom ratios separate from the applied size limits. Display changes apply those ratios again; they do not derive Zoom from limited font sizes. Display events do not save Zoom. Explicit scale configuration takes priority over display changes.
 
+A hosted process draws at the size that the shell configured, not at its hidden window's size. Windows can change that size at a display scale change, such as the end of an RDP session, and the shell refuses frames of another size. Run the `fault-window-size` shell probe after changes.
+
+The Sidebar process makes its fonts from the style fonts, which `require "core"` makes at the startup SCALE of 1. It divides by that SCALE, not by its Window's scale. Run `ui/sidebar_app.lua` after changes.
+
 Run `anvil:display-scale`, `ui/scale_fonts.lua` and the `zoom-global` shell probe after changes.
 
 ## Renderer selection

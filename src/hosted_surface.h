@@ -48,6 +48,8 @@ void anvil_hosted_surface_terminal_quit_choice(AnvilSurfaceTerminalQuit choice);
 void anvil_hosted_surface_dialog_result_failed(void);
 void anvil_hosted_surface_test_packet(bool stale);
 void anvil_hosted_surface_test_memory_release_failure(void);
+/* Probes only: changes the hidden window's size, as Windows can at a display scale change. */
+void anvil_hosted_surface_test_window_size(void);
 void anvil_hosted_surface_render_failed(const char *cause);
 bool anvil_hosted_surface_show_dialog(uint32_t id, SDL_FileDialogType type, SDL_PropertiesID props, SDL_DialogFileCallback callback, void *userdata);
 
@@ -60,6 +62,9 @@ bool anvil_hosted_surface_move_project(uint32_t project_id, uint32_t target_wind
 /* The Sidebar places a Project's row before or after another row. */
 bool anvil_hosted_surface_reorder_project(uint32_t row_id, uint32_t anchor_row_id, bool after);
 bool anvil_hosted_surface_is_window(SDL_Window *window);
+/* The size that the shell configured for a hosted window. The shell accepts only frames of this size. Windows can
+ * change the hidden window's own size, for example at a display scale change. Returns false for other windows. */
+bool anvil_hosted_surface_window_size(SDL_Window *window, int *w, int *h);
 
 void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, int width, int height);
 /* Records the background of the frame being published, R | G << 8 | B << 16 | A << 24. */

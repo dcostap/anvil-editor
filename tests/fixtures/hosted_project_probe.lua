@@ -293,6 +293,11 @@ if project:find("/driver$", 1) then
           user32.ShowWindow(window, 9)
           user32.SendMessageW(window, 0x804b, 0, 0)
           save(root .. "/continue.lua", {continue = true})
+        elseif fault == "window-size" then
+          assert(wait_for(function() return load(root .. "/fault-sent.lua") end, 15))
+          local record = trace():sub(trace_start + 1):match("Shell discarded stale frame:[^\n]*")
+          assert(not record, "the shell refused frames after the hidden window changed size: " .. tostring(record))
+          save(root .. "/continue.lua", {continue = true})
         elseif fault == "present" or fault == "resize" or fault == "release" or fault == "device" then
           -- A lost GPU device gets a new device. The Project keeps running and presents again.
           local mark = fault == "device" and "D3D11 device lost" or "Shell rebuilt GPU presentation"
@@ -1045,6 +1050,19 @@ else
       local fault = action:sub(7)
       if fault == "malformed" or fault == "stale" then
         system.test_surface_failure(fault)
+      elseif fault == "window-size" then
+        -- Windows changed the hidden window's size. The next frames must still have the configured size.
+        local draws, draw = 0, core.root_panel.draw
+        core.root_panel.draw = function(...) draws = draws + 1; return draw(...) end
+        system.test_surface_failure(fault)
+        local view = core.open_file(project .. "/edited.txt")
+        for index = 1, 5 do
+          view.buffer:insert(1, 1, "size " .. index)
+          core.redraw = true
+          local drawn = draws
+          assert(wait_for(function() return draws > drawn end, 5), "the Project did not draw")
+        end
+        core.root_panel.draw = draw
       elseif fault == "device" or fault == "project-release" then
         system.test_surface_failure(fault)
         local view = core.open_file(project .. "/edited.txt")

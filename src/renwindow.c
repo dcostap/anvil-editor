@@ -14,11 +14,19 @@
 #endif
 
 #ifdef ANVIL_USE_SDL_RENDERER
+/* A hosted window draws at its configured size, not at the hidden window's own size. */
+static void window_pixel_size(RenWindow *ren, int *w, int *h) {
+  if (!anvil_hosted_surface_window_size(ren->cache.window, w, h)) SDL_GetWindowSizeInPixels(ren->cache.window, w, h);
+}
+static void window_point_size(RenWindow *ren, int *w, int *h) {
+  if (!anvil_hosted_surface_window_size(ren->cache.window, w, h)) SDL_GetWindowSize(ren->cache.window, w, h);
+}
+
 static void query_surface_scale(RenWindow *ren, float* scale_x, float* scale_y) {
   int w_pixels, h_pixels;
   int w_points, h_points;
-  SDL_GetWindowSizeInPixels(ren->cache.window, &w_pixels, &h_pixels);
-  SDL_GetWindowSize(ren->cache.window, &w_points, &h_points);
+  window_pixel_size(ren, &w_pixels, &h_pixels);
+  window_point_size(ren, &w_points, &h_points);
   float scaleX = w_points > 0 ? (float) w_pixels / (float) w_points : 1.0f;
   float scaleY = h_points > 0 ? (float) h_pixels / (float) h_points : 1.0f;
   if(scale_x)
@@ -30,8 +38,8 @@ static void query_surface_scale(RenWindow *ren, float* scale_x, float* scale_y) 
 static void update_cached_window_size(RenWindow *ren) {
   int point_w = 0, point_h = 0;
   int pixel_w = 0, pixel_h = 0;
-  SDL_GetWindowSize(ren->cache.window, &point_w, &point_h);
-  SDL_GetWindowSizeInPixels(ren->cache.window, &pixel_w, &pixel_h);
+  window_point_size(ren, &point_w, &point_h);
+  window_pixel_size(ren, &pixel_w, &pixel_h);
   query_surface_scale(ren, &ren->cache.rensurface.scale_x, &ren->cache.rensurface.scale_y);
   ren->cache.window_width = point_w;
   ren->cache.window_height = point_h;
@@ -116,7 +124,7 @@ static void init_surface(RenWindow *ren) {
   }
   int w, h;
   query_start_ns = SDL_GetTicksNS();
-  SDL_GetWindowSizeInPixels(ren->cache.window, &w, &h);
+  window_pixel_size(ren, &w, &h);
   SDL_PixelFormat format = SDL_GetWindowPixelFormat(ren->cache.window);
   query_end_ns = SDL_GetTicksNS();
   create_start_ns = SDL_GetTicksNS();
@@ -214,7 +222,7 @@ void renwin_resize_surface(UNUSED RenWindow *ren) {
   int old_w = ren->cache.rensurface.surface ? ren->cache.rensurface.surface->w : 0;
   int old_h = ren->cache.rensurface.surface ? ren->cache.rensurface.surface->h : 0;
   float old_scale = ren->cache.rensurface.scale_x;
-  SDL_GetWindowSizeInPixels(ren->cache.window, &new_w, &new_h);
+  window_pixel_size(ren, &new_w, &new_h);
   query_surface_scale(ren, &new_scale, NULL);
   bool recreated = false;
   bool deferred = false;
