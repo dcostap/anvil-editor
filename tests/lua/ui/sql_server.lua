@@ -1154,6 +1154,32 @@ test.describe("SQL Queries", function()
     test.equal(view.column_widths[1], narrow)
   end)
 
+  test.it("summarizes the shown rows, the columns and the run time in the footer", function(context)
+    local Results = require "plugins.sql_server.results"
+    local result = { headers = { "name", "city" }, column_count = 2, rows = {} }
+    for i, name in ipairs({ "Ada", "Bea", "Cy" }) do
+      result.rows[i] = { cells = { name, "Lisbon" }, source_line1 = i, source_line2 = i }
+    end
+    result.distinct_values = require("plugins.tabular_data_preview.parser").distinct_values(result)
+    local view = Results("Test")
+    panes.place(function() return view end, { placement = "new", focus = true })
+    view:complete({ results = { result }, seconds = 0.0123 })
+    test.equal((view:footer_summary()), "3 rows · 2 columns · 12 ms")
+    test.ok(view:toggle_filter_value(1, "Bea"))
+    test.equal((view:footer_summary()), "1 of 3 rows · 2 columns · 12 ms")
+
+    -- A run measures its time.
+    local editor = connected_query(context)
+    require("plugins.sql_server.backend").execute = function(_, _, done)
+      done({ session = 7, results = { result }, messages = {}, transaction_count = 0 })
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("SELECT name, city FROM sales.customers")
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.ok((editor.buffer.sql_execution.view:footer_summary()):match("^%d+ rows? · 2 columns · %d+ ms$"))
+  end)
+
   test.it("sorts a number column by value and a text column as text", function()
     local Results = require "plugins.sql_server.results"
     local values = { "10", "9", "-2.5", "-10", "0.75", "100000000000000000001", "100000000000000000000", "1E+3" }

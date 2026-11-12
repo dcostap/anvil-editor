@@ -189,11 +189,25 @@ function Results:footer_summary()
   if self.model.column_count == 0 then return nil end
   local selection = self:selection_summary()
   if selection then return selection, style.text end
-  local rows = self:row_count()
-  local text = string.format("%d %s", rows, rows == 1 and "row" or "rows")
+  -- Like DbVisualizer's rows and columns item, a filter shows the total too.
+  -- The text stays until the rows or the result change, so a frame makes none.
+  local rows, cache = self:row_count(), self.summary_cache
+  if cache and cache.model == self.model and cache.data == self.data and cache.rows == rows then
+    return cache.text, style.dim
+  end
+  local total, columns = #self.model.rows, self.model.column_count
+  local text = string.format("%s%d %s · %d %s", rows ~= total and string.format("%d of ", rows) or "", total,
+    total == 1 and "row" or "rows", columns, columns == 1 and "column" or "columns")
+  local seconds = self.data and self.data.seconds
+  if seconds then
+    text = text .. " · " .. (seconds < 1 and string.format("%d ms", math.floor(seconds * 1000 + 0.5))
+      or seconds < 60 and string.format("%.1f s", seconds)
+      or string.format("%d min %d s", math.floor(seconds / 60), math.floor(seconds % 60)))
+  end
   if self.data and #self.data.results > 1 then
     text = string.format("Result %d of %d · %s", self.result_index, #self.data.results, text)
   end
+  self.summary_cache = { model = self.model, data = self.data, rows = rows, text = text }
   return text, style.dim
 end
 

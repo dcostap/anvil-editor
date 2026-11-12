@@ -399,15 +399,16 @@ function M.run(editor, opts)
     end
     if data.error_line then M.set_error_line(buffer, line1 + data.error_line - 1) end
     if c.generation == run.generation then session.schema_check(buffer, c, data.schema_changed) end
+    data.seconds = system.get_time() - run.started
     if buffer.sql_execution == run and not view.closed then view:complete(data) end
     if not opts.explain then
       require("plugins.sql_server.history").record(storage_key, { text = text, connection = c.id, name = c.name,
-        seconds = system.get_time() - run.started,
+        seconds = data.seconds,
         status = data.cancelled and "Cancelled" or data.error and "Error" or "OK" })
     end
     core.log_quiet("SQL Server: execution connection=%s cancelled=%s failed=%s explain=%s seconds=%.3f",
       c.id, tostring(data.cancelled == true), tostring(data.error ~= nil), tostring(opts.explain == true),
-      system.get_time() - run.started)
+      data.seconds)
   end
   function start()
     local handle, err = backend.execute(M.connection_options(c), text, finish, {
