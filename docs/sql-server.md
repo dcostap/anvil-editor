@@ -58,7 +58,7 @@ A right-click on a column name opens its Context Menu: Sort Ascending, Sort Desc
 
 Each column fits its name and its longest values when it first shows, up to 480 pixels. The fit reads the first 500 rows and measures the three longest values of each column, so a wide table opens fast. A double-click on a column border, **Fit Column** and **Fit All Columns** fit again. DbVisualizer also fits columns by default, with their headers (`FitTables=true` and `FitTablesConsiderHeader=true` in `dbvis.prefs`; `com/onseven/dbvis/bc/pb.java`). Its default has no width limit (`GridColumnSeparatorWidth=-1`).
 
-`NULL` shows in the dim text color, so it differs from the text `'NULL'`. DbVisualizer also gives NULL cells their own color (`dbvis.grid.nullCellForeground` in `dbvis-themes.xml`). Number columns align at the right, so their digits line up.
+`NULL` shows in the dim text color, so it differs from the text `'NULL'`. DbVisualizer also gives NULL cells their own color (`dbvis.grid.nullCellForeground` in `dbvis-themes.xml`). Number columns align at the right, so their digits line up. A value wider than its column shows its start and "…", also a number, so a narrow column never shows only the last digits.
 
 A column of an integer, decimal, money or floating-point type sorts by value. The compare is exact for decimals and large integers. Other columns sort as text, without case, and dates sort in order because the server sends them as ISO text. Use `ORDER BY` for the server's collation. Copy uses tab-separated text, with `NULL` as an empty field.
 

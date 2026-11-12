@@ -29,6 +29,8 @@ local DIVIDER_HIT_WIDTH = 5
 local FILTER_BUTTON_WIDTH = 24
 local FILTER_SUGGESTION_LIMIT = 200
 local PARSE_DEBOUNCE = 0.2
+-- A model without column kinds draws with this table, so no frame makes one.
+local NO_KINDS = {}
 
 local function scaled(value)
   return common.round(value * SCALE)
@@ -98,6 +100,50 @@ local function draw_text_clipped(font, color, text, x, y, width, height, align)
   core.push_clip_rect(x, y, width, height)
   common.draw_text(font, color, tostring(text or ""), align or "left", x, y, width, height)
   core.pop_clip_rect()
+end
+
+-- A cell's text that fits `width`: the whole text, or its start and "…".
+-- Each result stays in a cache, so a frame measures only values that it has
+-- not drawn at that width.
+local ELLIPSIS = "…"
+local FIT_CACHE_LIMIT = 8192
+local fit_cache = { count = 0, by_width = {} }
+local function fitted_text(font, text, width)
+  local size = font:get_size()
+  if fit_cache.font ~= font or fit_cache.size ~= size or fit_cache.count > FIT_CACHE_LIMIT then
+    fit_cache.font, fit_cache.size, fit_cache.count, fit_cache.by_width = font, size, 0, {}
+  end
+  local cache = fit_cache.by_width[width]
+  if not cache then
+    cache = { texts = {}, widths = {} }
+    fit_cache.by_width[width] = cache
+  end
+  local fitted = cache.texts[text]
+  if fitted then return fitted, cache.widths[text] end
+  local fitted_width
+  fitted, fitted_width = text, font:get_width(text)
+  if fitted_width > width then
+    fitted, fitted_width = "", 0
+    local available = width - font:get_width(ELLIPSIS)
+    if available > 0 then
+      -- Each glyph takes at least one pixel, so a longer start cannot fit.
+      local ends, limit = {}, math.floor(available) + 1
+      for char_end in text:gmatch("[%z\1-\127\194-\244][\128-\191]*()") do
+        ends[#ends + 1] = char_end - 1
+        if #ends >= limit then break end
+      end
+      local low, high = 0, #ends
+      while low < high do
+        local mid = math.ceil((low + high) / 2)
+        if font:get_width(text:sub(1, ends[mid])) <= available then low = mid else high = mid - 1 end
+      end
+      fitted = (low > 0 and text:sub(1, ends[low]) or "") .. ELLIPSIS
+      fitted_width = font:get_width(fitted)
+    end
+  end
+  cache.texts[text], cache.widths[text] = fitted, fitted_width
+  fit_cache.count = fit_cache.count + 1
+  return fitted, fitted_width
 end
 
 local function display_text(value, missing_label)
@@ -1178,7 +1224,7 @@ function Preview:draw_body()
   local body_height = math.max(0, self.size.y - header_height)
   local first_row, last_row = self:visible_row_range()
   local first_column, last_column = self:visible_column_range()
-  local kinds = self.model.column_kinds or {}
+  local kinds = self.model.column_kinds or NO_KINDS
 
   for display_row = first_row, last_row do
     local y = body_y + (display_row - 1) * row_height - self.scroll.y
@@ -1205,15 +1251,20 @@ function Preview:draw_body()
       end
       if background then renderer.draw_rect(x, y, width, row_height, background) end
       -- A missing value, such as NULL, is dim, so it differs from its label
-      -- as text. Numbers align at the right, so their digits line up.
+      -- as text. Numbers that fit align at the right, so their digits line
+      -- up. A value that does not fit shows its start and "…".
       local value = self:cell_value(display_row, column)
-      draw_text_clipped(
-        font, color or (value == false and style.dim or style.text),
-        display_text(value, self.model.missing_label),
-        x + scaled(CELL_PADDING), y,
-        math.max(0, width - scaled(CELL_PADDING * 2)), row_height,
-        kinds[column] == "number" and value ~= false and "right" or "left"
-      )
+      local inner = width - scaled(CELL_PADDING * 2)
+      if inner > 0 then
+        local text = display_text(value, self.model.missing_label)
+        local shown, shown_width = fitted_text(font, text, inner)
+        local text_x = x + scaled(CELL_PADDING)
+        if kinds[column] == "number" and value ~= false and shown == text then
+          text_x = text_x + inner - shown_width
+        end
+        renderer.draw_text(font, shown, text_x, common.round(y + (row_height - font:get_height()) / 2),
+          color or (value == false and style.dim or style.text))
+      end
       renderer.draw_rect(x + width - 1, y, 1, row_height, style.divider)
       if self.selection_focus and self.selection_focus.row == display_row
           and self.selection_focus.column == column then
