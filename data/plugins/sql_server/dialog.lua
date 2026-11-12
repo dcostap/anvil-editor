@@ -106,17 +106,21 @@ function Databases:new()
   self.remove_button = Button { label = "Remove Connection", icon = ui.icons.remove, kind = "danger", size = "small",
     on_click = function()
       local c = self:selected()
-      if c then sql.remove(c.id); self:refresh(); self:focus(self:selected() and self.list or self.empty_add_button) end
+      if c then sql.after_transactions(c.id, function()
+        sql.remove(c.id); self:refresh(); self:focus(self:selected() and self.list or self.empty_add_button)
+      end) end
     end }
   self.connect_button = Button { label = "Connect", on_click = function()
     local c = self:selected()
     if not c then return end
-    sql.connect(c.id, self.password:get_text())
+    local password = self.password:get_text()
     self.password:set_text("")
+    if c.state == "Ready" then sql.refresh_schema(c.id); return end
+    sql.after_transactions(c.id, function() sql.connect(c.id, password) end)
   end }
   self.disconnect_button = Button { label = "Disconnect", on_click = function()
     local c = self:selected()
-    if c then sql.disconnect(c.id); self.password:set_text("") end
+    if c then self.password:set_text(""); sql.after_transactions(c.id, function() sql.disconnect(c.id) end) end
   end }
   self.status_text = layout.Text {}
   self.state_dot = StatusDot {}

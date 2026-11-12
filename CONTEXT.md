@@ -93,7 +93,7 @@ The per-project editor state that restores open views, tabs, splits, scroll posi
 _Avoid_: Session, app state
 
 **Project Symbol Search**:
-A search over named code symbols and Markdown headings across a loaded Project. In a SQL Query or Database Definition, it searches the objects of that document's Database Connection.
+A search over named code symbols and Markdown headings across a loaded Project, and over the objects of the Project's Database Connections.
 _Avoid_: global symbol search
 
 **Project Usage Search**:
@@ -165,6 +165,14 @@ _Avoid_: SQL Commander, query tab
 
 **SQL Result**:
 A read-only table returned by running a SQL Query. One run can return several SQL Results.
+
+**SQL Session**:
+A SQL Query's own open connection to its database server. Temporary tables, settings and open transactions stay in it from one run to the next. When it ends, the server rolls back its open transaction.
+_Avoid_: editor connection, physical connection
+
+**Table Design**:
+An editable copy of one table's structure: its columns, keys, indexes and constraints. It gives a script that makes the table look like the copy. It never changes the database.
+_Avoid_: table editor, schema editor
 
 **Database Connection**:
 A named configuration that identifies a database server, database, and authentication method for SQL Queries.

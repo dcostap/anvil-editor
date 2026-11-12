@@ -369,8 +369,12 @@ config.force_scrollbar_status = "contracted"
 require_core_plugin "bookmarks"
 require_core_plugin "filetree"
 require_core_plugin "project_paths"
-config.plugins.sql_server = { max_rows = 1000, timeout_seconds = 30 }
+config.plugins.sql_server = { max_rows = 1000, timeout_seconds = 0, run_generated_select = true, history_entries = 500,
+  connect_on_open = true }
 require_core_plugin "sql_server"
+-- In a SQL Editor, Ctrl+Enter runs only the selection, as in DbVisualizer.
+keymap.add({ ["ctrl+return"] = { "sql_server:run_selection" } })
+keymap.add({ ["f2"] = "sql_server:edit_cell", ["return"] = "sql_server:edit_cell", ["delete"] = "sql_server:delete_rows" })
 require_core_plugin "terminal"
 -- Use hard tabs for indentation, displayed at 4 columns.
 config.indent_size = 4

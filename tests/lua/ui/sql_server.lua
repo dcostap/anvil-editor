@@ -17,14 +17,15 @@ local schema = {
     } },
   },
 }
-local function connected_query(context)
+local function connected_query(context, catalog)
   local sql = require "plugins.sql_server"
   local backend = require "plugins.sql_server.backend"
   context.original_backend = backend.read_schema
   context.original_execute = backend.execute
   context.original_definition = backend.read_definition
+  context.original_columns = backend.read_columns
   backend.read_schema = function(_, callback)
-    callback(schema)
+    callback(catalog or schema)
     return { cancel = function() end }
   end
   backend.read_definition = function(_, object, callback)
@@ -50,8 +51,14 @@ test.describe("SQL Queries", function()
     core.global_prompt_bar:exit(true)
     if context.original_backend then require("plugins.sql_server.backend").read_schema = context.original_backend end
     if context.original_execute then require("plugins.sql_server.backend").execute = context.original_execute end
+    if context.original_end then require("plugins.sql_server.backend").end_transaction = context.original_end end
+    if context.original_close then require("plugins.sql_server.backend").close_session = context.original_close end
+    if context.nag_show then core.nag_view.show = context.nag_show end
+    if context.original_warn then core.warn = context.original_warn end
     require("plugins.sql_server.backend").read_definition = context.original_definition
+    if context.original_columns then require("plugins.sql_server.backend").read_columns = context.original_columns end
     if context.connection_id then require("plugins.sql_server").remove(context.connection_id) end
+    if context.second_connection_id then require("plugins.sql_server").remove(context.second_connection_id) end
     local open = dialog.current()
     if open then open:close() end
     panes.reset_for_tests()
@@ -104,14 +111,22 @@ test.describe("SQL Queries", function()
     test.equal(buffer:get_text(1, 1, math.huge, math.huge), "SELECT * FROM sales.customers")
   end)
 
-  test.it("chooses a connection when an ordinary SQL Editor first runs a selection", function(context)
+  test.it("uses the Project's only connection without asking, and asks when the Project has more", function(context)
     local _, c = connected_query(context)
     local sql = require "plugins.sql_server"
-    sql.disconnect(c.id)
     local editor = sql.new_query()
+    editor.buffer:text_input("SELECT c.na FROM sales.customers AS c")
+    editor.buffer:set_selection(1, #"SELECT c.na" + 1)
+    autocomplete.trigger()
+    test.ok(autocomplete.is_open())
+    test.equal(autocomplete.get_selected_suggestion().text, "name")
+    autocomplete.close()
+
+    sql.disconnect(c.id)
+    editor = sql.new_query()
     editor.buffer:text_input("SELECT 1")
     editor.buffer:set_selection(1, 1, 1, 9)
-    local submitted
+    local submitted, asked
     require("plugins.sql_server.backend").execute = function(_, text, callback)
       submitted = text
       callback({ results = {}, affected_rows = {} })
@@ -119,17 +134,60 @@ test.describe("SQL Queries", function()
     end
     test.ok(command.perform("sql_server:run_selection"))
     local deadline = system.get_time() + 10
+    while not submitted and system.get_time() < deadline do
+      asked = asked or core.active_view == core.global_prompt_bar
+      coroutine.yield(0.01)
+    end
+    test.equal(submitted, "SELECT 1")
+    test.not_ok(asked)
+    test.equal(core.active_view, editor)
+
+    local second = test.not_nil(sql.add_connection())
+    context.second_connection_id = second.id
+    test.equal(sql.connection_for(editor.buffer), c)
+    local other = sql.new_query()
+    test.equal(sql.connection_for(other.buffer), nil)
+    other.buffer:text_input("SELECT 2")
+    other.buffer:set_selection(1, 1, 1, 9)
+    submitted = nil
+    test.ok(command.perform("sql_server:run_selection"))
     while core.active_view ~= core.global_prompt_bar and system.get_time() < deadline do coroutine.yield(0.01) end
     test.equal(core.active_view, core.global_prompt_bar)
     test.equal(submitted, nil)
-    core.global_prompt_bar:submit()
-    while not submitted and system.get_time() < deadline do coroutine.yield(0.01) end
-    test.equal(submitted, "SELECT 1")
-    test.equal(sql.connection_for(editor.buffer), c)
-    test.equal(core.active_view, editor)
   end)
 
-  test.it("completes a column through the normal popup using the table alias", function(context)
+  test.it("connects the Project's connections when it opens and asks once for a SQL login's password", function(context)
+    local _, c = connected_query(context)
+    local sql = require "plugins.sql_server"
+    local passwords = {}
+    require("plugins.sql_server.backend").read_schema = function(options, callback)
+      passwords[#passwords + 1] = options.password or "none"
+      callback(schema)
+      return { cancel = function() end }
+    end
+    local login = test.not_nil(sql.add_connection())
+    context.second_connection_id = login.id
+    test.ok(sql.update(login.id, "name", "Login Connection"))
+    test.ok(sql.update(login.id, "server", "login-test.invalid"))
+    test.ok(sql.update(login.id, "database", "AnvilTest"))
+    test.ok(sql.update(login.id, "user", "tester"))
+    test.ok(sql.update(login.id, "integrated", false))
+    sql.disconnect(c.id)
+    sql.connect_on_open()
+    local deadline = system.get_time() + 10
+    while not dialog.current() and system.get_time() < deadline do coroutine.yield(0.01) end
+    local card = test.not_nil(dialog.current())
+    test.equal(card.title, "Login Connection")
+    test.equal(c.state, "Ready")
+    test.equal(login.state, "Disconnected")
+    card:on_modal_text_input("pw-test")
+    test.ok(card:confirm())
+    test.equal(dialog.current(), nil)
+    test.equal(login.state, "Ready")
+    test.same(passwords, { "none", "pw-test" })
+  end)
+
+  test.it("completes a column through the normal popup using the table alias, and in an UPDATE", function(context)
     local editor = connected_query(context)
     editor.buffer:text_input("SELECT c.na FROM sales.customers AS c")
     editor.buffer:set_selection(1, #"SELECT c.na" + 1)
@@ -138,6 +196,88 @@ test.describe("SQL Queries", function()
     test.equal(autocomplete.get_selected_suggestion().text, "name")
     test.ok(command.perform("autocomplete:complete"))
     test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "SELECT c.name FROM sales.customers AS c")
+    editor.buffer:insert(2, 1, "\nUPDATE sales.customers SET na")
+    editor.buffer:set_selection(2, math.huge)
+    autocomplete.trigger()
+    test.ok(autocomplete.is_open())
+    test.equal(autocomplete.get_selected_suggestion().text, "name")
+  end)
+
+  test.it("reads a large database's columns when completion needs them, and runs SQL without metadata", function(context)
+    local large = { database = "AnvilTest", default_schema = "dbo", case_sensitive = false, columns_loaded = false,
+      objects = { { schema = "sales", name = "customers", kind = "table" }, { schema = "dbo", name = "orders", kind = "table" } } }
+    local editor = connected_query(context, large)
+    local backend = require "plugins.sql_server.backend"
+    local requests = {}
+    backend.read_columns = function(_, object, callback)
+      requests[#requests + 1] = { name = object.schema .. "." .. object.name, callback = callback }
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("SELECT c.na FROM sales.customers AS c")
+    editor.buffer:set_selection(1, #"SELECT c.na" + 1)
+    autocomplete.trigger()
+    test.not_ok(autocomplete.is_open())
+    test.equal(#requests, 1)
+    test.equal(requests[1].name, "sales.customers")
+    autocomplete.trigger()
+    test.equal(#requests, 1)
+    requests[1].callback(schema.objects[1].columns)
+    test.ok(autocomplete.is_open())
+    test.equal(autocomplete.get_selected_suggestion().text, "name")
+    autocomplete.close()
+
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    editor.buffer:text_input("SELECT * FROM dbo.orders")
+    editor.buffer:set_selection(1, #"SELECT *" + 1)
+    test.ok(command.perform("sql_server:expand_star"))
+    test.equal(#requests, 2)
+    test.equal(requests[2].name, "dbo.orders")
+    requests[2].callback(schema.objects[2].columns)
+    test.equal(editor.buffer.lines[1], "SELECT customer_id FROM dbo.orders\n")
+
+    local sql = require "plugins.sql_server"
+    local c = sql.connection_for(editor.buffer)
+    sql.disconnect(c.id)
+    backend.read_schema = function(_, callback)
+      callback({ database = "AnvilTest", default_schema = "dbo", columns_loaded = true, objects = {},
+        metadata_error = "Metadata read failed (SQLSTATE 42000, error 229)." })
+      return { cancel = function() end }
+    end
+    test.ok(sql.connect(c.id))
+    test.equal(c.state, "Ready")
+    local submitted
+    backend.execute = function(_, text, done)
+      submitted = text
+      done({ results = {}, affected_rows = {}, messages = {} })
+      return { cancel = function() end }
+    end
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(submitted, "SELECT customer_id FROM dbo.orders")
+  end)
+
+  test.it("completes and expands the columns of CTEs and temporary tables, not of a table with the same name", function(context)
+    local editor = connected_query(context)
+    local text = "WITH orders AS (SELECT c.id AS customer_key FROM sales.customers c) SELECT o.cu FROM orders o"
+    editor.buffer:text_input(text)
+    editor.buffer:set_selection(1, #"WITH orders AS (SELECT c.id AS customer_key FROM sales.customers c) SELECT o.cu" + 1)
+    autocomplete.trigger()
+    test.ok(autocomplete.is_open())
+    test.equal(autocomplete.get_selected_suggestion().text, "customer_key")
+    autocomplete.close()
+    editor.buffer:set_selection(1, #text)
+    test.not_ok(require("core.commands.language").activate_symbol(editor))
+    test.equal(core.active_view, editor)
+
+    editor.buffer:set_selection(1, 1, 1, #text + 1)
+    editor.buffer:text_input("CREATE TABLE #picked (code int, [the label] nvarchar(5))\nSELECT * FROM #picked")
+    editor.buffer:set_selection(2, #"SELECT *" + 1)
+    test.ok(command.perform("sql_server:expand_star"))
+    test.equal(editor.buffer.lines[2], "SELECT code, [the label] FROM #picked\n")
+    editor.buffer:set_selection(2, #"SELECT code, [the label] FROM #pi" + 1)
+    autocomplete.trigger()
+    test.ok(autocomplete.is_open())
+    test.equal(autocomplete.get_selected_suggestion().text, "#picked")
   end)
 
   test.it("runs selected SQL and shows a read-only result without taking focus", function(context)
@@ -173,6 +313,498 @@ test.describe("SQL Queries", function()
     test.equal(result:get_state(), nil)
     test.equal(core.active_view, editor)
     test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "-- not selected\nSELECT name FROM sales.customers\n-- not selected")
+  end)
+
+  test.it("views the shown rows of a result as CSV and JSON text in new Editors", function(context)
+    local editor = connected_query(context)
+    require("plugins.sql_server.backend").execute = function(_, _, callback)
+      callback({ results = { {
+        headers = { "id", "note", "id" }, column_count = 3,
+        rows = {
+          { cells = { "1", 'say "hi", ok', "x" }, source_line1 = 1, source_line2 = 1 },
+          { cells = { "2", false, "" }, source_line1 = 2, source_line2 = 2 },
+          { cells = { "3", "two\nlines\0", "\t" }, source_line1 = 3, source_line2 = 3 },
+        },
+        distinct_values = {},
+      } }, affected_rows = {}, messages = {} })
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("SELECT 1")
+    editor.buffer:set_selection(1, 1, 1, 9)
+    test.ok(command.perform("sql_server:run_selection"))
+    local Results = require "plugins.sql_server.results"
+    local result
+    for _, pane in ipairs(panes.ordered()) do
+      for _, view in ipairs(panes.views(pane)) do
+        if view:extends(Results) then result = view end
+      end
+    end
+    panes.focus(panes.pane_for_view(result))
+    test.ok(command.perform("sql_server:view_as_csv"))
+    local csv = core.active_view
+    test.not_equal(csv, result)
+    test.not_ok(csv.buffer.read_only)
+    test.equal(csv.buffer:get_text(1, 1, math.huge, math.huge),
+      'id,note,id\n1,"say ""hi"", ok",x\n2,,""\n3,"two\nlines\0","\t"\n')
+    panes.focus(panes.pane_for_view(result))
+    test.ok(command.perform("sql_server:view_as_json"))
+    test.equal(core.active_view.buffer:get_text(1, 1, math.huge, math.huge), table.concat({
+      "[",
+      '  {"id": "1", "note": "say \\"hi\\", ok", "id (2)": "x"},',
+      '  {"id": "2", "note": null, "id (2)": ""},',
+      '  {"id": "3", "note": "two\\nlines\\u0000", "id (2)": "\\t"}',
+      "]", "",
+    }, "\n"))
+    test.equal(core.active_view.buffer.syntax.name, "JSON")
+    repeat result:cycle_sort(1) until result:cell_value(1, 1) == "3"
+    panes.focus(panes.pane_for_view(result))
+    test.ok(command.perform("sql_server:view_as_csv"))
+    test.equal(core.active_view.buffer.lines[2], '3,"two\n')
+  end)
+
+  test.it("views a cell's whole value in a text Pane, as JSON or XML when it is", function(context)
+    local editor = connected_query(context)
+    local long = string.rep("x", 40000)
+    require("plugins.sql_server.backend").execute = function(_, _, callback)
+      callback({ results = { {
+        headers = { "doc", "note" }, column_count = 2,
+        rows = {
+          { cells = { ' {"a": [1, 2]}', "two\nlines" }, source_line1 = 1, source_line2 = 1 },
+          { cells = { "<root><a/></root>", false }, source_line1 = 2, source_line2 = 2 },
+          { cells = { long, "" }, source_line1 = 3, source_line2 = 3, cut = { [1] = true } },
+        },
+        distinct_values = {},
+      } }, messages = {} })
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("SELECT 1")
+    editor.buffer:set_selection(1, 1, 1, 9)
+    test.ok(command.perform("sql_server:run_selection"))
+    local result = editor.buffer.sql_results
+    local function view(row, column)
+      panes.focus(panes.pane_for_view(result))
+      result:select_cell(row, column, false)
+      return command.perform("sql_server:view_cell")
+    end
+    test.ok(view(1, 1))
+    test.equal(core.active_view.buffer:get_text(1, 1, math.huge, math.huge), ' {"a": [1, 2]}')
+    test.equal(core.active_view.buffer.syntax.name, "JSON")
+    test.ok(view(1, 2))
+    test.equal(core.active_view.buffer:get_text(1, 1, math.huge, math.huge), "two\nlines")
+    test.ok(view(2, 1))
+    test.equal(core.active_view.buffer.syntax.name, "XML")
+    local warnings = {}
+    context.original_warn = core.warn
+    core.warn = function(format, ...) warnings[#warnings + 1] = string.format(format, ...) end
+    view(2, 2)
+    test.equal(core.active_view, result)
+    test.ok(view(3, 1))
+    core.warn = context.original_warn
+    test.equal(#core.active_view.buffer:get_text(1, 1, math.huge, math.huge), 40000)
+    test.same(warnings, { "The value is NULL.", "SQL Server sent more of this value. Anvil keeps its first 32,768 characters." })
+  end)
+
+  test.it("scripts result edits by the table's key in a new Query and runs nothing", function(context)
+    local editor = connected_query(context)
+    local submitted = {}
+    local describe_headers = { "name", "is_hidden", "source_schema", "source_table", "source_column",
+      "is_part_of_unique_key", "is_updateable", "system_type_name" }
+    local function described(name, column, key, hidden, updateable, type)
+      return { cells = { name, hidden and "1" or "0", "sales", "customers", column, key and "1" or "0",
+        updateable and "1" or "0", type }, source_line1 = 1, source_line2 = 1 }
+    end
+    local function row(...) return { cells = { ... }, source_line1 = 1, source_line2 = 1 } end
+    require("plugins.sql_server.backend").execute = function(_, text, callback)
+      submitted[#submitted + 1] = text
+      if #submitted == 2 then
+        callback({ messages = {}, results = { { headers = describe_headers, column_count = 8, distinct_values = {}, rows = {
+          described("id", "id", true, false, false, "int"), described("who", "name", false, false, true, "nvarchar(80)"),
+          row("n", "0", false, false, false, "0", "0", "int") } } } })
+      else
+        callback({ messages = {}, results = { { headers = { "id", "who", "n" }, column_count = 3, distinct_values = {},
+          rows = { row("1", "Ada", "3"), row("2", "Bea", "3"), row("3", false, "0") } } } })
+      end
+      return { cancel = function() end }
+    end
+    local text = "SELECT id, name AS who, LEN(name) n FROM sales.customers WHERE city = 'Lisbon'"
+    editor.buffer:text_input(text)
+    editor.buffer:set_selection(1, 1, 1, #text + 1)
+    test.ok(command.perform("sql_server:run_selection"))
+    local result = editor.buffer.sql_execution.view
+    panes.focus(panes.pane_for_view(result))
+    result:select_cell(2, 2, false)
+    test.ok(command.perform("sql_server:edit_cell"))
+    test.equal(submitted[2], "EXEC sys.sp_describe_first_result_set @tsql = N'SELECT id, name AS who, LEN(name) n "
+      .. "FROM sales.customers WHERE city = ''Lisbon''', @params = NULL, @browse_information_mode = 1;")
+    test.equal(core.active_view, core.global_prompt_bar)
+    test.equal(core.global_prompt_bar:get_text(), "Bea")
+    core.global_prompt_bar:set_text("Bea O'Neil")
+    core.global_prompt_bar:submit()
+    test.equal(core.active_view, result)
+    test.equal(result:cell_value(2, 2), "Bea O'Neil")
+    result:select_cell(1, 3, false)
+    command.perform("sql_server:edit_cell")
+    test.equal(core.active_view, result)
+    result:select_cell(3, 1, false)
+    test.ok(command.perform("sql_server:delete_rows"))
+    result:select_cell(1, 2, false)
+    result:select_cell(1, 3, true)
+    test.equal((result:footer_summary()), "2 cells")
+    test.ok(command.perform("sql_server:set_cell_null"))
+    test.equal(result:cell_value(1, 2), false)
+    test.equal((result:footer_summary()), "2 cells · 1 NULL · Sum 3 · Avg 3 · Min 3 · Max 3")
+    result:select_cell(1, 1, false)
+    result:select_cell(3, 1, true)
+    test.equal((result:footer_summary()), "3 cells · Sum 6 · Avg 2 · Min 1 · Max 3")
+    local labels = {}
+    for _, b in ipairs(result:footer_buttons()) do labels[#labels + 1] = b.label end
+    test.equal(labels[1], "Script 3 Changes")
+    test.ok(command.perform("sql_server:script_changes"))
+    local script = core.active_view
+    test.not_equal(script, result)
+    test.equal(require("plugins.sql_server").connection_for(script.buffer), require("plugins.sql_server").connection_for(editor.buffer))
+    test.equal(script.buffer:get_text(1, 1, math.huge, math.huge), table.concat({
+      "-- Changes to [sales].[customers] from SQL Results. Review them, then run this script.",
+      "SET XACT_ABORT ON;",
+      "BEGIN TRANSACTION;",
+      "UPDATE [sales].[customers] SET [name] = NULL WHERE [id] = N'1';",
+      "IF @@ROWCOUNT <> 1 THROW 50001, N'Row 1 changed or no longer exists.', 1;",
+      "UPDATE [sales].[customers] SET [name] = N'Bea O''Neil' WHERE [id] = N'2';",
+      "IF @@ROWCOUNT <> 1 THROW 50001, N'Row 2 changed or no longer exists.', 1;",
+      "DELETE FROM [sales].[customers] WHERE [id] = N'3';",
+      "IF @@ROWCOUNT <> 1 THROW 50001, N'Row 3 changed or no longer exists.', 1;",
+      "COMMIT TRANSACTION;",
+      "",
+    }, "\n"))
+    test.equal(#submitted, 2)
+
+    panes.focus(panes.pane_for_view(result))
+    result:select_cell(1, 1, false)
+    result:select_cell(2, 3, true)
+    test.ok(command.perform("sql_server:script_rows_as_insert"))
+    test.equal(core.active_view.buffer:get_text(1, 1, math.huge, math.huge), table.concat({
+      "-- Rows of [sales].[customers] from SQL Results. Review them, then run this script.",
+      "INSERT INTO [sales].[customers] ([name]) VALUES",
+      "    (NULL),",
+      "    (N'Bea O''Neil');",
+      "",
+    }, "\n"))
+    panes.focus(panes.pane_for_view(result))
+    test.ok(command.perform("sql_server:script_rows_as_select"))
+    test.equal(core.active_view.buffer:get_text(1, 1, math.huge, math.huge),
+      "SELECT *\nFROM [sales].[customers]\nWHERE ([id] = N'1' AND [name] = N'Ada')\n   OR ([id] = N'2' AND [name] = N'Bea');\n")
+    test.equal(#submitted, 2)
+
+    local _, reason = require("plugins.sql_server.edit").analyze({ column_count = 1 }, { results = { {
+      headers = describe_headers, rows = { described("id", "id", true, true, false, "int"),
+        described("who", "name", false, false, true, "nvarchar(80)") } } } })
+    test.equal(reason, "Include the key column [id] to edit this result.")
+  end)
+
+  test.it("designs a table in a Dialog and opens its ALTER script in a new Query that runs nothing", function(context)
+    local editor = connected_query(context)
+    local reads = 0
+    local function result(headers, rows)
+      local out = { headers = headers, rows = {} }
+      for i, cells in ipairs(rows) do out.rows[i] = { cells = cells } end
+      return out
+    end
+    require("plugins.sql_server.backend").execute = function(_, text, callback)
+      test.ok(text:find("sys.sql_expression_dependencies", 1, true))
+      reads = reads + 1
+      callback({ results = {
+        result({ "object_id" }, { { "10" } }),
+        result({ "column_id", "name", "type", "collation_name", "is_nullable", "is_identity", "seed", "increment",
+          "default_name", "default_definition", "computed", "is_persisted", "locked" },
+          { { "1", "customer_id", "int", false, "0", "0", false, false, false, false, false, false, "0" } }),
+        result({ "index_id", "name", "kind", "is_unique", "type", "column_id", "locked" }, {}),
+        result({ "object_id", "name", "ref_schema", "ref_table", "parent_column_id", "ref_column", "on_delete",
+          "on_update", "locked" }, {}),
+        result({ "object_id", "name", "definition", "locked" }, {}),
+        result({ "object_id", "minor_id", "column_id" }, {}),
+      } })
+      return { cancel = function() end }
+    end
+    local function type_text(text)
+      for char in text:gmatch(".") do core.on_event("textinput", char) end
+      test.ok(command.perform("dialog:confirm"))
+    end
+    local orders = { schema = "dbo", name = "orders", kind = "table" }
+    test.ok(command.perform("sql_server:table_design", editor, orders))
+    local design = test.not_nil(dialog.current())
+    test.equal(tostring(design), "Table Design")
+    test.equal(design.status.text, "No changes")
+    test.ok(not design.script_button.enabled)
+
+    test.ok(design.add_column:activate())
+    test.equal(design.focused, design.column_name)
+    type_text("id")
+    design:focus(design.column_type)
+    type_text("int")
+    design.column_nullable:toggle()
+    design.column_identity:toggle()
+    design:show_page("primary")
+    design.pk_columns:select(2)
+    test.ok(design.pk_columns:activate())
+    design:show_page("foreign")
+    test.ok(design.add_fk:activate())
+    test.equal(design.status.text, "Foreign key [FK_orders_1] needs a referenced table.")
+    design.fk_table:choose("sales.customers")
+    design.fk_columns:select(1)
+    test.ok(design.fk_columns:activate())
+    design:show_page("checks")
+    test.ok(design.add_check:activate())
+    type_text("customer_id > 0")
+    design:show_page("indexes")
+    test.ok(design.add_index:activate())
+    design.index_columns:select(1)
+    test.ok(design.index_columns:activate())
+    test.equal(design.status.text, "")
+    test.ok(design.script_button.enabled)
+
+    -- A closed design stays until the next connect, so the Dialog opens it again without a read.
+    design:close()
+    test.ok(command.perform("sql_server:table_design", editor, orders))
+    design = test.not_nil(dialog.current())
+    test.equal(reads, 1)
+    test.ok(design.script_button:activate())
+    test.is_nil(dialog.current())
+    local script = core.active_view
+    test.not_equal(script, editor)
+    test.equal(require("plugins.sql_server").connection_for(script.buffer), require("plugins.sql_server").connection_for(editor.buffer))
+    test.equal(script.buffer:get_text(1, 1, math.huge, math.huge), table.concat({
+      "SET XACT_ABORT ON;",
+      "BEGIN TRANSACTION;",
+      "ALTER TABLE [dbo].[orders] ADD [id] int IDENTITY(1,1) NOT NULL;",
+      "ALTER TABLE [dbo].[orders] ADD CONSTRAINT [PK_orders] PRIMARY KEY ([id]);",
+      "CREATE INDEX [IX_orders_1] ON [dbo].[orders] ([customer_id]);",
+      "ALTER TABLE [dbo].[orders] ADD CONSTRAINT [CK_orders_1] CHECK (customer_id > 0);",
+      "ALTER TABLE [dbo].[orders] ADD CONSTRAINT [FK_orders_1] FOREIGN KEY ([customer_id]) REFERENCES [sales].[customers] ([id]);",
+      "COMMIT TRANSACTION;",
+      "",
+    }, "\n"))
+    test.equal(reads, 1)
+
+    -- A script that opened ends the design, so the next Dialog reads the table again.
+    panes.focus(panes.pane_for_view(editor))
+    test.ok(command.perform("sql_server:table_design", editor, orders))
+    test.equal(reads, 2)
+    test.not_nil(dialog.current()):close()
+    test.ok(command.perform("sql_server:new_table"))
+    design = test.not_nil(dialog.current())
+    test.equal(design.title, "New Table")
+    test.ok(design.script_button.enabled)
+  end)
+
+  test.it("keeps the Project's runs in SQL History and opens one in a new Query that runs nothing", function(context)
+    local editor, c = connected_query(context)
+    local history = require "plugins.sql_server.history"
+    local runs = 0
+    require("plugins.sql_server.backend").execute = function(_, text, callback)
+      runs = runs + 1
+      callback(text:find("missing", 1, true) and { error = "Invalid object name 'missing'." }
+        or { results = {}, affected_rows = { "1" } })
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("SELECT name\nFROM sales.customers")
+    test.ok(command.perform("sql_server:run_buffer"))
+    test.ok(command.perform("sql_server:run_buffer"))
+    editor.buffer:set_selection(2, #editor.buffer.lines[2])
+    editor.buffer:text_input("\nSELECT * FROM missing")
+    editor.buffer:set_selection(3, 1, 3, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.ok(command.perform("sql_server:explain_selection"))
+    test.equal(runs, 4)
+    local deadline = system.get_time() + 10
+    while require("plugins.sql_server").is_saving() and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.ok(not require("plugins.sql_server").is_saving())
+
+    -- The history comes back from storage.
+    history.reset()
+    test.ok(command.perform("sql_server:history"))
+    while core.active_view ~= core.global_prompt_bar and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.equal(core.active_view, core.global_prompt_bar)
+    local items = core.global_prompt_bar.suggestions
+    test.equal(items[1].text, "SELECT * FROM missing")
+    test.equal(items[1].info, c.name .. " · now · Error")
+    test.equal(items[2].text, "SELECT name FROM sales.customers")
+    test.equal(items[2].info, c.name .. " · now · ×2")
+    core.global_prompt_bar:set_text("customers")
+    core.global_prompt_bar:submit()
+    local query = core.active_view
+    test.not_equal(query, editor)
+    test.equal(query.buffer:get_text(1, 1, math.huge, math.huge), "SELECT name\nFROM sales.customers")
+    test.equal(require("plugins.sql_server").connection_for(query.buffer), c)
+    test.equal(runs, 4)
+  end)
+
+  test.it("reloads the catalog in place after SQL that changes the schema", function(context)
+    local editor, c = connected_query(context)
+    local backend = require "plugins.sql_server.backend"
+    context.original_close = backend.close_session
+    local closed, reads = {}, 0
+    backend.close_session = function(id) closed[#closed + 1] = id end
+    local grown = { database = "AnvilTest", default_schema = "dbo", case_sensitive = false, objects = {
+      schema.objects[1], { schema = "sales", name = "notes", kind = "table", columns = { { name = "body", type = "nvarchar(max)" } } } } }
+    backend.read_schema = function(_, callback)
+      reads = reads + 1
+      callback(grown)
+      return { cancel = function() end }
+    end
+    local changed = true
+    backend.execute = function(_, _, done)
+      done({ session = 7, results = {}, messages = {}, transaction_count = 0, schema_changed = changed })
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("CREATE TABLE sales.notes (body nvarchar(max))")
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(reads, 1)
+    test.equal(c.state, "Ready")
+    test.equal(c.catalog, grown)
+    test.equal(require("plugins.sql_server.session").get(editor.buffer).id, 7)
+    test.same(closed, {})
+    changed = false
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(reads, 1)
+  end)
+
+  test.it("stops completion in a Query whose session moved to another database", function(context)
+    local editor = connected_query(context)
+    local backend = require "plugins.sql_server.backend"
+    local database = "master"
+    backend.execute = function(_, _, done)
+      done({ session = 7, results = {}, messages = {}, transaction_count = 0, database = database })
+      return { cancel = function() end }
+    end
+    local function status()
+      local item = core.status_bar:get_item("sql:connection")
+      local text = ""
+      for _, part in ipairs(item.get_item(item, editor)) do if type(part) == "string" then text = text .. part end end
+      return text
+    end
+    local function completes()
+      editor.buffer:set_selection(2, math.huge)
+      autocomplete.trigger()
+      local open = autocomplete.is_open()
+      autocomplete.close()
+      return open
+    end
+    editor.buffer:text_input("USE master\nSELECT c.na FROM sales.customers AS c")
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.ok(status():find(" · Database master", 1, true))
+    editor.buffer:set_selection(2, #"SELECT c.na" + 1)
+    autocomplete.trigger()
+    test.not_ok(autocomplete.is_open())
+    database = "ANVILTEST"
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.not_ok(status():find("Database", 1, true))
+    editor.buffer:set_selection(2, #"SELECT c.na" + 1)
+    autocomplete.trigger()
+    test.ok(autocomplete.is_open())
+  end)
+
+  test.it("runs again on a new session when the idle session is gone, unless a transaction was open", function(context)
+    local editor = connected_query(context)
+    local backend = require "plugins.sql_server.backend"
+    local session = require "plugins.sql_server.session"
+    local calls, open = {}, 0
+    backend.execute = function(_, _, done, settings)
+      calls[#calls + 1] = settings.session or "new"
+      if settings.session == 7 then
+        done({ session_lost = true, idle_lost = true, results = {}, messages = {},
+          error = "The idle SQL session was lost. The server rolled back any open transaction." })
+      else
+        done({ session = 7, results = {}, messages = { { text = "(1 row affected)" } }, transaction_count = open })
+      end
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("UPDATE sales.customers SET name = N'x' WHERE id = 1")
+    local function run()
+      editor.buffer:set_selection(1, 1, 1, math.huge)
+      test.ok(command.perform("sql_server:run_selection"))
+    end
+    run()
+    run()
+    test.same(calls, { "new", 7, "new" })
+    test.equal(session.get(editor.buffer).id, 7)
+    local results = editor.buffer.sql_results
+    test.equal(results:messages_text(), "The idle SQL session was lost, so a new session ran the SQL. "
+      .. "Its temporary tables and SET options are gone.\n(1 row affected)")
+    open = 1
+    run()
+    calls = {}
+    run()
+    test.same(calls, { 7 })
+    test.equal(session.get(editor.buffer), nil)
+    test.ok(results:messages_text():find("rolled back", 1, true))
+  end)
+
+  test.it("runs a large script without a time limit unless the Query sets one", function(context)
+    local editor = connected_query(context)
+    local backend = require "plugins.sql_server.backend"
+    local settings
+    backend.execute = function(_, _, done, options)
+      settings = options
+      done({ results = {}, affected_rows = {}, messages = {} })
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("SELECT 1")
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(test.not_nil(settings).timeout, 0)
+    test.ok(command.perform("sql_server:set_timeout"))
+    test.equal(core.active_view, core.global_prompt_bar)
+    core.global_prompt_bar:set_text("45")
+    core.global_prompt_bar:submit()
+    test.equal(core.active_view, editor)
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(settings.timeout, 45)
+    local script = string.rep("PRINT N'" .. string.rep("x", 100) .. "'\nGO\n", 3000)
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    editor.buffer:text_input(script)
+    settings = nil
+    test.ok(command.perform("sql_server:run_buffer"))
+    test.ok(#script > 256 * 1024 and test.not_nil(settings).timeout == 45)
+  end)
+
+  test.it("adjusts the Query's row limit from the result footer for the next run", function(context)
+    local editor = connected_query(context)
+    local context_menu = require "core.context_menu"
+    local limits = {}
+    require("plugins.sql_server.backend").execute = function(_, _, callback, settings)
+      limits[#limits + 1] = settings.max_rows
+      callback({ results = { { headers = { "id" }, column_count = 1, distinct_values = {},
+        rows = { { cells = { "1" }, source_line1 = 1, source_line2 = 1 } } } }, affected_rows = {}, messages = {} })
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("SELECT 1")
+    editor.buffer:set_selection(1, 1, 1, 9)
+    test.ok(command.perform("sql_server:run_selection"))
+    local result = editor.buffer.sql_execution.view
+    local function press(label)
+      for _, b in ipairs(result:footer_buttons()) do
+        if b.label == label then return result:on_mouse_pressed("left", b.x + 1, b.y + 1, 1) end
+      end
+      error("no footer button " .. label)
+    end
+    test.equal(limits[1], 1000)
+    test.ok(press("Limit 1,000"))
+    test.ok(context_menu.is_open())
+    test.same(context_menu.labels(), { "Limit 100", "Limit 1,000", "Limit 10,000", "No Row Limit" })
+    test.ok(context_menu.choose("Limit 100"))
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(limits[2], 100)
+    test.ok(press("Limit 100"))
+    test.ok(context_menu.choose("No Row Limit"))
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(limits[3], require("plugins.sql_server").ROW_LIMIT_MAX)
+    test.ok(press("JSON"))
+    test.equal(core.active_view.buffer:get_text(1, 1, math.huge, math.huge), '[\n  {"id": "1"}\n]\n')
   end)
 
   test.it("runs nothing at a caret unless Run Buffer is explicit, and reuses its results", function(context)
@@ -254,6 +886,74 @@ test.describe("SQL Queries", function()
     test.equal(core.active_view, editor)
   end)
 
+  test.it("keeps one session per SQL Query and asks before its open transaction ends", function(context)
+    local editor, c = connected_query(context)
+    local backend = require "plugins.sql_server.backend"
+    local sql = require "plugins.sql_server"
+    context.original_end, context.original_close = backend.end_transaction, backend.close_session
+    context.nag_show = core.nag_view.show
+    local runs, ended, closed, question = {}, {}, {}, nil
+    backend.execute = function(_, text, callback, settings)
+      runs[#runs + 1] = { text = text, settings = settings }
+      callback({ results = {}, session = 7, transaction_count = text:find("INSERT") and 1 or 0,
+        messages = { { text = "(1 row affected)" } } })
+      return { cancel = function() end }
+    end
+    backend.end_transaction = function(session, commit, callback)
+      ended[#ended + 1] = { session = session, commit = commit }
+      callback(0)
+      return { cancel = function() end }
+    end
+    backend.close_session = function(session) closed[#closed + 1] = session end
+    core.nag_view.show = function(_, title, _, _, callback) question = { title = title, answer = callback } end
+    editor.buffer:text_input("INSERT sales.customers (name) VALUES (N'Ada')")
+    test.ok(command.perform("sql_server:toggle_auto_commit"))
+    test.ok(command.perform("sql_server:run_buffer"))
+    test.equal(runs[1].settings.session, nil)
+    test.equal(runs[1].settings.autocommit, false)
+    test.ok(command.perform("sql_server:run_buffer"))
+    test.equal(runs[2].settings.session, 7)
+
+    test.ok(command.perform("sql_server:disconnect"))
+    test.equal(test.not_nil(question).title, "Open Transaction")
+    question.answer({ text = "Cancel" })
+    test.same(ended, {})
+    test.equal(c.state, "Ready")
+    test.ok(command.perform("sql_server:commit"))
+    test.same(ended, { { session = 7, commit = true } })
+
+    test.ok(command.perform("sql_server:run_buffer"))
+    question = nil
+    local pane = panes.pane_for_view(editor)
+    panes.close(pane)
+    test.equal(test.not_nil(question).title, "Open Transaction")
+    test.ok(panes.pane_for_view(editor))
+    question.answer({ text = "Roll Back" })
+    test.same(ended[2], { session = 7, commit = false })
+    test.same(closed, {})
+    sql.disconnect(c.id)
+    test.same(closed, { 7 })
+  end)
+
+  test.it("shows server messages in order and moves the caret to the line of an error after edits", function(context)
+    local editor = connected_query(context)
+    require("plugins.sql_server.backend").execute = function(_, _, callback)
+      callback({ results = {}, error = "Line 3: Invalid column name 'nam'.", error_line = 3, messages = {
+        { text = "first" }, { text = "Msg 207, Level 16, State 1, Line 3\nInvalid column name 'nam'.", line = 3, error = true } } })
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("-- note\nPRINT 'first'\nGO\nSELECT nam\nFROM sales.customers")
+    editor.buffer:set_selection(2, 1, 5, 21)
+    test.ok(command.perform("sql_server:run_selection"))
+    local results = test.not_nil(editor.buffer.sql_results)
+    test.equal(results:messages_text(), "first\nMsg 207, Level 16, State 1, Line 3\nInvalid column name 'nam'.")
+    test.ok(command.perform("sql_server:go_to_error"))
+    test.equal(select(1, editor.buffer:get_selection()), 4)
+    editor.buffer:insert(1, 1, "-- added\n")
+    test.ok(command.perform("sql_server:go_to_error"))
+    test.equal(select(1, editor.buffer:get_selection()), 5)
+  end)
+
   test.it("shows every row of the next result without the previous result's filter", function()
     local Results = require "plugins.sql_server.results"
     local function model(names)
@@ -273,6 +973,28 @@ test.describe("SQL Queries", function()
     test.equal(view:cell_value(2, 1), "Bea")
     test.ok(command.perform("sql_server:previous_result"))
     test.equal(view:row_count(), 1)
+  end)
+
+  test.it("sorts a number column by value and a text column as text", function()
+    local Results = require "plugins.sql_server.results"
+    local values = { "10", "9", "-2.5", "-10", "0.75", "100000000000000000001", "100000000000000000000", "1E+3" }
+    local result = { headers = { "n", "t" }, column_kinds = { "number", "text" }, column_count = 2, rows = {} }
+    for i, value in ipairs(values) do
+      result.rows[i] = { cells = { value, value }, source_line1 = i, source_line2 = i }
+    end
+    result.distinct_values = require("plugins.tabular_data_preview.parser").distinct_values(result)
+    local view = Results("Test")
+    panes.place(function() return view end, { placement = "new", focus = true })
+    view:complete({ results = { result } })
+    local function column(index)
+      local shown = {}
+      for row = 1, view:row_count() do shown[row] = view:cell_value(row, index) end
+      return table.concat(shown, " ")
+    end
+    view:cycle_sort(1)
+    test.equal(column(1), "-10 -2.5 0.75 9 10 1E+3 100000000000000000000 100000000000000000001")
+    view:cycle_sort(2)
+    test.equal(column(2), "-10 -2.5 0.75 10 100000000000000000000 100000000000000000001 1E+3 9")
   end)
 
   test.it("opens a table definition and returns to the same Untitled Query", function(context)
@@ -314,6 +1036,58 @@ test.describe("SQL Queries", function()
       require("plugins.sql_server").connection_for(editor.buffer))
   end)
 
+  test.it("opens a symbol's actions with its default first and runs a generated SELECT", function(context)
+    local editor = connected_query(context)
+    local context_menu = require "core.context_menu"
+    editor.buffer:text_input("SELECT * FROM sales.customers")
+    editor.buffer:set_selection(1, #"SELECT * FROM sales.cus" + 1)
+    local items = editor:context_menu()
+    test.equal(items[1].label, "sales.customers")
+    test.equal(items[1].items[1].label, "Script as SELECT")
+    local view_items = require("plugins.sql_server.source").action_items(editor,
+      { schema = "dbo", name = "recent", kind = "view", columns = {} })
+    test.equal(view_items[1].label, "Script as ALTER")
+    local submitted, settings
+    require("plugins.sql_server.backend").execute = function(_, sql, done, options)
+      submitted, settings = sql, options
+      done({ results = {}, affected_rows = {}, messages = {} })
+      return { cancel = function() end }
+    end
+    test.ok(command.perform("sql_server:symbol_actions"))
+    test.ok(context_menu.is_open())
+    test.equal(context_menu.selected_label(), "Script as SELECT")
+    test.ok(context_menu.choose("Script as SELECT"))
+    local generated = core.active_view
+    test.not_equal(generated, editor)
+    test.equal(generated.buffer:get_text(1, 1, math.huge, math.huge), "SELECT [id], [name]\nFROM [sales].[customers];")
+    test.equal(submitted, "SELECT [id], [name]\nFROM [sales].[customers];")
+    test.not_nil(settings)
+    test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "SELECT * FROM sales.customers")
+  end)
+
+  test.it("formats the selected lines, or the Buffer without a selection, in one undo step", function()
+    local config = require "core.config"
+    test.ok(command.perform("sql_server:new_query"))
+    local editor = core.active_view
+    local i = config.tab_type == "hard" and "\t" or string.rep(" ", config.indent_size)
+    local original = "select a from t\nselect c from u where x = 1 and y = 2\n-- tail"
+    editor.buffer:text_input(original)
+    editor.buffer:set_selection(2, 3, 2, 12)
+    test.ok(command.perform("sql_server:format"))
+    test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "select a from t\nSELECT\n" .. i .. "c\nFROM\n" ..
+      i .. "u\nWHERE\n" .. i .. "x = 1\nAND y = 2\n-- tail")
+    editor.buffer:undo()
+    test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), original)
+    editor.buffer:set_selection(3, 1)
+    test.ok(command.perform("sql_server:format"))
+    test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "SELECT\n" .. i .. "a\nFROM\n" .. i .. "t\nSELECT\n" ..
+      i .. "c\nFROM\n" .. i .. "u\nWHERE\n" .. i .. "x = 1\nAND y = 2\n-- tail")
+    editor.buffer:undo()
+    editor.buffer.read_only = true
+    command.perform("sql_server:format")
+    test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), original)
+  end)
+
   test.it("does not navigate an unknown column to an unrelated table", function(context)
     local editor = connected_query(context)
     editor.buffer:text_input("SELECT missing FROM sales.customers")
@@ -331,33 +1105,56 @@ test.describe("SQL Queries", function()
     test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "SELECT c.* FROM sales.customers c")
   end)
 
-  test.it("finds database symbols with Project Symbol Search and opens their source", function(context)
+  test.it("lists database objects in a group of Project Symbol Search from any Pane and shows their actions", function(context)
     local _, c = connected_query(context)
     local sql = require "plugins.sql_server"
+    local context_menu = require "core.context_menu"
     sql.disconnect(c.id)
-    local editor = sql.new_query()
-    editor.buffer:text_input("SELECT 1;")
-    test.ok(command.perform("fuzzy:open_symbols"))
-    local picker = test.not_nil(core.fuzzy_searcher_active_view)
-    local deadline = system.get_time() + 10
-    local chose_connection
-    while system.get_time() < deadline and not (picker.results[1] and picker.results[1].label == "sales.customers") do
-      if core.active_view == core.global_prompt_bar then
-        chose_connection = true
-        core.global_prompt_bar:submit()
+    local plain = require("core.editor")(core.open_buffer())
+    panes.place(function() return plain end, { placement = "new", focus = true })
+    local function row(label)
+      local picker = core.fuzzy_searcher_active_view
+      if not picker or picker.closed or picker.closing then return end
+      for index, result in ipairs(picker.results) do
+        if result.label == label and not result.header then return picker, index end
       end
-      picker = core.fuzzy_searcher_active_view or picker
-      if not picker.closed and not picker.closing then picker.input:set_text("$customers"); picker:update() end
-      coroutine.yield(0.01)
     end
-    test.ok(chose_connection)
-    test.equal(sql.connection_for(editor.buffer), c)
-    test.equal(test.not_nil(picker.results[1]).label, "sales.customers")
+    local function search_until(label)
+      local deadline = system.get_time() + 10
+      while system.get_time() < deadline and not row(label) do
+        local picker = core.fuzzy_searcher_active_view
+        if picker and not picker.closed and not picker.closing and picker.input:get_text() ~= "$customers" then
+          picker.input:set_text("$customers"); picker:update()
+        end
+        coroutine.yield(0.01)
+      end
+      return row(label)
+    end
+    test.ok(command.perform("fuzzy:open_symbols"))
+    local picker, index = search_until("Connect")
+    test.not_nil(picker)
+    test.ok(picker.results[index - 1].header)
+    test.equal(picker.results[index - 1].label, "New Connection")
+    picker.selected = index
     picker:confirm()
+    picker, index = search_until("sales.customers")
+    test.not_nil(picker)
+    test.equal(c.state, "Ready")
+    test.equal(sql.connection_for(plain.buffer), nil)
+    picker.selected = index
+    picker:confirm()
+    test.ok(context_menu.is_open())
+    test.equal(context_menu.selected_label(), "Script as SELECT")
+    test.ok(context_menu.choose("Open Definition"))
+    local deadline = system.get_time() + 10
+    while not core.active_view.buffer.read_only and system.get_time() < deadline do coroutine.yield(0.01) end
     test.ok(core.active_view.buffer.read_only)
     test.ok(core.active_view.buffer:get_text(1, 1, math.huge, math.huge):find("CREATE TABLE", 1, true))
-    test.ok(command.perform("core:navigate_back"))
-    test.equal(core.active_view, editor)
+    test.equal(sql.connection_for(core.active_view.buffer), c)
+    local object = schema.objects[1]
+    test.ok(command.is_valid("sql_server:script_object", c, object, "select"))
+    sql.disconnect(c.id)
+    test.not_ok(command.is_valid("sql_server:script_object", c, object, "select"))
   end)
 
   test.it("ignores metadata received after disconnect and never saves a password", function(context)

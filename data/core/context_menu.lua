@@ -44,7 +44,7 @@ context_menu.icons = {
   new_file = "\u{F0EED}", new_folder = "\u{F0B9D}", rename = "\u{F0455}", path = "\u{F0A38}",
   reveal = "\u{F0DCF}", terminal = "\u{F018D}", sort = "\u{F04BA}",
   close = "\u{F0156}", close_others = "\u{F0C5E}", reopen = "\u{F099B}",
-  insert = "\u{F0704}", format = "\u{F06D6}", reset = "\u{F0450}",
+  insert = "\u{F0704}", format = "\u{F06D6}", reset = "\u{F0450}", run = "\u{F040A}",
   pi = function(x, y, height) require("core.agent_icons").draw("pi", x, y, height) end,
 }
 

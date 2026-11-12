@@ -34,21 +34,28 @@ function M.choose(sql, view, done)
   end)
 end
 
-local function password_prompt(c, done)
+-- Enter or Connect connects. Closing the card connects nothing.
+function M.password_prompt(c, done)
   local Dialog = require("core.ui.dialog").Dialog
   local layout = require "core.ui.layout"
   local TextField = require "core.ui.text_field"
   local Button = require "core.ui.button"
   local card = Dialog { title = c.name, width = 420 }
   local password = TextField { secret = true, grow = 1 }
-  card:set_body(layout.Column { layout.Field { title = "Password", stacked = true, control = password } })
-  card.footer = layout.Row { justify = "end", Button { label = "Connect", kind = "primary", on_click = function()
+  local function connect()
     local value = password:get_text()
     card:close()
     done(value)
-  end } }
+  end
+  card:set_body(layout.Column { layout.Field { title = "Password", stacked = true, control = password } })
+  card.footer = layout.Row { justify = "end", Button { label = "Connect", kind = "primary", on_click = connect } }
+  function card:confirm()
+    if self.focused == password then connect(); return true end
+    return Dialog.confirm(self)
+  end
   function card:on_close() password:set_text("") end
   card:open(password)
+  return card
 end
 
 function M.with_connection(sql, view, action)
@@ -61,6 +68,8 @@ function M.with_connection(sql, view, action)
   end
   local function use(connection)
     if not unchanged() then return false end
+    -- The first explicit action keeps the connection, also after the Project adds another.
+    if not buffer.sql_connection_id then sql.bind(buffer, connection.id) end
     if connection.state == "Ready" then return action(connection) end
     local function connect(password)
       if not unchanged() then return end
@@ -75,7 +84,7 @@ function M.with_connection(sql, view, action)
       end)
     end
     if connection.integrated or connection.state == "Connecting" then connect()
-    else password_prompt(connection, connect) end
+    else M.password_prompt(connection, connect) end
     return true
   end
   local connection = sql.connection_for(buffer)

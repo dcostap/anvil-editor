@@ -38,9 +38,43 @@ local function value_label(value, missing_label)
   return tostring(value)
 end
 
-local function compare_values(a, b)
+-- A plain decimal's sign, integer digits and fraction digits, without the
+-- zeros that do not change its value. Nil for other text.
+local function decimal_parts(text)
+  local sign, whole, fraction = text:match("^%s*([+-]?)(%d*)%.?(%d*)%s*$")
+  if not sign or whole == "" and fraction == "" then return nil end
+  whole, fraction = whole:gsub("^0+", ""), fraction:gsub("0+$", "")
+  if whole == "" and fraction == "" then sign = "" end
+  return sign == "-" and -1 or 1, whole, fraction
+end
+
+-- Compares number text exactly, also past double precision, such as
+-- decimal(38) and bigint values. Other number text, such as 1E+3, compares
+-- as a double. Text that is not a number goes after numbers.
+local function compare_numbers(a, b)
+  local a_sign, a_whole, a_fraction = decimal_parts(a)
+  local b_sign, b_whole, b_fraction = decimal_parts(b)
+  if a_sign and b_sign then
+    if a_sign ~= b_sign then return a_sign < b_sign and -1 or 1 end
+    local order = 0
+    if #a_whole ~= #b_whole then order = #a_whole < #b_whole and -1 or 1
+    elseif a_whole ~= b_whole then order = a_whole < b_whole and -1 or 1
+    elseif a_fraction ~= b_fraction then order = a_fraction < b_fraction and -1 or 1 end
+    return order * a_sign
+  end
+  local x, y = tonumber(a), tonumber(b)
+  if x and y then return x == y and 0 or (x < y and -1 or 1) end
+  if x or y then return x and -1 or 1 end
+  return nil
+end
+
+local function compare_values(a, b, kind)
   if a == false then return b ~= false and 1 or 0 end
   if b == false then return -1 end
+  if kind == "number" then
+    local order = compare_numbers(a, b)
+    if order then return order end
+  end
   local al = tostring(a):gsub("\r\n", " "):gsub("[\r\n]", " "):lower()
   local bl = tostring(b):gsub("\r\n", " "):gsub("[\r\n]", " "):lower()
   if al == bl then return 0 end
@@ -344,12 +378,13 @@ function Preview:rebuild_display_rows(reason)
     local column = self.sort.column
     local descending = self.sort.direction == "descending"
     local rows = self.model.rows
+    local kind = self.model.column_kinds and self.model.column_kinds[column]
     table.sort(display_rows, function(a_index, b_index)
       local a_value = rows[a_index].cells[column]
       local b_value = rows[b_index].cells[column]
       if a_value == false and b_value ~= false then return false end
       if b_value == false and a_value ~= false then return true end
-      local comparison = compare_values(a_value, b_value)
+      local comparison = compare_values(a_value, b_value, kind)
       if comparison == 0 then return a_index < b_index end
       if descending then return comparison > 0 end
       return comparison < 0
@@ -380,6 +415,10 @@ function Preview:cell_value(display_row, column)
   if not row then return nil end
   return row.cells[column]
 end
+
+---A cell's background and text color, or nil for the defaults. Subclasses
+---mark cells, such as pending edits.
+function Preview:cell_style(display_row, column) end
 
 function Preview:clear_selection()
   local changed = self.selection_anchor ~= nil or self.selection_focus ~= nil
@@ -954,13 +993,15 @@ function Preview:draw_body()
       local hovered = self.hover_target and self.hover_target.kind == "cell"
         and self.hover_target.display_row == display_row
         and self.hover_target.column == column
+      local background, color = self:cell_style(display_row, column)
       if selected then
         renderer.draw_rect(x, y, width, row_height, style.selection)
       elseif hovered then
         renderer.draw_rect(x, y, width, row_height, style.line_highlight)
       end
+      if background then renderer.draw_rect(x, y, width, row_height, background) end
       draw_text_clipped(
-        font, style.text, display_text(self:cell_value(display_row, column), self.model.missing_label),
+        font, color or style.text, display_text(self:cell_value(display_row, column), self.model.missing_label),
         x + scaled(CELL_PADDING), y,
         math.max(0, width - scaled(CELL_PADDING * 2)), row_height
       )

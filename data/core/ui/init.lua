@@ -16,6 +16,7 @@ ui.icons = {
   tune = "\u{F062E}", shape = "\u{F0831}", view_list = "\u{F0572}", delete = "\u{F01B4}",
   database = "\u{F01BC}", server = "\u{F048B}", inbox = "\u{F0687}", info = "\u{F02FD}", console = "\u{F018D}",
   web = "\u{F059F}", label = "\u{F0316}", unfold = "\u{F054F}", keyboard = "\u{F097B}",
+  table = "\u{F04EB}", key = "\u{F0306}", sort = "\u{F04BA}", arrow_up = "\u{F005D}", arrow_down = "\u{F0045}",
 }
 
 ---The text font of Dialogs: the proportional font of the Sidebar and the Title Bar.

@@ -11,7 +11,7 @@ local function equal(catalog, a, b)
 end
 local function quote(buffer, value)
   local symbols = buffer.syntax and buffer.syntax.symbols or {}
-  if value:match("^[%a_][%w_]*$") and not symbols[value:upper()] then return value end
+  if value:match("^[#@]*[%a_][%w_@#$]*$") and not symbols[value:upper()] then return value end
   return "[" .. value:gsub("]", "]]") .. "]"
 end
 local function resolve(catalog, schema, name)
@@ -24,11 +24,29 @@ local function resolve(catalog, schema, name)
   end
   return fallback
 end
+local LOCAL_LABELS = { cte = "CTE", derived = "derived table", temp = "temporary table", variable = "table variable" }
+-- A source's object: a Local Source that the text defines, or else a catalog object.
+local function source_object(state, source)
+  local index = source.local_index
+  if not index then return resolve(state.catalog, source.schema, source.name) end
+  state.local_objects = state.local_objects or {}
+  local object = state.local_objects[index]
+  if not object then
+    local definition = state.parsed.locals[index]
+    object = { schema = "", name = definition.name, kind = definition.kind, local_source = true,
+      incomplete = definition.star, columns = {} }
+    for i, column in ipairs(definition.columns) do
+      object.columns[i] = { name = column, type = LOCAL_LABELS[definition.kind] }
+    end
+    state.local_objects[index] = object
+  end
+  return object
+end
 local function context(view, sql)
   local buffer = view and view.buffer
-  if not buffer or not buffer.sql_connection_id then return end
+  if not buffer then return end
   local c = sql.connection_for(buffer)
-  if not c or not c.catalog then return end
+  if not c or not c.catalog or sql.other_database(buffer) then return end
   local line, col, line2, col2 = buffer:get_selection()
   if line ~= line2 or col ~= col2 then return end
   local previous = cache[buffer]
@@ -46,9 +64,18 @@ local function context(view, sql)
   if not parsed then return end
   if parsed.start < offset - col + 1 or text:sub(offset + 1, parsed["end"]):find("[\r\n]") then return end
   local result = { revision = buffer.text_revision, line = line, col = col, offset = offset,
-    generation = sql.generation, parsed = parsed, catalog = c.catalog, text = text }
+    generation = sql.generation, parsed = parsed, catalog = c.catalog, connection = c, text = text }
   cache[buffer] = result
   return result
+end
+-- A table whose columns are not loaded reads them. Completion then opens again, if the caret
+-- has not moved.
+local function load_columns(view, sql, state, object)
+  sql.object_columns(state.connection, object, function()
+    if core.active_view ~= view or view.buffer.text_revision ~= state.revision then return end
+    local line, col = view.buffer:get_selection()
+    if line == state.line and col == state.col then autocomplete.refresh() end
+  end)
 end
 local function complete(view, sql)
   local state = context(view, sql)
@@ -71,6 +98,11 @@ local function complete(view, sql)
       return true
     end }
   end
+  if (p.mode == "table" or p.mode == "object" and p.object_kind == "table") and p.qualifier == "" then
+    for _, definition in ipairs(p.locals) do
+      if definition.kind ~= "derived" then add(definition.name, quote(buffer, definition.name), LOCAL_LABELS[definition.kind]) end
+    end
+  end
   if p.mode == "table" or p.mode == "object" then
     for _, t in ipairs(catalog.objects) do
       local kind = p.mode == "table" and "table" or p.object_kind
@@ -84,12 +116,14 @@ local function complete(view, sql)
     for _, source in ipairs(p.sources) do
       local qualifier = source.alias ~= "" and source.alias or source.name
       if p.qualifier == "" or equal(catalog, p.qualifier, qualifier) then
-        local t = resolve(catalog, source.schema, source.name)
-        if t then
+        local t = source_object(state, source)
+        if t and not t.columns then load_columns(view, sql, state, t)
+        elseif t then
+          local owner = t.local_source and t.name or t.schema .. "." .. t.name
           for _, column in ipairs(t.columns) do
             local inserted = quote(buffer, column.name)
             if p.qualifier == "" and #p.sources > 1 then inserted = quote(buffer, qualifier) .. "." .. inserted end
-            add(column.name, inserted, t.schema .. "." .. t.name .. " · " .. column.type)
+            add(column.name, inserted, owner .. " · " .. column.type)
           end
         end
       end
@@ -103,35 +137,74 @@ function M.install(sql)
   autocomplete.add_provider("sql-server", function(view) return complete(view, sql) end)
   require("core.language_intelligence").register_provider {
     id = "sql-server", name = "Database", priority = 100,
-    is_available = function(buffer) return buffer and buffer.syntax and buffer.syntax.name == "SQL" end,
-    prepare_project_symbols = function(view, done) return sql.with_connection(view, done) end,
-    project_symbols = function(buffer, query, opts)
-      local c = sql.connection_for(buffer)
-      if not c or not c.catalog then return nil, "Choose a database connection", "pending" end
-      local catalog, generation = c.catalog, c.generation
-      local names = symbol_names[catalog]
-      if not names then
-        names = {}
-        for i, object in ipairs(catalog.objects) do names[i] = object.schema .. "." .. object.name end
-        symbol_names[catalog] = names
+    -- Database groups join Project Symbol Search from any Buffer. The other features need a SQL Buffer.
+    is_available = function(buffer, feature)
+      return feature == "project_symbol_groups" or buffer and buffer.syntax and buffer.syntax.name == "SQL"
+    end,
+    -- One group for each of the Project's connections, after the Project's code symbols. A Ready
+    -- connection lists its matching objects. Enter shows an object's actions, and a new Pane opens its
+    -- source. A connection that is not Ready shows one row that connects it and searches again.
+    project_symbol_groups = function(query, opts)
+      sql.load()
+      local groups = {}
+      for _, c in ipairs(sql.connections) do
+        local items = {}
+        if c.state == "Ready" and c.catalog then
+          local catalog, generation = c.catalog, c.generation
+          local names = symbol_names[catalog]
+          if not names then
+            names = {}
+            for i, object in ipairs(catalog.objects) do names[i] = object.schema .. "." .. object.name end
+            symbol_names[catalog] = names
+          end
+          for _, match in ipairs(require("fuzzy").filter(names, query, {
+            limit = opts.limit, spans = false, case_sensitive = opts.case_sensitive,
+          })) do
+            local object = catalog.objects[match.index]
+            items[#items + 1] = { name = names[match.index], kind = object.kind, display_file = c.database,
+              activate = function(view, placement)
+                if sql.find(c.id) ~= c or c.generation ~= generation then
+                  core.warn("Database metadata changed. Search again."); return false
+                end
+                local source = require "plugins.sql_server.source"
+                if placement then return source.open(sql, c, object, placement) end
+                return source.object_actions(c, object, view)
+              end,
+            }
+          end
+        elseif c.server ~= "" and c.database ~= "" then
+          items[1] = { name = c.state == "Connecting" and "Connecting…" or "Connect", kind = c.state,
+            display_file = c.database, activate = function(view) return M.connect_and_search(sql, c, query, view) end }
+        end
+        groups[#groups + 1] = { label = c.name, items = items }
       end
-      local results = {}
-      for _, match in ipairs(require("fuzzy").filter(names, query, {
-        limit = opts.limit, spans = false, case_sensitive = opts.case_sensitive,
-      })) do
-        local object = catalog.objects[match.index]
-        results[#results + 1] = { name = names[match.index], kind = object.kind, display_file = c.database,
-          activate = function(view, placement)
-            if sql.connection_for(view.buffer) ~= c or c.generation ~= generation then
-              core.warn("Database metadata changed. Search again."); return false
-            end
-            return require("plugins.sql_server.source").open(sql, view, object, placement)
-          end,
-        }
-      end
-      return results, nil, "fresh"
+      return groups
     end,
   }
+end
+
+-- Connects from a Project Symbol Search row, then runs the same search again.
+function M.connect_and_search(sql, c, query, view)
+  local function search_again()
+    core.add_thread(function()
+      local deadline = system.get_time() + 30
+      while c.state == "Connecting" and system.get_time() < deadline do coroutine.yield(0.05) end
+      if sql.find(c.id) ~= c then return end
+      if c.state ~= "Ready" then core.error("%s", c.error or "SQL connection is not ready."); return end
+      if view and core.active_view ~= view then return end
+      require("plugins.fuzzy_searcher").open_project_symbols(query, { source_view = view })
+    end)
+  end
+  if c.state == "Connecting" then search_again()
+  elseif c.integrated then sql.connect(c.id); search_again()
+  else
+    require("plugins.sql_server.connection").password_prompt(c, function(password)
+      if sql.find(c.id) ~= c then return end
+      sql.connect(c.id, password)
+      search_again()
+    end)
+  end
+  return true
 end
 function M.object_at(view, sql)
   local state = context(view, sql)
@@ -140,6 +213,13 @@ function M.object_at(view, sql)
   local symbol = state.text:sub(p.start + 1, p["end"])
   if symbol:sub(1, 1) == "[" then symbol = symbol:sub(2):gsub("]$", ""):gsub("]]", "]")
   elseif symbol:sub(1, 1) == '"' then symbol = symbol:sub(2):gsub('"$', ""):gsub('""', '"') end
+  -- A Local Source has no database definition, so it must not reach a catalog
+  -- object with the same name.
+  if p.qualifier == "" then
+    for _, definition in ipairs(p.locals) do
+      if definition.kind ~= "derived" and equal(state.catalog, definition.name, symbol) then return end
+    end
+  end
   if p.mode == "table" or p.mode == "object" then
     local direct = resolve(state.catalog, p.qualifier, symbol)
     if direct then return direct end
@@ -147,11 +227,14 @@ function M.object_at(view, sql)
   local candidate
   for _, source in ipairs(p.sources) do
     local qualifier = source.alias ~= "" and source.alias or source.name
-    local t = resolve(state.catalog, source.schema, source.name)
+    local t = source_object(state, source)
     if t then
-      if p.qualifier == "" and symbol ~= "" and equal(state.catalog, qualifier, symbol) then return t end
+      if p.qualifier == "" and symbol ~= "" and equal(state.catalog, qualifier, symbol) then
+        if t.local_source then return end
+        return t
+      end
       if p.mode == "column" and (p.qualifier == "" or equal(state.catalog, qualifier, p.qualifier)) then
-        for _, column in ipairs(t.columns) do
+        for _, column in ipairs(t.columns or {}) do
           if equal(state.catalog, column.name, symbol) then
             if candidate then return end -- An unqualified column belongs to more than one source.
             candidate = t
@@ -160,6 +243,7 @@ function M.object_at(view, sql)
       end
     end
   end
+  if candidate and candidate.local_source then return end
   return candidate
 end
 
@@ -169,11 +253,32 @@ function M.expand_star(view, sql)
     local state = context(view, sql)
     if not state or not state.parsed.star then return false end
     local p, columns = state.parsed, {}
+    -- Read the columns that a large database did not load, then expand at the same caret.
+    local missing = {}
+    for _, source in ipairs(p.sources) do
+      local qualifier = source.alias ~= "" and source.alias or source.name
+      local object = (p.qualifier == "" or equal(state.catalog, p.qualifier, qualifier)) and source_object(state, source)
+      if object and not object.columns then missing[#missing + 1] = object end
+    end
+    if #missing > 0 then
+      local remaining = #missing
+      for _, object in ipairs(missing) do
+        sql.object_columns(state.connection, object, function()
+          remaining = remaining - 1
+          if remaining > 0 or view.closed or view.buffer.text_revision ~= state.revision then return end
+          local line, col = view.buffer:get_selection()
+          if line == state.line and col == state.col then M.expand_star(view, sql) end
+        end)
+      end
+      return true
+    end
     for _, source in ipairs(p.sources) do
       local qualifier = source.alias ~= "" and source.alias or source.name
       if p.qualifier == "" or equal(state.catalog, p.qualifier, qualifier) then
-        local object = resolve(state.catalog, source.schema, source.name)
-        if not object or #object.columns == 0 then core.warn("Column metadata is unavailable."); return false end
+        local object = source_object(state, source)
+        if not object or #object.columns == 0 or object.incomplete then
+          core.warn("Column metadata is unavailable."); return false
+        end
         for _, column in ipairs(object.columns) do
           local name = quote(view.buffer, column.name)
           if (#columns > 0 and p.qualifier ~= "") or (p.qualifier == "" and #p.sources > 1) then
