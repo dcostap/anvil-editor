@@ -133,7 +133,8 @@ int sql_batch_module(const char *s, size_t n, char *name, size_t size) {
     }
     if (!used) return 0;
     name[used] = 0;
-    if (p < n && s[p] == '.') ++p;
+    size_t dot = skip_space(s, n, p);
+    if (dot < n && s[dot] == '.') p = skip_space(s, n, dot + 1);
     else return 1;
   }
 }
@@ -147,16 +148,18 @@ int sql_batch_changes_schema(const char *s, size_t n) {
   static const char *const verbs[] = { "CREATE", "ALTER", "DROP", NULL };
   static const char *const kinds[] = { "TABLE", "VIEW", "PROC", "PROCEDURE", "FUNCTION", "TRIGGER", "SCHEMA",
     "SYNONYM", "TYPE", "SEQUENCE", NULL };
-  /* After a verb, after its object kind, or after INTO: the next name decides. */
+  /* After a verb, after its object kind, or after INTO: the next name decides.
+   * An INTO after OUTPUT names an existing table, not a new one. */
   enum { NONE, VERB, NAME } state = NONE;
   char previous[16] = "";
+  int output = 0;
   size_t p = 0;
   for (;;) {
     p = skip_space(s, n, p);
     if (p >= n) return 0;
     char c = s[p];
     if (c == '\'' || c == '[' || c == '"') {
-      if (c != '\'' && state == NAME) return 1;
+      if (c != '\'' && state == NAME && !(p + 1 < n && s[p + 1] == '#')) return 1;
       char close = c == '[' ? ']' : c;
       for (++p; p < n; ++p)
         if (s[p] == close) {
@@ -166,7 +169,10 @@ int sql_batch_changes_schema(const char *s, size_t n) {
       state = NONE; previous[0] = 0;
       continue;
     }
-    if (!word_char(c)) { ++p; state = NONE; previous[0] = 0; continue; }
+    if (!word_char(c)) {
+      if (c == ';') output = 0;
+      ++p; state = NONE; previous[0] = 0; continue;
+    }
     size_t start = p;
     while (p < n && word_char(s[p])) ++p;
     char w[16] = "";
@@ -176,7 +182,7 @@ int sql_batch_changes_schema(const char *s, size_t n) {
       if (!strcmp(w, "IF") || !strcmp(w, "EXISTS")) continue;
       if (s[start] != '#' && s[start] != '@') return 1;
       state = NONE;
-    } else if (state == VERB && (!strcmp(w, "OR") || !strcmp(w, "ALTER"))) {
+    } else if (state == VERB && (!strcmp(w, "OR") || !strcmp(w, "ALTER") || !strcmp(w, "EXTERNAL"))) {
       continue;
     } else if (state == VERB && is_word(w, kinds)) {
       state = NAME;
@@ -185,6 +191,13 @@ int sql_batch_changes_schema(const char *s, size_t n) {
       state = VERB;
     } else if (!strcmp(w, "SP_RENAME")) {
       return 1;
+    } else if (!strcmp(w, "OUTPUT") || !strcmp(w, "SELECT")) {
+      /* OUTPUT has no SELECT inside it, so a SELECT ends its clause. */
+      output = w[0] == 'O';
+      state = NONE;
+    } else if (!strcmp(w, "INTO") && output) {
+      output = 0;
+      state = NONE;
     } else {
       state = !strcmp(w, "INTO") && strcmp(previous, "INSERT") && strcmp(previous, "MERGE") ? NAME : NONE;
     }

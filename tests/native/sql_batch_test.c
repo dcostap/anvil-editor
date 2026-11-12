@@ -34,6 +34,8 @@ int main(void) {
   assert(sql_batch_module(text, strlen(text), name, sizeof(name)) && !strcmp(name, "quoted"));
   text = "CREATE TRIGGER t_audit ON sales.customers AFTER INSERT AS SELECT 1";
   assert(sql_batch_module(text, strlen(text), name, sizeof(name)) && !strcmp(name, "t_audit"));
+  text = "CREATE PROCEDURE dbo . [p] AS SELECT 1";
+  assert(sql_batch_module(text, strlen(text), name, sizeof(name)) && !strcmp(name, "p"));
   text = "SELECT 1; CREATE PROCEDURE p AS SELECT 1";
   assert(!sql_batch_module(text, strlen(text), name, sizeof(name)));
   text = "CREATE TABLE p (id int)";
@@ -44,12 +46,17 @@ int main(void) {
 
   const char *changes[] = { "CREATE TABLE sales.notes (id int)", "create or alter procedure [p] as select 1",
     "ALTER TABLE t ADD c int", "DROP VIEW IF EXISTS dbo.v", "EXEC sys.sp_rename 'a', 'b'",
-    "SELECT * INTO backup_orders FROM sales.orders", "PRINT 1\nGO\nCREATE SCHEMA audit" };
+    "SELECT * INTO backup_orders FROM sales.orders", "PRINT 1\nGO\nCREATE SCHEMA audit",
+    "CREATE EXTERNAL TABLE dbo.ext (id int) WITH (LOCATION = 'x')",
+    "DELETE FROM t OUTPUT deleted.id INTO @log;\nSELECT * INTO dbo.copy FROM t",
+    "EXEC p @x OUTPUT\nSELECT 1 AS a INTO dbo.copy" };
   for (size_t i = 0; i < sizeof(changes) / sizeof(changes[0]); ++i)
     assert(sql_batch_changes_schema(changes[i], strlen(changes[i])));
   const char *same[] = { "CREATE TABLE #t (id int)", "DROP TABLE IF EXISTS #t", "INSERT INTO dbo.t VALUES (1)",
     "SELECT 'CREATE TABLE x' AS text", "-- DROP TABLE t\nSELECT 1", "/* ALTER /* VIEW */ v */ SELECT 1",
-    "FETCH NEXT FROM c INTO @a", "SELECT 1 INTO #copy", "CREATE INDEX ix ON t (c)", "MERGE INTO t USING s ON 1 = 0", "" };
+    "FETCH NEXT FROM c INTO @a", "SELECT 1 INTO #copy", "CREATE INDEX ix ON t (c)", "MERGE INTO t USING s ON 1 = 0",
+    "DELETE FROM t OUTPUT deleted.* INTO dbo.archive", "UPDATE t SET a = 1 OUTPUT inserted.a, deleted.a INTO dbo.audit (new, old)",
+    "CREATE TABLE [#t] (id int)", "DROP TABLE \"#t\"", "" };
   for (size_t i = 0; i < sizeof(same) / sizeof(same[0]); ++i)
     assert(!sql_batch_changes_schema(same[i], strlen(same[i])));
   puts("SQL batches passed");
