@@ -342,6 +342,48 @@ test.describe("Tabular Data Preview", function()
     test.same({ view:selection_bounds() }, { 1, 1, 1, 3 })
   end)
 
+  test.it("marks a column filter while it is active, and offers one on the hovered header", function()
+    command.perform("tabular_data:open_preview")
+    local view = remember(panes.active().current_view)
+    test.ok(wait_ready(view))
+    view.position = { x = 0, y = 0 }
+    view.size = { x = 700, y = 400 }
+    -- The marks that each column's header draws beside its name.
+    local function marks()
+      local drawn, saved = {}, { renderer.draw_text, renderer.draw_rect, renderer.set_clip_rect }
+      renderer.draw_text = function(font, text, x, y, color)
+        drawn[#drawn + 1] = { text = text, x = x, color = color }
+        return x + font:get_width(text)
+      end
+      renderer.draw_rect = function() end
+      renderer.set_clip_rect = function() end
+      local ok, err = pcall(function() view:draw_header() end)
+      renderer.draw_text, renderer.draw_rect, renderer.set_clip_rect = saved[1], saved[2], saved[3]
+      test.ok(ok, err)
+      local result = {}
+      for column = 1, 3 do
+        local x, _, w = view:column_screen_rect(column)
+        result[column] = {}
+        for _, call in ipairs(drawn) do
+          if call.x >= x and call.x < x + w and not call.text:find(view.model.headers[column], 1, true) then
+            table.insert(result[column], call)
+          end
+        end
+      end
+      return result
+    end
+    local shown = marks()
+    test.equal(#shown[1] + #shown[2] + #shown[3], 0)
+    test.ok(view:toggle_filter_value(2, "37"))
+    shown = marks()
+    test.equal(#shown[1] + #shown[3], 0)
+    test.equal(#shown[2], 1)
+    test.same(shown[2][1].color, require("core.style").accent)
+    local x, _, w, h = view:column_screen_rect(1)
+    view:on_mouse_moved(x + w / 2, h / 2, 0, 0)
+    test.equal(#marks()[1], 1)
+  end)
+
   test.it("moves the active cell to the edges of the table", function()
     write_file(path, "A,B,C\n1,2,3\n4,5,6\n7,8,9\n")
     editor.buffer:reload()

@@ -1220,12 +1220,14 @@ local function scenario_is_ready()
     local model = { headers = { "id", "name", "city", "note" }, column_count = 4,
       column_kinds = { "number", "text", "text", "text" }, missing_label = "NULL", rows = {} }
     for i = 1, 100 do
-      model.rows[i] = { cells = { tostring(i), "Customer " .. i, "Lisbon", i % 2 == 0 and "" or false },
+      model.rows[i] = { cells = { tostring(i), "Customer " .. i, i % 3 == 0 and "Porto" or "Lisbon",
+        i % 2 == 0 and "" or false },
         source_line1 = i, source_line2 = i }
     end
     model.distinct_values = require("plugins.tabular_data_preview.parser").distinct_values(model)
     benchmark.view = Results("Example SQL Server")
-    benchmark.view:complete({ results = { model }, affected_rows = {} })
+    benchmark.view:complete({ results = { model }, affected_rows = {}, seconds = 0.0123 })
+    benchmark.view:toggle_filter_value(3, "Lisbon")
     require("core.panes").present(benchmark.view, { focus = true })
     return false
   end

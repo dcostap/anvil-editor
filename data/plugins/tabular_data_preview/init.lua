@@ -7,6 +7,7 @@ local Editor = require "core.editor"
 local keymap = require "core.keymap"
 local panes = require "core.panes"
 local style = require "core.style"
+local ui = require "core.ui"
 local View = require "core.view"
 local view_icons = require "core.view_icons"
 local parser = require "plugins.tabular_data_preview.parser"
@@ -1333,10 +1334,19 @@ function Preview:draw_header()
       x + scaled(CELL_PADDING), y,
       math.max(0, width - filter_width - scaled(CELL_PADDING)), height
     )
-    local filter_color = self.filters[column] and style.accent or style.dim
-    draw_text_clipped(
-      font, filter_color, "▾", x + width - filter_width, y, filter_width, height, "center"
-    )
+    -- An active filter shows a filter icon. Other columns offer the filter
+    -- only under the pointer, like DbVisualizer's mouse-over filter icon.
+    if self.filters[column] then
+      draw_text_clipped(
+        ui.small_icon_font(), style.accent, ui.icons.filter, x + width - filter_width, y, filter_width, height,
+        "center"
+      )
+    elseif hovered then
+      draw_text_clipped(
+        font, self.hover_target.kind == "header_filter" and style.text or style.dim, "▾",
+        x + width - filter_width, y, filter_width, height, "center"
+      )
+    end
     renderer.draw_rect(x + width - 1, y, 1, height, style.divider)
   end
   core.pop_clip_rect()
