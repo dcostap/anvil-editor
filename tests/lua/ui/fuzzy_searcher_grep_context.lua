@@ -1,6 +1,7 @@
 local test = require "core.test"
 local core = require "core"
 local style = require "core.style"
+local config = require "core.config"
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
 local symbol_icons = require "core.symbol_icons"
 local file_icons = require "core.file_icons"
@@ -19,6 +20,7 @@ test.describe("Fuzzy Searcher Text Search context", function()
       draw_rounded_rect = renderer.draw_rounded_rect,
       draw_file_icon = file_icons.draw,
       draw_symbol_icon = symbol_icons.draw,
+      transitions = config.transitions,
     }
     renderer.draw_canvas_scaled = function() end
     renderer.draw_rounded_rect = function() end
@@ -33,6 +35,7 @@ test.describe("Fuzzy Searcher Text Search context", function()
     renderer.draw_rounded_rect = saved.draw_rounded_rect
     file_icons.draw = saved.draw_file_icon
     symbol_icons.draw = saved.draw_symbol_icon
+    config.transitions = saved.transitions
   end)
 
   test.it("draws the enclosing function without parameters at the file column edge", function()
@@ -171,11 +174,13 @@ test.describe("Fuzzy Searcher Text Search context", function()
       "the enclosing symbol label must end at the column edge")
   end)
 
-  test.it("keeps grouped text rows collapsed when scrolling starts inside a file group", function()
+  test.it("shows each file path on its first visible text result while scrolling", function()
+    config.transitions = false
     local results = {}
-    for index = 1, 30 do
+    for index = 1, 60 do
+      local file = index < 25 and "src/basegame.cpp" or "src/other.cpp"
       results[#results + 1] = {
-        kind = "grep", file = "src/basegame.cpp", abs_path = "C:/project/src/basegame.cpp",
+        kind = "grep", file = file, abs_path = "C:/project/" .. file,
         line = index == 1 and 12 or 347 + index,
         text = "match " .. tostring(index), file_size = 122 * 1024,
       }
@@ -183,13 +188,10 @@ test.describe("Fuzzy Searcher Text Search context", function()
     local picker = fuzzy_searcher.open_static_results("Text Search", results)
     picker.position.x, picker.position.y = 0, 0
     picker:set_size(1200, 500)
-    picker.selected = 20
-    picker.viewport_offset = 20
     picker.open_transition_complete = true
     picker.update_selected_preview = function() end
     picker:refresh_static()
     picker:update()
-    picker.viewport_offset = 20
 
     local metrics = picker:list_metrics()
     local visible = {}
@@ -200,7 +202,9 @@ test.describe("Fuzzy Searcher Text Search context", function()
     local saved_set_clip_rect = renderer.set_clip_rect
     local saved_draw_canvas = renderer.draw_canvas
     renderer.draw_text = function(font, text, x, y)
-      if y >= metrics.results_top then visible[#visible + 1] = text end
+      if y >= metrics.results_top and y < metrics.results_top + metrics.result_rows * metrics.lh then
+        visible[#visible + 1] = { text = text, y = y }
+      end
       return x + font:get_width(text)
     end
     renderer.draw_rect = function() end
@@ -208,7 +212,29 @@ test.describe("Fuzzy Searcher Text Search context", function()
     renderer.draw_text_known_bounds = function() end
     renderer.set_clip_rect = function() end
     renderer.draw_canvas = function() end
-    local ok, err = pcall(function() picker:draw_open_content() end)
+    local ok, err = pcall(function()
+      for _, first in ipairs { 20, 21, 25, 26, 20 } do
+        picker:scroll_results(first - picker.viewport_offset)
+        picker:update()
+        visible = {}
+        picker:draw_open_content()
+        local paths = {}
+        for _, call in ipairs(visible) do
+          if call.text == "basegame.cpp" or call.text == "other.cpp" then
+            test.is_nil(paths[call.text], "subsequent rows must not repeat the file name")
+            paths[call.text] = math.floor((call.y - metrics.results_top) / metrics.lh) + 1
+          end
+        end
+        local top_name = first < 25 and "basegame.cpp" or "other.cpp"
+        test.equal(paths[top_name], 1, "the first visible result must show its file name")
+        if first < 25 then
+          test.equal(paths["other.cpp"], 26 - first,
+            "the next file group must show its own name")
+        else
+          test.is_nil(paths["basegame.cpp"], "the previous group must leave the screen")
+        end
+      end
+    end)
     renderer.draw_text = saved_draw_text
     renderer.draw_rect = saved_draw_rect
     renderer.draw_rounded_rect = saved_draw_rounded_rect
@@ -216,12 +242,6 @@ test.describe("Fuzzy Searcher Text Search context", function()
     renderer.set_clip_rect = saved_set_clip_rect
     renderer.draw_canvas = saved_draw_canvas
     if not ok then error(err, 0) end
-
-    test.ok(#visible > 0, "expected visible text-search rows")
-    for _, text in ipairs(visible) do
-      test.ok(not text:find("basegame", 1, true),
-        "a continuation row must not redraw the file name at the viewport top: " .. text)
-    end
   end)
 
   test.it("keeps the full filename before an optional declaration", function()

@@ -8997,6 +8997,7 @@ function FSView:draw_open_content()
     self, font, first, last
   )
   core.push_clip_rect(x, m.results_top, list_w, m.result_rows * lh)
+  -- Each file group starts at its first visible result, not at its off-screen head.
   local previous_rendered_file_kind = nil
   local previous_rendered_file = nil
   local previous_rendered_line_x = nil
@@ -9006,40 +9007,6 @@ function FSView:draw_open_content()
     previous_rendered_file = nil
     previous_rendered_line_x = nil
     previous_rendered_context_x = nil
-  end
-  if first > 1 then
-    local first_result = self.results[first]
-    local before = self.results[first - 1]
-    local kind = first_result and (first_result.kind == "grep" or first_result.kind == "symbol"
-      or first_result.kind == "navigation_place" and first_result.buffer) and first_result.kind
-    local file = kind and fuzzy_searcher.group_key(first_result) or ""
-    if file ~= "" and before and before.kind == kind
-        and fuzzy_searcher.group_key(before) == file then
-      local group_start = first - 1
-      while group_start > 1 do
-        local candidate = self.results[group_start - 1]
-        if not candidate or candidate.kind ~= kind
-            or fuzzy_searcher.group_key(candidate) ~= file then
-          break
-        end
-        group_start = group_start - 1
-      end
-      -- Seed the collapsed-row layout from the group head. Without this, the
-      -- first visible continuation row redraws the file path until it moves
-      -- below the viewport top.
-      local seed_y = m.top - lh + row_padding
-      if kind ~= "symbol" then
-        previous_rendered_line_x, previous_rendered_context_x = draw_grep_result_row(
-          font, self.results[group_start], x + pad, seed_y, row_text_w,
-          false, nil, nil, kind == "navigation_place" and 0 or grep_edit_metadata_width)
-      else
-        previous_rendered_line_x = fuzzy_searcher.draw_symbol_result_row(
-          font, self.results[group_start], x + pad, seed_y, row_text_w, lh, false
-        )
-      end
-      previous_rendered_file_kind = kind
-      previous_rendered_file = file
-    end
   end
   -- Row backgrounds go below the highlights, which glide across them in list coordinates.
   local row_x, row_w = x + inset, list_w - 2 * inset
