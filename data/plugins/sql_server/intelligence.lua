@@ -127,35 +127,74 @@ function M.install(sql)
   autocomplete.add_provider("sql-server", function(view) return complete(view, sql) end)
   require("core.language_intelligence").register_provider {
     id = "sql-server", name = "Database", priority = 100,
-    is_available = function(buffer) return buffer and buffer.syntax and buffer.syntax.name == "SQL" end,
-    prepare_project_symbols = function(view, done) return sql.with_connection(view, done) end,
-    project_symbols = function(buffer, query, opts)
-      local c = sql.connection_for(buffer)
-      if not c or not c.catalog then return nil, "Choose a database connection", "pending" end
-      local catalog, generation = c.catalog, c.generation
-      local names = symbol_names[catalog]
-      if not names then
-        names = {}
-        for i, object in ipairs(catalog.objects) do names[i] = object.schema .. "." .. object.name end
-        symbol_names[catalog] = names
+    -- Database groups join Project Symbol Search from any Buffer. The other features need a SQL Buffer.
+    is_available = function(buffer, feature)
+      return feature == "project_symbol_groups" or buffer and buffer.syntax and buffer.syntax.name == "SQL"
+    end,
+    -- One group for each of the Project's connections, after the Project's code symbols. A Ready
+    -- connection lists its matching objects. Enter shows an object's actions, and a new Pane opens its
+    -- source. A connection that is not Ready shows one row that connects it and searches again.
+    project_symbol_groups = function(query, opts)
+      sql.load()
+      local groups = {}
+      for _, c in ipairs(sql.connections) do
+        local items = {}
+        if c.state == "Ready" and c.catalog then
+          local catalog, generation = c.catalog, c.generation
+          local names = symbol_names[catalog]
+          if not names then
+            names = {}
+            for i, object in ipairs(catalog.objects) do names[i] = object.schema .. "." .. object.name end
+            symbol_names[catalog] = names
+          end
+          for _, match in ipairs(require("fuzzy").filter(names, query, {
+            limit = opts.limit, spans = false, case_sensitive = opts.case_sensitive,
+          })) do
+            local object = catalog.objects[match.index]
+            items[#items + 1] = { name = names[match.index], kind = object.kind, display_file = c.database,
+              activate = function(view, placement)
+                if sql.find(c.id) ~= c or c.generation ~= generation then
+                  core.warn("Database metadata changed. Search again."); return false
+                end
+                local source = require "plugins.sql_server.source"
+                if placement then return source.open(sql, c, object, placement) end
+                return source.object_actions(c, object, view)
+              end,
+            }
+          end
+        elseif c.server ~= "" and c.database ~= "" then
+          items[1] = { name = c.state == "Connecting" and "Connecting…" or "Connect", kind = c.state,
+            display_file = c.database, activate = function(view) return M.connect_and_search(sql, c, query, view) end }
+        end
+        groups[#groups + 1] = { label = c.name, items = items }
       end
-      local results = {}
-      for _, match in ipairs(require("fuzzy").filter(names, query, {
-        limit = opts.limit, spans = false, case_sensitive = opts.case_sensitive,
-      })) do
-        local object = catalog.objects[match.index]
-        results[#results + 1] = { name = names[match.index], kind = object.kind, display_file = c.database,
-          activate = function(view, placement)
-            if sql.connection_for(view.buffer) ~= c or c.generation ~= generation then
-              core.warn("Database metadata changed. Search again."); return false
-            end
-            return require("plugins.sql_server.source").open(sql, view, object, placement)
-          end,
-        }
-      end
-      return results, nil, "fresh"
+      return groups
     end,
   }
+end
+
+-- Connects from a Project Symbol Search row, then runs the same search again.
+function M.connect_and_search(sql, c, query, view)
+  local function search_again()
+    core.add_thread(function()
+      local deadline = system.get_time() + 30
+      while c.state == "Connecting" and system.get_time() < deadline do coroutine.yield(0.05) end
+      if sql.find(c.id) ~= c then return end
+      if c.state ~= "Ready" then core.error("%s", c.error or "SQL connection is not ready."); return end
+      if view and core.active_view ~= view then return end
+      require("plugins.fuzzy_searcher").open_project_symbols(query, { source_view = view })
+    end)
+  end
+  if c.state == "Connecting" then search_again()
+  elseif c.integrated then sql.connect(c.id); search_again()
+  else
+    require("plugins.sql_server.connection").password_prompt(c, function(password)
+      if sql.find(c.id) ~= c then return end
+      sql.connect(c.id, password)
+      search_again()
+    end)
+  end
+  return true
 end
 function M.object_at(view, sql)
   local state = context(view, sql)

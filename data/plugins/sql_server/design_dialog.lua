@@ -607,27 +607,38 @@ end
 
 -- Opens the design of the table at the caret, or of `object`. The catalog read uses its own session, so
 -- the Query's transaction and settings do not change.
-function M.open(sql, view, object)
+local function open_table(sql, c, object, alive)
+  local designs = kept_designs(c)
+  local key = object.schema .. "\0" .. object.name
+  if designs[key] then open_design(sql, c, designs[key]); return true end
+  local generation = c.generation
+  local handle, err = backend.execute(sql.connection_options(c), model.read_sql(object.schema, object.name),
+    function(data)
+      if data.session then backend.close_session(data.session) end
+      if c.generation ~= generation or not alive() then return end
+      local design, reason = model.from_results(object.schema, object.name, data)
+      core.log_quiet("SQL Server: Table Design read connection=%s ok=%s", c.id, tostring(design ~= nil))
+      if not design then core.warn("%s", reason); return end
+      open_design(sql, c, design)
+    end, { max_rows = 4096 })
+  if not handle then core.warn("%s", err or "Could not read the table."); return false end
+  return true
+end
+
+-- `from` is a SQL Editor, which designs the table at its caret, or a Ready
+-- connection from Project Symbol Search.
+function M.open(sql, from, object)
+  if sql.find(from.id) == from then
+    local view = core.active_view
+    return open_table(sql, from, object, function() return core.active_view == view end)
+  end
+  local view = from
   return sql.with_connection(view, function(c)
     object = object or require("plugins.sql_server.intelligence").object_at(view, sql)
     if not object or object.kind ~= "table" or object.local_source then
       core.warn("Table Design needs a table of the database at the caret."); return false
     end
-    local designs = kept_designs(c)
-    local key = object.schema .. "\0" .. object.name
-    if designs[key] then open_design(sql, c, designs[key]); return true end
-    local generation = c.generation
-    local handle, err = backend.execute(sql.connection_options(c), model.read_sql(object.schema, object.name),
-      function(data)
-        if data.session then backend.close_session(data.session) end
-        if c.generation ~= generation or view.closed or core.active_view ~= view then return end
-        local design, reason = model.from_results(object.schema, object.name, data)
-        core.log_quiet("SQL Server: Table Design read connection=%s ok=%s", c.id, tostring(design ~= nil))
-        if not design then core.warn("%s", reason); return end
-        open_design(sql, c, design)
-      end, { max_rows = 4096 })
-    if not handle then core.warn("%s", err or "Could not read the table."); return false end
-    return true
+    return open_table(sql, c, object, function() return not view.closed and core.active_view == view end)
   end)
 end
 

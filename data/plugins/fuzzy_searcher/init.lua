@@ -7222,6 +7222,36 @@ local function symbol_result_from_item(item, query, opts)
   }
 end
 
+-- Providers such as a Project's databases add groups after the Project's symbols. Each group is a
+-- divider, a header with its label, then its rows. A group without rows does not show.
+function fuzzy_searcher.add_symbol_groups(view, out, query, limit, opts)
+  local buffer = view.source_buffer or (view.source_view and view.source_view.buffer)
+  local providers = require("core.language_intelligence").providers_for("project_symbol_groups", buffer)
+  for _, provider in ipairs(providers) do
+    local groups = provider.project_symbol_groups(query, { limit = limit, case_sensitive = view.case_sensitive })
+    for _, group in ipairs(groups or {}) do
+      local first = #out + 1
+      for _, item in ipairs(group.items) do
+        local result = symbol_result_from_item(item, query, opts)
+        if result then out[#out + 1] = result end
+      end
+      if #out >= first then
+        if first > 1 then
+          table.insert(out, first, { header = true, label = group.label })
+          table.insert(out, first, { header = true, separator = true, label = "" })
+        else
+          table.insert(out, first, { header = true, label = group.label })
+        end
+      end
+    end
+  end
+  if out[view.selected or 1] and out[view.selected or 1].header then
+    for index = (view.selected or 1) + 1, #out do
+      if not out[index].header then view.selected = index; break end
+    end
+  end
+end
+
 local function set_symbol_results(view, query, results, source_label, status, reason, limit, opts)
   opts = opts or {}
   view:cancel_deferred_loading_feedback()
@@ -7234,6 +7264,8 @@ local function set_symbol_results(view, query, results, source_label, status, re
       out[#out + 1] = result
     end
   end
+  local own = #out
+  if opts.scope == "project" then fuzzy_searcher.add_symbol_groups(view, out, query, limit, opts) end
   view.results = out
   local selected = view.selected or 1
   local target = opts.select_preceding_position
@@ -7251,7 +7283,7 @@ local function set_symbol_results(view, query, results, source_label, status, re
   view.selected = common.clamp(selected, 1, math.max(1, #out))
   view:ensure_selection_visible()
   if status == "fresh" or status == "stale" then
-    local count = #out
+    local count = own
     local suffix = source_label and source_label ~= "" and (" — " .. source_label) or ""
     view.status = string.format("%d symbol%s%s", count, count == 1 and "" or "s", suffix)
   elseif reason then
@@ -7333,6 +7365,7 @@ function FSView:start_symbol_search(query, reset_selection, path_query)
       self.viewport_offset = 1
     end
     self.status = "Type after $ to find Project symbols"
+    fuzzy_searcher.add_symbol_groups(self, self.results, query, limit, { scope = "project", case_sensitive = self.case_sensitive })
     self:schedule_update(true)
     return
   end
@@ -7420,6 +7453,9 @@ function FSView:start_symbol_search(query, reset_selection, path_query)
       self:cancel_deferred_loading_feedback()
       self.results = {}
       self.status = reason and ("Project symbols unavailable: " .. tostring(reason)) or "Project symbols unavailable"
+      fuzzy_searcher.add_symbol_groups(self, self.results, query, limit, {
+        scope = "project", path_query = path_query, case_sensitive = self.case_sensitive,
+      })
       self:schedule_update(true)
     end
     if reason and status ~= "fresh" then core.log_quiet("Fuzzy Project symbols: %s", tostring(reason)) end

@@ -93,7 +93,7 @@ The per-project editor state that restores open views, tabs, splits, scroll posi
 _Avoid_: Session, app state
 
 **Project Symbol Search**:
-A search over named code symbols and Markdown headings across a loaded Project. In a SQL Query or Database Definition, it searches the objects of that document's Database Connection.
+A search over named code symbols and Markdown headings across a loaded Project, and over the objects of the Project's Database Connections.
 _Avoid_: global symbol search
 
 **Project Usage Search**:

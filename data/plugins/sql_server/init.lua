@@ -465,19 +465,23 @@ command.add(function() return M.is_sql(core.active_view), core.active_view end, 
     return require("plugins.sql_server.design_dialog").new_table(M, view)
   end),
 })
--- Menu items carry the View and the object, so they act on the clicked symbol.
-local function object_args(view, object, action)
-  return M.is_sql(view) and not view.closed and type(object) == "table", view, object, action
+-- Menu items carry the object and where it came from: a SQL Editor, or a Ready
+-- connection from Project Symbol Search. So they act on the chosen symbol.
+local function object_args(from, object, action)
+  if type(from) ~= "table" or type(object) ~= "table" then return false end
+  local valid
+  if M.find(from.id) == from then valid = from.state == "Ready" else valid = M.is_sql(from) and not from.closed end
+  return valid, from, object, action
 end
 command.add(object_args, {
-  ["sql_server:script_object"] = function(view, object, action)
-    return require("plugins.sql_server.source").generate(M, view, action, object)
+  ["sql_server:script_object"] = function(from, object, action)
+    return require("plugins.sql_server.source").generate(M, from, action, object)
   end,
-  ["sql_server:open_object"] = function(view, object)
-    return require("plugins.sql_server.source").open(M, view, object)
+  ["sql_server:open_object"] = function(from, object)
+    return require("plugins.sql_server.source").open(M, from, object)
   end,
-  ["sql_server:table_design"] = function(view, object)
-    return require("plugins.sql_server.design_dialog").open(M, view, object)
+  ["sql_server:table_design"] = function(from, object)
+    return require("plugins.sql_server.design_dialog").open(M, from, object)
   end,
 })
 

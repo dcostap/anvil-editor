@@ -843,33 +843,56 @@ test.describe("SQL Queries", function()
     test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "SELECT c.* FROM sales.customers c")
   end)
 
-  test.it("finds database symbols with Project Symbol Search and opens their source", function(context)
+  test.it("lists database objects in a group of Project Symbol Search from any Pane and shows their actions", function(context)
     local _, c = connected_query(context)
     local sql = require "plugins.sql_server"
+    local context_menu = require "core.context_menu"
     sql.disconnect(c.id)
-    local editor = sql.new_query()
-    editor.buffer:text_input("SELECT 1;")
-    test.ok(command.perform("fuzzy:open_symbols"))
-    local picker = test.not_nil(core.fuzzy_searcher_active_view)
-    local deadline = system.get_time() + 10
-    local chose_connection
-    while system.get_time() < deadline and not (picker.results[1] and picker.results[1].label == "sales.customers") do
-      if core.active_view == core.global_prompt_bar then
-        chose_connection = true
-        core.global_prompt_bar:submit()
+    local plain = require("core.editor")(core.open_buffer())
+    panes.place(function() return plain end, { placement = "new", focus = true })
+    local function row(label)
+      local picker = core.fuzzy_searcher_active_view
+      if not picker or picker.closed or picker.closing then return end
+      for index, result in ipairs(picker.results) do
+        if result.label == label and not result.header then return picker, index end
       end
-      picker = core.fuzzy_searcher_active_view or picker
-      if not picker.closed and not picker.closing then picker.input:set_text("$customers"); picker:update() end
-      coroutine.yield(0.01)
     end
-    test.not_ok(chose_connection)
-    test.equal(sql.connection_for(editor.buffer), c)
-    test.equal(test.not_nil(picker.results[1]).label, "sales.customers")
+    local function search_until(label)
+      local deadline = system.get_time() + 10
+      while system.get_time() < deadline and not row(label) do
+        local picker = core.fuzzy_searcher_active_view
+        if picker and not picker.closed and not picker.closing and picker.input:get_text() ~= "$customers" then
+          picker.input:set_text("$customers"); picker:update()
+        end
+        coroutine.yield(0.01)
+      end
+      return row(label)
+    end
+    test.ok(command.perform("fuzzy:open_symbols"))
+    local picker, index = search_until("Connect")
+    test.not_nil(picker)
+    test.ok(picker.results[index - 1].header)
+    test.equal(picker.results[index - 1].label, "New Connection")
+    picker.selected = index
     picker:confirm()
+    picker, index = search_until("sales.customers")
+    test.not_nil(picker)
+    test.equal(c.state, "Ready")
+    test.equal(sql.connection_for(plain.buffer), nil)
+    picker.selected = index
+    picker:confirm()
+    test.ok(context_menu.is_open())
+    test.equal(context_menu.selected_label(), "Script as SELECT")
+    test.ok(context_menu.choose("Open Definition"))
+    local deadline = system.get_time() + 10
+    while not core.active_view.buffer.read_only and system.get_time() < deadline do coroutine.yield(0.01) end
     test.ok(core.active_view.buffer.read_only)
     test.ok(core.active_view.buffer:get_text(1, 1, math.huge, math.huge):find("CREATE TABLE", 1, true))
-    test.ok(command.perform("core:navigate_back"))
-    test.equal(core.active_view, editor)
+    test.equal(sql.connection_for(core.active_view.buffer), c)
+    local object = schema.objects[1]
+    test.ok(command.is_valid("sql_server:script_object", c, object, "select"))
+    sql.disconnect(c.id)
+    test.not_ok(command.is_valid("sql_server:script_object", c, object, "select"))
   end)
 
   test.it("ignores metadata received after disconnect and never saves a password", function(context)
