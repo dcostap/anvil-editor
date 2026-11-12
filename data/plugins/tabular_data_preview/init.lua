@@ -424,16 +424,22 @@ function Preview:clear_selection()
   local changed = self.selection_anchor ~= nil or self.selection_focus ~= nil
   self.selection_anchor = nil
   self.selection_focus = nil
-  self.selection_drag = false
+  self.selection_span = nil
+  self.selection_drag = nil
   if changed then core.redraw = true end
   return changed
 end
 
+-- The selected rectangle. A selection of whole rows or whole columns
+-- (`selection_span`) covers every column or every row.
 function Preview:selection_bounds()
   local anchor, focus = self.selection_anchor, self.selection_focus
   if not (anchor and focus) then return nil end
-  return math.min(anchor.row, focus.row), math.min(anchor.column, focus.column),
-    math.max(anchor.row, focus.row), math.max(anchor.column, focus.column)
+  local row1, column1 = math.min(anchor.row, focus.row), math.min(anchor.column, focus.column)
+  local row2, column2 = math.max(anchor.row, focus.row), math.max(anchor.column, focus.column)
+  if self.selection_span == "rows" then column1, column2 = 1, self.model.column_count
+  elseif self.selection_span == "columns" then row1, row2 = 1, self:row_count() end
+  return row1, column1, row2, column2
 end
 
 function Preview:cell_is_selected(row, column)
@@ -473,11 +479,39 @@ function Preview:select_cell(row, column, extend)
   column = common.clamp(math.floor(tonumber(column) or 1), 1, column_count)
   if not extend or not self.selection_anchor then
     self.selection_anchor = { row = row, column = column }
+    self.selection_span = nil
   end
   self.selection_focus = { row = row, column = column }
   self:ensure_cell_visible(row, column)
   core.redraw = true
   return true
+end
+
+-- Selects whole rows or whole columns (`span`), from the anchor to `index`.
+-- The active cell keeps its other coordinate.
+function Preview:select_span(span, index, extend)
+  local focus = self.selection_focus
+  local row = span == "rows" and index or focus and focus.row or 1
+  local column = span == "columns" and index or focus and focus.column or 1
+  if not self:select_cell(row, column, extend) then return false end
+  self.selection_span = span
+  return true
+end
+
+function Preview:select_row() return self.selection_focus and self:select_span("rows", self.selection_focus.row) end
+function Preview:select_column() return self.selection_focus and self:select_span("columns", self.selection_focus.column) end
+
+-- The number of rows that one page moves.
+function Preview:page_rows()
+  return math.max(1, math.floor((self.size.y - self:header_height()) / self:row_height()) - 1)
+end
+
+-- Moves the active cell to a place that `target(focus)` gives, such as an edge.
+function Preview:move_to(target, extend)
+  if not self.model or self:row_count() == 0 or self.model.column_count == 0 then return false end
+  local focus = self.selection_focus or { row = 1, column = 1 }
+  local row, column = target(self, focus)
+  return self:select_cell(row, column, extend)
 end
 
 function Preview:move_selection(row_delta, column_delta, extend)
@@ -497,6 +531,7 @@ function Preview:select_all_cells()
   end
   self.selection_anchor = { row = 1, column = 1 }
   self.selection_focus = { row = self:row_count(), column = self.model.column_count }
+  self.selection_span = nil
   core.redraw = true
   return true
 end
@@ -886,8 +921,14 @@ function Preview:on_mouse_pressed(button, x, y, clicks)
       target.display_row, target.column,
       keymap.modkeys["shift"] and self.selection_anchor ~= nil
     )
-    self.selection_drag = true
+    self.selection_drag = "cells"
     return true
+  elseif target.kind == "source_row" then
+    self:select_span("rows", target.display_row, keymap.modkeys["shift"])
+    self.selection_drag = "rows"
+    return true
+  elseif target.kind == "source_header" then
+    return self:select_all_cells()
   end
   return false
 end
@@ -906,7 +947,9 @@ function Preview:on_mouse_moved(x, y, dx, dy)
   end
   if self.selection_drag then
     local target = self:hit_test(x, y)
-    if target.kind == "cell" then
+    if self.selection_drag == "rows" and target.display_row then
+      self:select_span("rows", target.display_row, true)
+    elseif target.kind == "cell" then
       self:select_cell(target.display_row, target.column, true)
     end
     return true
@@ -937,7 +980,7 @@ function Preview:on_mouse_released(button, x, y)
     return true
   end
   if button == "left" and self.selection_drag then
-    self.selection_drag = false
+    self.selection_drag = nil
     return true
   end
 end
@@ -1215,7 +1258,36 @@ command.add(Preview, {
   ["tabular_data:copy_selection"] = function(view) return view:copy_selection() end,
   ["tabular_data:select_all"] = function(view) return view:select_all_cells() end,
   ["tabular_data:clear_selection"] = function(view) return view:clear_selection() end,
+  ["tabular_data:select_row"] = function(view) return view:select_row() end,
+  ["tabular_data:select_column"] = function(view) return view:select_column() end,
 })
+
+-- Moves to an edge of the table or one page away. Each move has a `select_to`
+-- form that extends the selection.
+do
+  local targets = {
+    row_start = function(_, focus) return focus.row, 1 end,
+    row_end = function(view, focus) return focus.row, view.model.column_count end,
+    first_row = function(_, focus) return 1, focus.column end,
+    last_row = function(view, focus) return view:row_count(), focus.column end,
+    start = function() return 1, 1 end,
+    ["end"] = function(view) return view:row_count(), view.model.column_count end,
+  }
+  local pages = {
+    page_up = function(view, focus) return focus.row - view:page_rows(), focus.column end,
+    page_down = function(view, focus) return focus.row + view:page_rows(), focus.column end,
+  }
+  local commands = {}
+  for name, target in pairs(targets) do
+    commands["tabular_data:move_to_" .. name] = function(view) return view:move_to(target, false) end
+    commands["tabular_data:select_to_" .. name] = function(view) return view:move_to(target, true) end
+  end
+  for name, target in pairs(pages) do
+    commands["tabular_data:" .. name] = function(view) return view:move_to(target, false) end
+    commands["tabular_data:select_" .. name] = function(view) return view:move_to(target, true) end
+  end
+  command.add(Preview, commands)
+end
 
 keymap.add {
   ["left"] = "tabular_data:move_left",
@@ -1229,6 +1301,30 @@ keymap.add {
   ["ctrl+c"] = "tabular_data:copy_selection",
   ["ctrl+a"] = "tabular_data:select_all",
   ["escape"] = "tabular_data:clear_selection",
+  ["shift+space"] = "tabular_data:select_row",
+  ["ctrl+space"] = "tabular_data:select_column",
+  ["tab"] = "tabular_data:move_right",
+  ["shift+tab"] = "tabular_data:move_left",
+  ["home"] = "tabular_data:move_to_row_start",
+  ["end"] = "tabular_data:move_to_row_end",
+  ["shift+home"] = "tabular_data:select_to_row_start",
+  ["shift+end"] = "tabular_data:select_to_row_end",
+  ["ctrl+left"] = "tabular_data:move_to_row_start",
+  ["ctrl+right"] = "tabular_data:move_to_row_end",
+  ["ctrl+shift+left"] = "tabular_data:select_to_row_start",
+  ["ctrl+shift+right"] = "tabular_data:select_to_row_end",
+  ["ctrl+up"] = "tabular_data:move_to_first_row",
+  ["ctrl+down"] = "tabular_data:move_to_last_row",
+  ["ctrl+shift+up"] = "tabular_data:select_to_first_row",
+  ["ctrl+shift+down"] = "tabular_data:select_to_last_row",
+  ["ctrl+home"] = "tabular_data:move_to_start",
+  ["ctrl+end"] = "tabular_data:move_to_end",
+  ["ctrl+shift+home"] = "tabular_data:select_to_start",
+  ["ctrl+shift+end"] = "tabular_data:select_to_end",
+  ["pageup"] = "tabular_data:page_up",
+  ["pagedown"] = "tabular_data:page_down",
+  ["shift+pageup"] = "tabular_data:select_page_up",
+  ["shift+pagedown"] = "tabular_data:select_page_down",
 }
 
 return Preview
