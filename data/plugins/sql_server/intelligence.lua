@@ -119,19 +119,76 @@ local KEYWORDS = {
   ["is not"] = { "NULL" },
 }
 -- Keywords that start with the typed text, in the case of the clause's keyword.
--- A row that replaces the name at the caret with its text, while the text and the caret stay.
-local function text_item(state, buffer, text, description)
+-- A row that replaces the name at the caret with inserted, or with its text, while the text and the
+-- caret stay. Back moves the caret that many characters back from the end of the insert.
+local function text_item(state, buffer, text, description, inserted, back)
   local p = state.parsed
   local start_col = state.col - (state.offset - p.start)
   local end_col = state.col + p["end"] - state.offset
+  inserted = inserted or text
   return { text = text, desc = description, onselect = function()
     if buffer.text_revision ~= state.revision then return true end
     local line, col = buffer:get_selection()
     if line ~= state.line or col ~= state.col then return true end
-    local edits = { { line1 = line, col1 = start_col, line2 = line, col2 = end_col, text = text, idx = 1 } }
+    local edits = { { line1 = line, col1 = start_col, line2 = line, col2 = end_col, text = inserted, idx = 1 } }
     buffer:apply_edits(edits, { type = "insert", selections = buffer:selections_after_edits(edits, { "end" }), last_selection = 1 })
+    if back then
+      local l, c = buffer:get_selection()
+      buffer:set_selection(l, c - back)
+    end
     return true
   end }
+end
+-- Built-in functions and their arguments.
+local FUNCTIONS = {
+  { "ABS", "number" }, { "AVG", "expression" }, { "CAST", "expression AS type" }, { "CEILING", "number" },
+  { "CHARINDEX", "find, text, start" }, { "CHOOSE", "index, value, ..." }, { "COALESCE", "expression, ..." },
+  { "CONCAT", "value, value, ..." }, { "CONCAT_WS", "separator, value, value, ..." },
+  { "CONVERT", "type, expression, style" }, { "COUNT", "expression" }, { "COUNT_BIG", "expression" },
+  { "DATALENGTH", "expression" }, { "DATEADD", "datepart, number, date" }, { "DATEDIFF", "datepart, start, end" },
+  { "DATEDIFF_BIG", "datepart, start, end" }, { "DATEFROMPARTS", "year, month, day" }, { "DATENAME", "datepart, date" },
+  { "DATEPART", "datepart, date" }, { "DAY", "date" }, { "DB_NAME", "" }, { "DENSE_RANK", "" },
+  { "EOMONTH", "date, months" }, { "FIRST_VALUE", "expression" }, { "FLOOR", "number" },
+  { "FORMAT", "value, format, culture" }, { "GETDATE", "" }, { "GETUTCDATE", "" },
+  { "IIF", "condition, true_value, false_value" }, { "ISDATE", "expression" }, { "ISJSON", "expression" },
+  { "ISNULL", "expression, replacement" }, { "ISNUMERIC", "expression" }, { "JSON_QUERY", "json, path" },
+  { "JSON_VALUE", "json, path" }, { "LAG", "expression, offset, default" }, { "LAST_VALUE", "expression" },
+  { "LEAD", "expression, offset, default" }, { "LEFT", "text, length" }, { "LEN", "text" }, { "LOWER", "text" },
+  { "LTRIM", "text" }, { "MAX", "expression" }, { "MIN", "expression" }, { "MONTH", "date" }, { "NEWID", "" },
+  { "NTILE", "groups" }, { "NULLIF", "expression, expression" }, { "OBJECT_ID", "name" },
+  { "PATINDEX", "pattern, text" }, { "POWER", "number, power" }, { "QUOTENAME", "name" }, { "RANK", "" },
+  { "REPLACE", "text, find, replacement" }, { "REPLICATE", "text, count" }, { "REVERSE", "text" },
+  { "RIGHT", "text, length" }, { "ROUND", "number, length" }, { "ROW_NUMBER", "" }, { "RTRIM", "text" },
+  { "SCHEMA_NAME", "" }, { "SCOPE_IDENTITY", "" }, { "SIGN", "number" }, { "SQRT", "number" },
+  { "STRING_AGG", "expression, separator" }, { "STUFF", "text, start, length, insert" },
+  { "SUBSTRING", "text, start, length" }, { "SUM", "expression" }, { "SUSER_SNAME", "" }, { "SYSDATETIME", "" },
+  { "SYSDATETIMEOFFSET", "" }, { "SYSUTCDATETIME", "" }, { "TRIM", "text" }, { "TRY_CAST", "expression AS type" },
+  { "TRY_CONVERT", "type, expression, style" }, { "UPPER", "text" }, { "YEAR", "date" },
+}
+local SYSTEM_FUNCTIONS = { "@@ERROR", "@@FETCH_STATUS", "@@IDENTITY", "@@ROWCOUNT", "@@SERVERNAME", "@@SPID",
+  "@@TRANCOUNT", "@@VERSION" }
+-- Functions that start with the typed name, in the case of the nearest keyword. The caret goes
+-- between the parentheses, or after them for a function without arguments.
+local function function_items(state, buffer, items)
+  local p = state.parsed
+  local prefix = p.prefix:upper()
+  for _, f in ipairs(FUNCTIONS) do
+    local name, arguments = f[1], f[2]
+    if #name > #prefix and name:sub(1, #prefix) == prefix then
+      name = p.lower and name:lower() or name
+      items[#items + 1] = text_item(state, buffer, name, "(" .. arguments .. ")", name .. "()", arguments ~= "" and 1 or nil)
+    end
+  end
+end
+local function system_function_completion(state, buffer)
+  local p = state.parsed
+  local prefix, items = p.prefix:upper(), {}
+  for _, name in ipairs(SYSTEM_FUNCTIONS) do
+    if #name > #prefix and name:sub(1, #prefix) == prefix then
+      items[#items + 1] = text_item(state, buffer, p.lower and name:lower() or name)
+    end
+  end
+  return { query = p.prefix, line = state.line, query_col = state.col - #p.prefix, items = items }
 end
 local function keyword_completion(state, buffer)
   local p = state.parsed
@@ -217,6 +274,7 @@ local function complete(view, sql, opts)
   if not state then return end
   local p, catalog, buffer = state.parsed, state.catalog, view.buffer
   if p.prefix:match("^@[^@]") or p.prefix == "@" then return variable_completion(state, buffer) end
+  if p.prefix:match("^@@") then return system_function_completion(state, buffer) end
   -- No existing name goes here, but a keyword can. Keywords wait for a typed letter, and where
   -- the typed word can be an alias, for an explicit request.
   if p.slot == "none" then
@@ -282,8 +340,10 @@ local function complete(view, sql, opts)
     end
   end
   table.sort(items, function(a, b) return a.text < b.text or (a.text == b.text and a.desc < b.desc) end)
-  -- Join conditions go first, in key order.
+  -- Join conditions go first, in key order. Functions follow the columns, where an expression
+  -- goes and a name is typed.
   for i = #conditions, 1, -1 do table.insert(items, 1, conditions[i]) end
+  if p.mode == "column" and p.prefix ~= "" and p.qualifier == "" then function_items(state, buffer, items) end
   state.completion = { query = p.prefix, line = state.line, query_col = state.col - #p.prefix, items = items }
   return state.completion
 end

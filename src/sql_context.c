@@ -137,10 +137,8 @@ static int slot(const char *s, Token *ts, size_t first, size_t last, size_t care
   }
   return term(s, t) ? SQL_SLOT_NONE : SQL_SLOT_NAME;
 }
-static void set_keywords(const char *s, Token at, const char *group, SqlContext *out) {
+static void set_keywords(const char *group, SqlContext *out) {
   snprintf(out->keywords, sizeof(out->keywords), "%s", group);
-  out->lower = 1;
-  for (size_t i = at.start; i < at.end; ++i) if (isupper((unsigned char)s[i])) out->lower = 0;
 }
 /* The number or parenthesized group after TOP. */
 static int top_argument(const char *s, Token *ts, size_t first, size_t i) {
@@ -169,16 +167,16 @@ static void follow(const char *s, Token *ts, size_t first, size_t p, SqlContext 
   Token t = ts[p];
   char lower[16];
   if (word(s, t, "AS")) return;
-  if (word(s, t, "IS")) { set_keywords(s, t, "is", out); return; }
-  if (word(s, t, "NOT")) { set_keywords(s, t, "is not", out); return; }
-  if (word(s, t, "ASC") || word(s, t, "DESC")) { set_keywords(s, t, "sort", out); return; }
+  if (word(s, t, "IS")) { set_keywords("is", out); return; }
+  if (word(s, t, "NOT")) { set_keywords("is not", out); return; }
+  if (word(s, t, "ASC") || word(s, t, "DESC")) { set_keywords("sort", out); return; }
   if (t.kind == IDENT && one_of(s, t, LEADING_WORDS)) {
     size_t n = 0;
     for (size_t i = t.start; i < t.end && n + 1 < sizeof(lower); ++i) lower[n++] = (char)tolower((unsigned char)s[i]);
     lower[n] = 0;
     if (!strcmp(lower, "group") || !strcmp(lower, "order") || !strcmp(lower, "partition")) strcpy(lower, "by");
     if (!strcmp(lower, "intersect")) strcpy(lower, "except");
-    set_keywords(s, t, lower, out);
+    set_keywords(lower, out);
     return;
   }
   int ends = 0, depth = t.depth;
@@ -197,12 +195,12 @@ static void follow(const char *s, Token *ts, size_t first, size_t p, SqlContext 
     if (word(s, c, "BY")) {
       const char *group = i > first && word(s, ts[i - 1], "GROUP") ? "group"
         : i > first && word(s, ts[i - 1], "ORDER") ? "order" : i > first && word(s, ts[i - 1], "PARTITION") ? "partition" : "";
-      set_keywords(s, i > first ? ts[i - 1] : c, group, out);
+      set_keywords(group, out);
       return;
     }
     for (int k = 0; clauses[k].word; ++k) {
       if (!word(s, c, clauses[k].word)) continue;
-      set_keywords(s, c, clauses[k].group, out);
+      set_keywords(clauses[k].group, out);
       const char *g = clauses[k].group;
       out->alias = (!strcmp(g, "select") || !strcmp(g, "from") || !strcmp(g, "join")) && aliasable(s, ts, first, p);
       return;
@@ -776,6 +774,13 @@ int sql_context_parse(const char *s, size_t len, size_t caret, SqlContext *out) 
   size_t previous;
   out->slot = slot(s, ts, first, last, caret, &previous);
   if (out->slot == SQL_SLOT_NONE && previous < last) follow(s, ts, first, previous, out);
+  /* Keywords and functions take the case of the nearest keyword before the caret's name. */
+  for (size_t i = first; i < last && ts[i].start < caret; ++i) {
+    if (caret <= ts[i].end && is_name(ts[i])) break;
+    if (ts[i].kind != IDENT || !one_of(s, ts[i], KEYWORDS)) continue;
+    out->lower = 1;
+    for (size_t k = ts[i].start; k < ts[i].end; ++k) if (isupper((unsigned char)s[k])) out->lower = 0;
+  }
   /* Variables belong to the batch, which ends at a GO line. A typed variable is
    * the completion prefix in any statement. */
   size_t batch = 0, batch_end = n;

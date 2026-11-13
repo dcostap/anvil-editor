@@ -338,6 +338,20 @@ int main(void) {
   text = "SELECT * FROM t WHERE email l";
   parse_after(&c, text, "email l");
   assert(!c.lower);
+  /* Also at a name: the nearest keyword before the caret sets the case. */
+  text = "SELECT * FROM t where cou";
+  parse_after(&c, text, "where cou");
+  assert(c.lower);
+  text = "select * from t where a = 1 AND cou";
+  parse_after(&c, text, "AND cou");
+  assert(!c.lower);
+  /* Also at a name: the nearest keyword before the caret sets the case. */
+  text = "SELECT * FROM t where cou";
+  parse_after(&c, text, "where cou");
+  assert(c.lower);
+  text = "select * from t where a = 1 AND cou";
+  parse_after(&c, text, "AND cou");
+  assert(!c.lower);
   sql_context_free(&c);
   puts("SQL context passed");
   return 0;

@@ -1374,6 +1374,34 @@ test.describe("SQL Queries", function()
     test.not_ok(autocomplete.is_open())
   end)
 
+  test.it("offers built-in functions after the matching columns, with the caret in their arguments", function(context)
+    local editor = connected_query(context)
+    local function type_line(text)
+      editor.buffer:set_selection(1, 1, 1, math.huge)
+      for char in text:gmatch(".") do core.on_event("textinput", char) end
+    end
+    local function line() return (editor.buffer.lines[1]:gsub("\n$", "")) end
+    local function selected() return autocomplete.get_selected_suggestion() end
+    type_line("SELECT * FROM sales.customers WHERE n")
+    test.equal(selected().text, "name")
+    test.ok(command.perform("autocomplete:next"))
+    test.equal(selected().text, "NEWID")
+    type_line("SELECT cou")
+    test.equal(selected().text, "COUNT")
+    test.equal(selected().desc, "(expression)")
+    test.ok(command.perform("autocomplete:complete"))
+    for char in ("*"):gmatch(".") do core.on_event("textinput", char) end
+    test.equal(line(), "SELECT COUNT(*)")
+    -- A function without arguments leaves the caret after it. Functions follow the keywords' case.
+    type_line("select getd")
+    test.equal(selected().text, "getdate")
+    test.ok(command.perform("autocomplete:complete"))
+    test.equal(line(), "select getdate()")
+    test.same({ editor.buffer:get_selection() }, { 1, #"select getdate()" + 1, 1, #"select getdate()" + 1 })
+    type_line("SELECT @@ro")
+    test.equal(selected().text, "@@ROWCOUNT")
+  end)
+
   test.it("opens the table of an alias from the alias's declaration", function(context)
     local editor = connected_query(context)
     editor.buffer:text_input("SELECT * FROM sales.customers AS c")
