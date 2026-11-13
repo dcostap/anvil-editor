@@ -11,12 +11,20 @@ static void free_columns(SqlServerCatalog *c) {
   }
   free(c->columns); c->columns = NULL; c->count = 0;
 }
+static void free_foreign_keys(SqlServerCatalog *c) {
+  for (size_t i = 0; i < c->foreign_key_count; ++i) {
+    SqlServerForeignKey *k = &c->foreign_keys[i];
+    free(k->id); free(k->name); free(k->schema); free(k->table); free(k->column);
+    free(k->ref_schema); free(k->ref_table); free(k->ref_column);
+  }
+  free(c->foreign_keys); c->foreign_keys = NULL; c->foreign_key_count = 0;
+}
 void sql_server_catalog_free(SqlServerCatalog *c) {
   for (size_t i = 0; i < c->object_count; ++i) {
     free(c->objects[i].schema); free(c->objects[i].name); free(c->objects[i].kind);
   }
   free(c->objects);
-  free_columns(c); free(c->database); free(c->default_schema);
+  free_foreign_keys(c); free_columns(c); free(c->database); free(c->default_schema);
   memset(c, 0, sizeof(*c));
 }
 
@@ -180,6 +188,42 @@ static int fetch_columns(SQLHSTMT stmt, SqlServerCatalog *out, size_t limit) {
     if (!valid) return 0;
   }
 }
+/* Completion builds join conditions from these. A failed read keeps the rest of
+ * the catalog, and a database with more pairs than the limit gets none. */
+static void read_foreign_keys(SQLHDBC dbc, SqlServerCatalog *out) {
+  SQLHSTMT stmt = SQL_NULL_HSTMT;
+  char error[256];
+  memcpy(error, out->error, sizeof(error));
+  int complete = 0;
+  size_t capacity = 0;
+  if (!execute(dbc, &stmt, L"SELECT CONVERT(nvarchar(20),fk.object_id),fk.name,ps.name,po.name,pc.name,rs.name,ro.name,rc.name "
+      L"FROM sys.foreign_keys fk JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id=fk.object_id "
+      L"JOIN sys.objects po ON po.object_id=fkc.parent_object_id JOIN sys.schemas ps ON ps.schema_id=po.schema_id "
+      L"JOIN sys.columns pc ON pc.object_id=fkc.parent_object_id AND pc.column_id=fkc.parent_column_id "
+      L"JOIN sys.objects ro ON ro.object_id=fkc.referenced_object_id JOIN sys.schemas rs ON rs.schema_id=ro.schema_id "
+      L"JOIN sys.columns rc ON rc.object_id=fkc.referenced_object_id AND rc.column_id=fkc.referenced_column_id "
+      L"WHERE fk.is_ms_shipped=0 ORDER BY fk.object_id,fkc.constraint_column_id", out)) goto done;
+  for (;;) {
+    SQLRETURN rc = SQLFetch(stmt);
+    if (rc == SQL_NO_DATA) { complete = 1; break; }
+    if (!SQL_SUCCEEDED(rc)) break;
+    if (out->foreign_key_count == SQL_SERVER_FOREIGN_KEY_LIMIT) { SQLCancel(stmt); break; }
+    if (out->foreign_key_count == capacity) {
+      capacity = capacity ? capacity * 2 : 64;
+      SqlServerForeignKey *p = realloc(out->foreign_keys, capacity * sizeof(*p));
+      if (!p) break;
+      out->foreign_keys = p;
+    }
+    SqlServerForeignKey *k = &out->foreign_keys[out->foreign_key_count++];
+    k->id = cell(stmt, 1); k->name = cell(stmt, 2); k->schema = cell(stmt, 3); k->table = cell(stmt, 4);
+    k->column = cell(stmt, 5); k->ref_schema = cell(stmt, 6); k->ref_table = cell(stmt, 7); k->ref_column = cell(stmt, 8);
+    if (!k->id || !k->name || !k->schema || !k->table || !k->column || !k->ref_schema || !k->ref_table || !k->ref_column) break;
+  }
+done:
+  if (stmt != SQL_NULL_HSTMT) SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+  if (!complete) free_foreign_keys(out);
+  memcpy(out->error, error, sizeof(error));
+}
 static char *copy_text(const char *s) {
   char *p = malloc(strlen(s) + 1);
   if (p) strcpy(p, s);
@@ -217,6 +261,7 @@ static int read_catalog(SQLHDBC dbc, size_t column_limit, SqlServerCatalog *out)
     if (!object->schema || !object->name || !object->kind) goto done;
   }
   SQLFreeHandle(SQL_HANDLE_STMT, stmt); stmt = SQL_NULL_HSTMT;
+  read_foreign_keys(dbc, out);
   /* A truncated object list cannot hold all columns, so each object reads its own. */
   if (out->objects_truncated) { success = 1; goto done; }
   if (!execute(dbc, &stmt, L"SELECT CONVERT(nvarchar(20), COUNT_BIG(*)) FROM sys.objects o JOIN sys.columns c ON c.object_id=o.object_id "

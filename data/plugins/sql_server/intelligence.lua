@@ -140,6 +140,60 @@ local function keyword_completion(state, buffer)
   end
   return { query = p.prefix, line = state.line, query_col = state.col - #p.prefix, items = items }
 end
+-- The foreign keys at either end of each table, by its schema and name. Built once for each catalog.
+local key_index = setmetatable({}, { __mode = "k" })
+local function table_key(catalog, schema, name)
+  local key = schema .. "\0" .. name
+  return catalog.case_sensitive and key or key:lower()
+end
+local function keys_of(catalog, object)
+  local index = key_index[catalog]
+  if not index then
+    index = {}
+    for _, k in ipairs(catalog.foreign_keys) do
+      for _, at in ipairs({ table_key(catalog, k.schema, k.table), table_key(catalog, k.ref_schema, k.ref_table) }) do
+        local list = index[at] or {}
+        index[at] = list
+        -- A key that references its own table is listed once.
+        if list[#list] ~= k then list[#list + 1] = k end
+      end
+    end
+    key_index[catalog] = index
+  end
+  return index[table_key(catalog, object.schema, object.name)] or {}
+end
+-- `a.x = b.y` for each foreign key between the joined source and a source before it, with the
+-- earlier source first. The column pairs of a key join with AND. A self-join gets both directions.
+local function join_conditions(state, buffer, add)
+  local p, catalog = state.parsed, state.catalog
+  local joined = p.sources[p.join]
+  local target = joined and source_object(state, joined)
+  if not target or target.local_source then return end
+  local function qualifier(source) return quote(buffer, source.alias ~= "" and source.alias or source.name) end
+  local function at(o, schema, name) return equal(catalog, schema, o.schema) and equal(catalog, name, o.name) end
+  for i = 1, p.join - 1 do
+    local source = p.sources[i]
+    local earlier = source_object(state, source)
+    if earlier and not earlier.local_source then
+      for _, k in ipairs(keys_of(catalog, target)) do
+        for _, referenced in ipairs({ false, true }) do
+          -- Referenced: the earlier source holds the key's referenced columns.
+          local from, to = referenced and target or earlier, referenced and earlier or target
+          if at(from, k.schema, k.table) and at(to, k.ref_schema, k.ref_table) then
+            local parts = {}
+            for c = 1, #k.columns do
+              local mine = referenced and k.ref_columns[c] or k.columns[c]
+              local theirs = referenced and k.columns[c] or k.ref_columns[c]
+              parts[c] = qualifier(source) .. "." .. quote(buffer, mine) .. " = " .. qualifier(joined) .. "." .. quote(buffer, theirs)
+            end
+            local condition = table.concat(parts, " AND ")
+            add(condition, condition, k.name)
+          end
+        end
+      end
+    end
+  end
+end
 local function complete(view, sql, opts)
   local state = context(view, sql)
   if not state then return end
@@ -158,13 +212,14 @@ local function complete(view, sql, opts)
   end
   if state.completion then return state.completion end
   if p.star then return end
-  local items, seen = {}, {}
-  local function add(name, inserted, description)
+  local items, seen, conditions = {}, {}, {}
+  local function add(name, inserted, description, into)
     if not name:lower():find(p.prefix:lower(), 1, true) or seen[inserted] then return end
     seen[inserted] = true
     local start_col = state.col - (state.offset - p.start)
     local end_col = state.col + p["end"] - state.offset
-    items[#items + 1] = { text = name, desc = description, onselect = function()
+    into = into or items
+    into[#into + 1] = { text = name, desc = description, onselect = function()
       if buffer.text_revision ~= state.revision or sql.generation ~= state.generation then return true end
       local line, col = buffer:get_selection()
       if line ~= state.line or col ~= state.col then return true end
@@ -188,6 +243,9 @@ local function complete(view, sql, opts)
       end
     end
   elseif p.mode == "column" then
+    if p.join > 0 then
+      join_conditions(state, buffer, function(name, inserted, description) add(name, inserted, description, conditions) end)
+    end
     for _, source in ipairs(p.sources) do
       local qualifier = source.alias ~= "" and source.alias or source.name
       if p.qualifier == "" or equal(catalog, p.qualifier, qualifier) then
@@ -205,6 +263,8 @@ local function complete(view, sql, opts)
     end
   end
   table.sort(items, function(a, b) return a.text < b.text or (a.text == b.text and a.desc < b.desc) end)
+  -- Join conditions go first, in key order.
+  for i = #conditions, 1, -1 do table.insert(items, 1, conditions[i]) end
   state.completion = { query = p.prefix, line = state.line, query_col = state.col - #p.prefix, items = items }
   return state.completion
 end

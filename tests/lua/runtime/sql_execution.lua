@@ -55,6 +55,10 @@ test.describe("SQL execution input", function()
     end
     test.equal(test.not_nil(procedure).kind, "procedure")
     test.equal(#test.not_nil(periods).columns, 1)
+    local key
+    for _, k in ipairs(catalog.foreign_keys) do if k.name == "FK_parent" then key = k end end
+    test.same(test.not_nil(key), { name = "FK_parent", schema = "sales", table = "child", columns = { "parent_id" },
+      ref_schema = "sales", ref_table = "parent", ref_columns = { "id" } })
     local definition
     reply = {}
     test.not_nil(backend.read_definition(connection, { schema = "sales", name = "child" }, function(value, err)

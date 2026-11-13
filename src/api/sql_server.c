@@ -29,6 +29,7 @@ static int context(lua_State *L) {
   text(L, "mode", out.mode == SQL_CONTEXT_TABLE ? "table" : out.mode == SQL_CONTEXT_COLUMN ? "column" : out.mode == SQL_CONTEXT_OBJECT ? "object" : "none");
   boolean(L,"star",out.star); text(L,"slot",out.slot == SQL_SLOT_VALUE ? "value" : out.slot == SQL_SLOT_NONE ? "none" : "name");
   text(L,"keywords",out.keywords); boolean(L,"lower",out.lower); boolean(L,"alias",out.alias);
+  lua_pushinteger(L, (lua_Integer)out.join); lua_setfield(L, -2, "join");
   text(L,"object_kind",out.object_kind);
   text(L, "prefix", out.prefix); text(L, "qualifier", out.qualifier);
   lua_pushinteger(L, (lua_Integer)out.start); lua_setfield(L, -2, "start");
@@ -122,6 +123,25 @@ static int read_schema(lua_State *L) {
     lua_rawseti(L,-2,i+1);
   }
   lua_setfield(L, -2, "objects");
+  /* One entry for each key, with its column pairs in key order. */
+  lua_newtable(L);
+  int keys = 0;
+  for (size_t i = 0; i < c->foreign_key_count;) {
+    SqlServerForeignKey *k = &c->foreign_keys[i];
+    lua_newtable(L);
+    text(L, "name", k->name); text(L, "schema", k->schema); text(L, "table", k->table);
+    text(L, "ref_schema", k->ref_schema); text(L, "ref_table", k->ref_table);
+    lua_newtable(L); lua_newtable(L);
+    int pairs = 0;
+    for (; i < c->foreign_key_count && !strcmp(c->foreign_keys[i].id, k->id); ++i) {
+      ++pairs;
+      lua_pushstring(L, c->foreign_keys[i].ref_column); lua_rawseti(L, -2, pairs);
+      lua_pushstring(L, c->foreign_keys[i].column); lua_rawseti(L, -3, pairs);
+    }
+    lua_setfield(L, -3, "ref_columns"); lua_setfield(L, -2, "columns");
+    lua_rawseti(L, -2, ++keys);
+  }
+  lua_setfield(L, -2, "foreign_keys");
   sql_server_catalog_free(c);
   return 1;
 }

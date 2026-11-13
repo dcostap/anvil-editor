@@ -285,6 +285,23 @@ int main(void) {
       return 1;
     }
   }
+  /* At the start of a JOIN's ON, join is 1 + the index of the joined source. */
+  static const struct { const char *sql; size_t join; } joins[] = {
+    { "SELECT * FROM sales.customers c JOIN dbo.orders o ON |", 2 }, { "SELECT * FROM a JOIN b ON x|", 2 },
+    { "SELECT * FROM a JOIN b ON a.id = b.id LEFT JOIN c ON |", 3 }, { "SELECT * FROM a JOIN b ON | JOIN c ON c.id = a.id", 2 },
+    { "SELECT * FROM a JOIN (SELECT id FROM b) d ON |", 2 }, { "UPDATE c SET name = 1 FROM sales.customers c JOIN dbo.orders o ON |", 2 },
+    { "SELECT * FROM a JOIN b ON a.id = |", 0 }, { "SELECT * FROM a JOIN b ON a.id = b.id AND |", 0 },
+    { "SELECT * FROM a JOIN b ON b.|", 0 }, { "SELECT * FROM a JOIN b ON a.id = b.id WHERE |", 0 } };
+  for (size_t i = 0; i < sizeof(joins) / sizeof(joins[0]); ++i) {
+    char sql[256];
+    const char *bar = strchr(joins[i].sql, '|');
+    size_t at = (size_t)(bar - joins[i].sql);
+    memcpy(sql, joins[i].sql, at);
+    strcpy(sql + at, bar + 1);
+    sql_context_free(&c);
+    assert(sql_context_parse(sql, strlen(sql), at, &c));
+    if (c.join != joins[i].join) { fprintf(stderr, "%s: join %zu\n", joins[i].sql, c.join); return 1; }
+  }
   text = "select * from t where email l";
   parse_after(&c, text, "email l");
   assert(c.lower && !strcmp(c.keywords, "where"));

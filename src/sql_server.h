@@ -11,11 +11,18 @@ typedef struct {
   int nullable, identity, primary_key;
 } SqlServerColumn;
 typedef struct { char *schema, *name, *kind; } SqlServerObject;
+/* One column pair of a foreign key: schema.table.column references
+ * ref_schema.ref_table.ref_column. A key's pairs are consecutive, in key order,
+ * and share the key's object ID. */
+typedef struct { char *id, *name, *schema, *table, *column, *ref_schema, *ref_table, *ref_column; } SqlServerForeignKey;
 typedef struct {
   SqlServerColumn *columns;
   size_t count;
   SqlServerObject *objects;
   size_t object_count;
+  /* Empty when the read failed or the database has more pairs than the limit. */
+  SqlServerForeignKey *foreign_keys;
+  size_t foreign_key_count;
   char *database, *default_schema;
   int case_sensitive;
   /* 0 when the database has more columns than the limit: each object's columns then load on demand. */
@@ -29,6 +36,7 @@ typedef struct {
 
 #define SQL_SERVER_OBJECT_LIMIT 200000
 #define SQL_SERVER_COLUMN_LIMIT 50000
+#define SQL_SERVER_FOREIGN_KEY_LIMIT 50000
 
 /* Blocking, worker-only. All queries are fixed metadata SELECTs.
  * Connections close before return. No query text or credentials are retained.

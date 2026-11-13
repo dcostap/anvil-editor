@@ -39,6 +39,10 @@ typedef struct {
    * the caret can still take an alias, so a typed name can be one. */
   char keywords[16];
   int lower, alias;
+  /* At the start of a JOIN's ON, such as `JOIN b ON |`: 1 + the index of the
+   * source that the JOIN names, so completion can offer its join conditions.
+   * Otherwise 0. */
+  size_t join;
   /* Empty means any object; table also permits a view for DML. */
   char object_kind[16];
   char prefix[SQL_CONTEXT_NAME], qualifier[SQL_CONTEXT_NAME];

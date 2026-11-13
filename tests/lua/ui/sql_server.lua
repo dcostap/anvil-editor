@@ -16,6 +16,10 @@ local schema = {
       { name = "customer_id", type = "int", nullable = false },
     } },
   },
+  foreign_keys = {
+    { name = "FK_orders_customers", schema = "dbo", table = "orders", columns = { "customer_id" },
+      ref_schema = "sales", ref_table = "customers", ref_columns = { "id" } },
+  },
 }
 local function connected_query(context, catalog)
   local sql = require "plugins.sql_server"
@@ -1296,6 +1300,53 @@ test.describe("SQL Queries", function()
     test.not_nil(clipped)
     test.ok(clipped.text:match("^1234.*…$"), clipped.text)
     test.ok(clipped.x + font:get_width(clipped.text) <= x + w)
+  end)
+
+  test.it("offers the foreign keys' join conditions first at the start of a JOIN's ON", function(context)
+    local function columns(...)
+      local result = {}
+      for i, name in ipairs({ ... }) do result[i] = { name = name, type = "int" } end
+      return result
+    end
+    local editor = connected_query(context, {
+      database = "AnvilTest", default_schema = "dbo", case_sensitive = false,
+      objects = {
+        schema.objects[1], schema.objects[2],
+        { schema = "sales", name = "lines", kind = "table", columns = columns("order_id", "line_no") },
+        { schema = "sales", name = "notes", kind = "table", columns = columns("order_id", "line_no") },
+        { schema = "dbo", name = "staff", kind = "table", columns = columns("id", "manager_id") },
+      },
+      foreign_keys = {
+        schema.foreign_keys[1],
+        { name = "FK_notes_lines", schema = "sales", table = "notes", columns = { "order_id", "line_no" },
+          ref_schema = "sales", ref_table = "lines", ref_columns = { "order_id", "line_no" } },
+        { name = "FK_staff_manager", schema = "dbo", table = "staff", columns = { "manager_id" },
+          ref_schema = "dbo", ref_table = "staff", ref_columns = { "id" } },
+      },
+    })
+    local function type_line(text)
+      editor.buffer:set_selection(1, 1, 1, math.huge)
+      for char in text:gmatch(".") do core.on_event("textinput", char) end
+    end
+    local function selected() return autocomplete.get_selected_suggestion().text end
+    type_line("SELECT * FROM sales.customers c JOIN dbo.orders o ON ")
+    test.ok(autocomplete.is_open())
+    test.equal(selected(), "c.id = o.customer_id")
+    test.ok(command.perform("autocomplete:complete"))
+    test.equal(editor.buffer.lines[1]:gsub("\n$", ""), "SELECT * FROM sales.customers c JOIN dbo.orders o ON c.id = o.customer_id")
+
+    -- The earlier source comes first, whichever end of the key it is.
+    type_line("SELECT * FROM dbo.orders o JOIN sales.customers c ON ")
+    test.equal(selected(), "o.customer_id = c.id")
+    type_line("SELECT * FROM sales.notes n JOIN sales.lines l ON ")
+    test.equal(selected(), "n.order_id = l.order_id AND n.line_no = l.line_no")
+    type_line("SELECT * FROM staff e JOIN staff m ON ")
+    test.equal(selected(), "e.manager_id = m.id")
+    test.ok(command.perform("autocomplete:next"))
+    test.equal(selected(), "e.id = m.manager_id")
+    test.ok(command.perform("autocomplete:next"))
+    -- The columns follow.
+    test.equal(selected(), "id")
   end)
 
   test.it("opens the table of an alias from the alias's declaration", function(context)

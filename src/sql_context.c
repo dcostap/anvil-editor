@@ -489,14 +489,18 @@ static int read_scope(const char *s, Token *ts, size_t begin, size_t end, int sc
     if (t.depth!=scope) continue;
     if (word(s,t,"FROM") || word(s,t,"JOIN") || word(s,t,"APPLY") || word(s,t,"USING")) {
       source_list=expect_source=1;
-      if (t.end<=caret) out->mode=SQL_CONTEXT_TABLE;
+      if (t.end<=caret) { out->mode=SQL_CONTEXT_TABLE; out->join=0; }
       continue;
     }
     int column_word=0;
     for (int k=0; column_words[k]; ++k) if (word(s,t,column_words[k])) column_word=1;
     if (column_word || word(s,t,"VALUES")) {
       source_list=expect_source=0;
-      if (t.end<=caret) out->mode=column_word || merge ? SQL_CONTEXT_COLUMN : SQL_CONTEXT_NONE;
+      if (t.end<=caret) {
+        out->mode=column_word || merge ? SQL_CONTEXT_COLUMN : SQL_CONTEXT_NONE;
+        /* The last source before ON is the one its JOIN names. */
+        out->join=word(s,t,"ON") ? out->count : 0;
+      }
       continue;
     }
     if (t.kind==',' && source_list) {
@@ -636,6 +640,8 @@ static int read_statement(const char *s, Token *ts, size_t begin, size_t end, si
       if (same) {
         memmove(out->sources,out->sources+1,(out->count-1)*sizeof(*out->sources));
         --out->count;
+        /* The joined source moves down with the others, or was the removed target. */
+        if (out->join) out->join=out->join-1>k ? out->join-1 : out->join-1==k ? 0 : out->join;
         break;
       }
     }
@@ -752,6 +758,9 @@ int sql_context_parse(const char *s, size_t len, size_t caret, SqlContext *out) 
   }
   if (dml) ok = read_statement(s, ts, begin, end, caret, out);
   else { out->mode = SQL_CONTEXT_COLUMN; ok = read_scope(s, ts, begin, end, scope, caret, 0, out); }
+  /* A join condition goes only at the start of the ON, as one unqualified term. */
+  if (out->mode != SQL_CONTEXT_COLUMN || out->qualifier[0] || previous >= last || !word(s, ts[previous], "ON")
+      || ts[previous].depth != scope || out->join > out->count) out->join = 0;
 done:
   free(ts);
   if (!ok) { sql_context_free(out); memset(out, 0, sizeof(*out)); }
