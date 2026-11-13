@@ -1182,6 +1182,69 @@ test.describe("SQL Queries", function()
     test.equal(select(1, editor.buffer:get_selection()), 5)
   end)
 
+  test.it("keeps a result with its SQL and display state while a new run replaces the live result", function(context)
+    local sql = require "plugins.sql_server"
+    local editor, c = connected_query(context)
+    local Results = require "plugins.sql_server.results"
+    local parser = require "plugins.tabular_data_preview.parser"
+    local function model(names)
+      local result = { headers = { "name" }, column_count = 1, rows = {} }
+      for i, name in ipairs(names) do result.rows[i] = { cells = { name }, source_line1 = i, source_line2 = i } end
+      result.distinct_values = parser.distinct_values(result)
+      return result
+    end
+    local reply = { model({ "Ada", "Bea", "Cy" }) }
+    require("plugins.sql_server.backend").execute = function(_, _, callback)
+      callback({ results = reply, affected_rows = {}, messages = {} })
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("SELECT name FROM sales.customers")
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    local live = editor.buffer.sql_results
+    panes.focus(panes.pane_for_view(live))
+    test.ok(live:toggle_filter_value(1, "Ada"))
+    test.ok(live:toggle_filter_value(1, "Bea"))
+    live:cycle_sort(1); live:cycle_sort(1)
+    test.ok(command.perform("sql_server:keep_result"))
+    test.equal(core.active_view, live)
+    local kept
+    for _, pane in ipairs(panes.ordered()) do
+      for _, view in ipairs(panes.views(pane)) do
+        if view:extends(Results) and view ~= live then kept = view end
+      end
+    end
+    test.not_nil(kept)
+    local function shown(view)
+      local names = {}
+      for row = 1, view:row_count() do names[row] = view:cell_value(row, 1) end
+      return table.concat(names, " ")
+    end
+    test.equal(shown(kept), "Bea Ada")
+    test.ok(kept:get_name():find("Kept", 1, true))
+
+    -- A new run of changed SQL replaces only the live result.
+    reply = { model({ "Dee" }) }
+    panes.focus(panes.pane_for_view(editor))
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    editor.buffer:text_input("SELECT name FROM sales.customers WHERE 1 = 1")
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    test.equal(editor.buffer.sql_results, live)
+    test.equal(shown(live), "Dee")
+    test.equal(shown(kept), "Bea Ada")
+
+    -- A kept result does not change, and its SQL opens on its connection.
+    panes.focus(panes.pane_for_view(kept))
+    test.not_ok(command.is_valid("sql_server:edit_cell"))
+    local sql_button
+    for _, b in ipairs(kept:footer_buttons()) do if b.id == "sql" then sql_button = b end end
+    test.ok(kept:press_footer_button(test.not_nil(sql_button)))
+    local query = core.active_view
+    test.equal(query.buffer:get_text(1, 1, math.huge, math.huge), "SELECT name FROM sales.customers")
+    test.equal(sql.connection_for(query.buffer).id, c.id)
+  end)
+
   test.it("shows every row of the next result in fitted columns, without the previous result's filter", function()
     local Results = require "plugins.sql_server.results"
     local function model(names)
@@ -1195,16 +1258,23 @@ test.describe("SQL Queries", function()
     local view = Results("Test")
     panes.place(function() return view end, { placement = "new", focus = true })
     local long = "Beatrice Alexandra Montgomery"
-    view:complete({ results = { model({ "Ada" }), model({ "Ada", long }) } })
+    view:complete({ results = { model({ "Ada", "Bea" }), model({ "Ada", long }) } })
     local narrow = view.column_widths[1]
     test.ok(view:toggle_filter_value(1, "Ada"))
     test.ok(command.perform("sql_server:next_result"))
     test.equal(view:row_count(), 2)
     test.equal(view:cell_value(2, 1), long)
     test.ok(view.column_widths[1] > narrow)
+    view:cycle_sort(1); view:cycle_sort(1)
+    -- Each result keeps its own filter, sort and widths.
     test.ok(command.perform("sql_server:previous_result"))
     test.equal(view:row_count(), 1)
     test.equal(view.column_widths[1], narrow)
+    test.ok(command.perform("sql_server:next_result"))
+    test.equal(view:cell_value(1, 1), long)
+    -- A new run starts again.
+    view:complete({ results = { model({ "Ada", "Bea" }) } })
+    test.equal(view:row_count(), 2)
   end)
 
   test.it("summarizes the shown rows, the columns and the run time in the footer", function(context)

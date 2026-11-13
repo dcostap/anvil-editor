@@ -60,15 +60,26 @@ function Results:messages_text()
   return #lines > 0 and table.concat(lines, "\n") or self.message
 end
 
+-- The filter, sort, widths and scroll of the shown result, so it shows the
+-- same when the user comes back to it.
+function Results:save_result_state()
+  if not self.result_index then return end
+  self.result_states[self.result_index] = { filters = self.filters, sort = self.sort,
+    column_widths = self.column_widths, x = self.scroll.to.x, y = self.scroll.to.y }
+end
+
 function Results:show_result(index)
   local model = self.data and self.data.results and self.data.results[index]
   if not model then return false end
+  self:save_result_state()
   self.result_index = index
-  self.filters, self.sort, self.column_widths = {}, nil, {}
-  self.scroll.x, self.scroll.y, self.scroll.to.x, self.scroll.to.y = 0, 0, 0, 0
+  local saved = self.result_states[index] or { filters = {}, column_widths = {}, x = 0, y = 0 }
+  self.filters, self.sort, self.column_widths = saved.filters, saved.sort, saved.column_widths
+  self.scroll.x, self.scroll.y, self.scroll.to.x, self.scroll.to.y = saved.x, saved.y, saved.x, saved.y
   self:publish_model(model, index)
   self.result_warning = self.data.error or (self.data.limited and "Result limit reached. Some results are cut.") or model.warning
-  self.title = string.format("%s %d/%d · %s", self.kind or "SQL Results", index, #self.data.results, self.connection_name)
+  self.title = string.format("%s%s %d/%d · %s", self.kept and "Kept " or "", self.kind or "SQL Results", index,
+    #self.data.results, self.connection_name)
   core.redraw = true
   return true
 end
@@ -76,6 +87,7 @@ end
 function Results:complete(data)
   self.cancel_query = nil
   self.data = data
+  self.result_index, self.result_states = nil, {}
   self.edits, self.deletes, self.edit_info, self.edit_error = {}, {}, nil, nil
   local last = data.messages and data.messages[#data.messages]
   if data.cancelled then
@@ -145,7 +157,8 @@ function Results:footer_buttons()
   if self.source_buffer then labels[#labels + 1] = "limit" end
   if self.model.column_count > 0 then labels[#labels + 1] = "csv"; labels[#labels + 1] = "json" end
   if self.data then labels[#labels + 1] = "messages" end
-  local names = { cancel = "Cancel", csv = "CSV", json = "JSON", messages = "Messages", discard = "Discard",
+  if self.kept then labels[#labels + 1] = "sql" end
+  local names = { cancel = "Cancel", csv = "CSV", json = "JSON", messages = "Messages", discard = "Discard", sql = "SQL",
     script = changes == 1 and "Script 1 Change" or string.format("Script %d Changes", changes) }
   local pad, height = common.round(10 * SCALE), self:footer_height()
   local x = self.position.x + self.size.x - common.round(4 * SCALE) - style.scrollbar_size
@@ -272,6 +285,8 @@ function Results:press_footer_button(b)
     open_text(require("plugins.sql_server.export").json(self), "json")
   elseif b.id == "messages" then
     show_messages(self)
+  elseif b.id == "sql" then
+    return self:open_script(self.run_text)
   elseif b.id == "script" then
     self:script_changes()
   elseif b.id == "discard" then
@@ -322,6 +337,7 @@ function Results:cell_menu_items()
     { label = "View as CSV", command = "sql_server:view_as_csv" },
     { label = "View as JSON", command = "sql_server:view_as_json" },
     { label = "Messages", command = "sql_server:messages" },
+    { label = "Keep Result", command = "sql_server:keep_result" },
     { label = "Go to Error", command = "sql_server:results_go_to_error" },
     { label = "Cancel SQL", command = "sql_server:cancel" },
   } do items[#items + 1] = item end
@@ -425,7 +441,7 @@ end
 function Results:open_script(text)
   local sql = require "plugins.sql_server"
   local c = self.source_buffer and sql.connection_for(self.source_buffer)
-  local editor = sql.new_query(c and c.id)
+  local editor = sql.new_query(self.connection_id or c and c.id)
   if not editor then return false end
   editor.buffer:text_input(text)
   editor.buffer:set_selection(1, 1)
@@ -474,6 +490,45 @@ function Results:discard_changes()
   return true
 end
 
+local function copy_filters(filters)
+  local copy = {}
+  for column, selected in pairs(filters) do
+    copy[column] = {}
+    for value in pairs(selected) do copy[column][value] = true end
+  end
+  return copy
+end
+
+-- A Kept Result is a copy of the run in its own Pane. It keeps the SQL and the
+-- connection of the run, and its rows do not change: no new run reaches it, and
+-- it takes no edits.
+function Results:keep()
+  if not self.data then return false end
+  local sql = require "plugins.sql_server"
+  local c = self.source_buffer and sql.connection_for(self.source_buffer)
+  self:save_result_state()
+  local copy = Results(self.connection_name)
+  copy.kept, copy.kind, copy.run_text = true, self.kind, self.run_text
+  copy.connection_id = self.connection_id or c and c.id
+  copy:complete(self.data)
+  copy.message, copy.edits, copy.deletes = self.message, nil, nil
+  for index, state in pairs(self.result_states) do
+    local widths = {}
+    for i, width in ipairs(state.column_widths) do widths[i] = width end
+    copy.result_states[index] = { filters = copy_filters(state.filters), column_widths = widths,
+      sort = state.sort and { column = state.sort.column, direction = state.sort.direction }, x = state.x, y = state.y }
+  end
+  copy.result_index = nil
+  copy:show_result(self.result_index or 1)
+  local panes = require "core.panes"
+  if not panes.place(function() return copy end,
+      { pane = panes.pane_for_view(self), placement = "split", direction = "right", focus = false }) then
+    return false
+  end
+  core.log_quiet("SQL Server: kept a result of %d table(s)", #self.data.results)
+  return true
+end
+
 function Results:duplicate()
   local copy = Results(self.connection_name)
   if self.data then copy:complete(self.data); copy:show_result(self.result_index or 1) end
@@ -485,6 +540,12 @@ function Results:on_close()
   Preview.on_close(self)
 end
 
+command.add(function()
+  local view = core.active_view
+  return view and view:is(Results) and view.data ~= nil and not view.cancel_query, view
+end, {
+  ["sql_server:keep_result"] = function(view) return view:keep() end,
+})
 command.add(Results, {
   ["sql_server:next_result"] = function(view) view:show_result((view.result_index or 0) + 1) end,
   ["sql_server:previous_result"] = function(view) view:show_result((view.result_index or 2) - 1) end,
