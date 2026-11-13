@@ -1402,6 +1402,19 @@ test.describe("SQL Queries", function()
     test.equal(selected().text, "@@ROWCOUNT")
   end)
 
+  test.it("ranks names that start with the typed text before names that only contain it", function(context)
+    local editor = connected_query(context)
+    local function type_line(text)
+      editor.buffer:set_selection(1, 1, 1, math.huge)
+      for char in text:gmatch(".") do core.on_event("textinput", char) end
+    end
+    local function selected() return autocomplete.get_selected_suggestion().text end
+    type_line("SELECT * FROM sales.customers c JOIN dbo.orders o ON c.id = o.customer_id WHERE i")
+    test.equal(selected(), "id")
+    test.ok(command.perform("autocomplete:next"))
+    test.equal(selected(), "customer_id")
+  end)
+
   test.it("opens the table of an alias from the alias's declaration", function(context)
     local editor = connected_query(context)
     editor.buffer:text_input("SELECT * FROM sales.customers AS c")

@@ -339,7 +339,17 @@ local function complete(view, sql, opts)
       end
     end
   end
-  table.sort(items, function(a, b) return a.text < b.text or (a.text == b.text and a.desc < b.desc) end)
+  -- An exact name first, then names that start with the typed text, then names that contain it.
+  -- Without typed text, all names rank the same.
+  local typed, rank = p.prefix:lower(), {}
+  for _, item in ipairs(typed ~= "" and items or {}) do
+    local name = item.text:lower()
+    rank[item] = name == typed and 1 or name:sub(1, #typed) == typed and 2 or 3
+  end
+  table.sort(items, function(a, b)
+    if rank[a] ~= rank[b] then return rank[a] < rank[b] end
+    return a.text < b.text or (a.text == b.text and a.desc < b.desc)
+  end)
   -- Join conditions go first, in key order. Functions follow the columns, where an expression
   -- goes and a name is typed.
   for i = #conditions, 1, -1 do table.insert(items, 1, conditions[i]) end
