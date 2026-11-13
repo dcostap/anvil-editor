@@ -90,7 +90,7 @@ end
 ---Add a folder as a Project Path. Returns its entry, or nil and a message.
 ---A folder that is already a Project Path keeps its entry.
 ---@param path string
----@param options? { role: string?, label: string? }
+---@param options? { role: string?, label: string?, read_only: boolean? }
 function M.add(path, options)
   options = options or {}
   if type(path) ~= "string" or path == "" then return nil, "No folder" end
@@ -116,7 +116,7 @@ function M.add(path, options)
       n = n + 1
     until M.check_label(label)
   end
-  local entry = project_paths.add_external({ path = path, label = label, role = role })
+  local entry = project_paths.add_external({ path = path, label = label, role = role, read_only = options.read_only })
   if not entry then return nil, "Could not add " .. common.home_encode(path) end
   core.log_quiet("Project Paths: added %s as %s, label %s", common.home_encode(path), role, label)
   changed()
@@ -154,6 +154,17 @@ function M.set_role(id, role)
   if not allows_role(entry.path, role) then return false end
   if not project_paths.change_role(entry.id, role) then return false end
   core.log_quiet("Project Paths: role of %s is now %s", common.home_encode(entry.path), role)
+  changed()
+  return true
+end
+
+---Change whether files in a Project Path allow editor changes.
+function M.set_read_only(id, value)
+  local entry = find_entry(id)
+  if not entry then return false end
+  if entry.read_only == value then return true end
+  if not project_paths.set_read_only(entry.id, value) then return false end
+  core.log_quiet("Project Paths: read-only for %s is now %s", common.home_encode(entry.path), tostring(value))
   changed()
   return true
 end

@@ -603,7 +603,7 @@ function M.object_at(view, sql)
 end
 
 function M.expand_star(view, sql)
-  if view.buffer.read_only then return false end
+  if view.buffer:is_read_only() then return false end
   return sql.with_connection(view, function()
     local state = context(view, sql)
     if not state or not state.parsed.star then return false end

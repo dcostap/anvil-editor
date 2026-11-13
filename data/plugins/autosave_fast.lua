@@ -33,6 +33,7 @@ local protected_project_file
 
 local function is_protected_buffer(buffer)
   if not buffer or not buffer.abs_filename then return false end
+  if buffer:is_read_only() then return true end
   local root = core.root_project and core.root_project() or nil
   if root ~= protected_project_root then
     protected_project_root = root

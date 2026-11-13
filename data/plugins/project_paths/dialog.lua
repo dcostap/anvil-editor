@@ -12,6 +12,7 @@ local Dialog = require("core.ui.dialog").Dialog
 local Button = require "core.ui.button"
 local List = require "core.ui.list"
 local Segmented = require "core.ui.segmented"
+local Switch = require "core.ui.switch"
 local TextField = require "core.ui.text_field"
 local paths = require "plugins.project_paths"
 
@@ -71,6 +72,12 @@ function ProjectPathsDialog:new()
     end,
   })
   self.location_text = layout.Text { wrap = false, cut = "start", align = "right" }
+  self.read_only_control = Switch {
+    on_change = function(value)
+      local entry = self:selected_entry()
+      return entry ~= nil and paths.set_read_only(entry.id, value)
+    end,
+  }
   self.reveal_button = Button({
     label = "Show in File Tree", icon = ui.icons.reveal, size = "small",
     on_click = function() self:reveal_selected() end,
@@ -92,6 +99,7 @@ function ProjectPathsDialog:new()
     layout.Group {
       layout.Field { title = "Label", control = self.label_field },
       layout.Field { title = "Role", control = self.role_control },
+      layout.Field { title = "Read-only", control = self.read_only_control },
       layout.Field { title = "Location", control = self.location_text },
       layout.Row { gap = 8, self.reveal_button, self.remove_button },
     },
@@ -133,6 +141,8 @@ function ProjectPathsDialog:show_selected()
   end
   self.shown_key = shown_key
   field.enabled = editable
+  self.read_only_control.enabled = entry ~= nil
+  self.read_only_control:set_value(entry and entry.read_only)
   if not entry then
     role:set_options({}, nil)
   elseif entry.role == "root" then

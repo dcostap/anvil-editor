@@ -547,8 +547,11 @@ A Path Tree row that presents consecutive single-child directories as one slash-
 _Avoid_: merged folder
 
 **Project Paths Dialog**:
-The Dialog that lists the Root Project and each Project Path, and changes their labels and Project Path Roles. It also adds and removes Project Paths.
+The Dialog that lists the Root Project and each Project Path, and changes their labels, Project Path Roles, and Read-only flags. It also adds and removes Project Paths.
 _Avoid_: Project Paths View, external folder manager
+
+**Read-only Project Path**:
+A Project Path whose files the editor can show but cannot edit or save. The most specific Project Path decides whether a file is read-only. This does not change file permissions or prevent changes by other programs.
 
 **File Types Dialog**:
 The Dialog that lists the file types that Anvil can open from Windows. A checked type opens with this Anvil from "Open with" and from Windows Settings, where the user makes Anvil the default app.

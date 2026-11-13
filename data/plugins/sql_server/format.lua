@@ -26,8 +26,9 @@ end
 
 function M.format(view)
   local buffer = view.buffer
-  if buffer.read_only then
-    core.status_bar:show_message("!", style.warn, buffer.read_only_reason or "This Buffer is read-only.")
+  local read_only, reason = buffer:is_read_only()
+  if read_only then
+    core.status_bar:show_message("!", style.warn, reason)
     return false
   end
   local tab_type, size = buffer:get_indent_info()

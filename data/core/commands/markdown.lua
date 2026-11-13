@@ -304,7 +304,7 @@ end, {
 
 command.add(function()
   local view = live_table_view()
-  return view ~= nil and not view.buffer.read_only and markdown_tables.can_copy_cells(view), view
+  return view ~= nil and not view.buffer:is_read_only() and markdown_tables.can_copy_cells(view), view
 end, {
   ["markdown:table_cut"] = function(view)
     markdown_tables.copy_cells(view, true)
@@ -334,7 +334,7 @@ end, {
 
 command.add(function()
   local view = live_table_view()
-  return view ~= nil and not view.buffer.read_only
+  return view ~= nil and not view.buffer:is_read_only()
     and markdown_tables.cell_selection(view) ~= nil, view
 end, {
   ["markdown:table_delete_cells"] = function(view)
@@ -347,7 +347,7 @@ end, {
 local function stops_beside_table(direction)
   return function()
     local view = live_table_view()
-    return view ~= nil and not view.buffer.read_only
+  return view ~= nil and not view.buffer:is_read_only()
       and markdown_tables.join_stop(view, direction) ~= nil, view
   end
 end
@@ -462,7 +462,7 @@ end, {
 command.add(function()
   local view = core.active_view
   if view and view:extends(Editor)
-  and not view.buffer.read_only
+  and not view.buffer:is_read_only()
   and markdown_live.is_markdown_buffer(view.buffer)
   and markdown_tables.can_insert_table(view)
   then
@@ -478,7 +478,7 @@ end, {
 local function live_table_editing(view)
   return config.markdown_live_interactive_tables == true
     and view and view:extends(Editor)
-    and not view.buffer.read_only
+    and not view.buffer:is_read_only()
     and markdown_live.is_markdown_buffer(view.buffer)
     and markdown_live.is_live_mode(view)
 end

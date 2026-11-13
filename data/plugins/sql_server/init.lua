@@ -769,7 +769,7 @@ function Editor:context_menu(x, y)
     sql_items[#sql_items + 1] = { label = "Explain Selection", icon = icons.search, command = "sql_server:explain_selection" }
   end
   sql_items[#sql_items + 1] = { label = "Run Buffer", icon = icons.run, command = "sql_server:run_buffer" }
-  if not self.buffer.read_only then
+  if not self.buffer:is_read_only() then
     sql_items[#sql_items + 1] = { label = "Format SQL", icon = icons.format, command = "sql_server:format" }
   end
   sql_items[#sql_items + 1] = "-"

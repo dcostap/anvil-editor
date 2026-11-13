@@ -4,6 +4,7 @@ local common = require "core.common"
 local project_paths = {}
 
 local workspace_entries = {}
+local root_read_only = false
 local workspace_entries_root_key
 local generation = 0
 local merged_entries_cache
@@ -86,7 +87,7 @@ end
 
 local function entries_signature(entries, root_key)
   local fields = {
-    "path", "label", "role", "source", "rank_penalty", "filetree_style", "exists",
+    "path", "label", "role", "source", "rank_penalty", "filetree_style", "exists", "read_only",
   }
   local rows = {}
   for _, entry in ipairs(entries or {}) do
@@ -149,6 +150,7 @@ local function normalize_entry(entry, defaults)
   normalized.label = label_for(abs, entry.label)
   normalized.role = role
   normalized.source = source
+  normalized.read_only = entry.read_only == true
   normalized.id = entry.id or make_id(source, role, abs)
   normalized.exists = require("core.project_files").info(abs) ~= nil
   return normalized
@@ -183,6 +185,7 @@ local function root_entry()
     label = common.basename(path),
     role = "root",
     source = "implicit",
+    read_only = root_read_only,
   }, { role = "root", source = "implicit" })
 end
 
@@ -371,6 +374,14 @@ function project_paths.resolve(path)
   }
 end
 
+---The most specific Project Path controls editing, independently of its role.
+function project_paths.is_read_only(path)
+  local abs = normalize_abs(path)
+  if not abs then return false end
+  local entry = resolve_abs(abs)
+  return entry ~= nil and entry.read_only == true
+end
+
 function project_paths.display_path(path, opts)
   opts = opts or {}
   local abs = normalize_abs(path)
@@ -436,6 +447,7 @@ local sync_compatibility_projects
 
 function project_paths.configure_workspace(spec)
   spec = spec or {}
+  root_read_only = spec.root_read_only == true
   local previous_entries = workspace_entries
   local entries = {}
   for _, role in ipairs({ "external", "vendored" }) do
@@ -575,7 +587,23 @@ function project_paths.change_role(id_or_path, role)
   return true
 end
 
+function project_paths.set_read_only(id_or_path, value)
+  if type(value) ~= "boolean" then return false end
+  local root = root_entry()
+  if id_or_path == root.id or common.path_equals(id_or_path, root.path) then
+    root_read_only = value
+  else
+    local _, _, entry = find_mutable_entry(id_or_path)
+    if not entry then return false end
+    entry.read_only = value
+  end
+  invalidate("set read-only")
+  return true
+end
+
 function project_paths.load_workspace_state(state, legacy_directories)
+  local previous_read_only = root_read_only
+  root_read_only = type(state) == "table" and state.root_read_only == true
   local current_root_key = path_key(root_path()) or ""
   local previous_signature = entries_signature(workspace_entries, workspace_entries_root_key or "")
   local previous_entries = workspace_entries
@@ -601,7 +629,8 @@ function project_paths.load_workspace_state(state, legacy_directories)
   end
   workspace_entries = normalize_entries(entries, { source = "workspace", base = root_path() })
   sync_compatibility_projects(previous_entries, workspace_entries)
-  local changed = previous_signature ~= entries_signature(workspace_entries, current_root_key)
+  local changed = previous_read_only ~= root_read_only
+    or previous_signature ~= entries_signature(workspace_entries, current_root_key)
   workspace_entries_root_key = current_root_key
   if changed then invalidate("workspace load") end
   return project_paths.entries(), changed
@@ -619,6 +648,7 @@ function project_paths.save_workspace_state()
       path = root and common.relative_path(root, entry.path) or entry.path,
       label = entry.label,
       role = entry.role,
+      read_only = entry.read_only or nil,
     }
     local defaults = ROLE_DEFAULTS[entry.role] or {}
     for _, field in ipairs({ "rank_penalty", "filetree_style" }) do
@@ -639,7 +669,7 @@ function project_paths.save_workspace_state()
       }, { source = "workspace", role = "external", base = root }))
     end
   end
-  return { entries = entries }
+  return { entries = entries, root_read_only = root_read_only or nil }
 end
 
 function project_paths.generation()

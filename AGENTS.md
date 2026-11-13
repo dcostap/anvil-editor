@@ -918,6 +918,7 @@ The focused control's `overlay`, such as a Select's list, draws above the card a
 The Context Menu and confirmations draw above a Dialog.
 Style keys for Dialogs and buttons are in `data/colors/default.lua`. `config.disabled_transitions.dialog` turns off its animation.
 Each Dialog uses this model: Project Paths, Databases, File Types, Updates and Machines. The Project Paths Dialog (`plugins.project_paths`) is the first Dialog. `project_paths:manage` opens it. `project_paths:add` and `filetree:add_to_project_paths` add a folder.
+Each Project Path, including the Root Project, has a Read-only switch. The most specific path controls editing, independently of its role. The Workspace saves the flags. Changes apply to open Buffers too. `Buffer:is_read_only()` combines source protection with the Project Path flag; edit checks use this method. Buffer saves refuse protected target paths, and Autosave keeps unsaved edits visible. This is editor text protection, not file permissions or a File Tree restriction. Run `ui/project_paths_dialog.lua` after changes.
 Run `ui/dialog.lua`, `ui/graphics.lua`, `ui/project_paths_dialog.lua` and `ui/filetree_project_paths.lua` after changes. Check the `project-paths-dialog` render scenario after visual changes.
 
 ## File Types

@@ -2847,8 +2847,8 @@ end
 
 function TextView:can_edit(reason, opts)
   opts = opts or {}
-  if self.buffer.read_only then
-    local why = self.buffer.read_only_reason or "This Buffer is read-only"
+  local read_only, why = self.buffer:is_read_only()
+  if read_only then
     if opts.warn then core.warn(why) end
     return false, why
   end
@@ -6649,7 +6649,7 @@ end
 ---Check if this view accepts text input.
 ---@return boolean accepts False for a read-only Buffer
 function TextView:supports_text_input()
-  return not self.buffer.read_only
+  return not self.buffer:is_read_only()
 end
 
 

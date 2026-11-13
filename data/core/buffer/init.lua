@@ -24,7 +24,7 @@ if config.safe_write == nil then config.safe_write = true end
 local tokenizer = require "core.tokenizer"
 
 ---@class core.buffer : core.object
----@field read_only? boolean Prevent user edits in each Text View that presents this Buffer
+---@field read_only? boolean Read-only source, independent of Project Path protection; use is_read_only() for edit checks
 ---@field read_only_reason? string Message shown when the user tries to edit this Buffer
 local Buffer = Object:extend()
 
@@ -1249,6 +1249,21 @@ fs.on_reconnect(function()
   end
 end)
 
+---Read-only sources and Project Paths both prevent user edits. Cache the path lookup
+---until the filename or Project Paths change. Repeated input checks reuse the result.
+function Buffer:is_read_only()
+  if self.read_only then return true, self.read_only_reason or "This Buffer is read-only" end
+  if not self.abs_filename then return false end
+  local paths = require "core.project_paths"
+  local generation = paths.generation()
+  if self.read_only_path ~= self.abs_filename or self.read_only_generation ~= generation then
+    self.project_read_only = paths.is_read_only(self.abs_filename)
+    self.read_only_path, self.read_only_generation = self.abs_filename, generation
+  end
+  if self.project_read_only then return true, "This Project Path is read-only" end
+  return false
+end
+
 function Buffer:save(filename, abs_filename)
   assert(not self:is_loading() and not self.load_error, self.load_error or "file is still loading")
   local prepared = self.prepared_save
@@ -1263,6 +1278,7 @@ function Buffer:save(filename, abs_filename)
     abs_filename = abs_filename or core.project_absolute_path(filename)
   end
 
+  assert(not require("core.project_paths").is_read_only(abs_filename), "This Project Path is read-only")
   if core.buffer_registry and core.buffer_registry:identity(self)
       and not core.buffer_registry:can_use_identity(self, abs_filename) then
     error("another Buffer already has this file identity")
@@ -1314,6 +1330,7 @@ end
 
 ---Return whether a worker can prepare this file without changing save rules.
 function Buffer:can_save_async()
+  if self:is_read_only() then return false end
   if fs.machine_file(self.abs_filename) or self:is_loading() or self.load_error then return false end
   if not self.abs_filename or self:needs_encoding_conversion()
     or config.safe_write == false or not system.sync_file
