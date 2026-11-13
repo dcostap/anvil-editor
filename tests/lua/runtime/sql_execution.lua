@@ -242,4 +242,46 @@ test.describe("SQL execution input", function()
     test.ok(run(test.not_nil(design_model.script(design))).error)
     test.equal(read("design_renamed").columns[4].nullable, true)
   end)
+
+  test.it("scripts result edits that stop at another user's change in the isolated probe", function()
+    local server = os.getenv("ANVIL_SQL_TEST_SERVER")
+    test.skip_if(os.getenv("ANVIL_SQL_INTEGRATION") ~= "1" or not server,
+      "Run the opt-in SQL Server integration test")
+    local backend = require "plugins.sql_server.backend"
+    local edit = require "plugins.sql_server.edit"
+    local connection = { server = test.not_nil(os.getenv("ANVIL_SQL_TEST_PIPE")), database = "AnvilTest",
+      integrated = true, encrypt = false }
+    local function run(text)
+      local reply = {}
+      test.not_nil(backend.execute(connection, text, function(value) reply.value = value end, { max_rows = 4096 }))
+      local deadline = system.get_time() + 45
+      while not reply.value and system.get_time() < deadline do coroutine.yield(0.01) end
+      local value = test.not_nil(reply.value)
+      if value.session then backend.close_session(value.session) end
+      return value
+    end
+    test.equal(run("CREATE TABLE sales.edit_check (id int PRIMARY KEY, label nvarchar(40) NULL, amount decimal(19,4), "
+      .. "at datetime2, f float); INSERT sales.edit_check VALUES (1, N'a', 2.5, '2024-01-02T03:04:05.1234567', 0.1)").error, nil)
+    local select = "SELECT id, label, amount, at, f FROM sales.edit_check"
+    local function script(change)
+      local model = run(select).results[1]
+      local results = { model = model, edits = {}, deletes = {} }
+      results.edit_info = test.not_nil(edit.analyze(model, run(edit.describe_sql(select))))
+      change(results, model.rows[1])
+      return edit.script(results)
+    end
+    local function label_to_b(results, row) results.edits[row] = { [2] = "b" } end
+    local stale = script(label_to_b)
+    test.equal(run("UPDATE sales.edit_check SET label = N'other'").error, nil)
+    test.ok(test.not_nil(run(stale).error):find("Row 1 changed or no longer exists.", 1, true))
+    test.same(run("SELECT label FROM sales.edit_check").results[1].rows[1].cells, { "other" })
+    -- A change to another column does not stop it.
+    local amount = script(function(results, row) results.edits[row] = { [3] = "3.5" } end)
+    test.equal(run("UPDATE sales.edit_check SET label = N'again'").error, nil)
+    test.equal(run(amount).error, nil)
+    test.same(run("SELECT label, amount FROM sales.edit_check").results[1].rows[1].cells, { "again", "3.5000" })
+    -- A delete checks each shown value that compares exactly.
+    test.equal(run(script(function(results, row) results.deletes[row] = true end)).error, nil)
+    test.equal(#run(select).results[1].rows, 0)
+  end)
 end)

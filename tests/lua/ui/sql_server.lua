@@ -520,11 +520,11 @@ test.describe("SQL Queries", function()
       "-- Changes to [sales].[customers] from SQL Results. Review them, then run this script.",
       "SET XACT_ABORT ON;",
       "BEGIN TRANSACTION;",
-      "UPDATE [sales].[customers] SET [name] = NULL WHERE [id] = N'1';",
+      "UPDATE [sales].[customers] SET [name] = NULL WHERE [id] = N'1' AND [name] = N'Ada';",
       "IF @@ROWCOUNT <> 1 THROW 50001, N'Row 1 changed or no longer exists.', 1;",
-      "UPDATE [sales].[customers] SET [name] = N'Bea O''Neil' WHERE [id] = N'2';",
+      "UPDATE [sales].[customers] SET [name] = N'Bea O''Neil' WHERE [id] = N'2' AND [name] = N'Bea';",
       "IF @@ROWCOUNT <> 1 THROW 50001, N'Row 2 changed or no longer exists.', 1;",
-      "DELETE FROM [sales].[customers] WHERE [id] = N'3';",
+      "DELETE FROM [sales].[customers] WHERE [id] = N'3' AND [name] IS NULL;",
       "IF @@ROWCOUNT <> 1 THROW 50001, N'Row 3 changed or no longer exists.', 1;",
       "COMMIT TRANSACTION;",
       "",
@@ -547,6 +547,25 @@ test.describe("SQL Queries", function()
     test.equal(core.active_view.buffer:get_text(1, 1, math.huge, math.huge),
       "SELECT *\nFROM [sales].[customers]\nWHERE ([id] = N'1' AND [name] = N'Ada')\n   OR ([id] = N'2' AND [name] = N'Bea');\n")
     test.equal(#submitted, 2)
+
+    -- A shown rowversion checks the whole row. Without one, only values that
+    -- compare exactly as text are checked: not float, XML or text columns.
+    local edit = require "plugins.sql_server.edit"
+    local function script(columns, cells, edits, delete)
+      local described_rows = {}
+      for i, c in ipairs(columns) do described_rows[i] = described(c[1], c[1], c[2], false, c[3], c[4]) end
+      local model = { column_count = #columns, rows = { row(unpack(cells)) } }
+      local results = { model = model, edits = { [model.rows[1]] = edits }, deletes = { [model.rows[1]] = delete } }
+      results.edit_info = test.not_nil(edit.analyze(model, { results = { { headers = describe_headers, rows = described_rows } } }))
+      local text = edit.script(results)
+      return text:match("\n(UPDATE [^\n]*)") or text:match("\n(DELETE [^\n]*)")
+    end
+    test.equal(script({ { "id", true, false, "int" }, { "name", false, true, "nvarchar(80)" }, { "rv", false, false, "timestamp" } },
+      { "1", "Ada", "00000000000007D1" }, { [2] = "Bea" }),
+      "UPDATE [sales].[customers] SET [name] = N'Bea' WHERE [id] = N'1' AND [rv] = 0x00000000000007D1;")
+    test.equal(script({ { "id", true, false, "int" }, { "f", false, true, "float" }, { "x", false, true, "xml" },
+      { "t", false, true, "ntext" }, { "d", false, true, "decimal(19,4)" } }, { "1", "0.1", "<a/>", "t", "2.5000" }, nil, true),
+      "DELETE FROM [sales].[customers] WHERE [id] = N'1' AND [d] = N'2.5000';")
 
     local _, reason = require("plugins.sql_server.edit").analyze({ column_count = 1 }, { results = { {
       headers = describe_headers, rows = { described("id", "id", true, true, false, "int"),
@@ -1560,7 +1579,7 @@ test.describe("SQL Queries", function()
   test.it("opens a table definition and returns to the same Untitled Query", function(context)
     local editor = connected_query(context)
     editor.buffer:text_input("SELECT * FROM sales.customers")
-    editor.buffer:set_selection(1, #"SELECT * FROM sales.customers" + 1)
+    editor.buffer:set_selection(1, #"SELECT * FROM sales." + 1)
     test.ok(require("core.commands.language").activate_symbol(editor))
     test.not_equal(core.active_view, editor)
     test.ok(core.active_view.buffer.read_only)

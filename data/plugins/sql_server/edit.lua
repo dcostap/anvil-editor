@@ -17,6 +17,14 @@ local function binary(type_name)
   return t:find("^varbinary") or t:find("^binary") or t == "image" or t == "timestamp" or t == "rowversion"
     or t == "geography" or t == "geometry" or t == "hierarchyid" or t == "sql_variant"
 end
+-- Types whose server text does not compare exactly, or that `=` refuses.
+local function inexact(type_name)
+  local t = type_name:lower()
+  return t == "float" or t:find("^float%(") or t == "real" or t == "xml" or t == "text" or t == "ntext"
+end
+local function condition(column, value)
+  return quote(column) .. (value == false and " IS NULL" or " = " .. literal(value))
+end
 
 -- The target table, its key columns and the editable columns of a result, from
 -- the describe reply. Returns nil and a reason when the result is not editable.
@@ -60,9 +68,13 @@ function M.analyze(model, data)
     return nil, string.format("%s.%s has no primary key or unique key.", quote(target.schema), quote(target.table))
   end
   -- A table column can find its rows; an editable column can also take a value.
+  -- A rowversion column (`version`) changes with each change of its row.
   for i, entry in ipairs(visible) do
     local column = same(entry) and entry.column and not binary(entry.type)
-    info.columns[i] = { column = entry.column, editable = column and entry.updateable, comparable = column }
+    local t = entry.type:lower()
+    info.columns[i] = { column = entry.column, editable = column and entry.updateable, comparable = column,
+      checkable = column and not inexact(entry.type),
+      version = same(entry) and entry.column and (t == "timestamp" or t == "rowversion") or nil }
   end
   return info
 end
@@ -82,18 +94,33 @@ end
 
 -- One statement for each changed row, in one transaction. Each statement must
 -- change exactly one row, so a row that changed since the run stops the script.
+-- A row matches by its key and by the values that the statement replaces or
+-- deletes, so it does not overwrite another user's change. A shown rowversion
+-- checks the whole row instead.
 function M.script(results)
   local info = results.edit_info
   local target = quote(info.schema) .. "." .. quote(info.table)
+  local keys, version = {}, nil
+  for _, key in ipairs(info.keys) do keys[key.index] = true end
+  for i, column in ipairs(info.columns) do if column.version then version = i end end
   local lines = { "-- Changes to " .. target .. " from SQL Results. Review them, then run this script.",
     "SET XACT_ABORT ON;", "BEGIN TRANSACTION;" }
   for number, row in ipairs(results.model.rows) do
     local edits = results.edits[row]
     if results.deletes[row] or edits then
       local where = {}
-      for i, key in ipairs(info.keys) do
-        local value = row.cells[key.index]
-        where[i] = quote(key.column) .. (value == false and " IS NULL" or " = " .. literal(value))
+      for i, key in ipairs(info.keys) do where[i] = condition(key.column, row.cells[key.index]) end
+      local stamp = version and row.cells[version]
+      if stamp and stamp:find("^%x+$") then
+        where[#where + 1] = quote(info.columns[version].column) .. " = 0x" .. stamp
+      else
+        for column = 1, results.model.column_count do
+          local c = info.columns[column]
+          if c.checkable and not keys[column] and not (row.cut and row.cut[column])
+              and (results.deletes[row] or edits[column] ~= nil) then
+            where[#where + 1] = condition(c.column, row.cells[column])
+          end
+        end
       end
       where = " WHERE " .. table.concat(where, " AND ") .. ";"
       if results.deletes[row] then
