@@ -489,6 +489,54 @@ test.describe("SQL Queries", function()
     test.same(warnings, { "The value is NULL.", "SQL Server sent more of this value. Anvil keeps its first 32,768 characters." })
   end)
 
+  test.it("opens the rows that a foreign key links to the selected result rows, in both directions", function(context)
+    local editor = connected_query(context)
+    local context_menu = require "core.context_menu"
+    local describe_headers = { "name", "is_hidden", "source_schema", "source_table", "source_column",
+      "is_part_of_unique_key", "is_updateable", "system_type_name" }
+    local function row(...) return { cells = { ... }, source_line1 = 1, source_line2 = 1 } end
+    local function described(schema_name, table_name, column, key)
+      return row(column, "0", schema_name, table_name, column, key and "1" or "0", key and "0" or "1", "int")
+    end
+    local submitted = {}
+    require("plugins.sql_server.backend").execute = function(_, text, callback)
+      submitted[#submitted + 1] = text
+      local orders = text:find("dbo.orders", 1, true) ~= nil
+      if text:find("^EXEC sys.sp_describe_first_result_set") then
+        local rows = orders and { described("dbo", "orders", "id", true), described("dbo", "orders", "customer_id") }
+          or { described("sales", "customers", "id", true), described("sales", "customers", "name") }
+        callback({ messages = {}, results = { { headers = describe_headers, column_count = 8, distinct_values = {}, rows = rows } } })
+      else
+        local rows = orders and { row("10", "1"), row("11", "1"), row("12", false), row("13", "2") } or { row("1", "Ada") }
+        callback({ messages = {}, results = { { headers = orders and { "id", "customer_id" } or { "id", "name" },
+          column_count = 2, distinct_values = {}, rows = rows } } })
+      end
+      return { cancel = function() end }
+    end
+    local function related(text, row2, label)
+      panes.focus(panes.pane_for_view(editor))
+      editor.buffer:set_selection(1, 1, 1, math.huge)
+      editor.buffer:text_input(text)
+      editor.buffer:set_selection(1, 1, 1, math.huge)
+      test.ok(command.perform("sql_server:run_selection"))
+      local result = editor.buffer.sql_execution.view
+      panes.focus(panes.pane_for_view(result))
+      result:select_cell(1, 2, false)
+      result:select_cell(row2, 2, true)
+      test.ok(command.perform("sql_server:related_rows"))
+      test.ok(context_menu.is_open())
+      test.same(context_menu.labels(), { label })
+      test.ok(context_menu.choose(label))
+      return core.active_view.buffer:get_text(1, 1, math.huge, math.huge)
+    end
+    -- A NULL references nothing, and a repeated value gives one condition.
+    test.equal(related("SELECT id, customer_id FROM dbo.orders", 4, "Referenced: sales.customers (customer_id)"),
+      "SELECT *\nFROM [sales].[customers]\nWHERE ([id] = N'1')\n   OR ([id] = N'2');\n")
+    test.equal(submitted[#submitted], "SELECT *\nFROM [sales].[customers]\nWHERE ([id] = N'1')\n   OR ([id] = N'2');\n")
+    test.equal(related("SELECT id, name FROM sales.customers", 1, "Referencing: dbo.orders (customer_id)"),
+      "SELECT *\nFROM [dbo].[orders]\nWHERE ([customer_id] = N'1');\n")
+  end)
+
   test.it("scripts result edits by the table's key in a new Query and runs nothing", function(context)
     local editor = connected_query(context)
     local submitted = {}

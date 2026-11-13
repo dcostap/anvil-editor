@@ -192,6 +192,63 @@ function M.select_script(results, row1, column1, row2, column2)
   return "SELECT *\nFROM " .. target .. "\nWHERE " .. table.concat(conditions, "\n   OR ") .. ";\n", nil, note
 end
 
+-- The foreign keys from and to the result's table whose columns the result
+-- shows, each with a SELECT of the rows that it links to the selected rows.
+-- Referenced rows are the rows that the selected rows point to; referencing
+-- rows point to the selected rows. A NULL or a cut value links no row.
+-- Returns a list of { label, text }, or nil and a reason.
+function M.related(results, catalog, row1, row2)
+  local info = results.edit_info
+  local function same(a, b)
+    return a == b or not catalog.case_sensitive and a:lower() == b:lower()
+  end
+  local index = {}
+  for i, column in ipairs(info.columns) do
+    if column.comparable then index[catalog.case_sensitive and column.column or column.column:lower()] = i end
+  end
+  local function shown(name) return index[catalog.case_sensitive and name or name:lower()] end
+  local items, keys, linked = {}, false, false
+  local function add(direction, key, schema_name, table_name, from, to)
+    keys = true
+    local columns = {}
+    for i, name in ipairs(from) do
+      columns[i] = shown(name)
+      if not columns[i] then return end
+    end
+    local conditions, seen = {}, {}
+    for display_row = row1, row2 do
+      local row, parts = results:source_row(display_row), {}
+      for i, column in ipairs(columns) do
+        local value = row.cells[column]
+        if value == false or (row.cut and row.cut[column]) then parts = nil; break end
+        parts[i] = quote(to[i]) .. " = " .. literal(value)
+      end
+      local text = parts and "(" .. table.concat(parts, " AND ") .. ")"
+      if text and not seen[text] then seen[text] = true; conditions[#conditions + 1] = text end
+    end
+    if #conditions == 0 then return end
+    linked = true
+    local target = quote(schema_name) .. "." .. quote(table_name)
+    items[#items + 1] = { label = string.format("%s: %s.%s (%s)", direction, schema_name, table_name,
+      table.concat(key.columns, ", ")),
+      text = "SELECT *\nFROM " .. target .. "\nWHERE " .. table.concat(conditions, "\n   OR ") .. ";\n" }
+  end
+  for _, key in ipairs(catalog.foreign_keys or {}) do
+    if same(key.schema, info.schema) and same(key.table, info.table) then
+      add("Referenced", key, key.ref_schema, key.ref_table, key.columns, key.ref_columns)
+    end
+  end
+  for _, key in ipairs(catalog.foreign_keys or {}) do
+    if same(key.ref_schema, info.schema) and same(key.ref_table, info.table) then
+      add("Referencing", key, key.schema, key.table, key.ref_columns, key.columns)
+    end
+  end
+  if #items > 0 then return items end
+  local target = quote(info.schema) .. "." .. quote(info.table)
+  if not keys then return nil, string.format("No foreign key links %s to another table.", target) end
+  if not linked then return nil, "The selected rows link to no rows. Include the key columns, without NULL." end
+end
+
 -- Calls done(info) when SQL Server described the result. The describe call
 -- uses the Query's SQL Session, so temporary tables and the database stay.
 function M.prepare(sql, results, done)

@@ -329,6 +329,7 @@ function Results:cell_menu_items()
     { label = "Delete Rows", command = "sql_server:delete_rows" },
     { label = "Script Rows as INSERT", command = "sql_server:script_rows_as_insert" },
     { label = "Script Rows as SELECT", command = "sql_server:script_rows_as_select" },
+    { label = "Related Rows", command = "sql_server:related_rows" },
     { label = "Script Changes", command = "sql_server:script_changes" },
     { label = "Discard Changes", command = "sql_server:discard_changes" },
     "-",
@@ -471,6 +472,37 @@ function Results:script_rows(kind)
   end)
 end
 
+-- Lists the rows that foreign keys link to the selected rows. A choice opens
+-- its SELECT in a new SQL Query, which runs at once like other generated SELECTs.
+function Results:related_rows()
+  local row1, column1, row2 = self:selection_bounds()
+  if not row1 then return false end
+  local sql = require "plugins.sql_server"
+  local c = self.source_buffer and sql.connection_for(self.source_buffer)
+  if not c or not c.catalog then core.warn("Connect to read the foreign keys."); return false end
+  if sql.other_database(self.source_buffer) then
+    core.warn("Foreign keys are known only for the connection's database."); return false
+  end
+  return self:with_edit_info(function()
+    local items, reason = require("plugins.sql_server.edit").related(self, c.catalog, row1, row2)
+    if not items then core.warn("%s", reason); return end
+    local menu = {}
+    for i, item in ipairs(items) do
+      menu[i] = { label = item.label, command = "sql_server:open_related_rows", args = { self, item.text } }
+    end
+    local x, y, _, h = self:cell_screen_rect(row1, column1)
+    require("core.context_menu").open(x, y + h, menu, {})
+  end)
+end
+
+function Results:open_related_rows(text)
+  local sql = require "plugins.sql_server"
+  if not self:open_script(text) then return false end
+  core.log_quiet("SQL Server: opened related rows")
+  if require("core.config").plugins.sql_server.run_generated_select then sql.run(core.active_view, { whole_buffer = true }) end
+  return true
+end
+
 -- Opens an export of the shown rows, and warns when it holds cut values.
 function Results:export(text, mode)
   local opened = open_text(text, mode)
@@ -566,6 +598,12 @@ end, {
   ["sql_server:delete_rows"] = function(view) return view:delete_rows() end,
   ["sql_server:script_rows_as_insert"] = function(view) return view:script_rows("insert") end,
   ["sql_server:script_rows_as_select"] = function(view) return view:script_rows("select") end,
+  ["sql_server:related_rows"] = function(view) return view:related_rows() end,
+})
+command.add(function(view, text)
+  return view ~= nil and type(text) == "string" and not view.closed, view, text
+end, {
+  ["sql_server:open_related_rows"] = function(view, text) return view:open_related_rows(text) end,
 })
 command.add(function()
   local view = core.active_view
