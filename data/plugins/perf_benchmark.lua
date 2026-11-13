@@ -1229,9 +1229,18 @@ local function scenario_is_ready()
     require("plugins.fuzzy_searcher").open_project_symbols("", { source_view = benchmark.view })
     return false
   end
-  if benchmark.scenario == "sql-results" then
+  if benchmark.scenario == "sql-results" or benchmark.scenario == "sql-results-edit" then
     local Results = require "plugins.sql_server.results"
-    if view:extends(Results) then view:select_cell(2, 2, false); return true end
+    if view:extends(Results) then
+      view:select_cell(2, 2, false)
+      if benchmark.scenario == "sql-results-edit" and not view.cell_editor then
+        -- A changed cell, a deleted row, and the cell editor with its value selected.
+        view:apply_changes({ { row = view:source_row(1), column = 2, value = "Ada Lovelace" },
+          { row = view:source_row(4), delete = true } })
+        view.cell_editor = require("plugins.sql_server.cell_editor")(view, view:source_row(2), 2, 2, "Customer 2", true)
+      end
+      return true
+    end
     local model = { headers = { "id", "name", "city", "note" }, column_count = 4,
       column_kinds = { "number", "text", "text", "text" }, missing_label = "NULL", rows = {} }
     for i = 1, 100 do
