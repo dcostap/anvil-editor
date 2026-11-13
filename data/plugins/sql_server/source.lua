@@ -16,7 +16,7 @@ end
 -- Reads an object's scripts on a worker. The owner keeps one request; a View
 -- owner ends it when the View closes. `alive` tells if the reply still applies.
 local searched = {}
-local function read_object(sql, c, object, owner, alive, done)
+local function read_object(sql, c, object, owner, alive, done, failed)
   local generation, request = c.generation, {}
   if owner.sql_definition_request then owner.sql_definition_request:cancel() end
   owner.sql_definition_request = request
@@ -30,7 +30,10 @@ local function read_object(sql, c, object, owner, alive, done)
     request.finished = true
     if owner.remove_owned_feature then owner:remove_owned_feature("sql-definition", "finished") else release() end
     if not alive() or sql.find(c.id) ~= c or c.generation ~= generation then return end
-    if not scripts then core.error("%s", err or "Could not read SQL definition."); return end
+    if not scripts then
+      if failed then failed(err or "Could not read SQL definition.") else core.error("%s", err or "Could not read SQL definition.") end
+      return
+    end
     core.log_quiet("SQL definition: %s.%s connection=%s", object.schema, object.name, c.id)
     done(c, object, scripts)
   end
@@ -68,22 +71,65 @@ local function read(sql, from, object, done)
   end)
 end
 
+local function definition_text(sql, c, target, scripts)
+  return sql.in_database(c, target.database, scripts.source .. (scripts.select and ("\n\n-- Query\n" .. scripts.select) or ""))
+end
+
+-- The line and the columns of a column's name in a table's definition.
+function M.column_position(text, column)
+  local quoted = "[" .. column:gsub("%]", "]]") .. "]"
+  local line = 0
+  for row in (text .. "\n"):gmatch("([^\n]*)\n") do
+    line = line + 1
+    local first = row:find(quoted, 1, true)
+    if first and row:sub(1, first - 1):match("^%s*$") then return line, first, first + #quoted end
+  end
+end
+
+-- The definition of an object for a search preview, or nil while Anvil reads it. Each text stays while its catalog
+-- stays, and one read runs at a time. A failed read gives `nil, error`.
+local previews = setmetatable({}, { __mode = "k" })
+local previewing = {}
+function M.preview(sql, c, object)
+  local catalog = sql.object_catalog(c, object)
+  if not catalog or sql.find(c.id) ~= c or c.state ~= "Ready" then return nil, "The connection is not ready." end
+  local texts = previews[catalog] or {}
+  previews[catalog] = texts
+  local text = texts[object]
+  if text then return text end
+  if previewing.object == object then
+    if previewing.error then return nil, previewing.error end
+    if previewing.sql_definition_request then return nil end
+  end
+  previewing.object, previewing.error = object, nil
+  read_object(sql, c, object, previewing, function() return previewing.object == object end, function(_, target, scripts)
+    texts[target] = definition_text(sql, c, target, scripts)
+    core.redraw = true
+  end, function(err)
+    previewing.error = err
+    core.redraw = true
+  end)
+end
+
+-- `opts.line` and `opts.col` place the caret.
 function M.open(sql, from, object, opts)
   return read(sql, from, object, function(c, target, scripts)
     local buffer = Buffer()
     buffer.display_name = target.schema .. "." .. target.name
-    buffer:insert(1, 1, sql.in_database(c, target.database,
-      scripts.source .. (scripts.select and ("\n\n-- Query\n" .. scripts.select) or "")))
+    buffer:insert(1, 1, definition_text(sql, c, target, scripts))
     buffer:clear_undo_redo()
     buffer:clean()
     sql.bind(buffer, c.id)
     buffer.read_only, buffer.read_only_reason = true, "Database definitions are read-only. Generate a script to edit."
+    local line = opts and opts.line
+    if line then buffer:set_selection(line, opts.col or 1) end
     local definition = Definition(buffer)
     if opts and opts.placement then panes.place(function() return definition end, opts)
     else
       local pane, err = panes.present(definition, { focus = true })
-      if not pane then definition:on_close(); core.warn("%s", err) end
+      if not pane then definition:on_close(); core.warn("%s", err); return end
     end
+    if line then definition:scroll_to_line(line, true, true) end
   end)
 end
 
@@ -135,12 +181,4 @@ function M.symbol_actions(sql, view)
   end)
 end
 
--- Opens the actions of an object that Project Symbol Search found, over the
--- View that the search started from.
-function M.object_actions(c, object, view)
-  local area = view and view.position and view or core.root_panel
-  local x = area.position.x + math.floor(area.size.x / 2)
-  local y = area.position.y + math.floor(area.size.y / 4)
-  return require("core.context_menu").open(x, y, M.action_items(c, object), {})
-end
 return M

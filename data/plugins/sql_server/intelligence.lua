@@ -4,7 +4,9 @@ local native = require "sql_server_native"
 local autocomplete = require "plugins.autocomplete"
 local M = {}
 local cache = setmetatable({}, { __mode = "k" })
-local symbol_names = setmetatable({}, { __mode = "k" })
+local search_lists = { objects = setmetatable({}, { __mode = "k" }), columns = setmetatable({}, { __mode = "k" }) }
+local ui_icons = require("core.ui").icons
+local OBJECT_ICONS
 
 local function equal(catalog, a, b)
   return a == b or (not catalog.case_sensitive and a:lower() == b:lower())
@@ -426,55 +428,118 @@ function M.install(sql)
   autocomplete.add_provider("sql-server", function(view, opts) return complete(view, sql, opts) end)
   require("core.language_intelligence").register_provider {
     id = "sql-server", name = "Database", priority = 100,
-    -- Database groups join Project Symbol Search from any Buffer. The other features need a SQL Buffer.
+    -- Database groups join File Search and Project Symbol Search from any Buffer. The other features
+    -- need a SQL Buffer.
     is_available = function(buffer, feature)
-      return feature == "project_symbol_groups" or buffer and buffer.syntax and buffer.syntax.name == "SQL"
+      return feature == "project_file_groups" or feature == "project_symbol_groups"
+        or buffer and buffer.syntax and buffer.syntax.name == "SQL"
     end,
-    -- One group for each of the Project's connections, after the Project's code symbols. A Ready
-    -- connection lists its matching objects. Enter shows an object's actions, and a new Pane opens its
-    -- source. A connection that is not Ready shows one row that connects it and searches again.
+    -- File Search lists the objects of each connection, as it lists files. Enter opens an object's definition.
+    project_file_groups = function(query, opts)
+      return M.search_groups(sql, "objects", query, opts, function(c, generation, object, name)
+        return { name = name, icon = OBJECT_ICONS[object.kind], dim_length = #object.schema + 1, info = object.kind,
+          activate = function(_, placement) return M.open_definition(sql, c, generation, object, placement) end,
+          preview = M.definition_preview(sql, c, object) }
+      end)
+    end,
+    -- Project Symbol Search lists the columns of each connection's tables and views. Enter opens the
+    -- definition at the column.
     project_symbol_groups = function(query, opts)
-      sql.load()
-      local groups = {}
-      for _, c in ipairs(sql.connections) do
-        local items = {}
-        sql.check_catalog(c)
-        if c.state == "Ready" and c.catalog then
-          local catalog, generation = c.catalog, c.generation
-          local names = symbol_names[catalog]
-          if not names then
-            names = {}
-            for i, object in ipairs(catalog.objects) do names[i] = object.schema .. "." .. object.name end
-            symbol_names[catalog] = names
-          end
-          for _, match in ipairs(require("fuzzy").filter(names, query, {
-            limit = opts.limit, spans = false, case_sensitive = opts.case_sensitive,
-          })) do
-            local object = catalog.objects[match.index]
-            items[#items + 1] = { name = names[match.index], kind = object.kind, display_file = c.database,
-              activate = function(view, placement)
-                if sql.find(c.id) ~= c or c.generation ~= generation then
-                  core.warn("Database metadata changed. Search again."); return false
-                end
-                local source = require "plugins.sql_server.source"
-                if placement then return source.open(sql, c, object, placement) end
-                return source.object_actions(c, object, view)
-              end,
-            }
-          end
-        elseif c.server ~= "" and c.database ~= "" then
-          items[1] = { name = c.state == "Connecting" and "Connecting…" or "Connect", kind = c.state,
-            display_file = c.database, activate = function(view) return M.connect_and_search(sql, c, query, view) end }
+      return M.search_groups(sql, "columns", query, opts, function(c, generation, object, _, column)
+        local declaration = column.name .. " " .. column.type .. (column.nullable and " NULL" or " NOT NULL")
+        local item = { name = column.name, kind = "field", display_file = object.schema .. "." .. object.name,
+          declaration = declaration, declaration_name_span = { 1, #column.name } }
+        function item.activate(_, placement)
+          local text = require("plugins.sql_server.source").preview(sql, c, object)
+          local line, col = text and require("plugins.sql_server.source").column_position(text, column.name)
+          local opts = { line = line, col = col }
+          for key, value in pairs(placement or {}) do opts[key] = value end
+          return M.open_definition(sql, c, generation, object, opts)
         end
-        groups[#groups + 1] = { label = c.name, items = items }
-      end
-      return groups
+        item.preview = M.definition_preview(sql, c, object, column.name)
+        return item
+      end)
     end,
   }
 end
 
--- Connects from a Project Symbol Search row, then runs the same search again.
-function M.connect_and_search(sql, c, query, view)
+OBJECT_ICONS = { table = ui_icons.table, view = "\u{F0208}", procedure = "\u{F0493}", ["function"] = "\u{F0295}" }
+
+-- The names that a search matches: `schema.name` for objects, and `table.column` for the columns of tables
+-- and views. Each list stays while its catalog stays.
+local function search_names(catalog, mode)
+  local cache = search_lists[mode][catalog]
+  if cache then return cache end
+  cache = { names = {}, objects = {}, columns = {} }
+  for _, object in ipairs(catalog.objects) do
+    if mode == "objects" then
+      cache.names[#cache.names + 1] = object.schema .. "." .. object.name
+      cache.objects[#cache.names] = object
+    elseif object.kind == "table" or object.kind == "view" then
+      for _, column in ipairs(object.columns or {}) do
+        cache.names[#cache.names + 1] = object.name .. "." .. column.name
+        cache.objects[#cache.names], cache.columns[#cache.names] = object, column
+      end
+    end
+  end
+  search_lists[mode][catalog] = cache
+  return cache
+end
+
+-- One group for each of the Project's connections, after the Project's own rows. A Ready connection
+-- lists its matches. A connection that is not Ready shows one row that connects it and searches again.
+-- An empty query lists nothing.
+function M.search_groups(sql, mode, query, opts, make_item)
+  sql.load()
+  local groups = {}
+  if query:match("^%s*$") then return groups end
+  for _, c in ipairs(sql.connections) do
+    local items = {}
+    sql.check_catalog(c)
+    if c.state == "Ready" and c.catalog then
+      local list = search_names(c.catalog, mode)
+      for _, match in ipairs(require("fuzzy").filter(list.names, query, {
+        limit = opts.limit, spans = false, case_sensitive = opts.case_sensitive,
+      })) do
+        items[#items + 1] = make_item(c, c.generation, list.objects[match.index], list.names[match.index],
+          list.columns[match.index])
+      end
+    elseif c.server ~= "" and c.database ~= "" then
+      local text = (mode == "columns" and "$" or "") .. query
+      items[1] = { name = c.state == "Connecting" and "Connecting…" or "Connect", kind = c.state,
+        icon = ui_icons.database, info = c.database, display_file = c.database,
+        activate = function(view) return M.connect_and_search(sql, c, text, view) end }
+    end
+    groups[#groups + 1] = { label = c.name, items = items }
+  end
+  return groups
+end
+
+function M.open_definition(sql, c, generation, object, opts)
+  if sql.find(c.id) ~= c or c.generation ~= generation then
+    core.warn("Database metadata changed. Search again."); return false
+  end
+  return require("plugins.sql_server.source").open(sql, c, object, opts)
+end
+
+-- The preview function of a search row: the object's definition, or nil and an error while it is not
+-- there. A column row marks the column's name.
+function M.definition_preview(sql, c, object, column)
+  local source = require "plugins.sql_server.source"
+  local shown
+  return function()
+    local text, err = source.preview(sql, c, object)
+    if not text then return nil, err end
+    if not shown or shown.text ~= text then
+      shown = { text = text, language = "sql" }
+      if column then shown.line, shown.col, shown.col2 = source.column_position(text, column) end
+    end
+    return shown
+  end
+end
+
+-- Connects from a search row, then opens the same search again.
+function M.connect_and_search(sql, c, text, view)
   local function search_again()
     core.add_thread(function()
       local deadline = system.get_time() + 30
@@ -482,7 +547,7 @@ function M.connect_and_search(sql, c, query, view)
       if sql.find(c.id) ~= c then return end
       if c.state ~= "Ready" then core.error("%s", c.error or "SQL connection is not ready."); return end
       if view and core.active_view ~= view then return end
-      require("plugins.fuzzy_searcher").open_project_symbols(query, { source_view = view })
+      require("plugins.fuzzy_searcher").open(text)
     end)
   end
   if c.state == "Connecting" then search_again()

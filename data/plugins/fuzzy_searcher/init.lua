@@ -44,6 +44,7 @@ local fuzzy_searcher = {
   projects = require "plugins.fuzzy_searcher.projects",
   terminals = require "plugins.fuzzy_searcher.terminals",
   other_projects = require "plugins.fuzzy_searcher.other_projects",
+  item_rows = require "plugins.fuzzy_searcher.item_rows",
   project_look = require "core.project_look",
   copy_feedback = require "core.copy_feedback",
   encoded_data = require "core.encoded_data",
@@ -4873,6 +4874,7 @@ end
 
 function FSView:update_preview_view()
   local r = self:selected_result()
+  if r and r.preview then return fuzzy_searcher.item_rows.update_preview(self, r) end
   if not r or not r.file or r.is_folder then self:clear_preview_view(); return nil end
   if r.kind == "bookmark" and r.bookmark.status ~= "ready" then
     self:clear_preview_view()
@@ -5540,6 +5542,24 @@ function FSView:seen_saved_rows(...)
   return seen
 end
 
+-- File Search rows, then the rows that providers add, such as database objects. The added rows stay for the
+-- same query, so they keep their identity while the file rows arrive.
+function fuzzy_searcher.with_item_rows(view, out, query)
+  local added = view.item_rows
+  if not added or added.query ~= query then
+    added = { query = query, divider = { header = true, separator = true, label = "" },
+      rows = fuzzy_searcher.item_rows.add_groups(view, {}, query, math.min(100, view:max_result_limit())) }
+    view.item_rows = added
+  end
+  if #added.rows == 0 then return out end
+  local joined = {}
+  for index = 1, #out do joined[index] = out[index] end
+  if #joined > 0 then joined[#joined + 1] = added.divider end
+  for _, row in ipairs(added.rows) do joined[#joined + 1] = row end
+  added.joined = joined
+  return joined
+end
+
 function FSView:start_file_search(query, line, reset_selection)
   kill_file_search()
   -- A refresh of the same query keeps the shown rows, so rows from other Projects show during the refresh.
@@ -5560,7 +5580,7 @@ function FSView:start_file_search(query, line, reset_selection)
     self:cancel_deferred_loading_feedback()
     local selected = keep_selection and self:result_selection_key(self.results[self.selected])
     keep_selection = true
-    out = path_search.prepend_direct(out, direct)
+    out = fuzzy_searcher.with_item_rows(self, path_search.prepend_direct(out, direct), query)
     self.own_results = out
     self.results = fuzzy_searcher.other_projects.with_rows(self, out)
     self.has_more = has_more
@@ -7191,6 +7211,7 @@ local function symbol_result_from_item(item, query, opts)
   return {
     kind = "symbol",
     activate = item.activate,
+    preview = item.preview,
     location_label = location_label,
     label = label,
     name = label,
@@ -8873,8 +8894,10 @@ end
 ---Fit the status and the active Search Modifiers into a width.
 function FSView:status_layout(font, max_width)
   local full_status = tostring(self.status or "")
-  -- "No matches" is true only for this Project. The rows of other Projects show below it.
-  if self.own_results and #self.own_results == 0 and #self.results > 0 and full_status:match("^No ") then
+  -- "No matches" is true only for this Project's files. The rows of providers and other Projects show below it.
+  local added = self.item_rows
+  if full_status:match("^No ") and self.own_results
+      and (#self.own_results == 0 and #self.results > 0 or added and added.joined == self.own_results) then
     full_status = ""
   end
   local modifier = self:search_modifier_text()
@@ -9132,6 +9155,11 @@ function FSView:draw_open_content()
       elseif r.kind == "new_project" then
         reset_rendered_file_group()
         draw_new_project_result_row(font, r, x + pad, row_y, row_text_w)
+      elseif r.kind == "item" then
+        reset_rendered_file_group()
+        local name_x, name_end = fuzzy_searcher.item_rows.draw(font, r, x + pad, row_y, row_text_w,
+          fuzzy_searcher.file_icons.column_width(font:get_height()), draw_highlighted_text)
+        fuzzy_searcher.set_copy_span(r, name_x, name_end)
       elseif r.kind == "more" then
         reset_rendered_file_group()
         -- The label lines up with the file names above it, in their font.

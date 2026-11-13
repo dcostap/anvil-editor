@@ -1202,31 +1202,46 @@ local function scenario_is_ready()
     require("core.panes").present(benchmark.view, { focus = true })
     return false
   end
-  if benchmark.scenario == "sql-symbols" then
+  if benchmark.scenario == "sql-symbols" or benchmark.scenario == "sql-files" then
+    -- Symbol Search lists columns and File Search lists objects. Each shows the selected row's definition.
     local picker = core.fuzzy_searcher_active_view
-    if picker then return #picker.results == 4 end
+    if picker then
+      for index, result in ipairs(picker.results) do
+        if result.preview and not picker.picked_database_row then picker.selected, picker.picked_database_row = index, true end
+      end
+      return picker.preview_view ~= nil
+    end
     local sql = require "plugins.sql_server"
     sql.load()
     if not sql.ready() then return false end
     local backend = require "plugins.sql_server.backend"
     backend.read_schema = function(_, done)
       done({ database = "Example", default_schema = "dbo", case_sensitive = false, objects = {
-        { schema = "sales", name = "customers", kind = "table", columns = {} },
-        { schema = "sales", name = "orders", kind = "table", columns = {} },
-        { schema = "sales", name = "customer_names", kind = "view", columns = {} },
+        { schema = "sales", name = "customers", kind = "table", columns = {
+          { name = "id", type = "int", nullable = false }, { name = "name", type = "nvarchar(80)", nullable = false },
+          { name = "city", type = "nvarchar(40)", nullable = true } } },
+        { schema = "sales", name = "orders", kind = "table", columns = {
+          { name = "customer_id", type = "int", nullable = false } } },
+        { schema = "sales", name = "customer_names", kind = "view", columns = {
+          { name = "customer_id", type = "int", nullable = false }, { name = "name", type = "nvarchar(80)", nullable = false } } },
         { schema = "sales", name = "list_customers", kind = "procedure", columns = {} },
       } })
       return { cancel = function() end }
     end
     backend.execute = function() error("SQL render scenes cannot execute SQL") end
-    backend.read_definition = function() error("SQL render scenes cannot connect") end
+    backend.read_definition = function(_, object, done)
+      done({ source = "CREATE TABLE [sales].[" .. object.name .. "] (\n    [id] int NOT NULL,\n"
+        .. "    [name] nvarchar(80) NOT NULL,\n    [city] nvarchar(40) NULL,\n"
+        .. "    CONSTRAINT [PK_customers] PRIMARY KEY ([id])\n);" })
+      return { cancel = function() end }
+    end
     local c = sql.add_connection()
     sql.update(c.id, "server", "test-only.invalid")
     sql.update(c.id, "database", "Example")
     sql.connect(c.id)
     benchmark.view = sql.new_query(c.id)
     benchmark.view.buffer:text_input("SELECT * FROM sales.customers;")
-    require("plugins.fuzzy_searcher").open_project_symbols("", { source_view = benchmark.view })
+    require("plugins.fuzzy_searcher").open(benchmark.scenario == "sql-files" and "cust" or "$customers")
     return false
   end
   if benchmark.scenario == "sql-results" or benchmark.scenario == "sql-results-edit" then

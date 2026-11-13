@@ -334,6 +334,8 @@ This Project's "No matches" status is hidden while other Projects show rows.
 Run `ui/fuzzy_searcher_other_projects.lua`, `ui/fuzzy_searcher_terminals.lua` and the `launch-file-search` shell probe after changes. The probe reports the answer times of both modes.
 Each group has a divider and a small, dim header. Check the `fuzzy-picker-other-projects` and `fuzzy-picker-other-text` render scenarios after visual changes.
 
+Language providers add groups to File Search with `project_file_groups` and to Project Symbol Search with `project_symbol_groups`. `plugins.fuzzy_searcher.item_rows` draws File Search item rows and shows the `preview()` of any row that has one. The SQL Server plugin lists database objects in File Search and columns in Symbol Search. These groups go after this Project's rows and before Other Project Results. Run `ui/sql_server.lua` after changes. Check the `sql-files` and `sql-symbols` render scenarios after visual changes.
+
 File Search shows all its rows at once. Paged lists load the next page one screen before their end. A refresh keeps the selected row.
 Each non-empty query keeps a Saved Screen: its rows down to the bottom of the screen and its selected row. The picker saves it at close and when the prompt history moves away from the query, but not while a search runs, because its rows can belong to the previous query. It keeps the newest 50 in memory. An empty File Search starts at its first row.
 A picker that opens a query with a Saved Screen, or that the prompt history moves to, shows that screen in its first frame. It does not wait for the search.
