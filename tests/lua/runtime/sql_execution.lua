@@ -64,6 +64,17 @@ test.describe("SQL execution input", function()
       { name = "@amount", type = "decimal(19,4)", output = false },
     })
     test.same(procedure.parameters, {})
+    test.equal(procedure.table_valued, false)
+    local from
+    for _, object in ipairs(catalog.objects) do
+      if object.schema == "sales" and object.name == "customers_from" then from = object end
+    end
+    test.equal(test.not_nil(from).kind, "function")
+    test.equal(from.table_valued, true)
+    test.same(from.parameters, { { name = "@first", type = "int", output = false } })
+    local names = {}
+    for i, column in ipairs(test.not_nil(from.columns)) do names[i] = column.name end
+    test.same(names, { "id", "na]me" })
     test.equal(#test.not_nil(periods).columns, 1)
     local key
     for _, k in ipairs(catalog.foreign_keys) do if k.name == "FK_parent" then key = k end end

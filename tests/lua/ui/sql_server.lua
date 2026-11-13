@@ -1435,6 +1435,37 @@ test.describe("SQL Queries", function()
     test.ok(not autocomplete.is_open())
   end)
 
+  test.it("offers table-valued functions as sources, with the caret in their arguments", function(context)
+    local editor = connected_query(context, {
+      database = "AnvilTest", default_schema = "dbo", case_sensitive = false,
+      objects = {
+        schema.objects[1], schema.objects[2],
+        { schema = "sales", name = "customers_from", kind = "function", table_valued = true,
+          parameters = { { name = "@first", type = "int", output = false } },
+          columns = { { name = "id", type = "int" }, { name = "label", type = "nvarchar(80)" } } },
+        { schema = "sales", name = "customer_count", kind = "function", table_valued = false, parameters = {}, columns = {} },
+      },
+      foreign_keys = {},
+    })
+    local function type_line(text)
+      editor.buffer:set_selection(1, 1, 1, math.huge)
+      for char in text:gmatch(".") do core.on_event("textinput", char) end
+    end
+    local function line() return (editor.buffer:get_text(1, 1, 1, math.huge):gsub("\n$", "")) end
+    type_line("SELECT * FROM sales.cust")
+    test.equal(autocomplete.get_selected_suggestion().text, "customers")
+    test.ok(command.perform("autocomplete:next"))
+    local item = autocomplete.get_selected_suggestion()
+    test.equal(item.text, "customers_from")
+    test.equal(item.desc, "sales.customers_from (@first int)")
+    test.ok(command.perform("autocomplete:complete"))
+    test.equal(line(), "SELECT * FROM sales.customers_from()")
+    local _, col = editor.buffer:get_selection()
+    test.equal(col, #"SELECT * FROM sales.customers_from(" + 1)
+    type_line("SELECT * FROM sales.customers_from(1) c WHERE c.la")
+    test.equal(autocomplete.get_selected_suggestion().text, "label")
+  end)
+
   test.it("ranks names that start with the typed text before names that only contain it", function(context)
     local editor = connected_query(context)
     local function type_line(text)

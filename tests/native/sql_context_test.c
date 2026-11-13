@@ -203,16 +203,21 @@ int main(void) {
   text = "IF UPDATE(name) SELECT c. FROM sales.customers c";
   parse_after(&c, text, "SELECT c.");
   assert(sources_are(&c, "customers c"));
-  /* A source without metadata adds no columns, and the other sources keep theirs. */
+  /* A table-valued function is a source. A source without metadata adds no
+   * columns, and the other sources keep theirs. */
   text = "SELECT o. FROM sales.orders o CROSS APPLY dbo.lines(o.id) AS l JOIN other.dbo.items i ON 1 = 1"
-    " JOIN OPENJSON(@j) WITH (a int) j ON 1 = 1, (VALUES (1, 2)) v (p, q) OUTER APPLY (SELECT x FROM dbo.y) z";
+    " JOIN OPENJSON(@j) WITH (a int) j ON 1 = 1, (VALUES (1, 2)) v (p, q) OUTER APPLY (SELECT x FROM dbo.y) z"
+    " JOIN dbo.pairs(1) AS p (a, b) ON 1 = 1";
   parse_after(&c, text, "SELECT o.");
-  assert(c.mode == SQL_CONTEXT_COLUMN && sources_are(&c, "orders o,z z"));
+  assert(c.mode == SQL_CONTEXT_COLUMN && sources_are(&c, "orders o,lines l,z z"));
   parse_after(&c, text, "lines(o.");
   assert(c.mode == SQL_CONTEXT_COLUMN && !strcmp(c.qualifier, "o"));
   text = "SELECT c.na FROM dbo.fn(1) c";
   parse_after(&c, text, "c.na");
-  assert(c.mode == SQL_CONTEXT_COLUMN && c.count == 0);
+  assert(c.mode == SQL_CONTEXT_COLUMN && sources_are(&c, "fn c") && !strcmp(c.sources[0].schema, "dbo"));
+  text = "SELECT * FROM dbo.fn(1) c JOIN ";
+  parse_after(&c, text, "JOIN ");
+  assert(c.mode == SQL_CONTEXT_TABLE && sources_are(&c, "fn c"));
   /* A three-part target needs a cross-database catalog. */
   text = "UPDATE other.sales.customers SET na";
   parse_after(&c, text, "SET na");

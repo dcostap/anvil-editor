@@ -169,7 +169,7 @@ void sql_server_close(SqlServerConnection *session) {
   L"WHERE i.object_id=o.object_id AND i.is_primary_key=1 AND ic.column_id=c.column_id) THEN N'1' ELSE N'0' END " \
   L"FROM sys.objects o JOIN sys.schemas s ON s.schema_id=o.schema_id " \
   L"JOIN sys.columns c ON c.object_id=o.object_id JOIN sys.types t ON t.user_type_id=c.user_type_id " \
-  L"WHERE o.type IN ('U','V') AND o.is_ms_shipped=0 AND c.is_hidden=0"
+  L"WHERE o.type IN ('U','V','IF','TF') AND o.is_ms_shipped=0 AND c.is_hidden=0"
 
 /* 1 at the end of the rows, -1 at the limit, 0 on an error. */
 static int fetch_columns(SQLHSTMT stmt, SqlServerCatalog *out, size_t limit) {
@@ -286,8 +286,8 @@ static int read_catalog(SQLHDBC dbc, size_t column_limit, SqlServerCatalog *out)
   if (!out->database || !out->default_schema || !sensitive) { free(sensitive); goto done; }
   out->case_sensitive = !strcmp(sensitive, "1"); free(sensitive);
   SQLFreeHandle(SQL_HANDLE_STMT, stmt); stmt = SQL_NULL_HSTMT;
-  if (!execute(dbc, &stmt, L"SELECT s.name,o.name,CASE o.type WHEN 'U' THEN 'table' WHEN 'V' THEN 'view' WHEN 'P' THEN 'procedure' ELSE 'function' END "
-      L"FROM sys.objects o JOIN sys.schemas s ON s.schema_id=o.schema_id "
+  if (!execute(dbc, &stmt, L"SELECT s.name,o.name,CASE o.type WHEN 'U' THEN 'table' WHEN 'V' THEN 'view' WHEN 'P' THEN 'procedure' ELSE 'function' END, "
+      L"CASE WHEN o.type IN ('IF','TF') THEN N'1' ELSE N'0' END FROM sys.objects o JOIN sys.schemas s ON s.schema_id=o.schema_id "
       L"WHERE o.type IN('U','V','P','FN','IF','TF') AND o.is_ms_shipped=0 ORDER BY s.name,o.name", out)) goto done;
   size_t object_capacity = 0;
   for (;;) {
@@ -304,7 +304,10 @@ static int read_catalog(SQLHDBC dbc, size_t column_limit, SqlServerCatalog *out)
     }
     SqlServerObject *object=&out->objects[out->object_count++];
     object->schema=cell(stmt,1); object->name=cell(stmt,2); object->kind=cell(stmt,3);
-    if (!object->schema || !object->name || !object->kind) goto done;
+    char *table_valued=cell(stmt,4);
+    object->table_valued=table_valued && !strcmp(table_valued,"1");
+    if (!object->schema || !object->name || !object->kind || !table_valued) { free(table_valued); goto done; }
+    free(table_valued);
   }
   SQLFreeHandle(SQL_HANDLE_STMT, stmt); stmt = SQL_NULL_HSTMT;
   read_foreign_keys(dbc, out);
@@ -313,7 +316,7 @@ static int read_catalog(SQLHDBC dbc, size_t column_limit, SqlServerCatalog *out)
   /* A truncated object list cannot hold all columns, so each object reads its own. */
   if (out->objects_truncated) { success = 1; goto done; }
   if (!execute(dbc, &stmt, L"SELECT CONVERT(nvarchar(20), COUNT_BIG(*)) FROM sys.objects o JOIN sys.columns c ON c.object_id=o.object_id "
-      L"WHERE o.type IN ('U','V') AND o.is_ms_shipped=0 AND c.is_hidden=0", out)) goto done;
+      L"WHERE o.type IN ('U','V','IF','TF') AND o.is_ms_shipped=0 AND c.is_hidden=0", out)) goto done;
   if (!SQL_SUCCEEDED(SQLFetch(stmt))) goto done;
   char *count = cell(stmt, 1);
   if (!count) goto done;

@@ -10,7 +10,8 @@ typedef struct {
   char *schema, *table, *name, *type;
   int nullable, identity, primary_key;
 } SqlServerColumn;
-typedef struct { char *schema, *name, *kind; } SqlServerObject;
+/* table_valued: an inline or multi-statement table-valued function, which has columns. */
+typedef struct { char *schema, *name, *kind; int table_valued; } SqlServerObject;
 /* One column pair of a foreign key: schema.table.column references
  * ref_schema.ref_table.ref_column. A key's pairs are consecutive, in key order,
  * and share the key's object ID. */

@@ -310,7 +310,8 @@ local function complete(view, sql, opts)
   if state.completion then return state.completion end
   if p.star then return end
   local items, seen, conditions = {}, {}, {}
-  local function add(name, inserted, description, into)
+  -- Back moves the caret that many characters back from the end of the insert.
+  local function add(name, inserted, description, into, back)
     if not name:lower():find(p.prefix:lower(), 1, true) or seen[inserted] then return end
     seen[inserted] = true
     local start_col = state.col - (state.offset - p.start)
@@ -322,6 +323,10 @@ local function complete(view, sql, opts)
       if line ~= state.line or col ~= state.col then return true end
       local edits = { { line1 = line, col1 = start_col, line2 = line, col2 = end_col, text = inserted, idx = 1 } }
       buffer:apply_edits(edits, { type = "insert", selections = buffer:selections_after_edits(edits, { "end" }), last_selection = 1 })
+      if back then
+        local l, c = buffer:get_selection()
+        buffer:set_selection(l, c - back)
+      end
       return true
     end }
   end
@@ -333,10 +338,21 @@ local function complete(view, sql, opts)
   if p.mode == "table" or p.mode == "object" then
     for _, t in ipairs(catalog.objects) do
       local kind = p.mode == "table" and "table" or p.object_kind
-      if (t.kind == kind or kind == "table" and t.kind == "view") and (p.qualifier == "" or equal(catalog, p.qualifier, t.schema)) then
+      -- A table-valued function is a source after FROM and JOIN, not a target.
+      local call = p.mode == "table" and t.table_valued
+      if (t.kind == kind or kind == "table" and t.kind == "view" or call) and (p.qualifier == "" or equal(catalog, p.qualifier, t.schema)) then
         local inserted = quote(buffer, t.name)
         if p.qualifier == "" then inserted = quote(buffer, t.schema) .. "." .. inserted end
-        add(t.name, inserted, t.schema .. "." .. t.name)
+        local description = t.schema .. "." .. t.name
+        if call then
+          -- Tab leaves the caret in the parentheses, or after them without parameters.
+          local parameters = {}
+          for i, parameter in ipairs(t.parameters or {}) do parameters[i] = parameter.name .. " " .. parameter.type end
+          description = description .. " (" .. table.concat(parameters, ", ") .. ")"
+          add(t.name, inserted .. "()", description, nil, (not t.parameters or #t.parameters > 0) and 1 or nil)
+        else
+          add(t.name, inserted, description)
+        end
       end
     end
   elseif p.mode == "column" then

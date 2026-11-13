@@ -120,8 +120,9 @@ static int read_schema(lua_State *L) {
     SqlServerObject *object=&c->objects[i];
     lua_newtable(L);
     text(L,"schema",object->schema); text(L,"name",object->name); text(L,"kind",object->kind);
-    /* A table or view without loaded columns has no columns field. */
-    int has_columns = c->columns_loaded || (strcmp(object->kind, "table") && strcmp(object->kind, "view"));
+    boolean(L, "table_valued", object->table_valued);
+    /* An object with columns has no columns field until they load. */
+    int has_columns = c->columns_loaded || (strcmp(object->kind, "table") && strcmp(object->kind, "view") && !object->table_valued);
     if (has_columns) {
       lua_newtable(L);
       size_t index=0;

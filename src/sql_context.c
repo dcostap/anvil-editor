@@ -647,7 +647,23 @@ static int read_scope(const char *s, Token *ts, size_t begin, size_t end, int sc
     size_t at=i;
     int read=read_name(s,ts,&i,end,&src);
     if (!read) return 0;
-    if (read<0 || (i+1<end && ts[i+1].kind=='(')) { i=skip_source(s,ts,at,end,caret,out); expect_source=0; continue; }
+    if (read<0) { i=skip_source(s,ts,at,end,caret,out); expect_source=0; continue; }
+    if (i+1<end && ts[i+1].kind=='(') {
+      /* A table-valued function, `name(arguments) [AS] alias`, is a source. With a
+       * WITH list or a column list, its columns need more metadata. */
+      size_t last=skip_source(s,ts,at,end,caret,out), k=closing(ts,i+1,end);
+      if (k<end && k+1<end && word(s,ts[k+1],"AS")) ++k;
+      if (k<end && k+1<end && is_name(ts[k+1]) && !reserved(s,ts[k+1])) {
+        ++k;
+        if (!name(s,ts[k],ts[k].end,src.alias)) return 0;
+      }
+      if (k==last) {
+        if (out->count==SQL_CONTEXT_SOURCES) return 0;
+        out->sources[out->count++]=src;
+      }
+      i=last; expect_source=0;
+      continue;
+    }
     i=system_time_end(s,ts,i,end);
     if (i+1<end && word(s,ts[i+1],"AS")) ++i;
     if (i+1<end && is_name(ts[i+1]) && !reserved(s,ts[i+1])) {
