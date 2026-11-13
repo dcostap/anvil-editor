@@ -313,6 +313,10 @@ SCENARIOS["markdown-heading-outline"] = dict(
 SCENARIOS["markdown-table-images"] = dict(
     SCENARIOS["markdown-footnotes"], fixture="markdown-table-images", window_width=900,
 )
+# A selection across a list, wrapped paragraphs, headings and a table.
+SCENARIOS["markdown-selection"] = dict(
+    SCENARIOS["markdown-footnotes"], fixture="markdown-selection", window_width=1100, window_height=960,
+)
 FOOTNOTES_SOURCE = """# Chapter one
 
 From Terrahawks[^1] it went
@@ -357,6 +361,37 @@ HEADING_OUTLINE_SOURCE = "".join(
         "## Troubleshooting",
     )
 )
+SELECTION_SOURCE = """**The distinction matters:**
+
+- **First:** vehicles started late **and** took substantially longer to manufacture.
+- **Second:** vehicles generally took about the expected time, but started late.
+
+These are measured schedule differences. They do not, by themselves, identify whether the cause was simulation logic, inputs, production constraints, or changed priorities.
+
+## Removing weekends and factory shutdowns
+
+Calendar duration can mislead when a vehicle crosses the summer shutdown.
+
+| Working-day measure | First | Second |
+| --- | --- | --- |
+| Average planned duration | 31.8 | 41.6 |
+| Average actual duration | **52.5** | **41.8** |
+| Average completion delay | **31.2** | **6.3** |
+
+**The first plant took approximately 65% more working days than planned. The second plant's average was almost exact.**
+
+> A quote that runs long enough to wrap across more than one visual row of this reading lane.
+
+```lua
+local delay = actual - planned
+```
+
+## Where the first plant was most inaccurate
+
+The largest error was in **HERO** vehicles.
+
+Same pre-start comparison:
+"""
 TABLE_IMAGES_SOURCE = """# Table images
 
 | Image | Name | Notes |
@@ -1228,6 +1263,9 @@ def run_case(
     if settings.get("fixture") == "markdown-heading-outline":
         case_fixture = work / "fixtures" / "markdown-heading-outline.md"
         case_fixture.write_text(HEADING_OUTLINE_SOURCE, encoding="utf-8", newline="\n")
+    if settings.get("fixture") == "markdown-selection":
+        case_fixture = work / "fixtures" / "markdown-selection.md"
+        case_fixture.write_text(SELECTION_SOURCE, encoding="utf-8", newline="\n")
     if settings.get("fixture") == "markdown-table-images":
         case_fixture = work / "fixtures" / "markdown-table-images.md"
         write_table_images_fixture(case_fixture)

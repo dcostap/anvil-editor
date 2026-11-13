@@ -48,14 +48,33 @@ local function draw_line(view, line)
     events[#events + 1] = { kind = "image", x = x, y = y, width = width, height = height }
   end
   renderer.draw_text = function(font, text, x) return x + font:get_width(text) end
+  local height
   local ok, err = pcall(view.with_selection_state, view, function()
     view:prepare_line_body_draw_cache(line, line)
-    view:draw_line_body(line, 0, 0)
+    height = view:draw_line_body(line, 0, 0)
   end)
   renderer.draw_rect, renderer.draw_text = old_rect, old_text
   renderer.draw_canvas, renderer.draw_canvas_scaled = old_canvas, old_scaled
   if not ok then error(err, 0) end
-  return events
+  return events, height
+end
+
+---The bottom of the selection fill that spans the whole width from the top
+---of a line drawn at y = 0, without a gap.
+local function full_width_selection_bottom(view, events)
+  local bottom, grown = 0, true
+  while grown do
+    grown = false
+    for _, event in ipairs(events) do
+      if event.color == style.selection and event.x <= 0
+        and event.x + event.width >= view.size.x
+        and event.y <= bottom and event.y + event.height > bottom
+      then
+        bottom, grown = event.y + event.height, true
+      end
+    end
+  end
+  return bottom
 end
 
 local function image_is_highlighted(events)
@@ -112,6 +131,18 @@ test.describe("Markdown selection backgrounds", function()
             and event.x + event.width >= view.size.x then filled = true end
         end
         test.ok(filled, phase .. ": the blank row must not inherit the list indent")
+      end
+    end)
+
+    test.it("fills each line between the selection ends from edge to edge (" .. mode .. ")", function(context)
+      local paragraph = string.rep("A sentence of prose that wraps in the lane. ", 12)
+      local view, buffer = make_view(context, "first\n\n## Heading\n\n" .. paragraph .. "\n\nlast\n", wrapped)
+      buffer:set_selection(1, 2, 7, 3)
+      for _, line in ipairs({ 3, 5 }) do
+        local events, height = draw_line(view, line)
+        test.ok(height > 0)
+        test.ok(full_width_selection_bottom(view, events) >= height,
+          "line " .. line .. " must be filled from its top to its bottom")
       end
     end)
 

@@ -950,6 +950,12 @@ Table images use the same Image Controls as prose: hover buttons, Image Overlay,
 A Wikilink reads `\|` as its alias separator, because a table needs it: `![[image.png\|200]]`.
 Run `ui/markdown_interactive_tables.lua` and `ui/markdown_image_resize.lua` after changes. Check the `markdown-table-images` render scenario after visual changes.
 
+## Selection backgrounds
+
+A selection over several lines covers the screen in reading order. Its start row fills from the start to the right edge. Each row after it fills the full width, and its end row fills from the left edge to the end.
+So block spacing, wrap indentation and tables between the two ends show no gaps. A selection in one line fills only its text. An end in a Live Preview table row keeps the cell rule.
+Run `ui/selection_background.lua` and `ui/markdown_selection_background.lua` after changes. Check the `markdown-selection` render scenario after visual changes.
+
 ## Wallpapers
 
 A native worker decodes the wallpaper (`image_decode` job, `src/image_decode.c`). The UI thread never decodes it. A Window shows its plain background until the image arrives. The `imagedecoded` event wakes the event loop.

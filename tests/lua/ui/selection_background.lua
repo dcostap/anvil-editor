@@ -14,7 +14,7 @@ local function make_view(text)
 end
 
 test.describe("Selection Background", function()
-  test.it("draws selected newlines through the right edge", function()
+  test.it("draws a selection over several lines through the right edge", function()
     local view, buffer = make_view("one\n\nthree")
     buffer:set_selection(1, 2, 3, 3)
 
@@ -50,8 +50,8 @@ test.describe("Selection Background", function()
     end
     local first_line = right_edge_rects[0]
     local blank_line = right_edge_rects[view:get_line_height()]
-    test.not_nil(first_line, "expected the first selected newline to reach the right edge")
-    test.equal(first_line.x, style.code_font:get_width("one"))
+    test.not_nil(first_line, "expected the first selected row to reach the right edge")
+    test.equal(first_line.x, style.code_font:get_width("o"))
     test.not_nil(blank_line, "expected a selection background on the blank line")
     test.equal(blank_line.x, 0)
     test.equal(blank_line.width, view.size.x)

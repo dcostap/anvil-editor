@@ -9078,7 +9078,7 @@ function TextView:prepare_line_body_draw_cache(minline, maxline)
   local selection_cache = {}
   local selection_color = self:get_selection_background_color()
   local search_match_cache = {}
-  local selection_newline_cache = {}
+  local selection_flow_cache = {}
   local gutter_selection_cache = {}
   local visible_caret_cache = {}
   local hcl = self:get_current_line_highlight_mode()
@@ -9130,28 +9130,30 @@ function TextView:prepare_line_body_draw_cache(minline, maxline)
       local to_line = math.min(line2, maxline)
       for line = from_line, to_line do
         gutter_selection_cache[line] = true
-        local text = self.buffer.lines[line]
-        local c1 = line1 ~= line and 1 or col1
-        local c2 = line2 ~= line and #text + 1 or col2
-        local is_search_selection = self.buffer:is_search_selection(line1, c1, line, c2)
-        if line < line2 and not is_search_selection and selection_color then
-          selection_newline_cache[line] = selection_color
-        end
-        if c1 ~= c2 then
-          if is_search_selection then
+        if line1 ~= line2 then
+          if selection_color then
+            local list = selection_flow_cache[line]
+            if not list then
+              list = {}
+              selection_flow_cache[line] = list
+            end
+            list[#list + 1] = { line1, col1, line2, col2 }
+          end
+        elseif col1 ~= col2 then
+          if self.buffer:is_search_selection(line1, col1, line2, col2) then
             local search_list = search_match_cache[line]
             if not search_list then
               search_list = {}
               search_match_cache[line] = search_list
             end
-            search_list[#search_list + 1] = { c1, c2, true }
+            search_list[#search_list + 1] = { col1, col2, true }
           elseif selection_color then
             local list = selection_cache[line]
             if not list then
               list = {}
               selection_cache[line] = list
             end
-            list[#list + 1] = { c1, c2, selection_color, false }
+            list[#list + 1] = { col1, col2, selection_color, false }
             if stats then stats.selection_cache_ranges = stats.selection_cache_ranges + 1 end
           end
         end
@@ -9192,7 +9194,7 @@ function TextView:prepare_line_body_draw_cache(minline, maxline)
   self.__line_body_highlight_cache = highlight_cache
   self.__line_body_selection_cache = selection_cache
   self.__line_body_search_match_cache = search_match_cache
-  self.__line_body_selection_newline_cache = selection_newline_cache
+  self.__line_body_selection_flow_cache = selection_flow_cache
   self.__line_gutter_selection_cache = gutter_selection_cache
   self.__visible_caret_cache = visible_caret_cache
 end
@@ -9626,17 +9628,48 @@ local function draw_line_selected_newline(view, line, x, y, color)
   if right > x1 then renderer.draw_rect(x1, row_y, right - x1, row_height, color) end
 end
 
-local function selected_newline_color(view, line, selection_color)
-  local cache = view.__line_body_selection_newline_cache
-  if cache then return cache[line] end
-  for _, line1, col1, line2, col2 in view.buffer:get_selections(true) do
-    if line1 > line then break end
-    if line >= line1 and line < line2
-      and not view.buffer:is_search_selection(line1, col1, line2, col2)
-    then
-      return selection_color
+---Draw the part of a selection over several lines that `line` holds. The
+---selection covers the screen in reading order: its start row from the start
+---to the right edge, each row after it at full width, and its end row from
+---the left edge to the end. So block spacing, wrap indentation and tables
+---between the two ends show no gaps.
+local function draw_line_selection_flow(
+  view, line, render_line, x, y, line1, col1, line2, col2, color
+)
+  if line == line2 and col2 == 1 then return end
+  local rows = render_line and render_line.position_rows
+  if (line == line1 or line == line2) and type(rows) == "table" and #rows > 0 then
+    -- An end in a table row keeps the cell rule of a selection in one line.
+    local c1 = line == line1 and col1 or 1
+    local c2 = line == line2 and col2 or #view.buffer.lines[line] + 1
+    if c1 ~= c2 then
+      draw_line_render_position_row_range(view, render_line, c1, c2, x, y, color)
     end
+    if line < line2 then draw_line_selected_newline(view, line, x, y, color) end
+    return
   end
+  local right = view.position.x + view.size.x
+  local _, line_y = view:get_line_screen_position(line)
+  local first = view:get_visual_row(line, 1, false)
+  local last = first + view:get_visual_row_count_for_line(line) - 1
+  local top = y
+  local bottom = y + view:get_visual_row_y_offset(last)
+    + view:get_visual_row_height(last) - view:get_visual_row_y_offset(first)
+  if line == line1 then
+    local row_y, row_height = view:get_position_highlight_geometry(line, col1, false)
+    row_y = y + row_y - line_y
+    local x1 = x + view:get_col_x_offset(line, col1, false)
+    if right > x1 then renderer.draw_rect(x1, row_y, right - x1, row_height, color) end
+    top = row_y + row_height
+  end
+  if line == line2 then
+    local row_y, row_height = view:get_position_highlight_geometry(line, col2, true)
+    row_y = y + row_y - line_y
+    local x2 = x + view:get_col_x_offset(line, col2, true)
+    if x2 > x then renderer.draw_rect(x, row_y, x2 - x, row_height, color) end
+    bottom = row_y
+  end
+  if bottom > top then renderer.draw_rect(x, top, right - x, bottom - top, color) end
 end
 
 local function line_search_matches(view, line)
@@ -9760,18 +9793,18 @@ function TextView:draw_line_body(line, x, y)
     local render_line = self:get_line_render(line)
     if selection_color then
       draw_line_render_cell_selections(self, line, render_line, x, y, selection_color)
-      local newline_color = selected_newline_color(self, line, selection_color)
-      if newline_color then
-        draw_line_selected_newline(self, line, x, y, newline_color)
-      end
     end
     local cell_selections = table_cell_selection_lookup(self).by_index
     for idx, line1, col1, line2, col2 in self.buffer:get_selections(true) do
       if line >= line1 and line <= line2 and not cell_selections[idx] then
-        if line1 ~= line then col1 = 1 end
-        if line2 ~= line then col2 = #self.buffer.lines[line] + 1 end
-        if col1 ~= col2 and selection_color then
-          if self.buffer:is_search_selection(line1, col1, line, col2) then
+        if line1 ~= line2 then
+          if selection_color then
+            draw_line_selection_flow(
+              self, line, render_line, x, y, line1, col1, line2, col2, selection_color
+            )
+          end
+        elseif col1 ~= col2 and selection_color then
+          if self.buffer:is_search_selection(line1, col1, line2, col2) then
             -- Search backgrounds were drawn before ordinary selections.
           elseif render_line and render_line.position_rows then
             draw_line_render_position_row_range(
@@ -9872,9 +9905,14 @@ function TextView:draw_line_body(line, x, y)
   local render_line = self:get_line_render(line)
   if selection_color then
     draw_line_render_cell_selections(self, line, render_line, x, y, selection_color)
-    local newline_color = selected_newline_color(self, line, selection_color)
-    if newline_color then
-      draw_line_selected_newline(self, line, x, y, newline_color)
+  end
+  local flows = selection_color and self.__line_body_selection_flow_cache
+  flows = flows and flows[line]
+  if flows then
+    for _, sel in ipairs(flows) do
+      draw_line_selection_flow(
+        self, line, render_line, x, y, sel[1], sel[2], sel[3], sel[4], selection_color
+      )
     end
   end
   local cached_selections = selection_color and selection_cache and selection_cache[line]
@@ -9903,10 +9941,11 @@ function TextView:draw_line_body(line, x, y)
     for lidx, line1, col1, line2, col2 in self.buffer:get_selections(true) do
       if line1 > line then break end
       if line >= line1 and line <= line2 and not cell_selections[lidx] then
-        local text = self.buffer.lines[line]
-        if line1 ~= line then col1 = 1 end
-        if line2 ~= line then col2 = #text + 1 end
-        if self.buffer:is_search_selection(line1, col1, line, col2) then
+        if line1 ~= line2 then
+          draw_line_selection_flow(
+            self, line, render_line, x, y, line1, col1, line2, col2, selection_color
+          )
+        elseif self.buffer:is_search_selection(line1, col1, line2, col2) then
           -- Search backgrounds were drawn before ordinary selections.
         elseif render_line and render_line.position_rows then
           draw_line_render_position_row_range(
@@ -10214,6 +10253,7 @@ function TextView:draw_folded()
 
   self.__line_body_highlight_cache = nil
   self.__line_body_selection_cache = nil
+  self.__line_body_selection_flow_cache = nil
   self.__line_body_search_match_cache = nil
   self.__line_gutter_selection_cache = nil
   self.__visible_caret_cache = nil
@@ -10409,6 +10449,7 @@ function TextView:draw_wrapped()
 
   self.__line_body_highlight_cache = nil
   self.__line_body_selection_cache = nil
+  self.__line_body_selection_flow_cache = nil
   self.__line_body_search_match_cache = nil
   self.__line_gutter_selection_cache = nil
   self.__visible_caret_cache = nil
@@ -10516,6 +10557,7 @@ local function draw_textview(self)
   core.pop_clip_rect()
   self.__line_body_highlight_cache = nil
   self.__line_body_selection_cache = nil
+  self.__line_body_selection_flow_cache = nil
   self.__line_gutter_selection_cache = nil
 
   perf_scope_end(phase_scope)

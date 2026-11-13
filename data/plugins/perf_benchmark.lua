@@ -1084,6 +1084,12 @@ local function setup_scenario()
         input.active_window_has_focus = function() return true end
       end)
     end
+  elseif benchmark.scenario == "markdown-selection" then
+    assert(view.__markdown_live_attached, "Markdown Live Preview did not attach")
+    view:set_wrapping_enabled(true)
+    -- From inside the second list item to the end of the paragraph after the last heading.
+    view.buffer:set_selection(28, 20, 4, 30)
+    linewrapping.update_textview_breaks(view)
   elseif benchmark.scenario == "markdown-long-link-caret-repeat" then
     assert(view.__markdown_live_attached, "Markdown Live Preview did not attach")
     view:set_wrapping_enabled(true)

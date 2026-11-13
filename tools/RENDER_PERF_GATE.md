@@ -478,6 +478,9 @@ Like `image-viewer`, it has no baseline. Run it with `--report-only` and look at
 Use `--scenario markdown-table-images` for images in Markdown table cells: an embedded image, a file image with an escaped width, and a cell with text and an image.
 It has no baseline. Run it with `--report-only` and look at the captured screenshot.
 
+Use `--scenario markdown-selection` for a selection across a list, wrapped paragraphs, headings, a table, a quote and a code block in Live Preview.
+It has no baseline. Run it with `--report-only` and look at the captured screenshot.
+
 Use `--scenario context-menu` for the Editor's Context Menu over a document, with one row selected.
 It has no baseline. Run it with `--report-only` and look at the captured screenshot.
 
