@@ -30,6 +30,14 @@ static int context(lua_State *L) {
   boolean(L,"star",out.star); text(L,"slot",out.slot == SQL_SLOT_VALUE ? "value" : out.slot == SQL_SLOT_NONE ? "none" : "name");
   text(L,"keywords",out.keywords); boolean(L,"lower",out.lower); boolean(L,"alias",out.alias);
   lua_pushinteger(L, (lua_Integer)out.join); lua_setfield(L, -2, "join");
+  boolean(L, "declaring", out.declaring);
+  lua_createtable(L, (int)out.variable_count, 0);
+  for (size_t i = 0; i < out.variable_count; ++i) {
+    lua_newtable(L);
+    text(L, "name", out.variables[i].name); text(L, "type", out.variables[i].type);
+    lua_rawseti(L, -2, (int)i + 1);
+  }
+  lua_setfield(L, -2, "variables");
   text(L,"object_kind",out.object_kind);
   text(L, "prefix", out.prefix); text(L, "qualifier", out.qualifier);
   lua_pushinteger(L, (lua_Integer)out.start); lua_setfield(L, -2, "start");

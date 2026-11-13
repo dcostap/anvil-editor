@@ -18,6 +18,7 @@ typedef struct {
  * column list, or the names of a SELECT's columns. With star set, a `*` or a
  * limit leaves the list incomplete. */
 enum { SQL_LOCAL_CTE = 1, SQL_LOCAL_DERIVED, SQL_LOCAL_TEMP, SQL_LOCAL_VARIABLE };
+typedef struct { char name[SQL_CONTEXT_NAME], type[64]; } SqlVariable;
 typedef struct {
   char name[SQL_CONTEXT_NAME];
   int kind, star;
@@ -43,6 +44,12 @@ typedef struct {
    * source that the JOIN names, so completion can offer its join conditions.
    * Otherwise 0. */
   size_t join;
+  /* The scalar variables and parameters that the caret's batch declares before
+   * the caret, in order, without table variables. Declaring tells that the
+   * caret is in a new declaration's name. */
+  SqlVariable *variables;
+  size_t variable_count;
+  int declaring;
   /* Empty means any object; table also permits a view for DML. */
   char object_kind[16];
   char prefix[SQL_CONTEXT_NAME], qualifier[SQL_CONTEXT_NAME];

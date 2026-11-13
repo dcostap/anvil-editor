@@ -119,23 +119,41 @@ local KEYWORDS = {
   ["is not"] = { "NULL" },
 }
 -- Keywords that start with the typed text, in the case of the clause's keyword.
+-- A row that replaces the name at the caret with its text, while the text and the caret stay.
+local function text_item(state, buffer, text, description)
+  local p = state.parsed
+  local start_col = state.col - (state.offset - p.start)
+  local end_col = state.col + p["end"] - state.offset
+  return { text = text, desc = description, onselect = function()
+    if buffer.text_revision ~= state.revision then return true end
+    local line, col = buffer:get_selection()
+    if line ~= state.line or col ~= state.col then return true end
+    local edits = { { line1 = line, col1 = start_col, line2 = line, col2 = end_col, text = text, idx = 1 } }
+    buffer:apply_edits(edits, { type = "insert", selections = buffer:selections_after_edits(edits, { "end" }), last_selection = 1 })
+    return true
+  end }
+end
 local function keyword_completion(state, buffer)
   local p = state.parsed
   local prefix = p.prefix:upper()
-  local start_col = state.col - (state.offset - p.start)
-  local end_col = state.col + p["end"] - state.offset
   local items = {}
   for _, word in ipairs(KEYWORDS[p.keywords] or {}) do
     if #word > #prefix and word:sub(1, #prefix) == prefix and (word ~= "AS" or p.alias) then
-      local inserted = p.lower and word:lower() or word
-      items[#items + 1] = { text = inserted, onselect = function()
-        if buffer.text_revision ~= state.revision then return true end
-        local line, col = buffer:get_selection()
-        if line ~= state.line or col ~= state.col then return true end
-        local edits = { { line1 = line, col1 = start_col, line2 = line, col2 = end_col, text = inserted, idx = 1 } }
-        buffer:apply_edits(edits, { type = "insert", selections = buffer:selections_after_edits(edits, { "end" }), last_selection = 1 })
-        return true
-      end }
+      items[#items + 1] = text_item(state, buffer, p.lower and word:lower() or word)
+    end
+  end
+  return { query = p.prefix, line = state.line, query_col = state.col - #p.prefix, items = items }
+end
+-- The batch's variables that start with the typed `@name`, in declaration order, with their types.
+-- Names compare without case. A new declaration's name offers none.
+local function variable_completion(state, buffer)
+  local p = state.parsed
+  local prefix, items, seen = p.prefix:lower(), {}, {}
+  for _, variable in ipairs(p.declaring and {} or p.variables) do
+    local key = variable.name:lower()
+    if not seen[key] and #key > #prefix and key:sub(1, #prefix) == prefix then
+      seen[key] = true
+      items[#items + 1] = text_item(state, buffer, variable.name, variable.type)
     end
   end
   return { query = p.prefix, line = state.line, query_col = state.col - #p.prefix, items = items }
@@ -198,6 +216,7 @@ local function complete(view, sql, opts)
   local state = context(view, sql)
   if not state then return end
   local p, catalog, buffer = state.parsed, state.catalog, view.buffer
+  if p.prefix:match("^@[^@]") or p.prefix == "@" then return variable_completion(state, buffer) end
   -- No existing name goes here, but a keyword can. Keywords wait for a typed letter, and where
   -- the typed word can be an alias, for an explicit request.
   if p.slot == "none" then

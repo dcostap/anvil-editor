@@ -209,6 +209,76 @@ static void follow(const char *s, Token *ts, size_t first, size_t p, SqlContext 
     }
   }
 }
+#define VARIABLE_LIMIT 256
+/* Words that start the next statement, so they end a DECLARE list. */
+static const char *const STATEMENT_WORDS[] = { "SELECT", "SET", "DECLARE", "IF", "ELSE", "WHILE", "BEGIN", "END",
+  "RETURN", "PRINT", "EXEC", "EXECUTE", "INSERT", "UPDATE", "DELETE", "MERGE", "WITH", "CREATE", "ALTER", "DROP",
+  "TRUNCATE", "FETCH", "OPEN", "CLOSE", "DEALLOCATE", "RAISERROR", "THROW", "WAITFOR", "GOTO", "BREAK", "CONTINUE",
+  "USE", NULL };
+/* Words after a parameter's type. */
+static const char *const PARAMETER_WORDS[] = { "OUTPUT", "OUT", "READONLY", "VARYING", "AS", NULL };
+/* `@name`, not a system function such as `@@ROWCOUNT`. */
+static int variable_token(const char *s, Token t) {
+  return t.kind == IDENT && s[t.start] == '@' && t.end - t.start > 1 && s[t.start + 1] != '@';
+}
+/* Records the variable at ts[at] and its type: the tokens after it, up to a
+ * default, a comma, a parameter option or the next statement. A table variable
+ * is a Local Source, not a value. The caret in the name declares a new one. */
+static void add_variable(const char *s, Token *ts, size_t at, size_t end, size_t caret, SqlContext *out) {
+  if (caret > ts[at].start && caret <= ts[at].end) { out->declaring = 1; return; }
+  size_t first = at + 1, last;
+  int depth = ts[at].depth;
+  if (first < end && word(s, ts[first], "AS")) ++first;
+  if (first >= end || word(s, ts[first], "TABLE") || out->variable_count == VARIABLE_LIMIT) return;
+  for (last = first; last < end; ++last) {
+    Token t = ts[last];
+    if (t.depth < depth) break;
+    if (t.depth == depth && (t.kind == ',' || t.kind == '=' || t.kind == ';' || one_of(s, t, PARAMETER_WORDS)
+        || one_of(s, t, STATEMENT_WORDS))) break;
+  }
+  if (last == first) return;
+  if (!out->variables && !(out->variables = calloc(VARIABLE_LIMIT, sizeof(*out->variables)))) return;
+  SqlVariable *v = &out->variables[out->variable_count];
+  if (!name(s, ts[at], ts[at].end, v->name)) return;
+  /* The type's text, with each run of white space as one space. */
+  size_t n = 0;
+  for (size_t i = ts[first].start; i < ts[last - 1].end && n + 1 < sizeof(v->type); ++i) {
+    if (!isspace((unsigned char)s[i])) v->type[n++] = s[i];
+    else if (n && v->type[n - 1] != ' ') v->type[n++] = ' ';
+  }
+  v->type[n] = 0;
+  ++out->variable_count;
+}
+/* The variables that DECLARE lists and procedure or function headers declare
+ * in [begin, end) before the caret. */
+static void add_variables(const char *s, Token *ts, size_t begin, size_t end, size_t caret, SqlContext *out) {
+  for (size_t i = begin; i < end && ts[i].start < caret; ++i) {
+    int depth = ts[i].depth;
+    if (word(s, ts[i], "DECLARE")) {
+      for (size_t k = i + 1; k < end && ts[k].start < caret; ++k) {
+        Token t = ts[k];
+        if (t.depth == depth && variable_token(s, t) && (k == i + 1 || ts[k - 1].kind == ',')) add_variable(s, ts, k, end, caret, out);
+        else if (t.depth < depth || (t.depth == depth && (t.kind == ';' || one_of(s, t, STATEMENT_WORDS)))) break;
+      }
+    } else if ((word(s, ts[i], "PROCEDURE") || word(s, ts[i], "PROC") || word(s, ts[i], "FUNCTION"))
+        && i > begin && (word(s, ts[i - 1], "CREATE") || word(s, ts[i - 1], "ALTER"))) {
+      /* The routine's name, then its parameters, in parentheses for a function. */
+      size_t k = i + 1;
+      if (k < end && is_name(ts[k]) && !variable_token(s, ts[k])) {
+        while (k + 2 < end && ts[k + 1].kind == '.' && is_name(ts[k + 2])) k += 2;
+        ++k;
+      }
+      size_t name_end = k;
+      for (; k < end && ts[k].start < caret; ++k) {
+        Token t = ts[k];
+        if (t.depth == depth && (t.kind == ';' || word(s, t, "RETURNS") || word(s, t, "WITH") || word(s, t, "FOR")
+            || (word(s, t, "AS") && !variable_token(s, ts[k - 1])))) break;
+        if (variable_token(s, t) && (t.depth == depth || t.depth == depth + 1)
+            && (k == name_end || ts[k - 1].kind == ',' || ts[k - 1].kind == '(')) add_variable(s, ts, k, end, caret, out);
+      }
+    }
+  }
+}
 static int go_line(const char *s, size_t len, Token t) {
   if (!word(s, t, "GO")) return 0;
   size_t a = t.start, b = t.end;
@@ -648,9 +718,9 @@ static int read_statement(const char *s, Token *ts, size_t begin, size_t end, si
   return 1;
 }
 void sql_context_free(SqlContext *out) {
-  free(out->locals); free(out->columns);
-  out->locals=NULL; out->columns=NULL;
-  out->local_count=out->column_count=out->column_capacity=0;
+  free(out->locals); free(out->columns); free(out->variables);
+  out->locals=NULL; out->columns=NULL; out->variables=NULL;
+  out->local_count=out->column_count=out->column_capacity=out->variable_count=0;
 }
 int sql_context_parse(const char *s, size_t len, size_t caret, SqlContext *out) {
   memset(out, 0, sizeof(*out));
@@ -706,6 +776,20 @@ int sql_context_parse(const char *s, size_t len, size_t caret, SqlContext *out) 
   size_t previous;
   out->slot = slot(s, ts, first, last, caret, &previous);
   if (out->slot == SQL_SLOT_NONE && previous < last) follow(s, ts, first, previous, out);
+  /* Variables belong to the batch, which ends at a GO line. A typed variable is
+   * the completion prefix in any statement. */
+  size_t batch = 0, batch_end = n;
+  for (size_t i = 0; i < n; ++i) {
+    if (!go_line(s, len, ts[i])) continue;
+    if (ts[i].end <= caret) batch = i + 1;
+    else { batch_end = i; break; }
+  }
+  add_variables(s, ts, batch, batch_end, caret, out);
+  for (size_t i = batch; i < batch_end && ts[i].start < caret; ++i) {
+    if (caret > ts[i].end || ts[i].kind != IDENT || s[ts[i].start] != '@') continue;
+    out->start = ts[i].start; out->end = ts[i].end;
+    if (!name(s, ts[i], caret, out->prefix)) { ok = 0; goto done; }
+  }
   add_ctes(s,ts,first,last,out);
   add_temporary_tables(s,ts,n,out);
   int object = object_context(s,ts,first,last,caret,out);

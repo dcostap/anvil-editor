@@ -302,6 +302,36 @@ int main(void) {
     assert(sql_context_parse(sql, strlen(sql), at, &c));
     if (c.join != joins[i].join) { fprintf(stderr, "%s: join %zu\n", joins[i].sql, c.join); return 1; }
   }
+  /* A typed variable gets the variables that the batch declares before the caret, "name type;" each. */
+  static const struct { const char *sql, *variables; int declaring; } variables[] = {
+    { "DECLARE @a int, @b varchar(10) = 'x'; SELECT * FROM t WHERE id = @|", "@a int;@b varchar(10);", 0 },
+    { "DECLARE @a AS decimal(10, 2) = (SELECT 1), @b int SELECT @|", "@a decimal(10, 2);@b int;", 0 },
+    { "CREATE PROCEDURE dbo.p @id int, @name nvarchar(80) = NULL OUTPUT, @o int OUT AS SELECT @|",
+      "@id int;@name nvarchar(80);@o int;", 0 },
+    { "CREATE OR ALTER FUNCTION f (@x AS int, @y bit) RETURNS int AS BEGIN RETURN @|", "@x int;@y bit;", 0 },
+    { "DECLARE @a int; SET @a = @|", "@a int;", 0 }, { "DECLARE @a int; PRINT @|", "@a int;", 0 },
+    { "DECLARE @a int; IF @| > 0 PRINT 1", "@a int;", 0 }, { "DECLARE @a int; EXEC dbo.p @id = @|", "@a int;", 0 },
+    { "DECLARE @a int\nGO\nSELECT @|", "", 0 }, { "SELECT @| DECLARE @late int", "", 0 },
+    { "DECLARE @t TABLE (id int); SELECT @|", "", 0 }, { "DECLARE @a int = 1, @b|", "@a int;", 1 },
+    { "CREATE PROCEDURE p @a int, @b|", "@a int;", 1 }, { "DECLARE @a int; SELECT @@|", "@a int;", 0 } };
+  for (size_t i = 0; i < sizeof(variables) / sizeof(variables[0]); ++i) {
+    char sql[256], listed[2048] = "";
+    const char *bar = strchr(variables[i].sql, '|');
+    size_t at = (size_t)(bar - variables[i].sql);
+    memcpy(sql, variables[i].sql, at);
+    strcpy(sql + at, bar + 1);
+    sql_context_free(&c);
+    assert(sql_context_parse(sql, strlen(sql), at, &c));
+    for (size_t v = 0; v < c.variable_count; ++v)
+      snprintf(listed + strlen(listed), sizeof(listed) - strlen(listed), "%s %s;", c.variables[v].name, c.variables[v].type);
+    size_t start = at;
+    while (start && sql[start - 1] == '@') --start;
+    if (strcmp(listed, variables[i].variables) || c.declaring != variables[i].declaring
+        || (!variables[i].declaring && (c.start != start || strncmp(c.prefix, sql + start, at - start)))) {
+      fprintf(stderr, "%s: variables \"%s\", declaring %d, prefix \"%s\"\n", variables[i].sql, listed, c.declaring, c.prefix);
+      return 1;
+    }
+  }
   text = "select * from t where email l";
   parse_after(&c, text, "email l");
   assert(c.lower && !strcmp(c.keywords, "where"));
