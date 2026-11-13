@@ -45,6 +45,91 @@ static int reserved(const char *s, Token t) {
   for (int i = 0; words[i]; ++i) if (word(s, t, words[i])) return 1;
   return 0;
 }
+/* What the token before the caret lets follow it. DbVisualizer's completion
+ * state machine makes the same choice (g_.q() in com/onseven/dbvis/b/c). */
+static int one_of(const char *s, Token t, const char *const *words) {
+  for (int i = 0; words[i]; ++i) if (word(s, t, words[i])) return 1;
+  return 0;
+}
+/* Microsoft's reserved keywords, and unreserved words that come before a name. */
+static const char *const KEYWORDS[] = { "ADD", "ALL", "ALTER", "AND", "ANY", "AS", "ASC", "AUTHORIZATION",
+  "BACKUP", "BEGIN", "BETWEEN", "BREAK", "BROWSE", "BULK", "BY", "CASCADE", "CASE", "CHECK", "CHECKPOINT",
+  "CLOSE", "CLUSTERED", "COALESCE", "COLLATE", "COLUMN", "COMMIT", "COMPUTE", "CONSTRAINT", "CONTAINS",
+  "CONTAINSTABLE", "CONTINUE", "CONVERT", "CREATE", "CROSS", "CURRENT", "CURRENT_DATE", "CURRENT_TIME",
+  "CURRENT_TIMESTAMP", "CURRENT_USER", "CURSOR", "DATABASE", "DBCC", "DEALLOCATE", "DECLARE", "DEFAULT",
+  "DELETE", "DENY", "DESC", "DISK", "DISTINCT", "DISTRIBUTED", "DOUBLE", "DROP", "DUMP", "ELSE", "END",
+  "ERRLVL", "ESCAPE", "EXCEPT", "EXEC", "EXECUTE", "EXISTS", "EXIT", "EXTERNAL", "FETCH", "FILE", "FILLFACTOR",
+  "FOR", "FOREIGN", "FREETEXT", "FREETEXTTABLE", "FROM", "FULL", "FUNCTION", "GOTO", "GRANT", "GROUP",
+  "HAVING", "HOLDLOCK", "IDENTITY", "IDENTITY_INSERT", "IDENTITYCOL", "IF", "IN", "INDEX", "INNER", "INSERT",
+  "INTERSECT", "INTO", "IS", "JOIN", "KEY", "KILL", "LEFT", "LIKE", "LINENO", "LOAD", "MERGE", "NATIONAL",
+  "NOCHECK", "NONCLUSTERED", "NOT", "NULL", "NULLIF", "OF", "OFF", "OFFSETS", "ON", "OPEN", "OPENDATASOURCE",
+  "OPENQUERY", "OPENROWSET", "OPENXML", "OPTION", "OR", "ORDER", "OUTER", "OVER", "PERCENT", "PIVOT", "PLAN",
+  "PRECISION", "PRIMARY", "PRINT", "PROC", "PROCEDURE", "PUBLIC", "RAISERROR", "READ", "READTEXT",
+  "RECONFIGURE", "REFERENCES", "REPLICATION", "RESTORE", "RESTRICT", "RETURN", "REVERT", "REVOKE", "RIGHT",
+  "ROLLBACK", "ROWCOUNT", "ROWGUIDCOL", "RULE", "SAVE", "SCHEMA", "SECURITYAUDIT", "SELECT",
+  "SEMANTICKEYPHRASETABLE", "SEMANTICSIMILARITYDETAILSTABLE", "SEMANTICSIMILARITYTABLE", "SESSION_USER", "SET",
+  "SETUSER", "SHUTDOWN", "SOME", "STATISTICS", "SYSTEM_USER", "TABLE", "TABLESAMPLE", "TEXTSIZE", "THEN", "TO",
+  "TOP", "TRAN", "TRANSACTION", "TRIGGER", "TRUNCATE", "TRY_CONVERT", "TSEQUAL", "UNION", "UNIQUE", "UNPIVOT",
+  "UPDATE", "UPDATETEXT", "USE", "USER", "VALUES", "VARYING", "VIEW", "WAITFOR", "WHEN", "WHERE", "WHILE", "WITH",
+  "WITHIN", "WRITETEXT", "APPLY", "OUTPUT", "USING", "TIES", NULL };
+/* Keywords that end a value, like a name does. */
+static const char *const TERM_WORDS[] = { "END", "NULL", "ASC", "DESC", "DEFAULT", "CURRENT_DATE", "CURRENT_TIME",
+  "CURRENT_TIMESTAMP", "CURRENT_USER", "SESSION_USER", "SYSTEM_USER", "USER", "IDENTITYCOL", "ROWGUIDCOL", NULL };
+static const char *const VALUE_WORDS[] = { "LIKE", "IN", "BETWEEN", "IS", "THEN", "ELSE", "TOP", "ESCAPE", NULL };
+/* A complete name, value or parenthesized group. */
+static int term(const char *s, Token t) {
+  if (t.kind == LITERAL || t.kind == QUOTED || t.kind == ')') return 1;
+  return t.kind == IDENT && (!one_of(s, t, KEYWORDS) || one_of(s, t, TERM_WORDS));
+}
+static int number(const char *s, Token t) { return t.kind == IDENT && isdigit((unsigned char)s[t.start]); }
+/* The parenthesis that opens the group of ts[at]: its own for `)`, the enclosing one otherwise. */
+static size_t group_open(Token *ts, size_t first, size_t at) {
+  int depth = ts[at].kind == ')' ? ts[at].depth : ts[at].depth - 1;
+  for (size_t i = at; depth >= 0 && i-- > first;) if (ts[i].kind == '(' && ts[i].depth == depth) return i;
+  return at;
+}
+/* A comparison in a JOIN's ON compares two columns more often than a value. */
+static int join_condition(const char *s, Token *ts, size_t first, size_t at) {
+  static const char *const clauses[] = { "ON", "WHERE", "HAVING", "SET", "WHEN", "THEN", "ELSE", "SELECT", "FROM",
+    "JOIN", "BY", NULL };
+  for (size_t i = at; i-- > first;)
+    if (ts[i].depth <= ts[at].depth && one_of(s, ts[i], clauses)) return word(s, ts[i], "ON");
+  return 0;
+}
+static int slot(const char *s, Token *ts, size_t first, size_t last, size_t caret) {
+  size_t current = last, p = last;
+  for (size_t i = first; i < last && ts[i].start < caret; ++i) {
+    if ((is_name(ts[i]) || ts[i].kind == '*') && caret <= ts[i].end) { current = i; break; }
+    p = i;
+  }
+  /* An unquoted name never starts with a digit, so the user types a number. */
+  if (current < last && number(s, ts[current])) return SQL_SLOT_NONE;
+  if (p == last) return SQL_SLOT_NAME;
+  Token t = ts[p];
+  if (t.kind == '(' || t.kind == ',') {
+    size_t open = t.kind == '(' ? p : group_open(ts, first, p);
+    if (open == p && t.kind == ',') return SQL_SLOT_NAME;
+    return open > first && (word(s, ts[open - 1], "IN") || word(s, ts[open - 1], "VALUES")) ? SQL_SLOT_VALUE : SQL_SLOT_NAME;
+  }
+  if (t.kind == ')') {
+    size_t open = group_open(ts, first, p);
+    return open < p && open > first && word(s, ts[open - 1], "TOP") ? SQL_SLOT_NAME : SQL_SLOT_NONE;
+  }
+  /* A star after a term multiplies; otherwise it is the projection's star. */
+  if (t.kind == '*') return p > first && term(s, ts[p - 1]) ? SQL_SLOT_VALUE : SQL_SLOT_NONE;
+  if (t.kind == '=' || t.kind == '<' || t.kind == '>' || t.kind == '!')
+    return join_condition(s, ts, first, p) ? SQL_SLOT_NAME : SQL_SLOT_VALUE;
+  if (t.kind < 128 && t.kind && strchr("+-/%&|^~", t.kind)) return SQL_SLOT_VALUE;
+  if (t.kind == IDENT) {
+    if (word(s, t, "AS")) return SQL_SLOT_NONE;
+    if (word(s, t, "NOT") && p > first && word(s, ts[p - 1], "IS")) return SQL_SLOT_VALUE;
+    if (word(s, t, "AND") && p >= first + 2 && word(s, ts[p - 2], "BETWEEN")) return SQL_SLOT_VALUE;
+    if (one_of(s, t, VALUE_WORDS)) return SQL_SLOT_VALUE;
+    if (term(s, t)) return number(s, t) && p > first && word(s, ts[p - 1], "TOP") ? SQL_SLOT_NAME : SQL_SLOT_NONE;
+    return SQL_SLOT_NAME;
+  }
+  return term(s, t) ? SQL_SLOT_NONE : SQL_SLOT_NAME;
+}
 static int go_line(const char *s, size_t len, Token t) {
   if (!word(s, t, "GO")) return 0;
   size_t a = t.start, b = t.end;
@@ -533,6 +618,7 @@ int sql_context_parse(const char *s, size_t len, size_t caret, SqlContext *out) 
     if (ts[i].end <= caret) first = i + 1;
     else { last = i; break; }
   }
+  out->slot = slot(s, ts, first, last, caret);
   add_ctes(s,ts,first,last,out);
   add_temporary_tables(s,ts,n,out);
   int object = object_context(s,ts,first,last,caret,out);

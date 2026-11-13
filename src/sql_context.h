@@ -29,6 +29,10 @@ typedef struct {
   size_t start, end;
   enum { SQL_CONTEXT_NONE, SQL_CONTEXT_TABLE, SQL_CONTEXT_COLUMN, SQL_CONTEXT_OBJECT } mode;
   int star;
+  /* What usually follows the token before the caret: a name; a value, such as
+   * after `=` or LIKE; or no existing name, such as after a complete name or AS.
+   * Completion reads it. The other fields still describe the query. */
+  enum { SQL_SLOT_NAME, SQL_SLOT_VALUE, SQL_SLOT_NONE } slot;
   /* Empty means any object; table also permits a view for DML. */
   char object_kind[16];
   char prefix[SQL_CONTEXT_NAME], qualifier[SQL_CONTEXT_NAME];

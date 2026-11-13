@@ -27,7 +27,7 @@ static int context(lua_State *L) {
   }
   lua_newtable(L);
   text(L, "mode", out.mode == SQL_CONTEXT_TABLE ? "table" : out.mode == SQL_CONTEXT_COLUMN ? "column" : out.mode == SQL_CONTEXT_OBJECT ? "object" : "none");
-  boolean(L,"star",out.star);
+  boolean(L,"star",out.star); text(L,"slot",out.slot == SQL_SLOT_VALUE ? "value" : out.slot == SQL_SLOT_NONE ? "none" : "name");
   text(L,"object_kind",out.object_kind);
   text(L, "prefix", out.prefix); text(L, "qualifier", out.qualifier);
   lua_pushinteger(L, (lua_Integer)out.start); lua_setfield(L, -2, "start");

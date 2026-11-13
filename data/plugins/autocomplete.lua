@@ -213,16 +213,29 @@ autocomplete.map_manually = {}
 autocomplete.on_close = nil
 ---@type table<string,plugins.autocomplete.icon>
 autocomplete.icons = {}
+-- Flag that indicates if the autocomplete box was manually triggered
+-- with the autocomplete.complete() function to prevent the suggestions
+-- from getting cluttered with arbitrary buffer symbols by using the
+-- autocomplete.map_manually table.
+local triggered_manually = false
+-- The Buffer, line and column where the user asked for completion.
+local manual_position
+
 ---A provider returns a query, its line/column, and ordered completion items.
 ---A non-nil result owns completion at the caret, including an empty result.
----@type table<string,fun(view:core.textview,opts:table):plugins.autocomplete.context?>
+---`opts.manual` is true while the caret stays where the user asked for completion,
+---so a provider can offer more than it opens by itself.
+---@type table<string,fun(view:core.textview,opts:{manual:boolean}):plugins.autocomplete.context?>
 autocomplete.providers = {}
 local provider_completion
 
-local function refresh_providers(view, opts)
+local function refresh_providers(view)
   provider_completion = nil
+  local line, col = view.buffer:get_selection()
+  local at = manual_position
+  local opts = { manual = triggered_manually and at ~= nil and at[1] == view.buffer and at[2] == line and at[3] == col }
   for id, provider in pairs(autocomplete.providers) do
-    local ok, result = pcall(provider, view, opts or {})
+    local ok, result = pcall(provider, view, opts)
     if not ok then
       core.log_quiet("Autocomplete provider %s failed: %s", id, tostring(result))
     elseif result then
@@ -231,12 +244,6 @@ local function refresh_providers(view, opts)
     end
   end
 end
-
--- Flag that indicates if the autocomplete box was manually triggered
--- with the autocomplete.complete() function to prevent the suggestions
--- from getting cluttered with arbitrary buffer symbols by using the
--- autocomplete.map_manually table.
-local triggered_manually = false
 
 local mt = { __tostring = function(t) return t.text end }
 
@@ -1221,6 +1228,7 @@ local function reset_suggestions(skip_close)
   desc_view_font = nil
 
   triggered_manually = false
+  manual_position = nil
   force_basic_suggestions = true
   pending_deletion_buffer = nil
   pending_tree_sitter_completion = nil
@@ -2186,7 +2194,7 @@ local function show_autocomplete(opts)
   local av = get_active_view()
   if av then
     local was_open = #suggestions > 0
-    refresh_providers(av, opts)
+    refresh_providers(av)
     -- update partial symbol and suggestions
     partial = autocomplete.get_partial_symbol()
 
@@ -2547,6 +2555,8 @@ function autocomplete.open(on_close, opts)
 
   local av = get_active_view()
   if av then
+    local line, col = av.buffer:get_selection()
+    manual_position = { av.buffer, line, col }
     if opts.force_basic ~= false then refresh_providers(av) end
     partial = autocomplete.get_partial_symbol()
     if opts.force_basic ~= nil then

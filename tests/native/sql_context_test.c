@@ -217,6 +217,41 @@ int main(void) {
   text = "UPDATE other.sales.customers SET na";
   parse_after(&c, text, "SET na");
   assert(c.mode == SQL_CONTEXT_NONE);
+  /* The token before the caret tells what belongs there. A name follows a
+   * keyword that starts a list of names, a comma, a parenthesis or a dot. */
+  static const char *names[] = {
+    "SELECT |", "SELECT name, |", "SELECT * FROM sales.customers WHERE |", "SELECT * FROM t WHERE a = 1 AND |",
+    "SELECT * FROM t ORDER BY |", "SELECT TOP 10 |", "SELECT TOP (10) |", "SELECT ISNULL(|",
+    "SELECT * FROM a JOIN b ON a.id = |", "SELECT * FROM t c WHERE c.|", "SELECT na|",
+    "SELECT * FROM a CROSS APPLY |", "SELECT * FROM t WHERE NOT |", NULL };
+  /* A value usually follows an operator or a value keyword. */
+  static const char *values[] = {
+    "SELECT * FROM sales.customers WHERE email <> |", "SELECT * FROM t WHERE email LIKE |",
+    "SELECT * FROM t WHERE id IN (|", "SELECT * FROM t WHERE id IN (1, |", "SELECT * FROM t WHERE id BETWEEN 1 AND |",
+    "SELECT * FROM t WHERE id IS |", "SELECT * FROM t WHERE id IS NOT |", "UPDATE t SET name = |",
+    "SELECT CASE WHEN a = 1 THEN |", "SELECT CASE WHEN a = 1 THEN 1 ELSE |", "SELECT a * |",
+    "SELECT * FROM t WHERE email <> n|", NULL };
+  /* No existing name follows a complete term, AS, or a number. */
+  static const char *nothing[] = {
+    "SELECT * FROM t WHERE email |", "SELECT * FROM t WHERE id = 1 |", "SELECT name |FROM t",
+    "SELECT name AS |", "SELECT name AS n|", "SELECT * FROM sales.customers c |", "SELECT * FROM sales.customers c|",
+    "SELECT * FROM t ORDER BY name |", "SELECT * FROM t WHERE email = 'a' |", "SELECT COUNT(*) |",
+    "SELECT CASE WHEN a = 1 THEN 1 END |", "SELECT * FROM t WHERE id = 1|", "SELECT * |FROM t",
+    "SELECT * FROM t WHERE a IS NULL |", NULL };
+  static const char **groups[] = { names, values, nothing };
+  for (int group = 0; group < 3; ++group) {
+    for (const char **item = groups[group]; *item; ++item) {
+      char sql[256];
+      const char *bar = strchr(*item, '|');
+      size_t at = (size_t)(bar - *item);
+      memcpy(sql, *item, at);
+      strcpy(sql + at, bar + 1);
+      sql_context_free(&c);
+      assert(sql_context_parse(sql, strlen(sql), at, &c));
+      int got = c.slot == SQL_SLOT_NONE ? 2 : c.slot == SQL_SLOT_VALUE ? 1 : 0;
+      if (got != group) { fprintf(stderr, "%s: got %d, expected %d\n", *item, got, group); return 1; }
+    }
+  }
   sql_context_free(&c);
   puts("SQL context passed");
   return 0;

@@ -77,11 +77,15 @@ local function load_columns(view, sql, state, object)
     if line == state.line and col == state.col then autocomplete.refresh() end
   end)
 end
-local function complete(view, sql)
+local function complete(view, sql, opts)
   local state = context(view, sql)
   if not state then return end
-  if state.completion then return state.completion end
   local p, catalog, buffer = state.parsed, state.catalog, view.buffer
+  -- No existing name goes here. At a value, names wait for a typed letter or an explicit request.
+  if p.slot == "none" or p.slot == "value" and p.prefix == "" and not opts.manual then
+    return { query = "", line = state.line, query_col = state.col, items = {} }
+  end
+  if state.completion then return state.completion end
   if p.star then return end
   local items, seen = {}, {}
   local function add(name, inserted, description)
@@ -134,7 +138,7 @@ local function complete(view, sql)
   return state.completion
 end
 function M.install(sql)
-  autocomplete.add_provider("sql-server", function(view) return complete(view, sql) end)
+  autocomplete.add_provider("sql-server", function(view, opts) return complete(view, sql, opts) end)
   require("core.language_intelligence").register_provider {
     id = "sql-server", name = "Database", priority = 100,
     -- Database groups join Project Symbol Search from any Buffer. The other features need a SQL Buffer.

@@ -203,6 +203,28 @@ test.describe("SQL Queries", function()
     test.equal(autocomplete.get_selected_suggestion().text, "name")
   end)
 
+  test.it("opens columns where a name belongs, waits for a typed name at a value, and offers none after a term", function(context)
+    connected_query(context)
+    local function type_text(text)
+      for char in text:gmatch(".") do core.on_event("textinput", char) end
+    end
+    type_text("SELECT * FROM sales.customers WHERE ")
+    test.ok(autocomplete.is_open())
+    autocomplete.close()
+    type_text("email ")
+    test.not_ok(autocomplete.is_open())
+    autocomplete.trigger()
+    test.not_ok(autocomplete.is_open())
+    type_text("<> ")
+    test.not_ok(autocomplete.is_open())
+    autocomplete.trigger()
+    test.ok(autocomplete.is_open())
+    autocomplete.close()
+    type_text("n")
+    test.ok(autocomplete.is_open())
+    test.equal(autocomplete.get_selected_suggestion().text, "name")
+  end)
+
   test.it("reads a large database's columns when completion needs them, and runs SQL without metadata", function(context)
     local large = { database = "AnvilTest", default_schema = "dbo", case_sensitive = false, columns_loaded = false,
       objects = { { schema = "sales", name = "customers", kind = "table" }, { schema = "dbo", name = "orders", kind = "table" } } }
@@ -213,8 +235,9 @@ test.describe("SQL Queries", function()
       requests[#requests + 1] = { name = object.schema .. "." .. object.name, callback = callback }
       return { cancel = function() end }
     end
-    editor.buffer:text_input("SELECT c.na FROM sales.customers AS c")
-    editor.buffer:set_selection(1, #"SELECT c.na" + 1)
+    -- At a value, columns that arrive later still answer the explicit request.
+    editor.buffer:text_input("SELECT * FROM sales.customers AS c WHERE c.id = ")
+    editor.buffer:set_selection(1, math.huge)
     autocomplete.trigger()
     test.not_ok(autocomplete.is_open())
     test.equal(#requests, 1)
@@ -223,7 +246,7 @@ test.describe("SQL Queries", function()
     test.equal(#requests, 1)
     requests[1].callback(schema.objects[1].columns)
     test.ok(autocomplete.is_open())
-    test.equal(autocomplete.get_selected_suggestion().text, "name")
+    test.equal(autocomplete.get_selected_suggestion().text, "id")
     autocomplete.close()
 
     editor.buffer:set_selection(1, 1, 1, math.huge)
@@ -1247,6 +1270,14 @@ test.describe("SQL Queries", function()
     test.not_nil(clipped)
     test.ok(clipped.text:match("^1234.*…$"), clipped.text)
     test.ok(clipped.x + font:get_width(clipped.text) <= x + w)
+  end)
+
+  test.it("opens the table of an alias from the alias's declaration", function(context)
+    local editor = connected_query(context)
+    editor.buffer:text_input("SELECT * FROM sales.customers AS c")
+    editor.buffer:set_selection(1, math.huge)
+    test.ok(require("core.commands.language").activate_symbol(editor))
+    test.ok(core.active_view.buffer:get_text(1, 1, math.huge, math.huge):find("CREATE TABLE [sales].[customers]", 1, true))
   end)
 
   test.it("opens a table definition and returns to the same Untitled Query", function(context)
