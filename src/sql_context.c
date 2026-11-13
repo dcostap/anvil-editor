@@ -277,6 +277,47 @@ static void add_variables(const char *s, Token *ts, size_t begin, size_t end, si
     }
   }
 }
+/* Where a parameter name goes in the arguments of `EXEC [@status =]
+ * [schema.]procedure`: after the procedure's name or a comma, with nothing or a
+ * typed variable at the caret. Records the procedure and the earlier arguments. */
+static void exec_arguments(const char *s, Token *ts, size_t first, size_t last, size_t caret, SqlContext *out) {
+  for (size_t i = first; i < last && ts[i].start < caret; ++i) {
+    if (!word(s, ts[i], "EXEC") && !word(s, ts[i], "EXECUTE")) continue;
+    size_t at = i + 1, schema = last;
+    if (at + 1 < last && variable_token(s, ts[at]) && ts[at + 1].kind == '=') at += 2;
+    if (at >= last || !is_name(ts[at]) || variable_token(s, ts[at])) continue;
+    if (at + 2 < last && ts[at + 1].kind == '.' && is_name(ts[at + 2])) { schema = at; at += 2; }
+    if ((at + 1 < last && ts[at + 1].kind == '.') || caret <= ts[at].end) continue;
+    int depth = ts[i].depth, named = 0, ended = 0;
+    size_t argument = at + 1, previous = at, positional = 0, named_count = 0;
+    for (size_t k = at + 1; k < last && ts[k].start < caret; ++k) {
+      Token t = ts[k];
+      if (caret <= t.end && is_name(t)) break;
+      if (t.depth < depth || (t.depth == depth && (t.kind == ';' || one_of(s, t, STATEMENT_WORDS)))) { ended = 1; break; }
+      if (t.depth == depth && t.kind == ',') {
+        if (!named && k > argument) ++positional;
+        argument = k + 1; named = 0;
+      } else if (k == argument && variable_token(s, t) && k + 1 < last && ts[k + 1].kind == '=') {
+        named = 1;
+        if (!out->named && !(out->named = calloc(SQL_CONTEXT_SOURCES, sizeof(*out->named)))) return;
+        if (named_count < SQL_CONTEXT_SOURCES && name(s, t, t.end, out->named[named_count])) ++named_count;
+      }
+      previous = k;
+    }
+    size_t current = previous + 1;
+    int at_name = previous == at || (ts[previous].kind == ',' && ts[previous].depth == depth);
+    /* A typed `@`, or a typed variable name. */
+    Token c = current < last ? ts[current] : ts[at];
+    int typed = current < last && caret > c.start;
+    int variable = c.kind == IDENT && s[c.start] == '@' && !(c.end - c.start > 1 && s[c.start + 1] == '@');
+    if (ended || !at_name || (typed && !variable)) { out->named_count = 0; continue; }
+    if (schema < last && !name(s, ts[schema], ts[schema].end, out->routine_schema)) return;
+    if (!name(s, ts[at], ts[at].end, out->routine)) { out->routine_schema[0] = 0; return; }
+    out->positional = positional;
+    out->named_count = named_count;
+    return;
+  }
+}
 static int go_line(const char *s, size_t len, Token t) {
   if (!word(s, t, "GO")) return 0;
   size_t a = t.start, b = t.end;
@@ -716,9 +757,9 @@ static int read_statement(const char *s, Token *ts, size_t begin, size_t end, si
   return 1;
 }
 void sql_context_free(SqlContext *out) {
-  free(out->locals); free(out->columns); free(out->variables);
-  out->locals=NULL; out->columns=NULL; out->variables=NULL;
-  out->local_count=out->column_count=out->column_capacity=out->variable_count=0;
+  free(out->locals); free(out->columns); free(out->variables); free(out->named);
+  out->locals=NULL; out->columns=NULL; out->variables=NULL; out->named=NULL;
+  out->local_count=out->column_count=out->column_capacity=out->variable_count=out->named_count=0;
 }
 int sql_context_parse(const char *s, size_t len, size_t caret, SqlContext *out) {
   memset(out, 0, sizeof(*out));
@@ -790,6 +831,7 @@ int sql_context_parse(const char *s, size_t len, size_t caret, SqlContext *out) 
     else { batch_end = i; break; }
   }
   add_variables(s, ts, batch, batch_end, caret, out);
+  exec_arguments(s, ts, first, last, caret, out);
   for (size_t i = batch; i < batch_end && ts[i].start < caret; ++i) {
     if (caret > ts[i].end || ts[i].kind != IDENT || s[ts[i].start] != '@') continue;
     out->start = ts[i].start; out->end = ts[i].end;

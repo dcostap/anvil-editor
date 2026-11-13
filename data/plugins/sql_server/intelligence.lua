@@ -215,6 +215,24 @@ local function variable_completion(state, buffer)
   end
   return { query = p.prefix, line = state.line, query_col = state.col - #p.prefix, items = items }
 end
+-- In an EXEC's arguments, the procedure's parameters that start with the typed `@name`, without
+-- the ones that earlier arguments set by position or by name. Tab inserts `@name = `. Nil when the
+-- catalog does not know the procedure's parameters.
+local function parameter_completion(state, buffer)
+  local p, catalog = state.parsed, state.catalog
+  local routine = resolve(catalog, p.routine_schema, p.routine)
+  if not routine or not routine.parameters then return end
+  local prefix, named, items = p.prefix:lower(), {}, {}
+  for _, name in ipairs(p.named) do named[name:lower()] = true end
+  for i, parameter in ipairs(routine.parameters) do
+    local key = parameter.name:lower()
+    if i > p.positional and not named[key] and key:sub(1, #prefix) == prefix then
+      local description = parameter.output and parameter.type .. " OUTPUT" or parameter.type
+      items[#items + 1] = text_item(state, buffer, parameter.name, description, parameter.name .. " = ")
+    end
+  end
+  return { query = p.prefix, line = state.line, query_col = state.col - #p.prefix, items = items }
+end
 -- The foreign keys at either end of each table, by its schema and name. Built once for each catalog.
 local key_index = setmetatable({}, { __mode = "k" })
 local function table_key(catalog, schema, name)
@@ -273,6 +291,8 @@ local function complete(view, sql, opts)
   local state = context(view, sql)
   if not state then return end
   local p, catalog, buffer = state.parsed, state.catalog, view.buffer
+  local parameters = p.routine ~= "" and parameter_completion(state, buffer)
+  if parameters then return parameters end
   if p.prefix:match("^@[^@]") or p.prefix == "@" then return variable_completion(state, buffer) end
   if p.prefix:match("^@@") then return system_function_completion(state, buffer) end
   -- No existing name goes here, but a keyword can. Keywords wait for a typed letter, and where

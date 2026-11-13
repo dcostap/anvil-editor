@@ -38,6 +38,11 @@ static int context(lua_State *L) {
     lua_rawseti(L, -2, (int)i + 1);
   }
   lua_setfield(L, -2, "variables");
+  text(L, "routine_schema", out.routine_schema); text(L, "routine", out.routine);
+  lua_createtable(L, (int)out.named_count, 0);
+  for (size_t i = 0; i < out.named_count; ++i) { lua_pushstring(L, out.named[i]); lua_rawseti(L, -2, (int)i + 1); }
+  lua_setfield(L, -2, "named");
+  lua_pushinteger(L, (lua_Integer)out.positional); lua_setfield(L, -2, "positional");
   text(L,"object_kind",out.object_kind);
   text(L, "prefix", out.prefix); text(L, "qualifier", out.qualifier);
   lua_pushinteger(L, (lua_Integer)out.start); lua_setfield(L, -2, "start");
@@ -110,7 +115,7 @@ static int read_schema(lua_State *L) {
   boolean(L, "objects_truncated", c->objects_truncated);
   if (c->metadata_error[0]) text(L, "metadata_error", c->metadata_error);
   lua_newtable(L);
-  size_t column_index = 0;
+  size_t column_index = 0, parameter_index = 0;
   for (size_t i = 0; i < c->object_count; ++i) {
     SqlServerObject *object=&c->objects[i];
     lua_newtable(L);
@@ -127,6 +132,19 @@ static int read_schema(lua_State *L) {
         lua_rawseti(L,-2,++index); ++column_index;
       }
       lua_setfield(L,-2,"columns");
+    }
+    /* A procedure or function has its parameters when they loaded. */
+    if (c->parameters_loaded && (!strcmp(object->kind, "procedure") || !strcmp(object->kind, "function"))) {
+      lua_newtable(L);
+      int index = 0;
+      while (parameter_index < c->parameter_count) {
+        SqlServerParameter *p = &c->parameters[parameter_index];
+        if (strcmp(object->schema, p->schema) || strcmp(object->name, p->routine)) break;
+        lua_newtable(L);
+        text(L, "name", p->name); text(L, "type", p->type); boolean(L, "output", p->output);
+        lua_rawseti(L, -2, ++index); ++parameter_index;
+      }
+      lua_setfield(L, -2, "parameters");
     }
     lua_rawseti(L,-2,i+1);
   }

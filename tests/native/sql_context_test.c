@@ -332,6 +332,26 @@ int main(void) {
       return 1;
     }
   }
+  /* Where a parameter name goes in an EXEC: "schema.routine positional named;...". */
+  static const struct { const char *sql, *call; } calls[] = {
+    { "EXEC dbo.p |", "dbo.p 0 " }, { "EXEC sales.find_customer @id = 1, |", "sales.find_customer 0 @id;" },
+    { "EXECUTE p 1, 'x', @c = 2, @|", ".p 2 @c;" }, { "EXEC @rc = dbo.p @a = 1, |", "dbo.p 0 @a;" },
+    { "EXEC dbo.p @a = |", "" }, { "EXEC dbo.p @a = 1 |", "" }, { "EXEC dbo.p 1; SELECT |", "" },
+    { "EXEC dbo.p|", "" }, { "EXEC dbo.p @a = dbo.f(1, |", "" }, { "EXEC dbo.p x|", "" } };
+  for (size_t i = 0; i < sizeof(calls) / sizeof(calls[0]); ++i) {
+    char sql[256], call[2048] = "";
+    const char *bar = strchr(calls[i].sql, '|');
+    size_t at = (size_t)(bar - calls[i].sql);
+    memcpy(sql, calls[i].sql, at);
+    strcpy(sql + at, bar + 1);
+    sql_context_free(&c);
+    assert(sql_context_parse(sql, strlen(sql), at, &c));
+    if (c.routine[0]) {
+      snprintf(call, sizeof(call), "%s.%s %zu ", c.routine_schema, c.routine, c.positional);
+      for (size_t k = 0; k < c.named_count; ++k) { strncat(call, c.named[k], 200); strcat(call, ";"); }
+    }
+    if (strcmp(call, calls[i].call)) { fprintf(stderr, "%s: call \"%s\"\n", calls[i].sql, call); return 1; }
+  }
   text = "select * from t where email l";
   parse_after(&c, text, "email l");
   assert(c.lower && !strcmp(c.keywords, "where"));

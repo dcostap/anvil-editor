@@ -54,6 +54,8 @@ try {
         [void]$command.ExecuteNonQuery()
         $command.CommandText = 'CREATE PROCEDURE sales.list_customers AS SELECT * FROM sales.customers'
         [void]$command.ExecuteNonQuery()
+        $command.CommandText = 'CREATE PROCEDURE sales.find_customer @id int, @label nvarchar(80) = NULL OUTPUT, @amount decimal(19,4) = 0 AS SELECT @id'
+        [void]$command.ExecuteNonQuery()
         $prefix = "CREATE PROCEDURE sales.long_text AS SELECT N'"
         $command.CommandText = $prefix + ('x' * (3999 - $prefix.Length)) + [char]0xd83d + [char]0xde42 + "'"
         [void]$command.ExecuteNonQuery()

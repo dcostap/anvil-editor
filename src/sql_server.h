@@ -15,6 +15,9 @@ typedef struct { char *schema, *name, *kind; } SqlServerObject;
  * ref_schema.ref_table.ref_column. A key's pairs are consecutive, in key order,
  * and share the key's object ID. */
 typedef struct { char *id, *name, *schema, *table, *column, *ref_schema, *ref_table, *ref_column; } SqlServerForeignKey;
+/* One parameter of a procedure or function, in the order of the objects, then
+ * of the routine's parameters. */
+typedef struct { char *schema, *routine, *name, *type; int output; } SqlServerParameter;
 typedef struct {
   SqlServerColumn *columns;
   size_t count;
@@ -23,6 +26,10 @@ typedef struct {
   /* Empty when the read failed or the database has more pairs than the limit. */
   SqlServerForeignKey *foreign_keys;
   size_t foreign_key_count;
+  /* 0 when the read failed or the database has more parameters than the limit. */
+  SqlServerParameter *parameters;
+  size_t parameter_count;
+  int parameters_loaded;
   char *database, *default_schema;
   int case_sensitive;
   /* 0 when the database has more columns than the limit: each object's columns then load on demand. */
@@ -37,6 +44,7 @@ typedef struct {
 #define SQL_SERVER_OBJECT_LIMIT 200000
 #define SQL_SERVER_COLUMN_LIMIT 50000
 #define SQL_SERVER_FOREIGN_KEY_LIMIT 50000
+#define SQL_SERVER_PARAMETER_LIMIT 50000
 
 /* Blocking, worker-only. All queries are fixed metadata SELECTs.
  * Connections close before return. No query text or credentials are retained.

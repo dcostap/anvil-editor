@@ -50,6 +50,12 @@ typedef struct {
   SqlVariable *variables;
   size_t variable_count;
   int declaring;
+  /* Where a parameter name goes in an EXEC's arguments: the procedure, and the
+   * arguments before the caret, by name and by position. Otherwise routine is
+   * empty. */
+  char routine_schema[SQL_CONTEXT_NAME], routine[SQL_CONTEXT_NAME];
+  char (*named)[SQL_CONTEXT_NAME];
+  size_t named_count, positional;
   /* Empty means any object; table also permits a view for DML. */
   char object_kind[16];
   char prefix[SQL_CONTEXT_NAME], qualifier[SQL_CONTEXT_NAME];

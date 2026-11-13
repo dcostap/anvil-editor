@@ -19,12 +19,19 @@ static void free_foreign_keys(SqlServerCatalog *c) {
   }
   free(c->foreign_keys); c->foreign_keys = NULL; c->foreign_key_count = 0;
 }
+static void free_parameters(SqlServerCatalog *c) {
+  for (size_t i = 0; i < c->parameter_count; ++i) {
+    SqlServerParameter *p = &c->parameters[i];
+    free(p->schema); free(p->routine); free(p->name); free(p->type);
+  }
+  free(c->parameters); c->parameters = NULL; c->parameter_count = 0; c->parameters_loaded = 0;
+}
 void sql_server_catalog_free(SqlServerCatalog *c) {
   for (size_t i = 0; i < c->object_count; ++i) {
     free(c->objects[i].schema); free(c->objects[i].name); free(c->objects[i].kind);
   }
   free(c->objects);
-  free_foreign_keys(c); free_columns(c); free(c->database); free(c->default_schema);
+  free_foreign_keys(c); free_parameters(c); free_columns(c); free(c->database); free(c->default_schema);
   memset(c, 0, sizeof(*c));
 }
 
@@ -148,13 +155,15 @@ void sql_server_close(SqlServerConnection *session) {
   memset(session, 0, sizeof(*session));
 }
 
-#define COLUMN_SELECT \
-  L"SELECT s.name, o.name, c.name, " \
+/* The type of column or parameter c with type t, such as nvarchar(80) or decimal(19,4). */
+#define TYPE_TEXT \
   L"t.name + CASE WHEN t.name IN ('varchar','char','varbinary','binary','nvarchar','nchar') " \
   L"THEN '(' + CASE WHEN c.max_length=-1 THEN 'max' ELSE CONVERT(varchar(10), " \
   L"CASE WHEN t.name IN ('nvarchar','nchar') THEN c.max_length/2 ELSE c.max_length END) END + ')' " \
   L"WHEN t.name IN ('decimal','numeric') THEN '(' + CONVERT(varchar(10),c.precision) + ',' + CONVERT(varchar(10),c.scale) + ')' " \
-  L"WHEN t.name IN ('time','datetime2','datetimeoffset') THEN '(' + CONVERT(varchar(10),c.scale) + ')' ELSE '' END, " \
+  L"WHEN t.name IN ('time','datetime2','datetimeoffset') THEN '(' + CONVERT(varchar(10),c.scale) + ')' ELSE '' END"
+#define COLUMN_SELECT \
+  L"SELECT s.name, o.name, c.name, " TYPE_TEXT L", " \
   L"CONVERT(nvarchar(1),c.is_nullable), CONVERT(nvarchar(1),c.is_identity), " \
   L"CASE WHEN EXISTS (SELECT 1 FROM sys.indexes i JOIN sys.index_columns ic ON ic.object_id=i.object_id AND ic.index_id=i.index_id " \
   L"WHERE i.object_id=o.object_id AND i.is_primary_key=1 AND ic.column_id=c.column_id) THEN N'1' ELSE N'0' END " \
@@ -224,6 +233,43 @@ done:
   if (!complete) free_foreign_keys(out);
   memcpy(out->error, error, sizeof(error));
 }
+/* Completion lists these in EXEC arguments. A failed read keeps the rest of the
+ * catalog, and a database with more parameters than the limit gets none. */
+static void read_parameters(SQLHDBC dbc, SqlServerCatalog *out) {
+  SQLHSTMT stmt = SQL_NULL_HSTMT;
+  char error[256];
+  memcpy(error, out->error, sizeof(error));
+  size_t capacity = 0;
+  if (!execute(dbc, &stmt, L"SELECT s.name, o.name, c.name, " TYPE_TEXT L", CONVERT(nvarchar(1),c.is_output) "
+      L"FROM sys.objects o JOIN sys.schemas s ON s.schema_id=o.schema_id "
+      L"JOIN sys.parameters c ON c.object_id=o.object_id JOIN sys.types t ON t.user_type_id=c.user_type_id "
+      L"WHERE o.type IN('P','FN','IF','TF') AND o.is_ms_shipped=0 AND c.parameter_id>0 "
+      L"ORDER BY s.name,o.name,c.parameter_id", out)) goto done;
+  for (;;) {
+    SQLRETURN rc = SQLFetch(stmt);
+    if (rc == SQL_NO_DATA) { out->parameters_loaded = 1; break; }
+    if (!SQL_SUCCEEDED(rc)) break;
+    if (out->parameter_count == SQL_SERVER_PARAMETER_LIMIT) { SQLCancel(stmt); break; }
+    if (out->parameter_count == capacity) {
+      capacity = capacity ? capacity * 2 : 64;
+      SqlServerParameter *p = realloc(out->parameters, capacity * sizeof(*p));
+      if (!p) break;
+      out->parameters = p;
+    }
+    SqlServerParameter *p = &out->parameters[out->parameter_count++];
+    memset(p, 0, sizeof(*p));
+    p->schema = cell(stmt, 1); p->routine = cell(stmt, 2); p->name = cell(stmt, 3); p->type = cell(stmt, 4);
+    char *output = cell(stmt, 5);
+    p->output = output && !strcmp(output, "1");
+    int valid = p->schema && p->routine && p->name && p->type && output;
+    free(output);
+    if (!valid) break;
+  }
+done:
+  if (stmt != SQL_NULL_HSTMT) SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+  if (!out->parameters_loaded) free_parameters(out);
+  memcpy(out->error, error, sizeof(error));
+}
 static char *copy_text(const char *s) {
   char *p = malloc(strlen(s) + 1);
   if (p) strcpy(p, s);
@@ -262,6 +308,8 @@ static int read_catalog(SQLHDBC dbc, size_t column_limit, SqlServerCatalog *out)
   }
   SQLFreeHandle(SQL_HANDLE_STMT, stmt); stmt = SQL_NULL_HSTMT;
   read_foreign_keys(dbc, out);
+  /* A cut object list cannot hold each parameter's routine. */
+  if (!out->objects_truncated) read_parameters(dbc, out);
   /* A truncated object list cannot hold all columns, so each object reads its own. */
   if (out->objects_truncated) { success = 1; goto done; }
   if (!execute(dbc, &stmt, L"SELECT CONVERT(nvarchar(20), COUNT_BIG(*)) FROM sys.objects o JOIN sys.columns c ON c.object_id=o.object_id "

@@ -54,6 +54,16 @@ test.describe("SQL execution input", function()
       if object.schema == "sales" and object.name == "periods" then periods = object end
     end
     test.equal(test.not_nil(procedure).kind, "procedure")
+    local find
+    for _, object in ipairs(catalog.objects) do
+      if object.schema == "sales" and object.name == "find_customer" then find = object end
+    end
+    test.same(test.not_nil(find).parameters, {
+      { name = "@id", type = "int", output = false },
+      { name = "@label", type = "nvarchar(80)", output = true },
+      { name = "@amount", type = "decimal(19,4)", output = false },
+    })
+    test.same(procedure.parameters, {})
     test.equal(#test.not_nil(periods).columns, 1)
     local key
     for _, k in ipairs(catalog.foreign_keys) do if k.name == "FK_parent" then key = k end end

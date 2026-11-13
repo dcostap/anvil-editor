@@ -1402,6 +1402,39 @@ test.describe("SQL Queries", function()
     test.equal(selected().text, "@@ROWCOUNT")
   end)
 
+  test.it("offers a procedure's remaining parameters in its EXEC arguments", function(context)
+    local editor = connected_query(context, {
+      database = "AnvilTest", default_schema = "dbo", case_sensitive = false,
+      objects = {
+        schema.objects[1], schema.objects[2],
+        { schema = "sales", name = "find_customer", kind = "procedure", parameters = {
+          { name = "@id", type = "int", output = false },
+          { name = "@label", type = "nvarchar(80)", output = true },
+          { name = "@amount", type = "decimal(19,4)", output = false },
+        } },
+      },
+      foreign_keys = {},
+    })
+    local function type_line(text)
+      editor.buffer:set_selection(1, 1, 1, math.huge)
+      for char in text:gmatch(".") do core.on_event("textinput", char) end
+    end
+    local function selected() return autocomplete.get_selected_suggestion() end
+    type_line("EXEC sales.find_customer ")
+    test.ok(autocomplete.is_open())
+    test.equal(selected().text, "@id")
+    test.equal(selected().desc, "int")
+    test.ok(command.perform("autocomplete:complete"))
+    test.equal(editor.buffer:get_text(1, 1, 1, math.huge):gsub("\n$", ""), "EXEC sales.find_customer @id = ")
+    type_line("EXEC sales.find_customer @id = 1, ")
+    test.equal(selected().text, "@label")
+    test.equal(selected().desc, "nvarchar(80) OUTPUT")
+    type_line("EXEC sales.find_customer 1, @a")
+    test.equal(selected().text, "@amount")
+    type_line("EXEC sales.find_customer 1, 'x', @amount = 2, ")
+    test.ok(not autocomplete.is_open())
+  end)
+
   test.it("ranks names that start with the typed text before names that only contain it", function(context)
     local editor = connected_query(context)
     local function type_line(text)
