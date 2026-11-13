@@ -646,18 +646,33 @@ test.describe("Terminal View", function()
     file:close()
     local previous_open = system.open_in_system
     local opened = {}
-    system.open_in_system = function(uri) opened[#opened + 1] = uri; return true end
     local source = terminal.open { cwd = root }
     context.sessions[1].capture = {
-      text = "see label here\nvisit https://example.test/b. now\nnotes.txt:2:1",
+      text = "see label here\nvisit https://example.test/b. now\nnotes.txt:2:1\nfirstsecond",
       cursor_line = 1, cursor_col = 1, viewport_line = 1,
-      links = { [1] = { { col1 = 5, col2 = 10, uri = "https://example.test/a" } } },
+      links = {
+        [1] = { { col1 = 5, col2 = 10, uri = "https://example.test/a" } },
+        [4] = {
+          { col1 = 1, col2 = 6, uri = "https://example.test/first" },
+          { col1 = 6, col2 = 12, uri = "https://example.test/second" },
+        },
+      },
     }
     test.ok(source:open_text_capture())
     local capture = panes.active().current_view
     core.root_panel:update()
 
     capture.buffer:set_selection(1, 7)
+    test.equal(poi.point_at_caret(capture, { activatable = true }).uri, "https://example.test/a")
+    capture.buffer:set_selection(1, 11)
+    test.is_nil(poi.point_at_caret(capture, { activatable = true }))
+    capture.buffer:set_selection(4, 6)
+    test.equal(poi.point_at_caret(capture, { activatable = true }).uri, "https://example.test/second")
+    capture.buffer:set_selection(2, 29)
+    test.equal(test.not_nil(poi.point_at_caret(capture, { activatable = true })).uri, "https://example.test/b")
+    capture.buffer:set_selection(1, 10)
+    test.equal(test.not_nil(poi.point_at_caret(capture, { activatable = true })).uri, "https://example.test/a")
+    system.open_in_system = function(uri) opened[#opened + 1] = uri; return true end
     test.ok(command.perform("core:activate_point_of_interest"))
     test.same(opened, { "https://example.test/a" })
 
@@ -698,6 +713,7 @@ test.describe("Terminal View", function()
       test.ok(command.perform("core:next_point_of_interest"))
       test.same({ capture.buffer:get_selection() }, { expected[1], expected[2], expected[1], expected[2] })
     end
+    capture.buffer:set_selection(3, #"notes.txt:2:1" + 1)
     test.ok(command.perform("core:activate_point_of_interest"))
     system.open_in_system = previous_open
     test.ok(common.path_equals(core.active_view.buffer.abs_filename, root .. PATHSEP .. "notes.txt"))

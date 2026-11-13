@@ -2455,10 +2455,13 @@ function TerminalTextCaptureView:next_point_of_interest(direction, opts)
 end
 
 function TerminalTextCaptureView:get_point_of_interest_at(line, col)
+  local trailing
   for _, link in ipairs(self:line_links(line)) do
     if col >= link.col and col < link.col2 then return link, true end
+    if col == link.col2 then trailing = link end
   end
-  return nil, true
+  -- The caret can sit just after a link. A link starting there still takes priority.
+  return trailing, true
 end
 
 function TerminalTextCaptureView:activate_point_of_interest(point, opts)
