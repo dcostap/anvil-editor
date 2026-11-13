@@ -374,7 +374,9 @@ config.plugins.sql_server = { max_rows = 1000, timeout_seconds = 0, run_generate
 require_core_plugin "sql_server"
 -- In a SQL Editor, Ctrl+Enter runs only the selection, as in DbVisualizer.
 keymap.add({ ["ctrl+return"] = { "sql_server:run_selection" } })
-keymap.add({ ["f2"] = "sql_server:edit_cell", ["return"] = "sql_server:edit_cell", ["delete"] = "sql_server:delete_rows" })
+keymap.add({ ["f2"] = "sql_server:edit_cell", ["return"] = "sql_server:edit_cell", ["delete"] = "sql_server:delete_rows",
+  ["ctrl+z"] = "sql_server:undo_change", ["ctrl+y"] = "sql_server:redo_change", ["ctrl+shift+z"] = "sql_server:redo_change",
+  ["ctrl+s"] = "sql_server:show_change_script" })
 require_core_plugin "terminal"
 -- Use hard tabs for indentation, displayed at 4 columns.
 config.indent_size = 4

@@ -3,6 +3,7 @@ local common = require "core.common"
 local command = require "core.command"
 local style = require "core.style"
 local Preview = require "plugins.tabular_data_preview"
+local CellEditor = require "plugins.sql_server.cell_editor"
 
 local Results = Preview:extend()
 local empty = { headers = {}, rows = {}, column_count = 0, distinct_values = {} }
@@ -86,9 +87,11 @@ end
 
 function Results:complete(data)
   self.cancel_query = nil
+  if self.cell_editor then self.cell_editor:close(false) end
   self.data = data
   self.result_index, self.result_states = nil, {}
   self.edits, self.deletes, self.edit_info, self.edit_error = {}, {}, nil, nil
+  self.undo_steps, self.redo_steps = {}, {}
   local last = data.messages and data.messages[#data.messages]
   if data.cancelled then
     self.message = "SQL cancelled. Committed changes remain."
@@ -123,13 +126,18 @@ end
 function Results:cell_style(display_row, column)
   local row = self:source_row(display_row)
   if not row or not self.edits then return end
-  if self.deletes[row] then return tint(style.error), style.dim end
+  if self.deletes[row] then return tint(style.error), style.dim, column == 1 and style.error or nil, true end
   local edits = self.edits[row]
-  if edits and edits[column] ~= nil then return tint(style.accent), nil end
+  if edits and edits[column] ~= nil then return tint(style.accent), nil, style.accent end
 end
 
 function Results:draw_header()
   if self.model.column_count > 0 then Preview.draw_header(self) end
+end
+
+function Results:draw()
+  Preview.draw(self)
+  if self.cell_editor then self.cell_editor:draw() end
 end
 
 -- The footer shows the result and its row count, and the buttons that act on
@@ -159,7 +167,7 @@ function Results:footer_buttons()
   if self.data then labels[#labels + 1] = "messages" end
   if self.kept then labels[#labels + 1] = "sql" end
   local names = { cancel = "Cancel", csv = "CSV", json = "JSON", messages = "Messages", discard = "Discard", sql = "SQL",
-    script = changes == 1 and "Script 1 Change" or string.format("Script %d Changes", changes) }
+    script = changes == 1 and "Show Script · 1 Change" or string.format("Show Script · %d Changes", changes) }
   local pad, height = common.round(10 * SCALE), self:footer_height()
   local x = self.position.x + self.size.x - common.round(4 * SCALE) - style.scrollbar_size
   local y = self.position.y + self.size.y - height
@@ -288,7 +296,7 @@ function Results:press_footer_button(b)
   elseif b.id == "sql" then
     return self:open_script(self.run_text)
   elseif b.id == "script" then
-    self:script_changes()
+    self:show_change_script()
   elseif b.id == "discard" then
     self:discard_changes()
   elseif b.id == "limit" then
@@ -326,11 +334,15 @@ function Results:cell_menu_items()
     { label = "View Cell", command = "sql_server:view_cell" },
     { label = "Edit Cell", command = "sql_server:edit_cell" },
     { label = "Set to NULL", command = "sql_server:set_cell_null" },
+    { label = "Revert Cells", command = "sql_server:revert_cells" },
     { label = "Delete Rows", command = "sql_server:delete_rows" },
     { label = "Script Rows as INSERT", command = "sql_server:script_rows_as_insert" },
     { label = "Script Rows as SELECT", command = "sql_server:script_rows_as_select" },
     { label = "Related Rows", command = "sql_server:related_rows" },
-    { label = "Script Changes", command = "sql_server:script_changes" },
+    "-",
+    { label = "Undo Change", command = "sql_server:undo_change" },
+    { label = "Redo Change", command = "sql_server:redo_change" },
+    { label = "Show Change Script", command = "sql_server:show_change_script" },
     { label = "Discard Changes", command = "sql_server:discard_changes" },
     "-",
     { label = "Previous Result", command = "sql_server:previous_result" },
@@ -360,13 +372,63 @@ function Results:with_edit_info(action)
   end)
 end
 
-function Results:set_value(row, column, value)
-  local original = row.cells[column]
-  local edits = self.edits[row] or {}
-  if value == original then edits[column] = nil else edits[column] = value end
-  self.edits[row] = next(edits) and edits or nil
+-- A change names a cell (`row`, `column`, `value`) or a row's delete mark
+-- (`row`, `delete`). A value equal to the row's own value, or nil, removes the
+-- cell's edit. Each call is one step for Undo Change.
+local function current(self, change)
+  if change.column then
+    local edits = self.edits[change.row]
+    return edits and edits[change.column]
+  end
+  return self.deletes[change.row]
+end
+local function put(self, change, value)
+  if change.column then
+    local edits = self.edits[change.row] or {}
+    if value == change.row.cells[change.column] then value = nil end
+    edits[change.column] = value
+    self.edits[change.row] = next(edits) and edits or nil
+  else
+    self.deletes[change.row] = value or nil
+  end
+end
+local function apply_step(self, step, side)
+  for _, change in ipairs(step) do put(self, change, change[side]) end
   self.edit_revision = (self.edit_revision or 0) + 1
   core.redraw = true
+end
+function Results:apply_changes(changes)
+  local step = {}
+  for _, change in ipairs(changes) do
+    local before, value = current(self, change), change.delete
+    if change.column then value = change.value end
+    put(self, change, value)
+    local after = current(self, change)
+    if before ~= after then step[#step + 1] = { row = change.row, column = change.column, before = before, after = after } end
+  end
+  if #step == 0 then return false end
+  self.undo_steps[#self.undo_steps + 1] = step
+  self.redo_steps = {}
+  self.edit_revision = (self.edit_revision or 0) + 1
+  core.redraw = true
+  return true
+end
+function Results:undo_change()
+  local step = table.remove(self.undo_steps)
+  if not step then return false end
+  apply_step(self, step, "before")
+  self.redo_steps[#self.redo_steps + 1] = step
+  return true
+end
+function Results:redo_change()
+  local step = table.remove(self.redo_steps)
+  if not step then return false end
+  apply_step(self, step, "after")
+  self.undo_steps[#self.undo_steps + 1] = step
+  return true
+end
+function Results:set_value(row, column, value)
+  return self:apply_changes({ { row = row, column = column, value = value } })
 end
 
 -- True when Anvil keeps only the start of the cell's value (`row.cut`) and no
@@ -380,21 +442,69 @@ function Results:cut_message(column)
   return string.format("Anvil has only the first 32,768 characters of a value in %s.", self.model.headers[column])
 end
 
-function Results:edit_cell()
+-- Opens the in-cell editor at the focused cell. Without `text`, it starts with
+-- the value selected. A typed `text` replaces the value. The result's columns
+-- can arrive after the editor opens; a column that cannot change closes it.
+function Results:edit_cell(text)
   local row, column, display_row = self:focus_cell()
-  if not row then return false end
-  return self:with_edit_info(function(info)
-    if not info.columns[column].editable then
-      core.warn("Column %s is not a column of %s that can change.", self.model.headers[column], info.table); return
+  if not row or not self.edits or self.cell_editor then return false end
+  if self:is_cut(row, column) then core.warn("%s Change it with SQL.", self:cut_message(column)); return false end
+  local value = self:cell_value(display_row, column)
+  if not text and value and value:find("[\r\n]") then core.warn("Edit values with line breaks in a script."); return false end
+  local editor = CellEditor(self, row, column, display_row, text or value or "", text == nil)
+  self.cell_editor = editor
+  local function check(info)
+    if info.columns[column].editable then return true end
+    core.warn("Column %s is not a column of %s that can change.", self.model.headers[column], info.table)
+  end
+  self:with_edit_info(function(info)
+    if self.cell_editor == editor then
+      if not check(info) then editor:close(false) end
+    elseif editor.step and editor.step == self.undo_steps[#self.undo_steps] and not check(info) then
+      self:undo_change()
+      table.remove(self.redo_steps)
     end
-    if self:is_cut(row, column) then core.warn("%s Change it with SQL.", self:cut_message(column)); return end
-    local value = self:cell_value(display_row, column)
-    if value and value:find("[\r\n]") then core.warn("Edit values with line breaks in a script."); return end
-    core.global_prompt_bar:enter(self.model.headers[column], {
-      text = value or "",
-      submit = function(text) if self.edits then self:set_value(row, column, text) end end,
-    })
   end)
+  -- No columns and no read under way: the result cannot change.
+  if self.cell_editor == editor and not self.edit_info and not self.describing then editor:close(false) end
+  return true
+end
+
+function Results:end_cell_edit(editor, keep, row_delta, column_delta)
+  if self.cell_editor ~= editor then return end
+  self.cell_editor = nil
+  if keep and self.edits then
+    local info = self.edit_info
+    if (not info or info.columns[editor.column].editable)
+        and self:apply_changes({ { row = editor.row, column = editor.column, value = editor:text() } }) then
+      editor.step = self.undo_steps[#self.undo_steps]
+    end
+  end
+  if keep and (row_delta ~= 0 or column_delta ~= 0) then self:move_selection(row_delta, column_delta, false) end
+end
+
+-- Typing over a cell, or Backspace, starts the editor.
+function Results:supports_text_input() return not self.kept end
+function Results:on_text_input(text)
+  if self.selection_focus and self.edits then return self:edit_cell(text) end
+  return false
+end
+function Results:on_key_pressed(key, ...)
+  if key == "backspace" and self.selection_focus and self.edits then return self:edit_cell("") end
+  return Preview.on_key_pressed(self, key, ...)
+end
+
+-- Revert Cells puts back the values of the selected cells and keeps their rows.
+function Results:revert_cells()
+  local row1, column1, row2, column2 = self:selection_bounds()
+  if not row1 then return false end
+  local changes = {}
+  for display_row = row1, row2 do
+    local row = self:source_row(display_row)
+    changes[#changes + 1] = { row = row, delete = nil }
+    for column = column1, column2 do changes[#changes + 1] = { row = row, column = column, value = nil } end
+  end
+  return self:apply_changes(changes)
 end
 
 -- Opens the focused cell's value in a new text Pane, as JSON or XML when it
@@ -417,12 +527,14 @@ function Results:set_cells_null()
   local row1, column1, row2, column2 = self:selection_bounds()
   if not row1 then return false end
   return self:with_edit_info(function(info)
+    local changes = {}
     for display_row = row1, row2 do
       local row = self:source_row(display_row)
       for column = column1, column2 do
-        if info.columns[column].editable then self:set_value(row, column, false) end
+        if info.columns[column].editable then changes[#changes + 1] = { row = row, column = column, value = false } end
       end
     end
+    self:apply_changes(changes)
   end)
 end
 
@@ -430,11 +542,12 @@ function Results:delete_rows()
   local row1, _, row2 = self:selection_bounds()
   if not row1 then return false end
   return self:with_edit_info(function()
+    local changes = {}
     for display_row = row1, row2 do
       local row = self:source_row(display_row)
-      self.deletes[row] = not self.deletes[row] or nil
+      changes[#changes + 1] = { row = row, delete = not self.deletes[row] or nil }
     end
-    core.redraw = true
+    self:apply_changes(changes)
   end)
 end
 
@@ -457,7 +570,7 @@ function Results:open_script(text)
   return true
 end
 
-function Results:script_changes()
+function Results:show_change_script()
   local edit = require "plugins.sql_server.edit"
   if not self.edit_info or edit.change_count(self) == 0 then return false end
   core.log_quiet("SQL Server: scripted %d result change(s)", edit.change_count(self))
@@ -520,11 +633,14 @@ function Results:export(text, mode)
   return opened
 end
 
+-- Discard Changes is one step for Undo Change.
 function Results:discard_changes()
-  self.edits, self.deletes = {}, {}
-  self.edit_revision = (self.edit_revision or 0) + 1
-  core.redraw = true
-  return true
+  local changes = {}
+  for row, edits in pairs(self.edits) do
+    for column in pairs(edits) do changes[#changes + 1] = { row = row, column = column, value = nil } end
+  end
+  for row in pairs(self.deletes) do changes[#changes + 1] = { row = row, delete = nil } end
+  return self:apply_changes(changes)
 end
 
 local function copy_filters(filters)
@@ -574,6 +690,7 @@ function Results:duplicate()
 end
 
 function Results:on_close()
+  if self.cell_editor then self.cell_editor:close(false) end
   if self.cancel_query then self.cancel_query() end
   Preview.on_close(self)
 end
@@ -602,6 +719,7 @@ end, {
   ["sql_server:edit_cell"] = function(view) return view:edit_cell() end,
   ["sql_server:set_cell_null"] = function(view) return view:set_cells_null() end,
   ["sql_server:delete_rows"] = function(view) return view:delete_rows() end,
+  ["sql_server:revert_cells"] = function(view) return view:revert_cells() end,
   ["sql_server:script_rows_as_insert"] = function(view) return view:script_rows("insert") end,
   ["sql_server:script_rows_as_select"] = function(view) return view:script_rows("select") end,
   ["sql_server:related_rows"] = function(view) return view:related_rows() end,
@@ -616,8 +734,20 @@ command.add(function()
   return view and view:is(Results) and view.edits ~= nil
     and require("plugins.sql_server.edit").change_count(view) > 0, view
 end, {
-  ["sql_server:script_changes"] = function(view) return view:script_changes() end,
+  ["sql_server:show_change_script"] = function(view) return view:show_change_script() end,
   ["sql_server:discard_changes"] = function(view) return view:discard_changes() end,
+})
+command.add(function()
+  local view = core.active_view
+  return view and view:is(Results) and view.undo_steps ~= nil and #view.undo_steps > 0 and not view.kept, view
+end, {
+  ["sql_server:undo_change"] = function(view) return view:undo_change() end,
+})
+command.add(function()
+  local view = core.active_view
+  return view and view:is(Results) and view.redo_steps ~= nil and #view.redo_steps > 0 and not view.kept, view
+end, {
+  ["sql_server:redo_change"] = function(view) return view:redo_change() end,
 })
 command.add(function()
   local view = core.active_view

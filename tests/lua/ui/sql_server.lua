@@ -580,10 +580,10 @@ test.describe("SQL Queries", function()
     test.ok(command.perform("sql_server:edit_cell"))
     test.equal(submitted[2], "EXEC sys.sp_describe_first_result_set @tsql = N'SELECT id, name AS who, LEN(name) n "
       .. "FROM sales.customers WHERE city = ''Lisbon''', @params = NULL, @browse_information_mode = 1;")
-    test.equal(core.active_view, core.global_prompt_bar)
-    test.equal(core.global_prompt_bar:get_text(), "Bea")
-    core.global_prompt_bar:set_text("Bea O'Neil")
-    core.global_prompt_bar:submit()
+    -- The editor starts with the old value selected, so typing replaces it.
+    core.on_event("textinput", "Bea O'Neil")
+    test.equal(result:cell_value(2, 2), "Bea")
+    core.on_event("keypressed", "return")
     test.equal(core.active_view, result)
     test.equal(result:cell_value(2, 2), "Bea O'Neil")
     result:select_cell(1, 3, false)
@@ -602,8 +602,8 @@ test.describe("SQL Queries", function()
     test.equal((result:footer_summary()), "3 cells · Sum 6 · Avg 2 · Min 1 · Max 3")
     local labels = {}
     for _, b in ipairs(result:footer_buttons()) do labels[#labels + 1] = b.label end
-    test.equal(labels[1], "Script 3 Changes")
-    test.ok(command.perform("sql_server:script_changes"))
+    test.equal(labels[1], "Show Script · 3 Changes")
+    test.ok(command.perform("sql_server:show_change_script"))
     local script = core.active_view
     test.not_equal(script, result)
     test.equal(require("plugins.sql_server").connection_for(script.buffer), require("plugins.sql_server").connection_for(editor.buffer))
@@ -662,6 +662,84 @@ test.describe("SQL Queries", function()
       headers = describe_headers, rows = { described("id", "id", true, true, false, "int"),
         described("who", "name", false, false, true, "nvarchar(80)") } } } })
     test.equal(reason, "Include the key column [id] to edit this result.")
+  end)
+
+  test.it("edits result cells in place, and undoes and reverts the changes", function(context)
+    local editor = connected_query(context)
+    local describe_headers = { "name", "is_hidden", "source_schema", "source_table", "source_column",
+      "is_part_of_unique_key", "is_updateable", "system_type_name" }
+    local function described(name, key, updateable)
+      return { cells = { name, "0", "sales", "customers", name, key and "1" or "0", updateable and "1" or "0", "nvarchar(80)" },
+        source_line1 = 1, source_line2 = 1 }
+    end
+    local function row(...) return { cells = { ... }, source_line1 = 1, source_line2 = 1 } end
+    require("plugins.sql_server.backend").execute = function(_, text, callback)
+      if text:find("^EXEC sys.sp_describe_first_result_set") then
+        callback({ messages = {}, results = { { headers = describe_headers, column_count = 8, distinct_values = {},
+          rows = { described("id", true, false), described("name", false, true), described("city", false, true) } } } })
+      else
+        callback({ messages = {}, results = { { headers = { "id", "name", "city" }, column_count = 3, distinct_values = {},
+          rows = { row("1", "Ada", "Lisbon"), row("2", "Bea", "Porto") } } } })
+      end
+      return { cancel = function() end }
+    end
+    editor.buffer:text_input("SELECT id, name, city FROM sales.customers")
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
+    local result = editor.buffer.sql_execution.view
+    panes.focus(panes.pane_for_view(result))
+    local function focus()
+      local _, column, display_row = result:focus_cell()
+      return display_row .. ":" .. column
+    end
+
+    -- Typing over a cell replaces its value. Escape keeps the old value.
+    result:select_cell(1, 2, false)
+    core.on_event("textinput", "Z")
+    core.on_event("textinput", "oe")
+    core.on_event("keypressed", "escape")
+    test.equal(result:cell_value(1, 2), "Ada")
+    -- Tab keeps the text and moves right; Enter keeps it and moves down.
+    core.on_event("textinput", "Zoe")
+    core.on_event("keypressed", "tab")
+    test.equal(result:cell_value(1, 2), "Zoe")
+    test.equal(focus(), "1:3")
+    test.ok(command.perform("sql_server:edit_cell"))
+    core.on_event("textinput", "Faro")
+    core.on_event("keypressed", "return")
+    test.equal(result:cell_value(1, 3), "Faro")
+    test.equal(focus(), "2:3")
+    -- Backspace starts an empty value.
+    core.on_event("keypressed", "backspace")
+    core.on_event("keypressed", "return")
+    test.equal(result:cell_value(2, 3), "")
+    -- A column that cannot change takes no edit.
+    local warnings = {}
+    context.original_warn = core.warn
+    core.warn = function(format, ...) warnings[#warnings + 1] = string.format(format, ...) end
+    result:select_cell(1, 1, false)
+    core.on_event("textinput", "9")
+    core.on_event("keypressed", "return")
+    test.equal(result:cell_value(1, 1), "1")
+    test.equal(warnings[1], "Column id is not a column of customers that can change.")
+    core.warn = context.original_warn
+
+    -- Undo and redo go back through each change. Revert puts back the selected cells' values.
+    test.ok(command.perform("sql_server:undo_change"))
+    test.equal(result:cell_value(2, 3), "Porto")
+    test.ok(command.perform("sql_server:undo_change"))
+    test.equal(result:cell_value(1, 3), "Lisbon")
+    test.ok(command.perform("sql_server:redo_change"))
+    test.equal(result:cell_value(1, 3), "Faro")
+    result:select_cell(1, 2, false)
+    result:select_cell(1, 3, true)
+    test.ok(command.perform("sql_server:revert_cells"))
+    test.equal(result:cell_value(1, 2), "Ada")
+    test.equal(result:cell_value(1, 3), "Lisbon")
+    test.not_ok(command.is_valid("sql_server:show_change_script"))
+    test.ok(command.perform("sql_server:undo_change"))
+    test.equal(result:cell_value(1, 2), "Zoe")
+    test.ok(command.is_valid("sql_server:show_change_script"))
   end)
 
   test.it("does not edit or script a value that Anvil cut, and warns when it exports one", function(context)

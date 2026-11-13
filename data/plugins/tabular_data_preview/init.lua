@@ -509,6 +509,8 @@ end
 
 ---A cell's background and text color, or nil for the defaults. Subclasses
 ---mark cells, such as pending edits.
+-- A cell's background, text color and mark. A mark is a bar at the cell's
+-- left edge; `struck` draws a line through the text.
 function Preview:cell_style(display_row, column) end
 
 function Preview:clear_selection()
@@ -1254,7 +1256,7 @@ function Preview:draw_body()
       local hovered = self.hover_target and self.hover_target.kind == "cell"
         and self.hover_target.display_row == display_row
         and self.hover_target.column == column
-      local background, color = self:cell_style(display_row, column)
+      local background, color, mark, struck = self:cell_style(display_row, column)
       if selected then
         renderer.draw_rect(x, y, width, row_height, style.selection)
       elseif hovered then
@@ -1275,7 +1277,11 @@ function Preview:draw_body()
         end
         renderer.draw_text(font, shown, text_x, common.round(y + (row_height - font:get_height()) / 2),
           color or (value == false and style.dim or style.text))
+        if struck then
+          renderer.draw_rect(text_x, common.round(y + row_height / 2), shown_width, math.max(1, scaled(1)), color or style.text)
+        end
       end
+      if mark then renderer.draw_rect(x, y, math.max(1, scaled(3)), row_height, mark) end
       renderer.draw_rect(x + width - 1, y, 1, row_height, style.divider)
       if self.selection_focus and self.selection_focus.row == display_row
           and self.selection_focus.column == column then
