@@ -438,13 +438,21 @@ function Results:delete_rows()
   end)
 end
 
+-- The database of the result's Query when USE moved it, or nil. A kept result keeps it.
+function Results:database()
+  if self.kept then return self.kept_database end
+  return self.source_buffer and require("plugins.sql_server").other_database(self.source_buffer)
+end
+
 -- A script opens in a new SQL Query on the result's connection and runs nothing.
+-- It starts with USE for a result of another database.
 function Results:open_script(text)
   local sql = require "plugins.sql_server"
   local c = self.source_buffer and sql.connection_for(self.source_buffer)
-  local editor = sql.new_query(self.connection_id or c and c.id)
+  local id = self.connection_id or c and c.id
+  local editor = sql.new_query(id)
   if not editor then return false end
-  editor.buffer:text_input(text)
+  editor.buffer:text_input(sql.in_database(sql.find(id), self:database(), text))
   editor.buffer:set_selection(1, 1)
   return true
 end
@@ -539,6 +547,7 @@ function Results:keep()
   local copy = Results(self.connection_name)
   copy.kept, copy.kind, copy.run_text = true, self.kind, self.run_text
   copy.connection_id = self.connection_id or c and c.id
+  copy.kept_database = self:database()
   copy:complete(self.data)
   copy.message, copy.edits, copy.deletes = self.message, nil, nil
   for index, state in pairs(self.result_states) do

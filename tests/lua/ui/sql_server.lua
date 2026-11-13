@@ -498,18 +498,19 @@ test.describe("SQL Queries", function()
     local function described(schema_name, table_name, column, key)
       return row(column, "0", schema_name, table_name, column, key and "1" or "0", key and "0" or "1", "int")
     end
-    local submitted = {}
+    local submitted, database = {}, "AnvilTest"
     require("plugins.sql_server.backend").execute = function(_, text, callback)
       submitted[#submitted + 1] = text
       local orders = text:find("dbo.orders", 1, true) ~= nil
       if text:find("^EXEC sys.sp_describe_first_result_set") then
         local rows = orders and { described("dbo", "orders", "id", true), described("dbo", "orders", "customer_id") }
           or { described("sales", "customers", "id", true), described("sales", "customers", "name") }
-        callback({ messages = {}, results = { { headers = describe_headers, column_count = 8, distinct_values = {}, rows = rows } } })
+        callback({ session = 7, database = database, messages = {},
+          results = { { headers = describe_headers, column_count = 8, distinct_values = {}, rows = rows } } })
       else
         local rows = orders and { row("10", "1"), row("11", "1"), row("12", false), row("13", "2") } or { row("1", "Ada") }
-        callback({ messages = {}, results = { { headers = orders and { "id", "customer_id" } or { "id", "name" },
-          column_count = 2, distinct_values = {}, rows = rows } } })
+        callback({ session = 7, database = database, messages = {}, results = { {
+          headers = orders and { "id", "customer_id" } or { "id", "name" }, column_count = 2, distinct_values = {}, rows = rows } } })
       end
       return { cancel = function() end }
     end
@@ -535,6 +536,15 @@ test.describe("SQL Queries", function()
     test.equal(submitted[#submitted], "SELECT *\nFROM [sales].[customers]\nWHERE ([id] = N'1')\n   OR ([id] = N'2');\n")
     test.equal(related("SELECT id, name FROM sales.customers", 1, "Referencing: dbo.orders (customer_id)"),
       "SELECT *\nFROM [dbo].[orders]\nWHERE ([customer_id] = N'1');\n")
+    -- A result of a Query that USE moved scripts its rows in that database.
+    database = "Other"
+    require("plugins.sql_server.backend").read_schema = function(options, callback)
+      callback({ database = options.database, default_schema = "dbo", case_sensitive = false, objects = {},
+        foreign_keys = schema.foreign_keys })
+      return { cancel = function() end }
+    end
+    test.equal(related("SELECT id, name FROM sales.customers", 1, "Referencing: dbo.orders (customer_id)"),
+      "USE [Other];\nSELECT *\nFROM [dbo].[orders]\nWHERE ([customer_id] = N'1');\n")
   end)
 
   test.it("scripts result edits by the table's key in a new Query and runs nothing", function(context)
