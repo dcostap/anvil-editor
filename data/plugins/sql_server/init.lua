@@ -332,30 +332,73 @@ end
 -- After USE moved the session, Anvil reads that database's catalog once, in
 -- the background, and returns nil until it arrives. A failed read gives no
 -- catalog until the connection reads its catalog again.
-function M.catalog_for(buffer)
-  local c = M.connection_for(buffer)
-  if not c or c.state ~= "Ready" or not c.catalog then return end
-  local database = M.other_database(buffer)
-  if not database then return c.catalog, c end
-  c.other_catalogs = c.other_catalogs or {}
-  local key = database:lower()
-  local entry = c.other_catalogs[key]
-  if entry then return entry.catalog, c end
-  entry = {}
-  c.other_catalogs[key] = entry
-  local generation, options = c.generation, M.connection_options(c)
+local function read_other(c, database, entry)
+  local key, generation, options = database:lower(), c.generation, M.connection_options(c)
   options.database = database
+  local done = false
   local function finish(catalog, error)
-    entry.job = nil
+    done, entry.job = true, nil
     if M.find(c.id) ~= c or c.generation ~= generation or not c.other_catalogs or c.other_catalogs[key] ~= entry then return end
-    if catalog then for _, object in ipairs(catalog.objects) do object.database = database end end
-    entry.catalog = catalog
+    if catalog then
+      for _, object in ipairs(catalog.objects) do object.database = database end
+      entry.catalog = catalog
+    end
     core.log_quiet("SQL Server: other database metadata connection=%s objects=%s error=%s", c.id,
       catalog and #catalog.objects or 0, tostring(error ~= nil))
     changed()
   end
   local handle, err = backend.read_schema(options, finish)
-  if handle and not entry.catalog then entry.job = handle elseif not handle then finish(nil, err) end
+  if handle and not done then entry.job = handle elseif not handle then finish(nil, err) end
+end
+-- Metadata that Anvil checked more than this many seconds ago is checked again
+-- before its next use. The check reads one stamp from sys.objects on a worker,
+-- and a changed stamp reads the metadata again. Until then the old metadata
+-- stays in use.
+local STALE_SECONDS = 30
+local checks = setmetatable({}, { __mode = "k" })
+local function check_stale(c, catalog, database)
+  if not catalog.stamp then return end
+  local now = system.get_time()
+  local check = checks[catalog]
+  if not check then checks[catalog] = { at = now }; return end
+  if check.busy or now - check.at < STALE_SECONDS then return end
+  check.busy = true
+  local generation, options = c.generation, M.connection_options(c)
+  options.database = database or c.database
+  local function finish(data)
+    if data.session then backend.close_session(data.session) end
+    check.busy, check.at = false, system.get_time()
+    if M.find(c.id) ~= c or c.generation ~= generation then return end
+    local result = not data.error and data.results and data.results[1]
+    local stamp = result and result.rows[1] and result.rows[1].cells[1]
+    local stale = type(stamp) == "string" and stamp ~= catalog.stamp
+    core.log_quiet("SQL Server: metadata check connection=%s other=%s stale=%s failed=%s", c.id,
+      tostring(database ~= nil), tostring(stale), tostring(type(stamp) ~= "string"))
+    if not stale then return end
+    if not database then M.refresh_schema(c.id); return end
+    local entry = c.other_catalogs and c.other_catalogs[database:lower()]
+    if entry and entry.catalog == catalog and not entry.job then read_other(c, database, entry) end
+  end
+  if not backend.execute(options, require("sql_server_native").schema_stamp_sql, finish, { max_rows = 1, timeout = 10 }) then check.busy = false end
+end
+-- Checks a Ready connection's own metadata for changes on the server.
+function M.check_catalog(c)
+  if c.state == "Ready" and c.catalog then check_stale(c, c.catalog) end
+end
+function M.catalog_for(buffer)
+  local c = M.connection_for(buffer)
+  if not c or c.state ~= "Ready" or not c.catalog then return end
+  local database = M.other_database(buffer)
+  if not database then check_stale(c, c.catalog); return c.catalog, c end
+  c.other_catalogs = c.other_catalogs or {}
+  local entry = c.other_catalogs[database:lower()]
+  if not entry then
+    entry = {}
+    c.other_catalogs[database:lower()] = entry
+    read_other(c, database, entry)
+  elseif entry.catalog then
+    check_stale(c, entry.catalog, database)
+  end
   return entry.catalog, c
 end
 -- The catalog that holds a catalog object.

@@ -59,6 +59,7 @@ test.describe("SQL Queries", function()
     if context.original_close then require("plugins.sql_server.backend").close_session = context.original_close end
     if context.nag_show then core.nag_view.show = context.nag_show end
     if context.original_warn then core.warn = context.original_warn end
+    if context.original_time then system.get_time = context.original_time end
     require("plugins.sql_server.backend").read_definition = context.original_definition
     if context.original_columns then require("plugins.sql_server.backend").read_columns = context.original_columns end
     if context.connection_id then require("plugins.sql_server").remove(context.connection_id) end
@@ -1005,6 +1006,57 @@ test.describe("SQL Queries", function()
     test.equal(reads, 1)
     require("plugins.sql_server.session").close(editor.buffer)
     test.equal(reads, 2)
+  end)
+
+  test.it("reloads metadata whose objects changed on the server since the last check", function(context)
+    local function catalog(stamp, objects)
+      return { database = "AnvilTest", default_schema = "dbo", case_sensitive = false, stamp = stamp,
+        objects = objects, foreign_keys = {} }
+    end
+    local customers = { schema = "sales", name = "customers", kind = "table", columns = { { name = "id", type = "int" } } }
+    local editor = connected_query(context, catalog("1|a", { customers }))
+    local backend = require "plugins.sql_server.backend"
+    local server_stamp, checks, reads = "1|a", 0, 0
+    context.original_close = backend.close_session
+    backend.close_session = function() end
+    backend.execute = function(_, _, callback)
+      checks = checks + 1
+      callback({ session = 9, messages = {}, results = { { headers = { "" }, column_count = 1, distinct_values = {},
+        rows = { { cells = { server_stamp } } } } } })
+      return { cancel = function() end }
+    end
+    backend.read_schema = function(_, callback)
+      reads = reads + 1
+      callback(catalog(server_stamp, { customers,
+        { schema = "sales", name = "invoices", kind = "table", columns = { { name = "id", type = "int" } } } }))
+      return { cancel = function() end }
+    end
+    local now = system.get_time()
+    context.original_time = system.get_time
+    system.get_time = function() return now end
+    editor.buffer:text_input("SELECT * FROM sales.inv")
+    local function complete()
+      autocomplete.close()
+      editor.buffer:set_selection(1, #"SELECT * FROM sales.inv" + 1)
+      autocomplete.trigger()
+      local open = autocomplete.is_open() and autocomplete.get_selected_suggestion().text
+      autocomplete.close()
+      return open
+    end
+    test.not_ok(complete())
+    test.equal(checks, 0)
+    now = now + 31
+    test.not_ok(complete())
+    test.equal(checks, 1)
+    test.equal(reads, 0)
+    test.not_ok(complete())
+    test.equal(checks, 1)
+    server_stamp = "2|b"
+    now = now + 31
+    complete()
+    test.equal(checks, 2)
+    test.equal(reads, 1)
+    test.equal(complete(), "invoices")
   end)
 
   test.it("completes from the database that a Query's session moved to with USE", function(context)

@@ -284,4 +284,33 @@ test.describe("SQL execution input", function()
     test.equal(run(script(function(results, row) results.deletes[row] = true end)).error, nil)
     test.equal(#run(select).results[1].rows, 0)
   end)
+
+  test.it("reads a schema stamp that each object change changes in the isolated probe", function()
+    local server = os.getenv("ANVIL_SQL_TEST_SERVER")
+    test.skip_if(os.getenv("ANVIL_SQL_INTEGRATION") ~= "1" or not server,
+      "Run the opt-in SQL Server integration test")
+    local backend = require "plugins.sql_server.backend"
+    local connection = { server = test.not_nil(os.getenv("ANVIL_SQL_TEST_PIPE")), database = "AnvilTest",
+      integrated = true, encrypt = false }
+    local function await(start)
+      local reply = {}
+      test.not_nil(start(function(value) reply.value = value end))
+      local deadline = system.get_time() + 45
+      while not reply.value and system.get_time() < deadline do coroutine.yield(0.01) end
+      local value = test.not_nil(reply.value)
+      if value.session then backend.close_session(value.session) end
+      return value
+    end
+    local function run(text) return await(function(done) return backend.execute(connection, text, done, { max_rows = 1 }) end) end
+    local function stamp() return run(require("sql_server_native").schema_stamp_sql).results[1].rows[1].cells[1] end
+    local function catalog_stamp() return await(function(done) return backend.read_schema(connection, done) end).stamp end
+    local first = test.not_nil(catalog_stamp())
+    test.equal(stamp(), first)
+    test.equal(run("CREATE TABLE sales.stamp_probe (id int)").error, nil)
+    local created = catalog_stamp()
+    test.ok(created ~= first)
+    test.equal(stamp(), created)
+    test.equal(run("DROP TABLE sales.stamp_probe").error, nil)
+    test.ok(stamp() ~= created)
+  end)
 end)

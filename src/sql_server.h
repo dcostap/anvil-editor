@@ -32,6 +32,9 @@ typedef struct {
   size_t parameter_count;
   int parameters_loaded;
   char *database, *default_schema;
+  /* The count and the newest change time of sys.objects, read before the
+   * objects. The same text as SQL_SERVER_SCHEMA_STAMP tells a later change. */
+  char *stamp;
   int case_sensitive;
   /* 0 when the database has more columns than the limit: each object's columns then load on demand. */
   int columns_loaded;
@@ -45,6 +48,9 @@ typedef struct {
 #define SQL_SERVER_OBJECT_LIMIT 200000
 #define SQL_SERVER_COLUMN_LIMIT 50000
 #define SQL_SERVER_FOREIGN_KEY_LIMIT 50000
+/* One value that changes when an object of the database is created, altered
+ * or dropped. ALTER TABLE changes its table's modify_date. */
+#define SQL_SERVER_SCHEMA_STAMP "(SELECT CONVERT(nvarchar(12),COUNT(*))+N'|'+ISNULL(CONVERT(nvarchar(30),MAX(modify_date),126),N'') FROM sys.objects)"
 #define SQL_SERVER_PARAMETER_LIMIT 50000
 
 /* Blocking, worker-only. All queries are fixed metadata SELECTs.

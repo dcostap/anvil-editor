@@ -438,6 +438,7 @@ function M.install(sql)
       local groups = {}
       for _, c in ipairs(sql.connections) do
         local items = {}
+        sql.check_catalog(c)
         if c.state == "Ready" and c.catalog then
           local catalog, generation = c.catalog, c.generation
           local names = symbol_names[catalog]

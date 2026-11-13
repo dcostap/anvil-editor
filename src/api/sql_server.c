@@ -120,6 +120,7 @@ static int read_schema(lua_State *L) {
   }
   lua_newtable(L);
   text(L, "database", c->database); text(L, "default_schema", c->default_schema);
+  if (c->stamp) text(L, "stamp", c->stamp);
   boolean(L, "case_sensitive", c->case_sensitive);
   boolean(L, "columns_loaded", c->columns_loaded);
   boolean(L, "objects_truncated", c->objects_truncated);
@@ -427,5 +428,7 @@ int luaopen_sql_server_native(lua_State *L) {
   const luaL_Reg functions[] = { {"context", context}, {"read_schema", read_schema}, {"read_columns", read_columns}, {"execute", execute_query},
     {"read_definition", read_definition}, {"module_script", module_script}, {"format", format_sql}, {"risk", batch_risk},
     {"end_transaction", end_transaction}, {"close_session", close_session}, {NULL, NULL} };
-  luaL_newlib(L, functions); return 1;
+  luaL_newlib(L, functions);
+  lua_pushstring(L, "SELECT " SQL_SERVER_SCHEMA_STAMP); lua_setfield(L, -2, "schema_stamp_sql");
+  return 1;
 }

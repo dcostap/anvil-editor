@@ -31,13 +31,15 @@ void sql_server_catalog_free(SqlServerCatalog *c) {
     free(c->objects[i].schema); free(c->objects[i].name); free(c->objects[i].kind);
   }
   free(c->objects);
-  free_foreign_keys(c); free_parameters(c); free_columns(c); free(c->database); free(c->default_schema);
+  free_foreign_keys(c); free_parameters(c); free_columns(c); free(c->database); free(c->default_schema); free(c->stamp);
   memset(c, 0, sizeof(*c));
 }
 
 #ifdef _WIN32
 #include "sql_server_internal.h"
 #include <wchar.h>
+#define WIDE_(text) L##text
+#define WIDE(text) WIDE_(text)
 
 /* Keep credentials and server-controlled text out of logs and error messages. */
 void sql_server_diagnostic(char error[256], SQLSMALLINT type, SQLHANDLE handle, const char *action) {
@@ -279,10 +281,13 @@ static char *copy_text(const char *s) {
 static int read_catalog(SQLHDBC dbc, size_t column_limit, SqlServerCatalog *out) {
   SQLHSTMT stmt = SQL_NULL_HSTMT;
   int success = 0;
-  if (!execute(dbc, &stmt, L"SELECT DB_NAME(), SCHEMA_NAME(), CASE WHEN N'a'=N'A' THEN N'0' ELSE N'1' END", out)) goto done;
+  if (!execute(dbc, &stmt, L"SELECT DB_NAME(), SCHEMA_NAME(), CASE WHEN N'a'=N'A' THEN N'0' ELSE N'1' END, "
+      WIDE(SQL_SERVER_SCHEMA_STAMP), out)) goto done;
   if (!SQL_SUCCEEDED(SQLFetch(stmt))) goto done;
+  /* ODBC reads unbound columns in their order. */
   out->database = cell(stmt, 1); out->default_schema = cell(stmt, 2);
   char *sensitive = cell(stmt, 3);
+  out->stamp = cell(stmt, 4);
   if (!out->database || !out->default_schema || !sensitive) { free(sensitive); goto done; }
   out->case_sensitive = !strcmp(sensitive, "1"); free(sensitive);
   SQLFreeHandle(SQL_HANDLE_STMT, stmt); stmt = SQL_NULL_HSTMT;
