@@ -3,6 +3,7 @@ local common = require "core.common"
 local command = require "core.command"
 local style = require "core.style"
 local ui = require "core.ui"
+local surface = require "core.ui.surface"
 local Preview = require "plugins.tabular_data_preview"
 local CellEditor = require "plugins.sql_server.cell_editor"
 
@@ -279,13 +280,18 @@ function Results:draw_status()
     common.draw_text(style.font, color, text:gsub("\n.*", ""), "left", self.position.x + pad, y, 0, height)
     core.pop_clip_rect()
   end
+  -- A button under the pointer shows the hover surface of a Dialog's button.
+  local hover = surface.get("raised_hover")
+  local inset = common.round(3 * SCALE)
   for i, b in ipairs(buttons) do
-    if self.footer_hover == i then
-      renderer.draw_rect(b.x, b.y + style.divider_size, b.w, b.h - style.divider_size, style.line_highlight)
+    local hovered = self.footer_hover == i
+    if hovered then
+      surface.draw(hover, b.x + 1, b.y + inset, b.w - 2, b.h - inset * 2, ui.metrics().small_radius)
     end
     local warn = b.id == "limit" and self.data and (self.data.limited or self.result_warning == self.model.warning
       and self.model.truncated)
-    common.draw_text(style.font, warn and style.warn or style.text, b.label, "center", b.x, b.y, b.w, b.h)
+    common.draw_text(style.font, warn and style.warn or hovered and hover.text or style.text, b.label, "center",
+      b.x, b.y, b.w, b.h)
   end
 end
 

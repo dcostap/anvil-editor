@@ -1267,6 +1267,8 @@ local function scenario_is_ready()
         view:apply_changes({ { row = view:source_row(1), column = 2, value = "Ada Lovelace" },
           { row = view:source_row(4), delete = true } })
         view.cell_editor = require("plugins.sql_server.cell_editor")(view, view:source_row(2), 2, 2, "Customer 2", true)
+        -- The pointer rests on the Show Script button.
+        for i, b in ipairs(view:footer_buttons()) do if b.id == "script" then view.footer_hover = i end end
       end
       return true
     end
