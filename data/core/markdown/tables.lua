@@ -373,7 +373,7 @@ function tables.extend_semantic_table(view, line, table_node)
   return extended
 end
 
-local function context_at(view, line, col, require_canonical)
+local function context_at(view, line, col, allow_source)
   local instance = view and view.buffer and model.peek(view.buffer)
   if not (view and view.buffer) then return nil, "view is unavailable" end
   if not line then line, col = view.buffer:get_selection() end
@@ -412,9 +412,6 @@ local function context_at(view, line, col, require_canonical)
   for row_line = line1, line2 do
     local row = context_row_at(view.buffer, row_line)
     if not row then return nil, "table row is unavailable" end
-    if require_canonical and not row.canonical then
-      return nil, "table row is not canonical"
-    end
     if columns and row.columns ~= columns then
       core.log_quiet("Markdown table command declined inconsistent row at %s:%d", view.buffer:get_name(), row_line)
       return nil, "table columns are inconsistent"
@@ -427,7 +424,7 @@ local function context_at(view, line, col, require_canonical)
   end
   -- A table that shows its source has no cells to edit. Table commands still
   -- rewrite it.
-  if not require_canonical and tables.shows_source(view, line) then
+  if not allow_source and tables.shows_source(view, line) then
     return nil, "table shows its source"
   end
   local current = rows[line - line1 + 1]

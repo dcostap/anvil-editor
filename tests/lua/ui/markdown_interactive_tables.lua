@@ -2019,6 +2019,32 @@ test.describe("Markdown Interactive Table Editing", function()
     test.same(selected_cells(view), { "1:2", "3:2", "4:2" })
   end)
 
+  test.it("selects and changes tables with optional outer pipes in an Untitled Buffer", function()
+    for _, original in ipairs({
+      "| A | B |\n| --- | ---\n| one | two |\n| three | four |\n\nplain",
+      "A | B\n--- | ---\none | two\nthree | four\n\nplain",
+      "| A | B\n--- | --- |\none | two |\n| three | four\n\nplain",
+    }) do
+      local view, buffer = make_view(original)
+      buffer:set_filename(nil, nil)
+      buffer:set_language_mode("Markdown")
+      buffer:set_selection(6, 1)
+      refresh(view)
+      click_at(view, table_handle(view, 4, "row", 4))
+      test.same(selected_cells(view), { "4:1", "4:2" })
+
+      refresh(view)
+      click_at(view, table_handle(view, 1, "column", 2))
+      test.same(selected_cells(view), { "1:2", "3:2", "4:2" })
+      test.ok(markdown_tables.move_column_to(view, 1, 2, 1))
+      test.same(row_cells(buffer, 1), { "B", "A" })
+      test.same(row_cells(buffer, 3), { "two", "one" })
+      test.same(row_cells(buffer, 4), { "four", "three" })
+      buffer:undo()
+      test.equal(buffer:get_text(1, 1, #buffer.lines, #buffer.lines[#buffer.lines]), original)
+    end
+  end)
+
   test.it("drags a row handle to move the row as one undo step", function()
     local original = "| A | B |\n| --- | --- |\n| one | 1 |\n| two | 2 |\n| three | 3 |\n\nplain"
     local view, buffer = make_view(original)

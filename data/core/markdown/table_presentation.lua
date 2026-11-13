@@ -765,7 +765,7 @@ function table_presentation.layout(view, table_node, instance)
     return layout or nil
   end
 
-  local rows, columns, canonical = {}, nil, true
+  local rows, columns = {}, nil
   for line = line1, line2 do
     local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
     local row = table_source_row(text)
@@ -781,7 +781,6 @@ function table_presentation.layout(view, table_node, instance)
       return store(false)
     end
     row.line, row.text = line, text
-    canonical = canonical and row.canonical
     rows[line] = row
   end
 
@@ -888,7 +887,7 @@ function table_presentation.layout(view, table_node, instance)
   local separator_width = math.max(font:get_width(" "), math.max(1, SCALE * 3))
   -- Table Handles get their own room: a gutter on each side of the table and
   -- a band above its header row and below its last row.
-  local handle_size = canonical and math.max(8, math.floor(SCALE * 16 + 0.5)) or 0
+  local handle_size = math.max(8, math.floor(SCALE * 16 + 0.5))
   local chrome_width = separator_width * (columns + 1) + handle_size * 2
   local content_budget = math.max(1, available_width - chrome_width)
   local natural_content_width, minimum_content_width = 0, 0
@@ -942,7 +941,7 @@ function table_presentation.layout(view, table_node, instance)
     active_presentations = active_presentations,
     selection_stable_layout = selection_stable_layout,
     separator_width = separator_width, total_width = total_width,
-    handle_size = handle_size, canonical = canonical,
+    handle_size = handle_size,
   }
   return store(layout)
 end
