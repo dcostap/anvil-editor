@@ -2,6 +2,7 @@
 -- Project Sidebar draw Tabs with this module, so both show the same thing.
 -- A Tab item is plain data. The Project describes its Panes, and the Pane report sends the items to the Sidebar.
 local common = require "core.common"
+local config = require "core.config"
 local style = require "core.style"
 local view_icons = require "core.view_icons"
 local agent_icons = require "core.agent_icons"
@@ -372,6 +373,35 @@ function tab.draw(item, x, y, w, h, opts)
   end
   if note then renderer.draw_text(style.font, note, right - style.font:get_width(note), middle(style.font), style.dim) end
   return spinning, x
+end
+
+-- A Tab in a bar, such as the Title Bar, sits on a tile: a rounded card whose top corners show. The tile runs
+-- past the bottom of `h`, so the bar's clip cuts its lower corners.
+tab.SIDE_INSET = math.floor(3 * SCALE)
+tab.TOP_INSET = math.floor(4 * SCALE)
+local TILE_RADIUS = math.floor(8 * SCALE)
+function tab.draw_tile(x, y, w, h, color)
+  local side_inset = math.min(tab.SIDE_INSET, math.max(0, w / 2 - 1))
+  local top_inset = math.min(tab.TOP_INSET, math.max(0, h - 1))
+  local tile_width = math.max(1, w - side_inset * 2)
+  local radius = math.min(TILE_RADIUS, tile_width / 2)
+  renderer.draw_rounded_rect(x + side_inset, y + top_inset, tile_width,
+    math.max(1, h - top_inset + radius), radius, color)
+end
+
+-- Tabs in a bar draw the number in the interface font and the name in the View text font.
+local bar_fonts = {}
+function tab.bar_fonts()
+  bar_fonts.number_font, bar_fonts.name_font = style.font, style.view_text_font
+  return bar_fonts
+end
+
+-- The width of a Tab in a bar: its content and padding, within the Title Bar's Tab width limits.
+function tab.bar_width(item, row_height)
+  local min_width = config.integrated_titlebar_tab_min_width or 80 * SCALE
+  local max_width = config.integrated_titlebar_tab_max_width or style.tab_width
+  local width = math.ceil(tab.width(item, row_height, tab.bar_fonts()) + style.padding.x * 2)
+  return common.clamp(width, min_width, math.max(min_width, max_width))
 end
 
 -- Draws the agent's line at the left edge of the Tab's name. Returns true when the time counts seconds.

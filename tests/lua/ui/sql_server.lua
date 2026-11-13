@@ -410,13 +410,7 @@ test.describe("SQL Queries", function()
       rows = { { cells = { "Ada", false }, source_line1 = 1, source_line2 = 1 } },
       distinct_values = { { values = { "Ada" }, counts = { Ada = 1 } }, { values = { false }, counts = { [false] = 1 } } },
     } }, affected_rows = {} })
-    local Results = require "plugins.sql_server.results"
-    local result
-    for _, pane in ipairs(panes.ordered()) do
-      for _, view in ipairs(panes.views(pane)) do
-        if view:extends(Results) then result = view end
-      end
-    end
+    local result = editor.buffer.sql_results:current()
     test.not_nil(result)
     test.equal(result:cell_value(1, 1), "Ada")
     test.equal(result:cell_value(1, 2), false)
@@ -443,13 +437,7 @@ test.describe("SQL Queries", function()
     editor.buffer:text_input("SELECT 1")
     editor.buffer:set_selection(1, 1, 1, 9)
     test.ok(command.perform("sql_server:run_selection"))
-    local Results = require "plugins.sql_server.results"
-    local result
-    for _, pane in ipairs(panes.ordered()) do
-      for _, view in ipairs(panes.views(pane)) do
-        if view:extends(Results) then result = view end
-      end
-    end
+    local result = editor.buffer.sql_results:current()
     panes.focus(panes.pane_for_view(result))
     test.ok(command.perform("sql_server:view_as_csv"))
     local csv = core.active_view
@@ -491,7 +479,7 @@ test.describe("SQL Queries", function()
     editor.buffer:text_input("SELECT 1")
     editor.buffer:set_selection(1, 1, 1, 9)
     test.ok(command.perform("sql_server:run_selection"))
-    local result = editor.buffer.sql_results
+    local result = editor.buffer.sql_results:current()
     local function view(row, column)
       panes.focus(panes.pane_for_view(result))
       result:select_cell(row, column, false)
@@ -1253,7 +1241,7 @@ test.describe("SQL Queries", function()
     run()
     test.same(calls, { "new", 7, "new" })
     test.equal(session.get(editor.buffer).id, 7)
-    local results = editor.buffer.sql_results
+    local results = editor.buffer.sql_results:current()
     test.equal(results:messages_text(), "The idle SQL session was lost, so a new session ran the SQL. "
       .. "Its temporary tables and SET options are gone.\n(1 row affected)")
     open = 1
@@ -1262,7 +1250,7 @@ test.describe("SQL Queries", function()
     run()
     test.same(calls, { 7 })
     test.equal(session.get(editor.buffer), nil)
-    test.ok(results:messages_text():find("rolled back", 1, true))
+    test.ok(editor.buffer.sql_results:current():messages_text():find("rolled back", 1, true))
   end)
 
   test.it("runs a large script without a time limit unless the Query sets one", function(context)
@@ -1307,8 +1295,8 @@ test.describe("SQL Queries", function()
     editor.buffer:text_input("SELECT 1")
     editor.buffer:set_selection(1, 1, 1, 9)
     test.ok(command.perform("sql_server:run_selection"))
-    local result = editor.buffer.sql_execution.view
     local function press(label)
+      local result = editor.buffer.sql_results:current()
       for _, b in ipairs(result:footer_buttons()) do
         if b.label == label then return result:on_mouse_pressed("left", b.x + 1, b.y + 1, 1) end
       end
@@ -1350,9 +1338,9 @@ test.describe("SQL Queries", function()
     local count = 0
     for _, pane in ipairs(panes.ordered()) do
       for _, view in ipairs(panes.views(pane)) do
-        if view:extends(require "plugins.sql_server.results") then
+        if view:extends(require "plugins.sql_server.result_tabs") then
           count = count + 1
-          test.equal(view.message, "Test server refused the statement.")
+          test.equal(view:current().message, "Test server refused the statement.")
         end
       end
     end
@@ -1375,10 +1363,10 @@ test.describe("SQL Queries", function()
     local found
     for _, pane in ipairs(panes.ordered()) do
       for _, view in ipairs(panes.views(pane)) do
-        if view:extends(require "plugins.sql_server.results") then
+        if view:extends(require "plugins.sql_server.result_tabs") then
           found = true
-          test.equal(#view.model.rows, 0)
-          test.ok(view.message:find("cancelled", 1, true))
+          test.equal(#view:current().model.rows, 0)
+          test.ok(view:current().message:find("cancelled", 1, true))
         end
       end
     end
@@ -1398,7 +1386,7 @@ test.describe("SQL Queries", function()
     local result_pane
     for _, pane in ipairs(panes.ordered()) do
       for _, view in ipairs(panes.views(pane)) do
-        if view:extends(require "plugins.sql_server.results") then result_pane = pane end
+        if view:extends(require "plugins.sql_server.result_tabs") then result_pane = pane end
       end
     end
     test.ok(panes.close(test.not_nil(result_pane)))
@@ -1467,7 +1455,7 @@ test.describe("SQL Queries", function()
     editor.buffer:text_input("-- note\nPRINT 'first'\nGO\nSELECT nam\nFROM sales.customers")
     editor.buffer:set_selection(2, 1, 5, 21)
     test.ok(command.perform("sql_server:run_selection"))
-    local results = test.not_nil(editor.buffer.sql_results)
+    local results = test.not_nil(editor.buffer.sql_results):current()
     test.equal(results:messages_text(), "first\nMsg 207, Level 16, State 1, Line 3\nInvalid column name 'nam'.")
     test.ok(command.perform("sql_server:go_to_error"))
     test.equal(select(1, editor.buffer:get_selection()), 4)
@@ -1522,10 +1510,9 @@ test.describe("SQL Queries", function()
     test.equal(#submitted, 4)
   end)
 
-  test.it("keeps a result with its SQL and display state while a new run replaces the live result", function(context)
+  test.it("shows each result of a run in a Tab and keeps a Tab when the next run replaces the others", function(context)
     local sql = require "plugins.sql_server"
     local editor, c = connected_query(context)
-    local Results = require "plugins.sql_server.results"
     local parser = require "plugins.tabular_data_preview.parser"
     local function model(names)
       local result = { headers = { "name" }, column_count = 1, rows = {} }
@@ -1533,7 +1520,8 @@ test.describe("SQL Queries", function()
       result.distinct_values = parser.distinct_values(result)
       return result
     end
-    local reply = { model({ "Ada", "Bea", "Cy" }) }
+    local long = "Beatrice Alexandra Montgomery"
+    local reply = { model({ "Ada", "Bea", "Cy" }), model({ "Ada", long }) }
     require("plugins.sql_server.backend").execute = function(_, _, callback)
       callback({ results = reply, affected_rows = {}, messages = {} })
       return { cancel = function() end }
@@ -1541,80 +1529,145 @@ test.describe("SQL Queries", function()
     editor.buffer:text_input("SELECT name FROM sales.customers")
     editor.buffer:set_selection(1, 1, 1, math.huge)
     test.ok(command.perform("sql_server:run_selection"))
-    local live = editor.buffer.sql_results
-    panes.focus(panes.pane_for_view(live))
-    test.ok(live:toggle_filter_value(1, "Ada"))
-    test.ok(live:toggle_filter_value(1, "Bea"))
-    live:cycle_sort(1); live:cycle_sort(1)
-    test.ok(command.perform("sql_server:keep_result"))
-    test.equal(core.active_view, live)
-    local kept
-    for _, pane in ipairs(panes.ordered()) do
-      for _, view in ipairs(panes.views(pane)) do
-        if view:extends(Results) and view ~= live then kept = view end
+    local host = editor.buffer.sql_results
+    local function tabs()
+      local out = {}
+      for i, view in ipairs(host.tabs) do
+        local item = view:tab_item()
+        out[i] = (item.number or view.kept and "kept") .. " " .. item.name
       end
+      return table.concat(out, " | ")
     end
-    test.not_nil(kept)
     local function shown(view)
       local names = {}
       for row = 1, view:row_count() do names[row] = view:cell_value(row, 1) end
       return table.concat(names, " ")
     end
-    test.equal(shown(kept), "Bea Ada")
-    test.ok(kept:get_name():find("Kept", 1, true))
+    test.equal(tabs(), "1 3 rows | 2 2 rows")
+    test.equal(core.active_view, editor)
 
-    -- A new run of changed SQL replaces only the live result.
+    -- Each result keeps its own filter, sort and column widths.
+    panes.focus(panes.pane_for_view(host))
+    local first = core.active_view
+    test.equal(first, host.tabs[1])
+    test.ok(first:toggle_filter_value(1, "Ada"))
+    test.ok(first:toggle_filter_value(1, "Bea"))
+    first:cycle_sort(1); first:cycle_sort(1)
+    test.ok(command.perform("sql_server:next_result"))
+    test.equal(core.active_view, host.tabs[2])
+    test.equal(shown(core.active_view), "Ada " .. long)
+    test.ok(core.active_view.column_widths[1] > first.column_widths[1])
+    test.ok(command.perform("sql_server:previous_result"))
+    test.equal(core.active_view, first)
+    test.equal(shown(first), "Bea Ada")
+
+    test.ok(command.perform("sql_server:keep_result"))
+    test.ok(first:get_name():find("Kept", 1, true))
+    test.not_ok(command.is_valid("sql_server:keep_result"))
+
+    -- A new run of changed SQL replaces only the Tabs that are not kept.
     reply = { model({ "Dee" }) }
     panes.focus(panes.pane_for_view(editor))
     editor.buffer:set_selection(1, 1, 1, math.huge)
     editor.buffer:text_input("SELECT name FROM sales.customers WHERE 1 = 1")
     editor.buffer:set_selection(1, 1, 1, math.huge)
     test.ok(command.perform("sql_server:run_selection"))
-    test.equal(editor.buffer.sql_results, live)
-    test.equal(shown(live), "Dee")
-    test.equal(shown(kept), "Bea Ada")
+    test.equal(editor.buffer.sql_results, host)
+    test.equal(tabs(), "kept 3 rows | 1 1 row")
+    test.equal(shown(host.tabs[1]), "Bea Ada")
+    test.equal(shown(host.tabs[2]), "Dee")
 
-    -- A kept result does not change, and its SQL opens on its connection.
-    panes.focus(panes.pane_for_view(kept))
-    test.not_ok(command.is_valid("sql_server:edit_cell"))
+    -- A kept result's SQL opens on its connection.
+    host:select(first, true)
+    test.equal(core.active_view, first)
     local sql_button
-    for _, b in ipairs(kept:footer_buttons()) do if b.id == "sql" then sql_button = b end end
-    test.ok(kept:press_footer_button(test.not_nil(sql_button)))
+    for _, b in ipairs(first:footer_buttons()) do if b.id == "sql" then sql_button = b end end
+    test.ok(first:press_footer_button(test.not_nil(sql_button)))
     local query = core.active_view
     test.equal(query.buffer:get_text(1, 1, math.huge, math.huge), "SELECT name FROM sales.customers")
     test.equal(sql.connection_for(query.buffer).id, c.id)
+
+    -- Close Result closes the Tab, and results without Tabs close their Pane.
+    host:select(first, true)
+    test.ok(command.perform("sql_server:close_result"))
+    test.equal(tabs(), "1 1 row")
+    test.ok(command.perform("sql_server:close_result"))
+    test.equal(panes.pane_for_view(host), nil)
   end)
 
-  test.it("shows every row of the next result in fitted columns, without the previous result's filter", function()
-    local Results = require "plugins.sql_server.results"
-    local function model(names)
-      local result = { headers = { "name" }, column_count = 1, rows = {} }
-      for i, name in ipairs(names) do
-        result.rows[i] = { cells = { name }, source_line1 = i, source_line2 = i }
-      end
-      result.distinct_values = require("plugins.tabular_data_preview.parser").distinct_values(result)
+  test.it("moves a result Tab out to a split and back, and joins a dragged results Pane to other Tabs", function()
+    local ResultTabs = require "plugins.sql_server.result_tabs"
+    local parser = require "plugins.tabular_data_preview.parser"
+    local function model(name)
+      local result = { headers = { "name" }, column_count = 1, rows = { { cells = { name }, source_line1 = 1, source_line2 = 1 } } }
+      result.distinct_values = parser.distinct_values(result)
       return result
     end
-    local view = Results("Test")
-    panes.place(function() return view end, { placement = "new", focus = true })
-    local long = "Beatrice Alexandra Montgomery"
-    view:complete({ results = { model({ "Ada", "Bea" }), model({ "Ada", long }) } })
-    local narrow = view.column_widths[1]
-    test.ok(view:toggle_filter_value(1, "Ada"))
-    test.ok(command.perform("sql_server:next_result"))
-    test.equal(view:row_count(), 2)
-    test.equal(view:cell_value(2, 1), long)
-    test.ok(view.column_widths[1] > narrow)
-    view:cycle_sort(1); view:cycle_sort(1)
-    -- Each result keeps its own filter, sort and widths.
-    test.ok(command.perform("sql_server:previous_result"))
-    test.equal(view:row_count(), 1)
-    test.equal(view.column_widths[1], narrow)
-    test.ok(command.perform("sql_server:next_result"))
-    test.equal(view:cell_value(1, 1), long)
-    -- A new run starts again.
-    view:complete({ results = { model({ "Ada", "Bea" }) } })
-    test.equal(view:row_count(), 2)
+    local function results(...)
+      local host = ResultTabs("Test")
+      local view = host:begin_run(nil, "Test", function() end, false, "SELECT name")
+      local models = {}
+      for i, name in ipairs({ ... }) do models[i] = model(name) end
+      host:complete(view, { results = models, messages = {} })
+      return host
+    end
+    local host = results("Ada", "Bea", "Cy")
+    panes.place(function() return host end, { placement = "new", focus = true })
+    local function settle()
+      for _ = 1, 3 do coroutine.yield(0.02) end
+    end
+    local function center(view, index)
+      local rect = view.tab_rects[index]
+      return rect.x + rect.w / 2, rect.y + rect.h / 2
+    end
+    local function drag(x1, y1, x2, y2)
+      core.on_event("mousepressed", "left", x1, y1, 1)
+      core.on_event("mousemoved", (x1 + x2) / 2, (y1 + y2) / 2, 0, 0)
+      core.on_event("mousemoved", x2, y2, 0, 0)
+      core.on_event("mousereleased", "left", x2, y2)
+      settle()
+    end
+    settle()
+    local ada, bea = host.tabs[1], host.tabs[2]
+
+    -- In the Tabs, a drag changes the order.
+    local x, y = center(host, 2)
+    drag(x, y, host.tab_rects[1].x + 2, y)
+    test.same(host.tabs, { bea, ada, host.tabs[3] })
+
+    -- At the right edge of the Pane, the Tab opens in new results beside it, kept and focused.
+    local pane = panes.pane_for_view(host)
+    x, y = center(host, 1)
+    drag(x, y, pane.position.x + pane.size.x - 4, pane.position.y + pane.size.y / 2)
+    local other = panes.pane_for_view(bea).current_view
+    test.not_equal(other, host)
+    test.ok(other:is(ResultTabs))
+    test.same(other.tabs, { bea })
+    test.ok(bea.kept)
+    test.equal(#host.tabs, 2)
+    test.equal(core.active_view, bea)
+
+    -- Over the first results' Tabs, it joins them at the drop place, and its empty results close.
+    x, y = center(other, 1)
+    local last = host.tab_rects[2]
+    drag(x, y, last.x + last.w - 2, last.y + last.h / 2)
+    test.equal(host.tabs[3], bea)
+    test.equal(panes.pane_for_view(other), nil)
+
+    -- A results Pane that the Title Bar drags over the Tabs adds its Tabs there.
+    local dragged = results("Dee", "Eve")
+    local source = select(2, panes.place(function() return dragged end, { pane = pane, placement = "split", direction = "down" }))
+    settle()
+    local bar = require("core.titlebar")()
+    bar.dragged_pane = source
+    x, y = center(host, 1)
+    local target = test.not_nil(bar:resolve_pane_drag_target(x - host.tab_rects[1].w / 2 + 2, y))
+    test.equal(target.kind, "view")
+    test.ok(bar:apply_pane_drag_target(target))
+    local names = {}
+    for i, view in ipairs(host.tabs) do names[i] = view:cell_value(1, 1) end
+    test.same(names, { "Dee", "Eve", "Ada", "Cy", "Bea" })
+    test.equal(panes.pane_for_view(dragged), nil)
   end)
 
   test.it("summarizes the shown rows, the columns and the run time in the footer", function(context)

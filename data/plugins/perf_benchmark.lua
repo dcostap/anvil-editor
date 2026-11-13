@@ -1244,9 +1244,23 @@ local function scenario_is_ready()
     require("plugins.fuzzy_searcher").open(benchmark.scenario == "sql-files" and "cust" or "$customers")
     return false
   end
-  if benchmark.scenario == "sql-results" or benchmark.scenario == "sql-results-edit" then
-    local Results = require "plugins.sql_server.results"
-    if view:extends(Results) then
+  if benchmark.scenario == "sql-results" or benchmark.scenario == "sql-results-edit"
+      or benchmark.scenario == "sql-results-drag" then
+    local ResultTabs = require "plugins.sql_server.result_tabs"
+    if view:extends(ResultTabs) then
+      if benchmark.scenario == "sql-results-drag" then
+        -- The second result's Tab, dragged to the right edge of the results.
+        if not view.tab_rects[3] then return false end
+        if not view.drag then
+          local x = view.position.x + view.size.x - 20 * SCALE
+          local y = view.position.y + view.size.y / 2
+          view.drag = { view = view.tabs[3], x = x, y = y }
+          view.drag.target = view:drop_target(view.tabs[3], x, y)
+        end
+        return true
+      end
+      local host = view
+      view = host:current()
       view:select_cell(2, 2, false)
       if benchmark.scenario == "sql-results-edit" and not view.cell_editor then
         -- A changed cell, a deleted row, and the cell editor with its value selected.
@@ -1264,10 +1278,21 @@ local function scenario_is_ready()
         source_line1 = i, source_line2 = i }
     end
     model.distinct_values = require("plugins.tabular_data_preview.parser").distinct_values(model)
-    benchmark.view = Results("Example SQL Server")
-    benchmark.view:complete({ results = { model }, affected_rows = {}, seconds = 0.0123 })
-    benchmark.view:toggle_filter_value(3, "Lisbon")
-    require("core.panes").present(benchmark.view, { focus = true })
+    local small = { headers = { "city", "customers" }, column_count = 2, column_kinds = { "text", "number" },
+      missing_label = "NULL", rows = {
+        { cells = { "Lisbon", "67" }, source_line1 = 1, source_line2 = 1 },
+        { cells = { "Porto", "33" }, source_line1 = 2, source_line2 = 2 } } }
+    small.distinct_values = require("plugins.tabular_data_preview.parser").distinct_values(small)
+    -- A kept result of an earlier run, then the two results of the last run.
+    local host = ResultTabs("Example SQL Server")
+    local run = host:begin_run(nil, "Example SQL Server", function() end, false, "SELECT * FROM sales.customers;")
+    host:complete(run, { results = { model }, affected_rows = {}, seconds = 0.0123 })
+    run:keep()
+    run = host:begin_run(nil, "Example SQL Server", function() end, false, "SELECT * FROM sales.customers;")
+    host:complete(run, { results = { model, small }, affected_rows = {}, seconds = 0.0123 })
+    run:toggle_filter_value(3, "Lisbon")
+    benchmark.view = host
+    require("core.panes").present(host, { focus = true })
     return false
   end
   if benchmark.scenario:find("^sql%-table%-design") then

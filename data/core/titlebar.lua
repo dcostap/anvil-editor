@@ -16,9 +16,6 @@ local CAPTION_COUNT = 3
 local DRAG_THRESHOLD = 6
 local DRAG_SCROLL_EDGE = 28
 local DRAG_SCROLL_INTERVAL = 0.12
-local TAB_SIDE_INSET = math.floor(3 * SCALE)
-local TAB_TOP_INSET = math.floor(4 * SCALE)
-local TAB_RADIUS = math.floor(8 * SCALE)
 -- Text metrics and layout geometry can differ by a subpixel at fractional
 -- Zoom. Keep one pixel outside content-sized labels and ignore subpixel noise.
 local TEXT_FIT_RESERVE = 1
@@ -167,24 +164,14 @@ function TitleBar.pane_marker_font()
   return style.get_scaled_font(style.prose_heading_font, size)
 end
 
--- Title Bar Tabs draw the Pane number in the interface font and the name in the View text font.
-local function tab_fonts()
-  return {number_font = style.font, name_font = style.view_text_font}
-end
-
 local function draw_pane_label(number, pane, rect, name_color)
-  local opts = tab_fonts()
+  local opts = tab.bar_fonts()
   opts.name_color, opts.clock = name_color, system.get_time()
   tab.draw(tab.describe(pane, number), rect.x, rect.y, rect.w, rect.h, opts)
 end
 
 local function preferred_tab_width(number, pane, row_height)
-  local min_width = config.integrated_titlebar_tab_min_width or 80 * SCALE
-  local max_width = config.integrated_titlebar_tab_max_width or style.tab_width
-  local width = math.ceil(
-    tab.width(tab.describe(pane, number), row_height, tab_fonts()) + style.padding.x * 2
-  )
-  return common.clamp(width, min_width, math.max(min_width, max_width))
+  return tab.bar_width(tab.describe(pane, number), row_height)
 end
 
 -- The Title Bar shows Tabs only when they are enabled and no Project Sidebar shows them.
@@ -192,14 +179,7 @@ local function tabs_shown()
   return not config.hide_tabs and system.get_window_content_x() <= 0
 end
 
-local function draw_tab_tile(x, y, w, h, color)
-  local side_inset = math.min(TAB_SIDE_INSET, math.max(0, w / 2 - 1))
-  local top_inset = math.min(TAB_TOP_INSET, math.max(0, h - 1))
-  local tile_width = math.max(1, w - side_inset * 2)
-  local radius = math.min(TAB_RADIUS, tile_width / 2)
-  renderer.draw_rounded_rect(x + side_inset, y + top_inset, tile_width,
-    math.max(1, h - top_inset + radius), radius, color)
-end
+local draw_tab_tile = tab.draw_tile
 
 function TitleBar:__tostring() return "TitleBar" end
 
@@ -465,6 +445,14 @@ function TitleBar:resolve_pane_drag_target(x, y)
   local destination, direction = panes().drop_target_at(x, y)
   if destination then
     if destination == source then return nil end
+    -- A View can take the dropped Pane itself, such as SQL results that take another results Pane as Tabs.
+    -- Its target has a `rect` to highlight.
+    local view = destination.current_view
+    local own = view.pane_drop_target and view:pane_drop_target(source, x, y)
+    if own then
+      own.kind, own.view = "view", view
+      return own
+    end
     local rect = {
       x = destination.position.x, y = destination.position.y,
       w = destination.size.x, h = destination.size.y,
@@ -533,6 +521,8 @@ function TitleBar:apply_pane_drag_target(target)
   if not source or not target then return nil end
   if target.kind == "work" then
     return panes().drop(source, self.drag_x, self.drag_y)
+  elseif target.kind == "view" then
+    return target.view:accept_pane_drop(source, target)
   elseif target.kind == "reorder" then
     return panes().reorder(source, target.pane, target.direction)
   elseif target.kind == "group-boundary" then
@@ -719,16 +709,16 @@ function TitleBar:draw_pane_drag()
   local pane = self.dragged_pane
   if not pane then return end
   local target = self.drag_target
-  if target and target.kind == "work" and target.rect then
+  if target and target.rect then
     renderer.draw_rect(
       target.rect.x, target.rect.y, target.rect.w, target.rect.h,
-      style.drag_overlay
+      target.kind == "view" and style.drag_overlay_tab or style.drag_overlay
     )
   elseif target and target.indicator_x then
     local width = math.max(2, math.floor(2 * SCALE))
     renderer.draw_rect(
-      target.indicator_x - width / 2, self.position.y + TAB_TOP_INSET,
-      width, math.max(1, self.size.y - TAB_TOP_INSET),
+      target.indicator_x - width / 2, self.position.y + tab.TOP_INSET,
+      width, math.max(1, self.size.y - tab.TOP_INSET),
       style.drag_overlay_tab
     )
   end
@@ -843,8 +833,8 @@ function TitleBar:draw()
   end
   if first_visible then
     local height = math.max(2, math.floor(2 * SCALE))
-    local left = first_visible.x + TAB_SIDE_INSET
-    local right = last_visible.x + last_visible.w - TAB_SIDE_INSET
+    local left = first_visible.x + tab.SIDE_INSET
+    local right = last_visible.x + last_visible.w - tab.SIDE_INSET
     renderer.draw_rect(
       math.floor(left), self.position.y + self.size.y - height,
       math.max(1, math.floor(right - left)), height,

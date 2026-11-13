@@ -261,6 +261,10 @@ function M.prepare(sql, results, done)
     core.warn("Only the single result of a SQL run can be edited."); return false
   end
   if results.describing then return false end
+  -- A kept result can outlive its Query's connection or database. Its SQL describes only there.
+  if results.connection_id ~= c.id or sql.other_database(buffer) ~= results.run_database then
+    core.warn("The Query uses another connection or database now. Run the SQL again to edit this result."); return false
+  end
   if buffer.sql_execution and buffer.sql_execution.active then core.warn("Wait for the running SQL to finish."); return false end
   local session = require "plugins.sql_server.session"
   local generation, data_now = c.generation, results.data

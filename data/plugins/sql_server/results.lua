@@ -2,6 +2,7 @@ local core = require "core"
 local common = require "core.common"
 local command = require "core.command"
 local style = require "core.style"
+local ui = require "core.ui"
 local Preview = require "plugins.tabular_data_preview"
 local CellEditor = require "plugins.sql_server.cell_editor"
 
@@ -45,6 +46,7 @@ function Results:begin_run(cancel, explain, text)
   self.kind = explain and "Explain Plan" or "SQL Results"
   self.message = explain and "Reading plan…" or "Running SQL…"
   self.title = self.kind .. " · " .. self.connection_name
+  self.tab_cache = nil
   self:publish_model(empty, 0)
 end
 
@@ -61,36 +63,40 @@ function Results:messages_text()
   return #lines > 0 and table.concat(lines, "\n") or self.message
 end
 
--- The filter, sort, widths and scroll of the shown result, so it shows the
--- same when the user comes back to it.
-function Results:save_result_state()
-  if not self.result_index then return end
-  self.result_states[self.result_index] = { filters = self.filters, sort = self.sort,
-    column_widths = self.column_widths, x = self.scroll.to.x, y = self.scroll.to.y }
+local function set_title(self)
+  self.title = string.format("%s%s · %s", self.kept and "Kept " or "", self.kind or "SQL Results", self.connection_name)
+  self.tab_cache = nil
 end
 
-function Results:show_result(index)
+-- Shows result `index` of the run. `state` gives its filter, sort, column widths and scroll; without it, the
+-- result starts with fitted columns and no filter.
+function Results:show_result(index, state)
   local model = self.data and self.data.results and self.data.results[index]
   if not model then return false end
-  self:save_result_state()
+  state = state or { filters = {}, column_widths = {}, x = 0, y = 0 }
   self.result_index = index
-  local saved = self.result_states[index] or { filters = {}, column_widths = {}, x = 0, y = 0 }
-  self.filters, self.sort, self.column_widths = saved.filters, saved.sort, saved.column_widths
-  self.scroll.x, self.scroll.y, self.scroll.to.x, self.scroll.to.y = saved.x, saved.y, saved.x, saved.y
+  self.filters, self.sort, self.column_widths = state.filters, state.sort, state.column_widths
+  self.scroll.x, self.scroll.y, self.scroll.to.x, self.scroll.to.y = state.x, state.y, state.x, state.y
   self:publish_model(model, index)
   self.result_warning = self.data.error or (self.data.limited and "Result limit reached. Some results are cut.") or model.warning
-  self.title = string.format("%s%s %d/%d · %s", self.kept and "Kept " or "", self.kind or "SQL Results", index,
-    #self.data.results, self.connection_name)
+  set_title(self)
   core.redraw = true
   return true
 end
 
-function Results:complete(data)
+-- Shows result `index` (default 1) of the finished run. The result keeps the connection and the database of
+-- its Query at this time, for its edits and scripts.
+function Results:complete(data, index)
   self.cancel_query = nil
   if self.cell_editor then self.cell_editor:close(false) end
   self.data = data
-  self.result_index, self.result_states = nil, {}
+  self.result_index = nil
   self.edits, self.deletes, self.edit_info, self.edit_error = {}, {}, nil, nil
+  if self.source_buffer then
+    local sql = require "plugins.sql_server"
+    local c = sql.connection_for(self.source_buffer)
+    self.connection_id, self.run_database = c and c.id, sql.other_database(self.source_buffer)
+  end
   self.undo_steps, self.redo_steps = {}, {}
   local last = data.messages and data.messages[#data.messages]
   if data.cancelled then
@@ -105,8 +111,32 @@ function Results:complete(data)
   if not data.cancelled and data.transaction_count and data.transaction_count > 0 then
     self.message = self.message .. "  ·  Transaction open"
   end
-  if not self:show_result(1) then self:publish_model(empty, 0) end
+  if not self:show_result(index or 1) then set_title(self); self:publish_model(empty, 0) end
   core.redraw = true
+end
+
+-- The result's Tab: its number in the run, or a pin when it is kept, and its row count. A result without a table
+-- shows the run's last message.
+local ICONS = { kept = "\u{F0403}", error = "\u{F0028}" }
+function Results:tab_item()
+  local item = self.tab_cache
+  if item then return item end
+  item = {}
+  if self.kept then item.icon = { kind = "ui", glyph = ICONS.kept, font = ui.small_icon_font() }
+  else item.number = self.result_index end
+  if self.cancel_query then
+    item.name = "\u{280B} Running"
+  elseif self.model.column_count > 0 then
+    local rows = #self.model.rows
+    item.name = rows == 1 and "1 row" or string.format("%d rows", rows)
+  else
+    item.name = self.message:gsub("\n.*", "")
+    if self.data and self.data.error and not self.kept then
+      item.icon = { kind = "ui", glyph = ICONS.error, font = ui.small_icon_font(), color = style.error }
+    end
+  end
+  self.tab_cache = item
+  return item
 end
 
 -- Pending edits show in their cells until the user scripts or discards them.
@@ -224,9 +254,6 @@ function Results:footer_summary()
     text = text .. " · " .. (seconds < 1 and string.format("%d ms", math.floor(seconds * 1000 + 0.5))
       or seconds < 60 and string.format("%.1f s", seconds)
       or string.format("%d min %d s", math.floor(seconds / 60), math.floor(seconds % 60)))
-  end
-  if self.data and #self.data.results > 1 then
-    text = string.format("Result %d of %d · %s", self.result_index, #self.data.results, text)
   end
   self.summary_cache = { model = self.model, data = self.data, rows = rows, text = text }
   return text, style.dim
@@ -484,7 +511,7 @@ function Results:end_cell_edit(editor, keep, row_delta, column_delta)
 end
 
 -- Typing over a cell, or Backspace, starts the editor.
-function Results:supports_text_input() return not self.kept end
+function Results:supports_text_input() return self.edits ~= nil end
 function Results:on_text_input(text)
   if self.selection_focus and self.edits then return self:edit_cell(text) end
   return false
@@ -551,21 +578,18 @@ function Results:delete_rows()
   end)
 end
 
--- The database of the result's Query when USE moved it, or nil. A kept result keeps it.
+-- The database of the result's Query when USE moved it, or nil.
 function Results:database()
-  if self.kept then return self.kept_database end
-  return self.source_buffer and require("plugins.sql_server").other_database(self.source_buffer)
+  return self.run_database
 end
 
 -- A script opens in a new SQL Query on the result's connection and runs nothing.
 -- It starts with USE for a result of another database.
 function Results:open_script(text)
   local sql = require "plugins.sql_server"
-  local c = self.source_buffer and sql.connection_for(self.source_buffer)
-  local id = self.connection_id or c and c.id
-  local editor = sql.new_query(id)
+  local editor = sql.new_query(self.connection_id)
   if not editor then return false end
-  editor.buffer:text_input(sql.in_database(sql.find(id), self:database(), text))
+  editor.buffer:text_input(sql.in_database(sql.find(self.connection_id), self:database(), text))
   editor.buffer:set_selection(1, 1)
   return true
 end
@@ -652,40 +676,29 @@ local function copy_filters(filters)
   return copy
 end
 
--- A Kept Result is a copy of the run in its own Pane. It keeps the SQL and the
--- connection of the run, and its rows do not change: no new run reaches it, and
--- it takes no edits.
+-- A Kept Result stays when the next run replaces the other results, like a pinned Tab. It keeps its SQL, its
+-- connection and its edits.
 function Results:keep()
-  if not self.data then return false end
-  local sql = require "plugins.sql_server"
-  local c = self.source_buffer and sql.connection_for(self.source_buffer)
-  self:save_result_state()
-  local copy = Results(self.connection_name)
-  copy.kept, copy.kind, copy.run_text = true, self.kind, self.run_text
-  copy.connection_id = self.connection_id or c and c.id
-  copy.kept_database = self:database()
-  copy:complete(self.data)
-  copy.message, copy.edits, copy.deletes = self.message, nil, nil
-  for index, state in pairs(self.result_states) do
-    local widths = {}
-    for i, width in ipairs(state.column_widths) do widths[i] = width end
-    copy.result_states[index] = { filters = copy_filters(state.filters), column_widths = widths,
-      sort = state.sort and { column = state.sort.column, direction = state.sort.direction }, x = state.x, y = state.y }
-  end
-  copy.result_index = nil
-  copy:show_result(self.result_index or 1)
-  local panes = require "core.panes"
-  if not panes.place(function() return copy end,
-      { pane = panes.pane_for_view(self), placement = "split", direction = "right", focus = false }) then
-    return false
-  end
-  core.log_quiet("SQL Server: kept a result of %d table(s)", #self.data.results)
+  if self.kept or not self.data or self.cancel_query then return false end
+  self.kept = true
+  set_title(self)
+  core.log_quiet("SQL Server: kept a result")
   return true
 end
 
-function Results:duplicate()
+-- A kept copy of the result with the same rows, filter, sort, column widths and scroll, without its edits.
+function Results:copy()
   local copy = Results(self.connection_name)
-  if self.data then copy:complete(self.data); copy:show_result(self.result_index or 1) end
+  copy.kept, copy.kind, copy.run_text, copy.source_buffer = true, self.kind, self.run_text, self.source_buffer
+  local widths = {}
+  for i, width in ipairs(self.column_widths) do widths[i] = width end
+  copy:complete(self.data, self.result_index or 1)
+  copy.connection_id, copy.run_database, copy.message = self.connection_id, self.run_database, self.message
+  if self.result_index then
+    copy:show_result(self.result_index, { filters = copy_filters(self.filters), column_widths = widths,
+      sort = self.sort and { column = self.sort.column, direction = self.sort.direction },
+      x = self.scroll.to.x, y = self.scroll.to.y })
+  end
   return copy
 end
 
@@ -697,13 +710,11 @@ end
 
 command.add(function()
   local view = core.active_view
-  return view and view:is(Results) and view.data ~= nil and not view.cancel_query, view
+  return view and view:is(Results) and view.data ~= nil and not view.cancel_query and not view.kept, view
 end, {
   ["sql_server:keep_result"] = function(view) return view:keep() end,
 })
 command.add(Results, {
-  ["sql_server:next_result"] = function(view) view:show_result((view.result_index or 0) + 1) end,
-  ["sql_server:previous_result"] = function(view) view:show_result((view.result_index or 2) - 1) end,
   ["sql_server:messages"] = show_messages,
 })
 command.add(function()
@@ -739,13 +750,13 @@ end, {
 })
 command.add(function()
   local view = core.active_view
-  return view and view:is(Results) and view.undo_steps ~= nil and #view.undo_steps > 0 and not view.kept, view
+  return view and view:is(Results) and view.undo_steps ~= nil and #view.undo_steps > 0, view
 end, {
   ["sql_server:undo_change"] = function(view) return view:undo_change() end,
 })
 command.add(function()
   local view = core.active_view
-  return view and view:is(Results) and view.redo_steps ~= nil and #view.redo_steps > 0 and not view.kept, view
+  return view and view:is(Results) and view.redo_steps ~= nil and #view.redo_steps > 0, view
 end, {
   ["sql_server:redo_change"] = function(view) return view:redo_change() end,
 })

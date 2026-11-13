@@ -891,6 +891,12 @@ This is a personal fork with first-party ownership of the whole codebase, includ
 
 AGENTS.md and docs describe what exists now. When you remove a feature, remove its text. Do not write that it is gone. Put that history in the commit message.
 
+## Tabs inside a View
+
+`core.tab` draws the Title Bar's Tabs: `tab.draw_tile`, `tab.bar_fonts` and `tab.bar_width`. A View that shows its own Tabs, such as the SQL Result Tabs (`plugins.sql_server.result_tabs`), uses them with the Title Bar's styles, so both look the same.
+A View can take a Pane that the Title Bar drags over it. `view:pane_drop_target(source, x, y)` returns a target with a `rect`, and the Title Bar then calls `view:accept_pane_drop(source, target)` on the drop.
+Run `ui/titlebar.lua` and `ui/sql_server.lua` after changes. Check the `sql-results` and `sql-results-drag` render scenarios after visual changes.
+
 ## Popups
 
 A popup is a card that floats over its host: the Root Panel, or a Sidebar's surface. `core.popup` places popups in their host and hit-tests them. The Context Menu, the autocomplete description and the treelist tooltip use it.

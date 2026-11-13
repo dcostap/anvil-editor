@@ -488,17 +488,17 @@ function M.run(editor, opts)
     end
   end
   local run = { active = true, connection = c, generation = c.generation, started = system.get_time() }
-  local view = buffer.sql_results
-  if not view or view.closed or not panes.pane_for_view(view) then
-    view = panes.place(function() return require("plugins.sql_server.results")(c.name) end,
+  local host = buffer.sql_results
+  if not host or host.closed or not panes.pane_for_view(host) then
+    host = panes.place(function() return require("plugins.sql_server.result_tabs")(c.name) end,
       { pane = panes.pane_for_view(editor), placement = "split", direction = "down", focus = false })
-    if not view then return false end
-    buffer.sql_results = view
+    if not host then return false end
+    buffer.sql_results = host
   end
-  run.view, view.source_buffer = view, buffer
   buffer.sql_execution, active_runs[run] = run, true
   M.set_error_line(buffer, nil)
-  view:begin_run(function() cancel_run(run) end, opts.explain, text)
+  local view = host:begin_run(buffer, c.name, function() cancel_run(run) end, opts.explain, text)
+  run.view = view
   buffer:add_metadata_listener("sql_execution", function(_, event)
     if event.kind == "close" then run.closed = true; cancel_run(run) end
   end)
@@ -533,7 +533,7 @@ function M.run(editor, opts)
     if data.error_line then M.set_error_line(buffer, line1 + data.error_line - 1) end
     if c.generation == run.generation then session.schema_check(buffer, c, data.schema_changed) end
     data.seconds = system.get_time() - run.started
-    if buffer.sql_execution == run and not view.closed then view:complete(data) end
+    if buffer.sql_execution == run and not view.closed and view.host then view.host:complete(view, data) end
     if not opts.explain then
       require("plugins.sql_server.history").record(storage_key, { text = text, connection = c.id, name = c.name,
         seconds = data.seconds,
