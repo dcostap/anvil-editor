@@ -1260,6 +1260,8 @@ local function scenario_is_ready()
         return true
       end
       local host = view
+      -- In sql-results, the pointer rests on the pin of the first result of the last run.
+      if benchmark.scenario == "sql-results" then host.hovered, host.hovered_pin = 2, true end
       view = host:current()
       view:select_cell(2, 2, false)
       if benchmark.scenario == "sql-results-edit" and not view.cell_editor then
@@ -1289,7 +1291,7 @@ local function scenario_is_ready()
     local host = ResultTabs("Example SQL Server")
     local run = host:begin_run(nil, "Example SQL Server", function() end, false, "SELECT * FROM sales.customers;")
     host:complete(run, { results = { model }, affected_rows = {}, seconds = 0.0123 })
-    run:keep()
+    run:set_kept(true)
     run = host:begin_run(nil, "Example SQL Server", function() end, false, "SELECT * FROM sales.customers;")
     host:complete(run, { results = { model, small }, affected_rows = {}, seconds = 0.0123 })
     run:toggle_filter_value(3, "Lisbon")

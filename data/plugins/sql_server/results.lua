@@ -116,15 +116,14 @@ function Results:complete(data, index)
   core.redraw = true
 end
 
--- The result's Tab: its number in the run, or a pin when it is kept, and its row count. A result without a table
+-- The result's Tab: its number in the run, unless it is kept, and its row count. A result without a table
 -- shows the run's last message.
-local ICONS = { kept = "\u{F0403}", error = "\u{F0028}" }
+local ERROR_ICON = "\u{F0028}"
 function Results:tab_item()
   local item = self.tab_cache
   if item then return item end
   item = {}
-  if self.kept then item.icon = { kind = "ui", glyph = ICONS.kept, font = ui.small_icon_font() }
-  else item.number = self.result_index end
+  if not self.kept then item.number = self.result_index end
   if self.cancel_query then
     item.name = "\u{280B} Running"
   elseif self.model.column_count > 0 then
@@ -132,8 +131,8 @@ function Results:tab_item()
     item.name = rows == 1 and "1 row" or string.format("%d rows", rows)
   else
     item.name = self.message:gsub("\n.*", "")
-    if self.data and self.data.error and not self.kept then
-      item.icon = { kind = "ui", glyph = ICONS.error, font = ui.small_icon_font(), color = style.error }
+    if self.data and self.data.error then
+      item.icon = { kind = "ui", glyph = ERROR_ICON, font = ui.small_icon_font(), color = style.error }
     end
   end
   self.tab_cache = item
@@ -383,7 +382,6 @@ function Results:cell_menu_items()
     { label = "View as CSV", command = "sql_server:view_as_csv" },
     { label = "View as JSON", command = "sql_server:view_as_json" },
     { label = "Messages", command = "sql_server:messages" },
-    { label = "Keep Result", command = "sql_server:keep_result" },
     { label = "Go to Error", command = "sql_server:results_go_to_error" },
     { label = "Cancel SQL", command = "sql_server:cancel" },
   } do items[#items + 1] = item end
@@ -683,12 +681,16 @@ local function copy_filters(filters)
 end
 
 -- A Kept Result stays when the next run replaces the other results, like a pinned Tab. It keeps its SQL, its
--- connection and its edits.
-function Results:keep()
-  if self.kept or not self.data or self.cancel_query then return false end
-  self.kept = true
+-- connection and its edits. A released result goes with the next run.
+function Results:can_keep()
+  return self.data ~= nil and not self.cancel_query
+end
+
+function Results:set_kept(kept)
+  if kept == (self.kept == true) or not self:can_keep() then return false end
+  self.kept = kept or nil
   set_title(self)
-  core.log_quiet("SQL Server: kept a result")
+  core.log_quiet("SQL Server: %s a result", kept and "kept" or "released")
   return true
 end
 
@@ -716,9 +718,9 @@ end
 
 command.add(function()
   local view = core.active_view
-  return view and view:is(Results) and view.data ~= nil and not view.cancel_query and not view.kept, view
+  return view and view:is(Results) and view:can_keep(), view
 end, {
-  ["sql_server:keep_result"] = function(view) return view:keep() end,
+  ["sql_server:toggle_keep_result"] = function(view) return view:set_kept(not view.kept) end,
 })
 command.add(Results, {
   ["sql_server:messages"] = show_messages,

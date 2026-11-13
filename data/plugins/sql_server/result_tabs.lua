@@ -8,6 +8,7 @@ local style = require "core.style"
 local tab = require "core.tab"
 local View = require "core.view"
 local panes = require "core.panes"
+local ui = require "core.ui"
 local Results = require "plugins.sql_server.results"
 
 local ResultTabs = View:extend()
@@ -15,6 +16,8 @@ function ResultTabs:__tostring() return "SQLResultTabs" end
 ResultTabs.view_icon = Results.view_icon
 
 local DRAG_THRESHOLD = 6
+local PIN_ICONS = { kept = "\u{F0403}", free = "\u{F0931}" }
+local tab_width, pin_rect
 
 local function index_of(list, value)
   for i, item in ipairs(list) do
@@ -152,9 +155,9 @@ function ResultTabs:update()
   local h = self:strip_height()
   local total = 0
   for i, view in ipairs(self.tabs) do
-    local rect = self.tab_rects[i] or {}
+    local rect = self.tab_rects[i] or { pin = {} }
     self.tab_rects[i] = rect
-    rect.w = tab.bar_width(view:tab_item(), h)
+    rect.w = tab_width(view:tab_item(), h)
     rect.x, rect.y, rect.h = total, self.position.y, h
     total = total + rect.w
   end
@@ -167,7 +170,10 @@ function ResultTabs:update()
     self.tab_scroll = common.clamp(self.tab_scroll, rect.x + rect.w - self.size.x, rect.x)
   end
   self.tab_scroll = common.clamp(self.tab_scroll, 0, math.max(0, total - self.size.x))
-  for _, rect in ipairs(self.tab_rects) do rect.x = self.position.x + rect.x - self.tab_scroll end
+  for _, rect in ipairs(self.tab_rects) do
+    rect.x = self.position.x + rect.x - self.tab_scroll
+    pin_rect(rect, rect.pin)
+  end
   local view = self.shown
   if view then
     view.position.x, view.position.y = self.position.x, self.position.y + h
@@ -175,6 +181,35 @@ function ResultTabs:update()
     view:update()
   end
   ResultTabs.super.update(self)
+end
+
+-- Each Tab ends with its pin, which keeps the result.
+local function pin_width(h)
+  return math.floor(h * 0.9)
+end
+
+function tab_width(item, h)
+  return tab.bar_width(item, h) + pin_width(h)
+end
+
+function pin_rect(rect, out)
+  local size = pin_width(rect.h)
+  local inset = tab.TOP_INSET + math.floor(2 * SCALE)
+  out.x, out.y = rect.x + rect.w - size - math.floor(style.padding.x / 3), rect.y + inset
+  out.w, out.h = size, math.max(1, rect.h - inset - math.floor(2 * SCALE))
+  return out
+end
+
+-- A kept pin is solid, in the accent color. A pin under the pointer shows a hover tile.
+local function draw_pin(view, pin, hovered, pressed)
+  local enabled = view:can_keep()
+  if hovered and enabled then
+    renderer.draw_rounded_rect(pin.x, pin.y, pin.w, pin.h, math.floor(4 * SCALE),
+      pressed and style.titlebar_control_pressed or style.titlebar_control_hover)
+  end
+  local color = view.kept and style.accent or hovered and enabled and style.text or style.dim
+  common.draw_text(ui.small_icon_font(), color, view.kept and PIN_ICONS.kept or PIN_ICONS.free, "center",
+    pin.x, pin.y, pin.w, pin.h)
 end
 
 -- A running Tab turns its spinner.
@@ -189,8 +224,8 @@ end
 local function draw_label(item, rect, color)
   local opts = tab.bar_fonts()
   opts.name_color, opts.clock = color, system.get_time()
-  tab.draw(shown_item(item, opts.clock), rect.x + style.padding.x, rect.y, math.max(0, rect.w - style.padding.x * 2),
-    rect.h, opts)
+  tab.draw(shown_item(item, opts.clock), rect.x + style.padding.x, rect.y,
+    math.max(0, rect.w - pin_width(rect.h) - style.padding.x * 2), rect.h, opts)
 end
 
 -- While a Tab moves, its tile follows the pointer above all Panes, and the place where it would go shows.
@@ -203,7 +238,7 @@ local function draw_drag(self)
   end
   local h = self:strip_height()
   local item = drag.view:tab_item()
-  local tile = { w = tab.bar_width(item, h), h = h }
+  local tile = { w = tab_width(item, h), h = h }
   local root = core.root_panel
   tile.x = common.clamp(drag.x - tile.w / 2, root.position.x, math.max(root.position.x, root.position.x + root.size.x - tile.w))
   tile.y = common.clamp(drag.y - h / 2, root.position.y, math.max(root.position.y, root.position.y + root.size.y - h))
@@ -211,6 +246,7 @@ local function draw_drag(self)
   tab.draw_tile(tile.x, tile.y, tile.w, tile.h, style.titlebar)
   tab.draw_tile(tile.x, tile.y, tile.w, tile.h, style.titlebar_tab_hover)
   draw_label(item, tile, style.text)
+  draw_pin(drag.view, pin_rect(tile, {}), false, false)
   core.pop_clip_rect()
 end
 
@@ -228,6 +264,8 @@ function ResultTabs:draw()
           self.pressed == view and style.titlebar_control_pressed or style.titlebar_tab_hover)
       end
       draw_label(view:tab_item(), rect, (shown or hovered) and style.text or style.dim)
+      local on_pin = hovered and self.hovered_pin
+      draw_pin(view, rect.pin, on_pin, on_pin and self.pin_pressed == view)
     end
   end
   core.pop_clip_rect()
@@ -301,7 +339,7 @@ function ResultTabs:move(view, target)
   local focus = self:has_focus()
   local index = self:take(view)
   if not index then return false end
-  view:keep()
+  view:set_kept(true)
   if not self.shown then self:select(self.tabs[index] or self.tabs[index - 1], false) end
   if target.kind == "tabs" then
     target.host:add(view, target.index)
@@ -341,7 +379,7 @@ function ResultTabs:accept_pane_drop(source, target)
   for i, view in ipairs(from.tabs) do moved[i] = view end
   for i, view in ipairs(moved) do
     from:take(view)
-    view:keep()
+    view:set_kept(true)
     self:add(view, target.index + i - 1)
   end
   self:select(shown or moved[1], true)
@@ -352,7 +390,6 @@ end
 
 local icons = require("core.context_menu").icons
 local TAB_MENU = {
-  { label = "Keep Result", command = "sql_server:keep_result" },
   { label = "Close Result", icon = icons.close, command = "sql_server:close_result" },
   { label = "Close Other Results", icon = icons.close_others, command = "sql_server:close_other_results" },
   "-",
@@ -362,9 +399,15 @@ local TAB_MENU = {
 
 function ResultTabs:on_mouse_pressed(button, x, y, clicks)
   if self:in_strip(x, y) then
-    local view = self.tabs[self:tab_at(x, y) or 0]
+    local index = self:tab_at(x, y)
+    local view = self.tabs[index or 0]
     if not view then return true end
     if button == "middle" then return self:close_tab(view) end
+    if button == "left" and contains(self.tab_rects[index].pin, x, y) then
+      self.pin_pressed = view
+      core.redraw = true
+      return true
+    end
     self:select(view, true)
     if button == "right" then
       require("core.context_menu").open(x, y, TAB_MENU, { button = "right" })
@@ -394,7 +437,11 @@ function ResultTabs:on_mouse_moved(x, y, dx, dy)
     return true
   end
   local hovered = self:tab_at(x, y)
-  if hovered ~= self.hovered then self.hovered = hovered; core.redraw = true end
+  local on_pin = hovered ~= nil and contains(self.tab_rects[hovered].pin, x, y)
+  if hovered ~= self.hovered or on_pin ~= self.hovered_pin then
+    self.hovered, self.hovered_pin = hovered, on_pin
+    core.redraw = true
+  end
   local view = self.shown
   if self:in_strip(x, y) then
     if view and self.child_hovered then view:on_mouse_left() end
@@ -409,6 +456,16 @@ function ResultTabs:on_mouse_moved(x, y, dx, dy)
 end
 
 function ResultTabs:on_mouse_released(button, x, y)
+  local pinned = self.pin_pressed
+  if pinned then
+    self.pin_pressed = nil
+    core.redraw = true
+    local index = self:tab_at(x, y)
+    if self.tabs[index or 0] == pinned and contains(self.tab_rects[index].pin, x, y) then
+      pinned:set_kept(not pinned.kept)
+    end
+    return true
+  end
   if self.pressed then
     local drag = self.drag
     self.pressed, self.drag, self.cursor = nil, nil, "arrow"
@@ -421,7 +478,7 @@ function ResultTabs:on_mouse_released(button, x, y)
 end
 
 function ResultTabs:on_mouse_left()
-  self.hovered, self.child_hovered = nil, false
+  self.hovered, self.hovered_pin, self.child_hovered = nil, false, false
   core.redraw = true
   if self.shown then return self.shown:on_mouse_left() end
 end

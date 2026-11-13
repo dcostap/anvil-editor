@@ -1561,9 +1561,18 @@ test.describe("SQL Queries", function()
     test.equal(core.active_view, first)
     test.equal(shown(first), "Bea Ada")
 
-    test.ok(command.perform("sql_server:keep_result"))
+    -- The pin at the end of a Tab keeps its result, and a second click releases it.
+    local function click_pin(index)
+      for _ = 1, 3 do coroutine.yield(0.02) end
+      local pin = test.not_nil(host.tab_rects[index].pin)
+      local x, y = pin.x + pin.w / 2, pin.y + pin.h / 2
+      core.on_event("mousemoved", x, y, 0, 0)
+      core.on_event("mousepressed", "left", x, y, 1)
+      core.on_event("mousereleased", "left", x, y)
+    end
+    click_pin(1)
+    test.ok(first.kept)
     test.ok(first:get_name():find("Kept", 1, true))
-    test.not_ok(command.is_valid("sql_server:keep_result"))
 
     -- A new run of changed SQL replaces only the Tabs that are not kept.
     reply = { model({ "Dee" }) }
@@ -1587,10 +1596,19 @@ test.describe("SQL Queries", function()
     test.equal(query.buffer:get_text(1, 1, math.huge, math.huge), "SELECT name FROM sales.customers")
     test.equal(sql.connection_for(query.buffer).id, c.id)
 
-    -- Close Result closes the Tab, and results without Tabs close their Pane.
+    -- A released result goes with the next run.
     host:select(first, true)
-    test.ok(command.perform("sql_server:close_result"))
+    click_pin(1)
+    test.not_ok(first.kept)
+    reply = { model({ "Eve" }) }
+    panes.focus(panes.pane_for_view(editor))
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    test.ok(command.perform("sql_server:run_selection"))
     test.equal(tabs(), "1 1 row")
+    test.equal(shown(host.tabs[1]), "Eve")
+
+    -- Close Result closes the Tab, and results without Tabs close their Pane.
+    host:select(host.tabs[1], true)
     test.ok(command.perform("sql_server:close_result"))
     test.equal(panes.pane_for_view(host), nil)
   end)
