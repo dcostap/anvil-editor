@@ -886,7 +886,7 @@ int sql_context_parse(const char *s, size_t len, size_t caret, SqlContext *out) 
   }
   size_t current = n, prev = n;
   for (size_t i = begin; i < end; ++i) {
-    if ((is_name(ts[i]) || ts[i].kind=='*') && caret > ts[i].start && caret <= ts[i].end) { current = i; break; }
+    if ((is_name(ts[i]) || ts[i].kind=='*') && caret >= ts[i].start && caret <= ts[i].end) { current = i; break; }
     if (ts[i].end <= caret) prev = i;
   }
   if (current < n) {

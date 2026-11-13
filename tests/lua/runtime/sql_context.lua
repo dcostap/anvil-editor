@@ -1,6 +1,18 @@
 local test = require "core.test"
 
 test.describe("SQL context", function()
+  test.it("keeps the complete name range when the caret is at its first character", function()
+    local sql = require "sql_server_native"
+    for _, name in ipairs({ "customers", "[customers]", '"customers"' }) do
+      local prefix = "SELECT * FROM sales."
+      local context = sql.context(prefix .. name .. " WHERE id = 1", #prefix)
+      test.equal(context.mode, "table")
+      test.equal(context.qualifier, "sales")
+      test.equal(context.prefix, "")
+      test.equal(context.start, #prefix)
+      test.equal(context["end"], #prefix + #name)
+    end
+  end)
   test.it("finds the table of an alias declared after the caret", function()
     local sql = require "sql_server_native"
     local text = "SELECT c.na FROM sales.customers AS c WHERE c.id = 1"
