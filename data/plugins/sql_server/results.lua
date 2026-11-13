@@ -478,13 +478,10 @@ function Results:related_rows()
   local row1, column1, row2 = self:selection_bounds()
   if not row1 then return false end
   local sql = require "plugins.sql_server"
-  local c = self.source_buffer and sql.connection_for(self.source_buffer)
-  if not c or not c.catalog then core.warn("Connect to read the foreign keys."); return false end
-  if sql.other_database(self.source_buffer) then
-    core.warn("Foreign keys are known only for the connection's database."); return false
-  end
+  local catalog = self.source_buffer and sql.catalog_for(self.source_buffer)
+  if not catalog then core.warn("Wait for the database's foreign keys."); return false end
   return self:with_edit_info(function()
-    local items, reason = require("plugins.sql_server.edit").related(self, c.catalog, row1, row2)
+    local items, reason = require("plugins.sql_server.edit").related(self, catalog, row1, row2)
     if not items then core.warn("%s", reason); return end
     local menu = {}
     for i, item in ipairs(items) do

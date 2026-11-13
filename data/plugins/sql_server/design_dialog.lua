@@ -649,6 +649,7 @@ function M.open(sql, from, object)
     if not object or object.kind ~= "table" or object.local_source then
       core.warn("Table Design needs a table of the database at the caret."); return false
     end
+    if object.database then core.warn("Table Design works on tables of the connection's database."); return false end
     return open_table(sql, c, object, function() return not view.closed and core.active_view == view end)
   end)
 end

@@ -997,10 +997,22 @@ test.describe("SQL Queries", function()
     test.equal(reads, 2)
   end)
 
-  test.it("stops completion in a Query whose session moved to another database", function(context)
+  test.it("completes from the database that a Query's session moved to with USE", function(context)
     local editor = connected_query(context)
     local backend = require "plugins.sql_server.backend"
     local database = "master"
+    local reads, loaded = {}, nil
+    backend.read_schema = function(options, callback)
+      reads[#reads + 1] = options.database
+      loaded = callback
+      return { cancel = function() end }
+    end
+    local definitions = {}
+    backend.read_definition = function(options, object, callback)
+      definitions[#definitions + 1] = options.database .. ":" .. object.schema .. "." .. object.name
+      callback({ source = "CREATE TABLE [sales].[customers] ([name_in_master] int);" })
+      return { cancel = function() end }
+    end
     backend.execute = function(_, _, done)
       done({ session = 7, results = {}, messages = {}, transaction_count = 0, database = database })
       return { cancel = function() end }
@@ -1022,9 +1034,26 @@ test.describe("SQL Queries", function()
     editor.buffer:set_selection(1, 1, 1, math.huge)
     test.ok(command.perform("sql_server:run_selection"))
     test.ok(status():find(" · Database master", 1, true))
+    -- The other database's catalog loads once, in the background.
     editor.buffer:set_selection(2, #"SELECT c.na" + 1)
     autocomplete.trigger()
     test.not_ok(autocomplete.is_open())
+    test.same(reads, { "master" })
+    loaded({ database = "master", default_schema = "dbo", case_sensitive = false, objects = {
+      { schema = "sales", name = "customers", kind = "table", columns = { { name = "name_in_master", type = "int" } } } } })
+    editor.buffer:set_selection(2, #"SELECT c.na" + 1)
+    autocomplete.trigger()
+    test.ok(autocomplete.is_open())
+    test.equal(autocomplete.get_selected_suggestion().text, "name_in_master")
+    autocomplete.close()
+    test.same(reads, { "master" })
+    -- Go to Definition reads the object in its own database.
+    editor.buffer:set_selection(2, #"SELECT c.na FROM sales.cust" + 1)
+    test.ok(require("core.commands.language").activate_symbol(editor))
+    test.same(definitions, { "master:sales.customers" })
+    test.equal(core.active_view.buffer.lines[1], "USE [master];\n")
+    panes.present(editor, { focus = true })
+
     database = "ANVILTEST"
     editor.buffer:set_selection(1, 1, 1, math.huge)
     test.ok(command.perform("sql_server:run_selection"))
@@ -1032,6 +1061,7 @@ test.describe("SQL Queries", function()
     editor.buffer:set_selection(2, #"SELECT c.na" + 1)
     autocomplete.trigger()
     test.ok(autocomplete.is_open())
+    test.equal(autocomplete.get_selected_suggestion().text, "name")
   end)
 
   test.it("runs again on a new session when the idle session is gone, unless a transaction was open", function(context)

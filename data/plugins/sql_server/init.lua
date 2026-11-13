@@ -132,6 +132,7 @@ function M.disconnect(id)
   if c.job then c.job:cancel(); c.job = nil end
   if c.refreshing then c.refreshing:cancel(); c.refreshing = nil end
   c.refresh_again = nil
+  M.drop_other_catalogs(c)
   c.catalog, c.password, c.error, c.state = nil, nil, nil, "Disconnected"
   changed()
   core.log_quiet("SQL Server: disconnected connection=%s", c.id)
@@ -218,7 +219,7 @@ function M.refresh_schema(id)
     if M.find(id) ~= c or c.generation ~= generation then return end
     c.refreshing = nil
     local ok = catalog ~= nil and catalog.metadata_error == nil
-    if ok then c.catalog = catalog; changed() end
+    if ok then c.catalog = catalog; M.drop_other_catalogs(c); changed() end
     core.log_quiet("SQL Server: metadata refresh connection=%s ok=%s objects=%s error=%s", id,
       tostring(ok), catalog and #catalog.objects or 0, tostring(error ~= nil or not ok))
     if c.refresh_again then c.refresh_again = nil; M.refresh_schema(id) end
@@ -243,16 +244,16 @@ function M.object_columns(c, object, done)
   end
   waiters = { done }
   column_waiters[object] = waiters
-  local catalog, generation = c.catalog, c.generation
+  local catalog, generation = M.object_catalog(c, object), c.generation
   local function finish(columns, error)
     column_waiters[object] = nil
-    if c.catalog ~= catalog or c.generation ~= generation then return end
+    if M.object_catalog(c, object) ~= catalog or c.generation ~= generation then return end
     if not columns then core.log_quiet("SQL Server: column read failed connection=%s: %s", c.id, tostring(error)) end
     object.columns = columns or {}
     changed()
     for _, fn in ipairs(waiters) do fn(object.columns) end
   end
-  local handle, err = backend.read_columns(M.connection_options(c), object, finish)
+  local handle, err = backend.read_columns(M.object_options(c, object), object, finish)
   if not handle then finish(nil, err) end
 end
 function M.bind(buffer, id)
@@ -279,6 +280,19 @@ end
 function M.connection_options(c)
   return { server = c.server, database = c.database, user = c.user, password = passwords[c],
     integrated = c.integrated, trust_certificate = c.trust_certificate, encrypt = c.encrypt }
+end
+-- Reads of an object go to its own database. Objects of another database's
+-- catalog carry `database`.
+function M.object_options(c, object)
+  local options = M.connection_options(c)
+  options.database = object.database or c.database
+  return options
+end
+-- A script for another database starts with USE, because a new Query starts
+-- in the connection's database.
+function M.in_database(c, database, text)
+  if not c or not database or database:lower() == c.database:lower() then return text end
+  return "USE [" .. database:gsub("]", "]]") .. "];\n" .. text
 end
 function M.with_connection(view, action)
   return require("plugins.sql_server.connection").with_connection(M, view, action)
@@ -309,11 +323,50 @@ end, {
   end,
 })
 
--- The database that a Query's session moved to with USE, or nil. The catalog
--- describes only the connection's database.
+-- The database that a Query's session moved to with USE, or nil.
 function M.other_database(buffer)
   local c, s = M.connection_for(buffer), session.get(buffer)
   if c and s and s.connection == c and s.database and s.database:lower() ~= c.database:lower() then return s.database end
+end
+-- The catalog of the database that a Query's session uses, and its connection.
+-- After USE moved the session, Anvil reads that database's catalog once, in
+-- the background, and returns nil until it arrives. A failed read gives no
+-- catalog until the connection reads its catalog again.
+function M.catalog_for(buffer)
+  local c = M.connection_for(buffer)
+  if not c or c.state ~= "Ready" or not c.catalog then return end
+  local database = M.other_database(buffer)
+  if not database then return c.catalog, c end
+  c.other_catalogs = c.other_catalogs or {}
+  local key = database:lower()
+  local entry = c.other_catalogs[key]
+  if entry then return entry.catalog, c end
+  entry = {}
+  c.other_catalogs[key] = entry
+  local generation, options = c.generation, M.connection_options(c)
+  options.database = database
+  local function finish(catalog, error)
+    entry.job = nil
+    if M.find(c.id) ~= c or c.generation ~= generation or not c.other_catalogs or c.other_catalogs[key] ~= entry then return end
+    if catalog then for _, object in ipairs(catalog.objects) do object.database = database end end
+    entry.catalog = catalog
+    core.log_quiet("SQL Server: other database metadata connection=%s objects=%s error=%s", c.id,
+      catalog and #catalog.objects or 0, tostring(error ~= nil))
+    changed()
+  end
+  local handle, err = backend.read_schema(options, finish)
+  if handle and not entry.catalog then entry.job = handle elseif not handle then finish(nil, err) end
+  return entry.catalog, c
+end
+-- The catalog that holds a catalog object.
+function M.object_catalog(c, object)
+  if not object.database then return c.catalog end
+  local entry = c.other_catalogs and c.other_catalogs[object.database:lower()]
+  return entry and entry.catalog
+end
+function M.drop_other_catalogs(c)
+  for _, entry in pairs(c.other_catalogs or {}) do if entry.job then entry.job:cancel() end end
+  c.other_catalogs = nil
 end
 
 -- The native limit of a run's text.

@@ -42,7 +42,7 @@ local function read_object(sql, c, object, owner, alive, done)
     request.cancel = release
   end
   pending[request] = c
-  local handle, err = backend.read_definition(sql.connection_options(c), object, finish)
+  local handle, err = backend.read_definition(sql.object_options(c, object), object, finish)
   request.handle = handle
   if not handle then finish(nil, err) end
   return true
@@ -72,7 +72,8 @@ function M.open(sql, from, object, opts)
   return read(sql, from, object, function(c, target, scripts)
     local buffer = Buffer()
     buffer.display_name = target.schema .. "." .. target.name
-    buffer:insert(1, 1, scripts.source .. (scripts.select and ("\n\n-- Query\n" .. scripts.select) or ""))
+    buffer:insert(1, 1, sql.in_database(c, target.database,
+      scripts.source .. (scripts.select and ("\n\n-- Query\n" .. scripts.select) or "")))
     buffer:clear_undo_redo()
     buffer:clean()
     sql.bind(buffer, c.id)
@@ -92,7 +93,7 @@ function M.generate(sql, from, action, object)
     local text = scripts[action]
     if not text then core.warn("This symbol does not support Script as %s.", action:upper()); return end
     local editor = sql.new_query(c.id)
-    editor.buffer:text_input(text)
+    editor.buffer:text_input(sql.in_database(c, target.database, text))
     editor.buffer:set_selection(1, 1)
     core.log_quiet("SQL script: %s for %s.%s", action, target.schema, target.name)
     if action == "select" and require("core.config").plugins.sql_server.run_generated_select then

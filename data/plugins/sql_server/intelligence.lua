@@ -74,8 +74,8 @@ end
 local function context(view, sql)
   local buffer = view and view.buffer
   if not buffer then return end
-  local c = sql.connection_for(buffer)
-  if not c or not c.catalog or sql.other_database(buffer) then return end
+  local catalog, c = sql.catalog_for(buffer)
+  if not catalog then return end
   local line, col, line2, col2 = buffer:get_selection()
   if line ~= line2 or col ~= col2 then return end
   local previous = cache[buffer]
@@ -93,7 +93,7 @@ local function context(view, sql)
   if not parsed then return end
   if parsed.start < offset - col + 1 or text:sub(offset + 1, parsed["end"]):find("[\r\n]") then return end
   local result = { revision = buffer.text_revision, line = line, col = col, offset = offset,
-    generation = sql.generation, parsed = parsed, catalog = c.catalog, connection = c, text = text }
+    generation = sql.generation, parsed = parsed, catalog = catalog, connection = c, text = text }
   cache[buffer] = result
   return result
 end
