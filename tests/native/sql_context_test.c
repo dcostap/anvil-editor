@@ -228,7 +228,7 @@ int main(void) {
   static const char *values[] = {
     "SELECT * FROM sales.customers WHERE email <> |", "SELECT * FROM t WHERE email LIKE |",
     "SELECT * FROM t WHERE id IN (|", "SELECT * FROM t WHERE id IN (1, |", "SELECT * FROM t WHERE id BETWEEN 1 AND |",
-    "SELECT * FROM t WHERE id IS |", "SELECT * FROM t WHERE id IS NOT |", "UPDATE t SET name = |",
+    "UPDATE t SET name = |",
     "SELECT CASE WHEN a = 1 THEN |", "SELECT CASE WHEN a = 1 THEN 1 ELSE |", "SELECT a * |",
     "SELECT * FROM t WHERE email <> n|", NULL };
   /* No existing name follows a complete term, AS, or a number. */
@@ -237,7 +237,8 @@ int main(void) {
     "SELECT name AS |", "SELECT name AS n|", "SELECT * FROM sales.customers c |", "SELECT * FROM sales.customers c|",
     "SELECT * FROM t ORDER BY name |", "SELECT * FROM t WHERE email = 'a' |", "SELECT COUNT(*) |",
     "SELECT CASE WHEN a = 1 THEN 1 END |", "SELECT * FROM t WHERE id = 1|", "SELECT * |FROM t",
-    "SELECT * FROM t WHERE a IS NULL |", NULL };
+    "SELECT * FROM t WHERE a IS NULL |", "SELECT * FROM t WHERE id IS |", "SELECT * FROM t WHERE id IS NOT |",
+    "SELECT * FROM a LEFT |", "SELECT * FROM t ORDER |", "SELECT a FROM t UNION |", "INSERT |", NULL };
   static const char **groups[] = { names, values, nothing };
   for (int group = 0; group < 3; ++group) {
     for (const char **item = groups[group]; *item; ++item) {
@@ -252,6 +253,44 @@ int main(void) {
       if (got != group) { fprintf(stderr, "%s: got %d, expected %d\n", *item, got, group); return 1; }
     }
   }
+  /* Where no existing name follows, the clause names the keywords that can, and
+   * alias tells that the term before the caret can still take an alias. */
+  static const struct { const char *sql, *keywords; int alias; } follows[] = {
+    { "SELECT * FROM t WHERE email |", "where", 0 }, { "SELECT name |", "select", 1 },
+    { "SELECT name AS n |", "select", 0 }, { "SELECT * |", "select", 0 }, { "SELECT TOP 10 name |", "select", 1 },
+    { "SELECT * FROM sales.customers |", "from", 1 }, { "SELECT * FROM sales.customers c |", "from", 0 },
+    { "SELECT * FROM sales.customers c|", "from", 1 }, { "SELECT * FROM a JOIN b |", "join", 1 },
+    { "SELECT * FROM a JOIN b ON a.id = b.id |", "on", 0 }, { "SELECT * FROM t ORDER BY name |", "order", 0 },
+    { "SELECT * FROM t ORDER BY name DESC |", "sort", 0 }, { "SELECT * FROM t GROUP BY name |", "group", 0 },
+    { "SELECT CASE WHEN a = 1 |", "when", 0 }, { "SELECT CASE WHEN a = 1 THEN 'x' |", "then", 0 },
+    { "SELECT CASE WHEN a = 1 THEN 'x' END |", "select", 1 },
+    { "SELECT * FROM t WHERE id IN (SELECT id FROM u |", "from", 1 }, { "SELECT * FROM t WHERE (a = 1 |", "where", 0 },
+    { "SELECT COUNT(x |", "", 0 }, { "SELECT CONVERT(int, x |", "", 0 }, { "SELECT * FROM t WHERE id IN (1, 2 |", "", 0 },
+    { "SELECT * FROM t WHERE id IN (1, 2) |", "where", 0 }, { "SELECT * FROM t WHERE a IS |", "is", 0 },
+    { "SELECT * FROM t WHERE a IS NOT |", "is not", 0 }, { "SELECT * FROM a LEFT |", "left", 0 },
+    { "SELECT * FROM t ORDER |", "by", 0 }, { "SELECT a FROM t UNION |", "union", 0 },
+    { "SELECT a FROM t INTERSECT |", "except", 0 }, { "UPDATE sales.customers |", "update", 0 },
+    { "INSERT INTO t (a, b) |", "into", 0 }, { "INSERT |", "insert", 0 }, { "SELECT name AS |", "", 0 },
+    { "SELECT * FROM t WHERE id = 1|", "", 0 } };
+  for (size_t i = 0; i < sizeof(follows) / sizeof(follows[0]); ++i) {
+    char sql[256];
+    const char *bar = strchr(follows[i].sql, '|');
+    size_t at = (size_t)(bar - follows[i].sql);
+    memcpy(sql, follows[i].sql, at);
+    strcpy(sql + at, bar + 1);
+    sql_context_free(&c);
+    assert(sql_context_parse(sql, strlen(sql), at, &c));
+    if (c.slot != SQL_SLOT_NONE || strcmp(c.keywords, follows[i].keywords) || c.alias != follows[i].alias) {
+      fprintf(stderr, "%s: slot %d, keywords \"%s\", alias %d\n", follows[i].sql, c.slot, c.keywords, c.alias);
+      return 1;
+    }
+  }
+  text = "select * from t where email l";
+  parse_after(&c, text, "email l");
+  assert(c.lower && !strcmp(c.keywords, "where"));
+  text = "SELECT * FROM t WHERE email l";
+  parse_after(&c, text, "email l");
+  assert(!c.lower);
   sql_context_free(&c);
   puts("SQL context passed");
   return 0;

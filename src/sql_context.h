@@ -33,6 +33,12 @@ typedef struct {
    * after `=` or LIKE; or no existing name, such as after a complete name or AS.
    * Completion reads it. The other fields still describe the query. */
   enum { SQL_SLOT_NAME, SQL_SLOT_VALUE, SQL_SLOT_NONE } slot;
+  /* With slot none: the group of keywords that can follow, named by the
+   * caret's clause, such as "where" or "order", or empty for none. Lower tells
+   * that the clause's keyword is in lowercase. Alias tells that the term before
+   * the caret can still take an alias, so a typed name can be one. */
+  char keywords[16];
+  int lower, alias;
   /* Empty means any object; table also permits a view for DML. */
   char object_kind[16];
   char prefix[SQL_CONTEXT_NAME], qualifier[SQL_CONTEXT_NAME];

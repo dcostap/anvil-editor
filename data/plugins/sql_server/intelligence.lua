@@ -77,12 +77,83 @@ local function load_columns(view, sql, state, object)
     if line == state.line and col == state.col then autocomplete.refresh() end
   end)
 end
+-- The keywords that can follow a complete term in each clause, most likely first.
+local function list(...)
+  local result = {}
+  for _, words in ipairs({ ... }) do
+    for _, word in ipairs(words) do result[#result + 1] = word end
+  end
+  return result
+end
+local PREDICATES = { "LIKE", "NOT LIKE", "IN", "NOT IN", "IS NULL", "IS NOT NULL", "BETWEEN" }
+local SET_OPERATORS = { "UNION", "UNION ALL", "EXCEPT", "INTERSECT" }
+local JOINS = { "JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN", "CROSS JOIN", "CROSS APPLY", "OUTER APPLY" }
+local OUTER_JOINS = { "JOIN", "OUTER JOIN" }
+local KEYWORDS = {
+  select = list({ "FROM", "AS", "INTO", "OVER", "ORDER BY" }, SET_OPERATORS),
+  from = list({ "AS", "WHERE" }, JOINS, { "GROUP BY", "ORDER BY", "WITH", "OPTION" }, SET_OPERATORS),
+  join = list({ "ON", "AS", "WITH" }, JOINS, { "WHERE" }),
+  on = list({ "AND", "OR" }, PREDICATES, { "WHERE" }, JOINS, { "GROUP BY", "ORDER BY" }, SET_OPERATORS),
+  where = list({ "AND", "OR" }, PREDICATES, { "GROUP BY", "ORDER BY", "OPTION" }, SET_OPERATORS),
+  having = list({ "AND", "OR" }, PREDICATES, { "ORDER BY", "OPTION" }, SET_OPERATORS),
+  group = list({ "HAVING", "ORDER BY", "OPTION" }, SET_OPERATORS),
+  order = { "ASC", "DESC", "COLLATE", "OFFSET", "OPTION" },
+  sort = { "OFFSET", "OPTION" },
+  partition = { "ORDER BY", "ROWS", "RANGE" },
+  when = list({ "THEN", "AND", "OR" }, PREDICATES),
+  ["then"] = { "WHEN", "ELSE", "END" },
+  ["else"] = { "END" },
+  case = { "WHEN" },
+  set = { "FROM", "WHERE", "OUTPUT" },
+  update = { "SET" },
+  into = { "VALUES", "SELECT", "DEFAULT VALUES", "OUTPUT", "FROM" },
+  insert = { "INTO" },
+  by = { "BY" },
+  union = { "ALL", "SELECT" },
+  except = { "SELECT" },
+  left = OUTER_JOINS, right = OUTER_JOINS, full = OUTER_JOINS,
+  inner = { "JOIN" },
+  cross = { "JOIN", "APPLY" },
+  outer = { "JOIN", "APPLY" },
+  is = { "NULL", "NOT NULL" },
+  ["is not"] = { "NULL" },
+}
+-- Keywords that start with the typed text, in the case of the clause's keyword.
+local function keyword_completion(state, buffer)
+  local p = state.parsed
+  local prefix = p.prefix:upper()
+  local start_col = state.col - (state.offset - p.start)
+  local end_col = state.col + p["end"] - state.offset
+  local items = {}
+  for _, word in ipairs(KEYWORDS[p.keywords] or {}) do
+    if #word > #prefix and word:sub(1, #prefix) == prefix and (word ~= "AS" or p.alias) then
+      local inserted = p.lower and word:lower() or word
+      items[#items + 1] = { text = inserted, onselect = function()
+        if buffer.text_revision ~= state.revision then return true end
+        local line, col = buffer:get_selection()
+        if line ~= state.line or col ~= state.col then return true end
+        local edits = { { line1 = line, col1 = start_col, line2 = line, col2 = end_col, text = inserted, idx = 1 } }
+        buffer:apply_edits(edits, { type = "insert", selections = buffer:selections_after_edits(edits, { "end" }), last_selection = 1 })
+        return true
+      end }
+    end
+  end
+  return { query = p.prefix, line = state.line, query_col = state.col - #p.prefix, items = items }
+end
 local function complete(view, sql, opts)
   local state = context(view, sql)
   if not state then return end
   local p, catalog, buffer = state.parsed, state.catalog, view.buffer
-  -- No existing name goes here. At a value, names wait for a typed letter or an explicit request.
-  if p.slot == "none" or p.slot == "value" and p.prefix == "" and not opts.manual then
+  -- No existing name goes here, but a keyword can. Keywords wait for a typed letter, and where
+  -- the typed word can be an alias, for an explicit request.
+  if p.slot == "none" then
+    if not opts.manual and (p.prefix == "" or p.alias) then
+      return { query = "", line = state.line, query_col = state.col, items = {} }
+    end
+    return keyword_completion(state, buffer)
+  end
+  -- At a value, names wait for a typed letter or an explicit request.
+  if p.slot == "value" and p.prefix == "" and not opts.manual then
     return { query = "", line = state.line, query_col = state.col, items = {} }
   end
   if state.completion then return state.completion end
