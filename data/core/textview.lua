@@ -9501,8 +9501,12 @@ local function draw_table_cell_selection_outlines(view, line, render_line, x, y)
       local right = not selected(line, column + 1)
       local top = not selected(row.table_row_above, column)
       local bottom = not selected(row.table_row_below, column)
-      local x1, x2 = x + row.selection_frame_x1, x + row.selection_frame_x2
-      local y1, y2 = y + row.selection_frame_y1, y + row.selection_frame_y2
+      -- Rectangles round their coordinates, but polygons truncate them.
+      -- Use one pixel grid so fractional layout and scroll cannot split a join.
+      local x1 = common.round(x + row.selection_frame_x1)
+      local x2 = common.round(x + row.selection_frame_x2)
+      local y1 = common.round(y + row.selection_frame_y1)
+      local y2 = common.round(y + row.selection_frame_y2)
       local color = row.selection_outline
       local r_tl = top and left and radius or 0
       local r_tr = top and right and radius or 0
