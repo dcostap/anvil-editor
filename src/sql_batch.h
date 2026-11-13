@@ -25,4 +25,14 @@ int sql_batch_module(const char *text, size_t length, char *name, size_t size);
  * sp_rename, and SELECT ... INTO a permanent table. Temporary objects do not
  * count. A false report only costs a catalog read. */
 int sql_batch_changes_schema(const char *text, size_t length);
+/* What a run can change, for a question before it runs. changes: a statement
+ * that can change data, the schema or the server, such as INSERT, UPDATE,
+ * DELETE, MERGE, TRUNCATE, CREATE, ALTER, DROP, GRANT, a procedure call or
+ * SELECT ... INTO. unfiltered_line: the 1-based line of the first UPDATE or
+ * DELETE without a WHERE or an inner JOIN at its own level, or 0. Temporary
+ * tables and table variables do not count. A batch that creates a procedure,
+ * function or trigger runs none of its statements. This reads keywords; it
+ * cannot see what a procedure or dynamic SQL does. */
+typedef struct { int changes; unsigned unfiltered_line; char unfiltered_verb[8]; } SqlBatchRisk;
+void sql_batch_risk(const char *text, size_t length, SqlBatchRisk *out);
 #endif

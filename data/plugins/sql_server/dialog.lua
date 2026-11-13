@@ -13,6 +13,7 @@ local Button = require "core.ui.button"
 local TextField = require "core.ui.text_field"
 local Segmented = require "core.ui.segmented"
 local Select = require "core.ui.select"
+local Switch = require "core.ui.switch"
 local StatusDot = require "core.ui.status_dot"
 local project_look = require "core.project_look"
 local sql = require "plugins.sql_server"
@@ -97,6 +98,13 @@ function Databases:new()
       return sql.update(c.id, "trust_certificate", value == "trust")
     end,
   }
+  self.production = Switch {
+    on_change = function(value)
+      local c = self:selected()
+      if not c then return false end
+      return sql.update(c.id, "production", value)
+    end,
+  }
   local function add()
     local c = sql.add_connection()
     if c then self:refresh(c.id); self:focus(self.fields.name) end
@@ -143,6 +151,7 @@ function Databases:new()
       self.user_row,
       self.password_row,
       layout.Field { title = "Encryption", control = self.trust },
+      layout.Field { title = "Production", control = self.production },
       layout.Row { gap = 8, self.remove_button },
     },
     self.status_text,
@@ -176,6 +185,7 @@ function Databases:show_selected()
   self.selected_id = c and c.id
   self.auth.value = c and not c.integrated and "sql" or "windows"
   self.trust:set_value(c and c.encrypt == false and "none" or (c and c.trust_certificate and "trust" or "verify"))
+  self.production:set_value(c and c.production)
   local login = c ~= nil and not c.integrated
   self.user_row.visible, self.password_row.visible = login, login
   self.fields.user.enabled, self.password.enabled = login, login

@@ -379,6 +379,21 @@ static int module_script(lua_State *L) {
   if (!script) lua_pushnil(L); else { lua_pushstring(L, script); free(script); }
   return 1;
 }
+/* What a run can change: { changes = bool, unfiltered_line = n, unfiltered_verb = "DELETE" }. */
+static int batch_risk(lua_State *L) {
+  size_t length;
+  const char *sql = luaL_checklstring(L, 1, &length);
+  SqlBatchRisk risk;
+  sql_batch_risk(sql, length, &risk);
+  lua_newtable(L);
+  boolean(L, "changes", risk.changes);
+  if (risk.unfiltered_line) {
+    lua_pushinteger(L, risk.unfiltered_line); lua_setfield(L, -2, "unfiltered_line");
+    text(L, "unfiltered_verb", risk.unfiltered_verb);
+  }
+  return 1;
+}
+
 static int format_sql(lua_State *L) {
   size_t length, indent_length;
   const char *source = luaL_checklstring(L, 1, &length);
@@ -400,7 +415,7 @@ int luaopen_sql_server_native(lua_State *L) {
   luaL_newmetatable(L, "anvil.sql_query");
   lua_pushcfunction(L, query_gc); lua_setfield(L, -2, "__gc"); lua_pop(L, 1);
   const luaL_Reg functions[] = { {"context", context}, {"read_schema", read_schema}, {"read_columns", read_columns}, {"execute", execute_query},
-    {"read_definition", read_definition}, {"module_script", module_script}, {"format", format_sql},
+    {"read_definition", read_definition}, {"module_script", module_script}, {"format", format_sql}, {"risk", batch_risk},
     {"end_transaction", end_transaction}, {"close_session", close_session}, {NULL, NULL} };
   luaL_newlib(L, functions); return 1;
 }

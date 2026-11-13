@@ -59,6 +59,48 @@ int main(void) {
     "CREATE TABLE [#t] (id int)", "DROP TABLE \"#t\"", "" };
   for (size_t i = 0; i < sizeof(same) / sizeof(same[0]); ++i)
     assert(!sql_batch_changes_schema(same[i], strlen(same[i])));
+
+  /* An UPDATE or DELETE of a table that has no WHERE, or no inner JOIN, at its own level. */
+  static const struct { const char *sql, *verb; unsigned line; } unfiltered[] = {
+    { "DELETE FROM sales.orders", "DELETE", 1 }, { "update t set a = 1", "UPDATE", 1 },
+    { "SELECT 1;\nUPDATE t SET a = CASE WHEN b = 1 THEN 2 END\nSELECT 2 WHERE 1 = 1", "UPDATE", 2 },
+    { "DELETE TOP (10) FROM t", "DELETE", 1 }, { "UPDATE t SET a = 1 FROM t LEFT JOIN u ON u.id = t.id", "UPDATE", 1 },
+    { "IF 1 = 1 DELETE FROM t", "DELETE", 1 }, { "WITH x AS (SELECT * FROM t WHERE 1 = 1) DELETE FROM x", "DELETE", 1 },
+    { "UPDATE t SET a = (SELECT b FROM u WHERE u.id = t.id)", "UPDATE", 1 },
+    { "PRINT 1\nGO\nDELETE FROM t WHERE (id = 1)\nDELETE FROM [dbo].[u]", "DELETE", 4 },
+    { "BEGIN UPDATE t WITH (TABLOCK) SET a = 1 END", "UPDATE", 1 } };
+  for (size_t i = 0; i < sizeof(unfiltered) / sizeof(unfiltered[0]); ++i) {
+    SqlBatchRisk risk;
+    sql_batch_risk(unfiltered[i].sql, strlen(unfiltered[i].sql), &risk);
+    if (!risk.changes || risk.unfiltered_line != unfiltered[i].line || strcmp(risk.unfiltered_verb, unfiltered[i].verb)) {
+      fprintf(stderr, "%s: line %u %s\n", unfiltered[i].sql, risk.unfiltered_line, risk.unfiltered_verb); return 1;
+    }
+  }
+  /* Changes to data, schema or the server. Temporary tables and variables do not count. */
+  static const struct { const char *sql; int changes; } kinds[] = {
+    { "DELETE FROM t WHERE id = 1", 1 }, { "UPDATE t SET a = 1 WHERE CURRENT OF c", 1 },
+    { "UPDATE c SET a = 1 FROM sales.customers c JOIN dbo.orders o ON o.customer_id = c.id", 1 },
+    { "DELETE o FROM dbo.orders o INNER JOIN x ON 1 = 1", 1 },
+    { "MERGE t USING s ON t.id = s.id WHEN MATCHED THEN DELETE;", 1 },
+    { "CREATE TRIGGER tr ON t AFTER DELETE AS DELETE FROM log", 1 }, { "INSERT INTO dbo.t VALUES (1)", 1 },
+    { "TRUNCATE TABLE t", 1 }, { "CREATE INDEX ix ON t (c)", 1 }, { "DROP TABLE t", 1 }, { "EXEC dbo.p", 1 },
+    { "EXECUTE sp_who", 1 }, { "sp_who", 1 }, { "GRANT SELECT ON t TO u", 1 }, { "SELECT * INTO dbo.copy FROM t", 1 },
+    { "DBCC CHECKDB", 1 }, { "UPDATE STATISTICS dbo.t", 1 }, { "BEGIN TRAN; DELETE FROM t WHERE id = 1; COMMIT", 1 },
+    { "ALTER TABLE t ADD CONSTRAINT f FOREIGN KEY (a) REFERENCES u (id) ON DELETE CASCADE", 1 },
+    { "SELECT * FROM t", 0 }, { "WITH x AS (SELECT 1 AS a) SELECT * FROM x", 0 },
+    { "DECLARE @a int = 1; SET @a = 2; PRINT @a", 0 }, { "SELECT * INTO #copy FROM t", 0 },
+    { "INSERT INTO #t VALUES (1)", 0 }, { "CREATE TABLE #t (id int)", 0 }, { "DROP TABLE IF EXISTS #t", 0 },
+    { "DELETE FROM @t", 0 }, { "UPDATE [#t] SET a = 1", 0 }, { "TRUNCATE TABLE #t", 0 }, { "SET NOCOUNT ON; SELECT 1", 0 },
+    { "USE AnvilTest", 0 }, { "IF EXISTS (SELECT 1 FROM t) PRINT 1", 0 }, { "SELECT 'DELETE FROM t'", 0 },
+    { "-- DELETE FROM t\nSELECT 1", 0 }, { "FETCH NEXT FROM c INTO @a", 0 }, { "", 0 },
+    { "BEGIN TRANSACTION; SELECT 1; COMMIT", 0 } };
+  for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); ++i) {
+    SqlBatchRisk risk;
+    sql_batch_risk(kinds[i].sql, strlen(kinds[i].sql), &risk);
+    if (risk.changes != kinds[i].changes || risk.unfiltered_line) {
+      fprintf(stderr, "%s: changes %d line %u\n", kinds[i].sql, risk.changes, risk.unfiltered_line); return 1;
+    }
+  }
   puts("SQL batches passed");
   return 0;
 }

@@ -43,7 +43,8 @@ local function snapshot()
   local entries = {}
   for i, c in ipairs(M.connections) do
     entries[i] = { id = c.id, name = c.name, server = c.server, database = c.database,
-      integrated = c.integrated, user = c.user, trust_certificate = c.trust_certificate, encrypt = c.encrypt }
+      integrated = c.integrated, user = c.user, trust_certificate = c.trust_certificate, encrypt = c.encrypt,
+      production = c.production == true }
   end
   return { connections = entries }
 end
@@ -139,6 +140,13 @@ end
 function M.update(id, key, value)
   local c = M.find(id)
   if not c then return false, "Connection not found." end
+  -- The production mark changes only the questions before a run, so the sessions stay.
+  if key == "production" then
+    if type(value) ~= "boolean" then return false end
+    c.production = value
+    save(); changed()
+    return true
+  end
   if key == "integrated" or key == "trust_certificate" or key == "encrypt" then
     if type(value) ~= "boolean" then return false end
   elseif key == "name" or key == "server" or key == "database" or key == "user" then
@@ -331,6 +339,23 @@ function M.error_line(buffer)
   return range and range.line1
 end
 
+-- The question before a run, or nil: an UPDATE or DELETE without WHERE on
+-- each connection, and each change on a production connection, like
+-- DbVisualizer's Development and Production permission modes. Line1 is the
+-- Buffer line of the text's first line.
+function M.run_question(c, text, line1)
+  local risk = require("sql_server_native").risk(text)
+  local production = c.production and risk.changes
+    and string.format("%s is a production connection.", c.name) or nil
+  if risk.unfiltered_line then
+    local verb = risk.unfiltered_verb
+    local detail = string.format("The %s at line %d has no WHERE, so it %s each row of its table.", verb,
+      line1 + risk.unfiltered_line - 1, verb == "DELETE" and "deletes" or "changes")
+    return verb .. " without WHERE", production and (production .. " " .. detail) or detail
+  end
+  if production then return "Production Connection", production .. " This SQL can change data or the schema." end
+end
+
 -- Runs the selection, or the whole Buffer with opts.whole_buffer. With
 -- opts.explain, SQL Server returns estimated plans and runs nothing.
 function M.run(editor, opts)
@@ -352,8 +377,20 @@ function M.run(editor, opts)
   if bytes > M.TEXT_LIMIT then core.error("SQL exceeds the 64 MiB limit of a run."); return false end
   local text = buffer:get_text(line1, col1, line2, col2)
   if not text:find("%S") then return false end
-  return M.with_connection(editor, function(c)
+  local function go(c, confirmed)
   if buffer.sql_execution and buffer.sql_execution.active then return false end
+  if not confirmed and not opts.explain then
+    local title, question = M.run_question(c, text, line1)
+    if title then
+      core.nag_view:show(title, question, { { text = "Run", default_yes = true }, { text = "Cancel", default_no = true } },
+        function(item)
+          if item.text == "Run" and not editor.closed and M.connection_for(buffer) == c and c.state == "Ready" then
+            go(c, true)
+          end
+        end)
+      return true
+    end
+  end
   local run = { active = true, connection = c, generation = c.generation, started = system.get_time() }
   local view = buffer.sql_results
   if not view or view.closed or not panes.pane_for_view(view) then
@@ -419,7 +456,8 @@ function M.run(editor, opts)
     return handle ~= nil
   end
   return start()
-  end)
+  end
+  return M.with_connection(editor, go)
 end
 function M.new_query(id)
   if id and (not loaded or not M.find(id)) then return nil end
@@ -716,7 +754,8 @@ do
     get_item = function(_, view)
       local c = M.connection_for(view.buffer)
       if not c then return { style.dim, "No SQL connection" } end
-      local parts = { c.state == "Ready" and style.text or style.dim, c.name }
+      local parts = { c.production and style.error or c.state == "Ready" and style.text or style.dim, c.name }
+      if c.production then table.insert(parts, style.error); table.insert(parts, " · Production") end
       if c.state ~= "Ready" then
         table.insert(parts, c.state == "Failed" and style.error or style.dim)
         table.insert(parts, " · " .. c.state)

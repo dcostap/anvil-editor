@@ -1201,6 +1201,52 @@ test.describe("SQL Queries", function()
     test.equal(select(1, editor.buffer:get_selection()), 5)
   end)
 
+  test.it("asks before an UPDATE or DELETE without WHERE, and before each change on a production connection", function(context)
+    local sql = require "plugins.sql_server"
+    local editor, c = connected_query(context)
+    local submitted, question = {}, nil
+    require("plugins.sql_server.backend").execute = function(_, text, callback)
+      submitted[#submitted + 1] = text
+      callback({ results = {}, affected_rows = {}, messages = {} })
+      return { cancel = function() end }
+    end
+    context.nag_show = core.nag_view.show
+    core.nag_view.show = function(_, title, text, _, callback) question = { title = title, text = text, answer = callback } end
+    local function run(text, line1)
+      question = nil
+      panes.focus(panes.pane_for_view(editor))
+      editor.buffer:set_selection(1, 1, math.huge, math.huge)
+      editor.buffer:text_input(text)
+      editor.buffer:set_selection(line1 or 1, 1, math.huge, math.huge)
+      return command.perform("sql_server:run_selection")
+    end
+    test.ok(run("-- note\nSELECT 1\nDELETE FROM sales.customers", 2))
+    test.equal(#submitted, 0)
+    test.equal(test.not_nil(question).title, "DELETE without WHERE")
+    test.ok(question.text:find("line 3", 1, true))
+    question.answer({ text = "Cancel" })
+    test.equal(#submitted, 0)
+    test.ok(run("UPDATE sales.customers SET name = N'x'"))
+    test.equal(test.not_nil(question).title, "UPDATE without WHERE")
+    question.answer({ text = "Run" })
+    test.same(submitted, { "UPDATE sales.customers SET name = N'x'" })
+    test.ok(run("DELETE FROM sales.customers WHERE id = 1"))
+    test.equal(question, nil)
+    test.equal(#submitted, 2)
+
+    -- A production connection asks before each change, and keeps its session when the flag changes.
+    test.ok(sql.update(c.id, "production", true))
+    test.equal(c.state, "Ready")
+    test.ok(run("DELETE FROM sales.customers WHERE id = 1"))
+    test.equal(test.not_nil(question).title, "Production Connection")
+    test.equal(#submitted, 2)
+    question.answer({ text = "Run" })
+    test.equal(#submitted, 3)
+    test.ok(run("SELECT * FROM sales.customers"))
+    test.equal(question, nil)
+    test.equal(#submitted, 4)
+  end)
+
   test.it("keeps a result with its SQL and display state while a new run replaces the live result", function(context)
     local sql = require "plugins.sql_server"
     local editor, c = connected_query(context)
