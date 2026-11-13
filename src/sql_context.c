@@ -137,78 +137,78 @@ static int slot(const char *s, Token *ts, size_t first, size_t last, size_t care
   }
   return term(s, t) ? SQL_SLOT_NONE : SQL_SLOT_NAME;
 }
-static void set_keywords(const char *s, Token at, const char *group, SqlContext *out) {
-  snprintf(out->keywords, sizeof(out->keywords), "%s", group);
-  out->lower = 1;
-  for (size_t i = at.start; i < at.end; ++i) if (isupper((unsigned char)s[i])) out->lower = 0;
-}
-/* The number or parenthesized group after TOP. */
-static int top_argument(const char *s, Token *ts, size_t first, size_t i) {
-  size_t at = ts[i].kind == ')' ? group_open(ts, first, i) : i;
-  return at > first && (ts[i].kind == ')' || number(s, ts[i])) && word(s, ts[at - 1], "TOP");
-}
-/* A source or a SELECT column can take an alias, unless it has one. */
-static int aliasable(const char *s, Token *ts, size_t first, size_t p) {
-  if (ts[p].kind == ')' || word(s, ts[p], "END")) return 1;
-  if (ts[p].kind == '*') return 0;
-  if (p == first) return 1;
-  return !(word(s, ts[p - 1], "AS") || (term(s, ts[p - 1]) && !top_argument(s, ts, first, p - 1)));
-}
-/* Words before an expression's parentheses, which keep the clause. */
-static const char *const OPEN_WORDS[] = { "SELECT", "WHERE", "ON", "AND", "OR", "NOT", "HAVING", "WHEN", "THEN",
-  "ELSE", "CASE", "EXISTS", NULL };
-/* With slot none after ts[p]: the group of keywords that can follow, named by
- * the clause that holds the caret. A CASE ... END group is one value, and the
- * arguments of a call or an IN list have no keywords. */
-static void follow(const char *s, Token *ts, size_t first, size_t p, SqlContext *out) {
-  static const struct { const char *word, *group; } clauses[] = { { "SELECT", "select" }, { "FROM", "from" },
-    { "APPLY", "from" }, { "JOIN", "join" }, { "USING", "join" }, { "ON", "on" }, { "WHERE", "where" },
-    { "HAVING", "having" }, { "WHEN", "when" }, { "THEN", "then" }, { "ELSE", "else" }, { "CASE", "case" },
-    { "SET", "set" }, { "UPDATE", "update" }, { "INTO", "into" }, { "VALUES", "" }, { "OUTPUT", "" },
-    { "MERGE", "" }, { "DELETE", "" }, { NULL, NULL } };
-  Token t = ts[p];
-  char lower[16];
-  if (word(s, t, "AS")) return;
-  if (word(s, t, "IS")) { set_keywords(s, t, "is", out); return; }
-  if (word(s, t, "NOT")) { set_keywords(s, t, "is not", out); return; }
-  if (word(s, t, "ASC") || word(s, t, "DESC")) { set_keywords(s, t, "sort", out); return; }
-  if (t.kind == IDENT && one_of(s, t, LEADING_WORDS)) {
-    size_t n = 0;
-    for (size_t i = t.start; i < t.end && n + 1 < sizeof(lower); ++i) lower[n++] = (char)tolower((unsigned char)s[i]);
-    lower[n] = 0;
-    if (!strcmp(lower, "group") || !strcmp(lower, "order") || !strcmp(lower, "partition")) strcpy(lower, "by");
-    if (!strcmp(lower, "intersect")) strcpy(lower, "except");
-    set_keywords(s, t, lower, out);
-    return;
-  }
-  int ends = 0, depth = t.depth;
-  for (size_t i = p + 1; i-- > first;) {
-    Token c = ts[i];
-    if (c.depth > depth) continue;
-    if (c.kind == '(' && c.depth < depth) {
-      /* An enclosing group: a call or a list has no keywords; other parentheses keep the clause. */
-      if (i > first && (is_name(ts[i - 1]) || ts[i - 1].kind == ')' || ts[i - 1].kind == LITERAL)
-          && !one_of(s, ts[i - 1], OPEN_WORDS)) return;
-      depth = c.depth;
-      continue;
-    }
-    if (word(s, c, "END")) { ++ends; continue; }
-    if (ends) { if (word(s, c, "CASE")) --ends; continue; }
-    if (word(s, c, "BY")) {
-      const char *group = i > first && word(s, ts[i - 1], "GROUP") ? "group"
-        : i > first && word(s, ts[i - 1], "ORDER") ? "order" : i > first && word(s, ts[i - 1], "PARTITION") ? "partition" : "";
-      set_keywords(s, i > first ? ts[i - 1] : c, group, out);
-      return;
-    }
-    for (int k = 0; clauses[k].word; ++k) {
-      if (!word(s, c, clauses[k].word)) continue;
-      set_keywords(s, c, clauses[k].group, out);
-      const char *g = clauses[k].group;
-      out->alias = (!strcmp(g, "select") || !strcmp(g, "from") || !strcmp(g, "join")) && aliasable(s, ts, first, p);
-      return;
-    }
-  }
-}
+static void set_keywords(const char *s, Token at, const char *group, SqlContext *out) {
+  snprintf(out->keywords, sizeof(out->keywords), "%s", group);
+  out->lower = 1;
+  for (size_t i = at.start; i < at.end; ++i) if (isupper((unsigned char)s[i])) out->lower = 0;
+}
+/* The number or parenthesized group after TOP. */
+static int top_argument(const char *s, Token *ts, size_t first, size_t i) {
+  size_t at = ts[i].kind == ')' ? group_open(ts, first, i) : i;
+  return at > first && (ts[i].kind == ')' || number(s, ts[i])) && word(s, ts[at - 1], "TOP");
+}
+/* A source or a SELECT column can take an alias, unless it has one. */
+static int aliasable(const char *s, Token *ts, size_t first, size_t p) {
+  if (ts[p].kind == ')' || word(s, ts[p], "END")) return 1;
+  if (ts[p].kind == '*') return 0;
+  if (p == first) return 1;
+  return !(word(s, ts[p - 1], "AS") || (term(s, ts[p - 1]) && !top_argument(s, ts, first, p - 1)));
+}
+/* Words before an expression's parentheses, which keep the clause. */
+static const char *const OPEN_WORDS[] = { "SELECT", "WHERE", "ON", "AND", "OR", "NOT", "HAVING", "WHEN", "THEN",
+  "ELSE", "CASE", "EXISTS", NULL };
+/* With slot none after ts[p]: the group of keywords that can follow, named by
+ * the clause that holds the caret. A CASE ... END group is one value, and the
+ * arguments of a call or an IN list have no keywords. */
+static void follow(const char *s, Token *ts, size_t first, size_t p, SqlContext *out) {
+  static const struct { const char *word, *group; } clauses[] = { { "SELECT", "select" }, { "FROM", "from" },
+    { "APPLY", "from" }, { "JOIN", "join" }, { "USING", "join" }, { "ON", "on" }, { "WHERE", "where" },
+    { "HAVING", "having" }, { "WHEN", "when" }, { "THEN", "then" }, { "ELSE", "else" }, { "CASE", "case" },
+    { "SET", "set" }, { "UPDATE", "update" }, { "INTO", "into" }, { "VALUES", "" }, { "OUTPUT", "" },
+    { "MERGE", "" }, { "DELETE", "" }, { NULL, NULL } };
+  Token t = ts[p];
+  char lower[16];
+  if (word(s, t, "AS")) return;
+  if (word(s, t, "IS")) { set_keywords(s, t, "is", out); return; }
+  if (word(s, t, "NOT")) { set_keywords(s, t, "is not", out); return; }
+  if (word(s, t, "ASC") || word(s, t, "DESC")) { set_keywords(s, t, "sort", out); return; }
+  if (t.kind == IDENT && one_of(s, t, LEADING_WORDS)) {
+    size_t n = 0;
+    for (size_t i = t.start; i < t.end && n + 1 < sizeof(lower); ++i) lower[n++] = (char)tolower((unsigned char)s[i]);
+    lower[n] = 0;
+    if (!strcmp(lower, "group") || !strcmp(lower, "order") || !strcmp(lower, "partition")) strcpy(lower, "by");
+    if (!strcmp(lower, "intersect")) strcpy(lower, "except");
+    set_keywords(s, t, lower, out);
+    return;
+  }
+  int ends = 0, depth = t.depth;
+  for (size_t i = p + 1; i-- > first;) {
+    Token c = ts[i];
+    if (c.depth > depth) continue;
+    if (c.kind == '(' && c.depth < depth) {
+      /* An enclosing group: a call or a list has no keywords; other parentheses keep the clause. */
+      if (i > first && (is_name(ts[i - 1]) || ts[i - 1].kind == ')' || ts[i - 1].kind == LITERAL)
+          && !one_of(s, ts[i - 1], OPEN_WORDS)) return;
+      depth = c.depth;
+      continue;
+    }
+    if (word(s, c, "END")) { ++ends; continue; }
+    if (ends) { if (word(s, c, "CASE")) --ends; continue; }
+    if (word(s, c, "BY")) {
+      const char *group = i > first && word(s, ts[i - 1], "GROUP") ? "group"
+        : i > first && word(s, ts[i - 1], "ORDER") ? "order" : i > first && word(s, ts[i - 1], "PARTITION") ? "partition" : "";
+      set_keywords(s, i > first ? ts[i - 1] : c, group, out);
+      return;
+    }
+    for (int k = 0; clauses[k].word; ++k) {
+      if (!word(s, c, clauses[k].word)) continue;
+      set_keywords(s, c, clauses[k].group, out);
+      const char *g = clauses[k].group;
+      out->alias = (!strcmp(g, "select") || !strcmp(g, "from") || !strcmp(g, "join")) && aliasable(s, ts, first, p);
+      return;
+    }
+  }
+}
 #define VARIABLE_LIMIT 256
 /* Words that start the next statement, so they end a DECLARE list. */
 static const char *const STATEMENT_WORDS[] = { "SELECT", "SET", "DECLARE", "IF", "ELSE", "WHILE", "BEGIN", "END",
