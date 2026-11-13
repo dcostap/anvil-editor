@@ -23,7 +23,11 @@ typedef struct {
   char name[SQL_CONTEXT_NAME];
   int kind, star;
   size_t first, count; /* Range in SqlContext.columns. */
+  size_t star_first, star_count; /* Range in SqlContext.stars. */
 } SqlLocal;
+/* A source whose columns a `*` or `x.*` adds to a Local Source, before the
+ * Local Source's column at index at. */
+typedef struct { size_t at; SqlSource source; } SqlStar;
 
 typedef struct {
   /* Byte offsets, like Anvil's Buffer columns. End is exclusive. */
@@ -67,6 +71,10 @@ typedef struct {
   size_t local_count;
   char (*columns)[SQL_CONTEXT_NAME];
   size_t column_count, column_capacity;
+  SqlStar *stars;
+  size_t star_total, star_capacity;
+  /* Sources that the last scope read skipped, such as OPENJSON. */
+  size_t skipped;
 } SqlContext;
 
 /* Returns zero for oversized input or allocation failure. No partial result.

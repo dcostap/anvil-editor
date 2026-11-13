@@ -26,20 +26,49 @@ local function resolve(catalog, schema, name)
 end
 local LOCAL_LABELS = { cte = "CTE", derived = "derived table", temp = "temporary table", variable = "table variable" }
 -- A source's object: a Local Source that the text defines, or else a catalog object.
-local function source_object(state, source)
+-- A Local Source's * takes its sources' columns. Missing lists the catalog
+-- objects whose columns a large database did not load yet.
+local function source_object(state, source, visiting)
   local index = source.local_index
   if not index then return resolve(state.catalog, source.schema, source.name) end
   state.local_objects = state.local_objects or {}
   local object = state.local_objects[index]
-  if not object then
-    local definition = state.parsed.locals[index]
-    object = { schema = "", name = definition.name, kind = definition.kind, local_source = true,
-      incomplete = definition.star, columns = {} }
-    for i, column in ipairs(definition.columns) do
-      object.columns[i] = { name = column, type = LOCAL_LABELS[definition.kind] }
+  if object then return object end
+  visiting = visiting or {}
+  if visiting[index] then return end -- A CTE that reads itself.
+  visiting[index] = true
+  local definition = state.parsed.locals[index]
+  object = { schema = "", name = definition.name, kind = definition.kind, local_source = true,
+    incomplete = definition.star, columns = {} }
+  local stars, next_star = definition.stars, 1
+  local function add_stars(at)
+    while stars[next_star] and stars[next_star].at == at do
+      local from = source_object(state, stars[next_star], visiting)
+      if from and from.missing then
+        object.missing = object.missing or {}
+        for _, missing in ipairs(from.missing) do table.insert(object.missing, missing) end
+      end
+      if from and not from.columns then
+        object.missing = object.missing or {}
+        table.insert(object.missing, from)
+      end
+      if not from or not from.columns or from.incomplete then object.incomplete = true
+      else
+        for _, column in ipairs(from.columns) do
+          table.insert(object.columns, { name = column.name, type = column.type })
+        end
+      end
+      next_star = next_star + 1
     end
-    state.local_objects[index] = object
   end
+  for i, column in ipairs(definition.columns) do
+    add_stars(i - 1)
+    table.insert(object.columns, { name = column, type = LOCAL_LABELS[definition.kind] })
+  end
+  add_stars(#definition.columns)
+  visiting[index] = nil
+  -- Columns that arrive later change the object, so only a complete read stays.
+  if not object.missing then state.local_objects[index] = object end
   return object
 end
 local function context(view, sql)
@@ -519,6 +548,7 @@ function M.expand_star(view, sql)
       local qualifier = source.alias ~= "" and source.alias or source.name
       local object = (p.qualifier == "" or equal(state.catalog, p.qualifier, qualifier)) and source_object(state, source)
       if object and not object.columns then missing[#missing + 1] = object end
+      for _, other in ipairs(object and object.missing or {}) do missing[#missing + 1] = other end
     end
     if #missing > 0 then
       local remaining = #missing

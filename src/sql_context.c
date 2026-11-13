@@ -430,13 +430,24 @@ static void add_column_list(const char *s, Token *ts, size_t open, size_t close,
     if (is_name(ts[i]) && !constraint) add_column(s,ts[i],local,out);
   }
 }
+static int read_scope(const char *s, Token *ts, size_t begin, size_t end, int scope, size_t caret, int merge,
+                      SqlContext *out);
+/* A `*` or `x.*` of a SELECT: where its columns go, and the token of x, or 0. */
+typedef struct { size_t at, qualifier; } StarItem;
+#define STAR_ITEMS 16
 /* One SELECT column: `alias = expression`, `expression [AS] alias`, or a column
  * with its own name. An expression without a name adds nothing. */
-static void add_projection_item(const char *s, Token *ts, size_t a, size_t b, SqlLocal *local, SqlContext *out) {
+static void add_projection_item(const char *s, Token *ts, size_t a, size_t b, SqlLocal *local, SqlContext *out,
+                                StarItem *stars, size_t *star_count) {
   if (b-a>=2 && is_name(ts[a]) && ts[a+1].kind=='=') { add_column(s,ts[a],local,out); return; }
   static const char *expression_words[]={ "END", "NULL", "THEN", "ELSE", "AND", "OR", "NOT", "IS", NULL };
   Token last=ts[b-1];
-  if (last.kind=='*') { local->star=1; return; }
+  if (last.kind=='*') {
+    int plain=b-a==1, qualified=b-a==3 && is_name(ts[a]) && ts[a+1].kind=='.';
+    if (!stars || (!plain && !qualified) || *star_count==STAR_ITEMS) { local->star=1; return; }
+    stars[(*star_count)++]=(StarItem){ local->count, qualified ? a : 0 };
+    return;
+  }
   if (!is_name(last) || reserved(s,last) || (last.kind==IDENT && isdigit((unsigned char)s[last.start]))) return;
   for (int k=0; expression_words[k]; ++k) if (word(s,last,expression_words[k])) return;
   if (b-a==1) { add_column(s,last,local,out); return; }
@@ -450,17 +461,68 @@ static int projection_end(const char *s, Token t) {
   for (int i=0; words[i]; ++i) if (word(s,t,words[i])) return 1;
   return 0;
 }
-/* The names of the columns of the SELECT at select, which ends before end. */
-static void add_projection(const char *s, Token *ts, size_t select, size_t end, SqlLocal *local, SqlContext *out) {
+static void add_star(const SqlSource *source, size_t at, SqlLocal *local, SqlContext *out) {
+  if (out->star_total==out->star_capacity) {
+    size_t capacity=out->star_capacity ? out->star_capacity*2 : 16;
+    void *grown=capacity<=SQL_CONTEXT_COLUMNS ? realloc(out->stars,capacity*sizeof(*out->stars)) : NULL;
+    if (!grown) { local->star=1; return; }
+    out->stars=grown; out->star_capacity=capacity;
+  }
+  out->stars[out->star_total++]=(SqlStar){ at, *source };
+  ++local->star_count;
+}
+/* The sources of the SELECT at select, which ends before end, for its stars.
+ * Its first SELECT gives the columns of a UNION, so the read stops at the
+ * set operator. The caret's own sources stay. */
+static void add_stars(const char *s, Token *ts, size_t select, size_t end, const StarItem *stars, size_t count,
+                      SqlLocal *local, SqlContext *out) {
   int depth=ts[select].depth;
+  for (size_t i=select+1; i<end; ++i)
+    if (ts[i].depth==depth && (word(s,ts[i],"UNION") || word(s,ts[i],"EXCEPT") || word(s,ts[i],"INTERSECT"))) { end=i; break; }
+  size_t saved=out->count, join=out->join, skipped=out->skipped;
+  int mode=out->mode;
+  SqlSource *backup=saved ? malloc(saved*sizeof(*backup)) : NULL;
+  if (saved && !backup) { local->star=1; return; }
+  if (saved) memcpy(backup,out->sources,saved*sizeof(*backup));
+  out->count=0; out->skipped=0; out->mode=SQL_CONTEXT_COLUMN;
+  int read=read_scope(s,ts,select,end,depth,0,0,out) && out->mode!=SQL_CONTEXT_NONE && out->count;
+  /* The Local Sources that the read added come before this one's stars. */
+  local->star_first=out->star_total;
+  for (size_t k=0; read && k<count; ++k) {
+    char qualifier[SQL_CONTEXT_NAME]="";
+    if (stars[k].qualifier && !name(s,ts[stars[k].qualifier],ts[stars[k].qualifier].end,qualifier)) { read=0; break; }
+    if (!qualifier[0] && out->skipped) { read=0; break; }
+    size_t found=0;
+    for (size_t j=0; j<out->count; ++j) {
+      const SqlSource *source=&out->sources[j];
+      if (qualifier[0] && !same_name(source->alias[0] ? source->alias : source->name,qualifier)) continue;
+      add_star(source,stars[k].at,local,out);
+      ++found;
+    }
+    if (!found) read=0;
+  }
+  if (!read) local->star=1;
+  if (saved) memcpy(out->sources,backup,saved*sizeof(*backup));
+  free(backup);
+  out->count=saved; out->join=join; out->skipped=skipped; out->mode=mode;
+}
+/* The names of the columns of the SELECT at select, which ends before end.
+ * With sources set, a `*` or `x.*` takes the columns of the SELECT's sources;
+ * otherwise it leaves the list incomplete. */
+static void add_projection(const char *s, Token *ts, size_t select, size_t end, int sources, SqlLocal *local,
+                           SqlContext *out) {
+  int depth=ts[select].depth;
+  StarItem stars[STAR_ITEMS];
+  size_t star_count=0;
   size_t a=projection_first(s,ts,select,end);
   for (size_t i=a; i<=end; ++i) {
     int stop=i==end || ts[i].depth<depth || (ts[i].depth==depth && (ts[i].kind==',' || projection_end(s,ts[i])));
     if (!stop) continue;
-    if (i>a) add_projection_item(s,ts,a,i,local,out);
-    if (i==end || ts[i].kind!=',' || ts[i].depth!=depth) return;
+    if (i>a) add_projection_item(s,ts,a,i,local,out,sources ? stars : NULL,&star_count);
+    if (i==end || ts[i].kind!=',' || ts[i].depth!=depth) break;
     a=i+1;
   }
+  if (star_count) add_stars(s,ts,select,end,stars,star_count,local,out);
 }
 /* `WITH name [(columns)] AS (SELECT ...) [, ...]`. WITH (NOLOCK), WITH TIES and
  * other WITH clauses do not have this shape. */
@@ -477,7 +539,7 @@ static void add_ctes(const char *s, Token *ts, size_t first, size_t last, SqlCon
       SqlLocal *local=add_local(s,ts[at],SQL_LOCAL_CTE,out);
       if (local) {
         if (list && list_end<last) add_column_list(s,ts,list,list_end,local,out);
-        else if (open+1<close && word(s,ts[open+1],"SELECT")) add_projection(s,ts,open+1,close,local,out);
+        else if (open+1<close && word(s,ts[open+1],"SELECT")) add_projection(s,ts,open+1,close,1,local,out);
         else local->star=1;
       }
       i=close+1;
@@ -508,7 +570,7 @@ static void add_temporary_tables(const char *s, Token *ts, size_t n, SqlContext 
         if (ts[select].depth==ts[i].depth && (word(s,ts[select],"SELECT") || ts[select].kind==';')) break;
       if (select<i && word(s,ts[select],"SELECT")) {
         SqlLocal *local=add_local(s,ts[i+1],SQL_LOCAL_TEMP,out);
-        if (local) add_projection(s,ts,select,i,local,out);
+        if (local) add_projection(s,ts,select,i,0,local,out);
       }
     }
   }
@@ -631,23 +693,23 @@ static int read_scope(const char *s, Token *ts, size_t begin, size_t end, int sc
         size_t list_end=closing(ts,at+1,end);
         add_column_list(s,ts,at+1,list_end,local,out);
         at=list_end;
-      } else add_projection(s,ts,i+1,close,local,out);
+      } else add_projection(s,ts,i+1,close,1,local,out);
       SqlSource src={0};
       memcpy(src.name,local->name,sizeof(src.name));
       memcpy(src.alias,local->name,sizeof(src.alias));
-      src.local=out->local_count;
+      src.local=(size_t)(local-out->locals)+1;
       out->sources[out->count++]=src;
       expect_source=0;
       i=at;
       continue;
     }
-    if (t.kind=='(') { i=skip_source(s,ts,i,end,caret,out); expect_source=0; continue; }
+    if (t.kind=='(') { i=skip_source(s,ts,i,end,caret,out); ++out->skipped; expect_source=0; continue; }
     if (!is_name(t) || reserved(s,t)) { out->mode=SQL_CONTEXT_NONE; out->count=0; return 1; }
     SqlSource src={0};
     size_t at=i;
     int read=read_name(s,ts,&i,end,&src);
     if (!read) return 0;
-    if (read<0) { i=skip_source(s,ts,at,end,caret,out); expect_source=0; continue; }
+    if (read<0) { i=skip_source(s,ts,at,end,caret,out); ++out->skipped; expect_source=0; continue; }
     if (i+1<end && ts[i+1].kind=='(') {
       /* A table-valued function, `name(arguments) [AS] alias`, is a source. With a
        * WITH list or a column list, its columns need more metadata. */
@@ -660,7 +722,7 @@ static int read_scope(const char *s, Token *ts, size_t begin, size_t end, int sc
       if (k==last) {
         if (out->count==SQL_CONTEXT_SOURCES) return 0;
         out->sources[out->count++]=src;
-      }
+      } else ++out->skipped;
       i=last; expect_source=0;
       continue;
     }
@@ -773,9 +835,10 @@ static int read_statement(const char *s, Token *ts, size_t begin, size_t end, si
   return 1;
 }
 void sql_context_free(SqlContext *out) {
-  free(out->locals); free(out->columns); free(out->variables); free(out->named);
-  out->locals=NULL; out->columns=NULL; out->variables=NULL; out->named=NULL;
+  free(out->locals); free(out->columns); free(out->variables); free(out->named); free(out->stars);
+  out->locals=NULL; out->columns=NULL; out->variables=NULL; out->named=NULL; out->stars=NULL;
   out->local_count=out->column_count=out->column_capacity=out->variable_count=out->named_count=0;
+  out->star_total=out->star_capacity=0;
 }
 int sql_context_parse(const char *s, size_t len, size_t caret, SqlContext *out) {
   memset(out, 0, sizeof(*out));

@@ -257,7 +257,8 @@ test.describe("SQL Queries", function()
 
   test.it("reads a large database's columns when completion needs them, and runs SQL without metadata", function(context)
     local large = { database = "AnvilTest", default_schema = "dbo", case_sensitive = false, columns_loaded = false,
-      objects = { { schema = "sales", name = "customers", kind = "table" }, { schema = "dbo", name = "orders", kind = "table" } } }
+      objects = { { schema = "sales", name = "customers", kind = "table" }, { schema = "dbo", name = "orders", kind = "table" },
+        { schema = "dbo", name = "lines", kind = "table" } } }
     local editor = connected_query(context, large)
     local backend = require "plugins.sql_server.backend"
     local requests = {}
@@ -287,6 +288,17 @@ test.describe("SQL Queries", function()
     test.equal(requests[2].name, "dbo.orders")
     requests[2].callback(schema.objects[2].columns)
     test.equal(editor.buffer.lines[1], "SELECT customer_id FROM dbo.orders\n")
+    -- A CTE's * also reads the columns of its sources first.
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    editor.buffer:text_input("WITH w AS (SELECT * FROM dbo.lines) SELECT * FROM w")
+    editor.buffer:set_selection(1, #"WITH w AS (SELECT * FROM dbo.lines) SELECT *" + 1)
+    test.ok(command.perform("sql_server:expand_star"))
+    test.equal(#requests, 3)
+    test.equal(requests[3].name, "dbo.lines")
+    requests[3].callback({ { name = "qty", type = "int" } })
+    test.equal(editor.buffer.lines[1], "WITH w AS (SELECT * FROM dbo.lines) SELECT qty FROM w\n")
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    editor.buffer:text_input("SELECT customer_id FROM dbo.orders")
 
     local sql = require "plugins.sql_server"
     local c = sql.connection_for(editor.buffer)
@@ -321,6 +333,26 @@ test.describe("SQL Queries", function()
     editor.buffer:set_selection(1, #text)
     test.not_ok(require("core.commands.language").activate_symbol(editor))
     test.equal(core.active_view, editor)
+
+    -- A * or x.* in the CTE takes its sources' columns at its place.
+    editor.buffer:set_selection(1, 1, 1, #text + 1)
+    text = "WITH picked AS (SELECT c.*, o.customer_id AS ref FROM sales.customers c JOIN dbo.orders o ON 1 = 1)"
+      .. " SELECT * FROM picked p WHERE p.na"
+    editor.buffer:text_input(text)
+    editor.buffer:set_selection(1, #text + 1)
+    autocomplete.trigger()
+    test.ok(autocomplete.is_open())
+    test.equal(autocomplete.get_selected_suggestion().text, "name")
+    autocomplete.close()
+    editor.buffer:set_selection(1, #"WITH picked AS (SELECT c.*, o.customer_id AS ref FROM sales.customers c JOIN dbo.orders o ON 1 = 1) SELECT *" + 1)
+    test.ok(command.perform("sql_server:expand_star"))
+    test.ok(editor.buffer.lines[1]:find(") SELECT id, name, ref FROM picked p", 1, true))
+    -- A CTE that reads itself has no known columns.
+    editor.buffer:set_selection(1, 1, 1, math.huge)
+    editor.buffer:text_input("WITH r AS (SELECT * FROM r) SELECT * FROM r")
+    editor.buffer:set_selection(1, #"WITH r AS (SELECT * FROM r) SELECT *" + 1)
+    test.same({ pcall(require("plugins.sql_server.intelligence").expand_star, editor, require "plugins.sql_server") }, { true, false })
+    test.equal(editor.buffer.lines[1], "WITH r AS (SELECT * FROM r) SELECT * FROM r\n")
 
     editor.buffer:set_selection(1, 1, 1, #text + 1)
     editor.buffer:text_input("CREATE TABLE #picked (code int, [the label] nvarchar(5))\nSELECT * FROM #picked")

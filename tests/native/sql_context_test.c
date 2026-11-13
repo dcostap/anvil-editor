@@ -18,6 +18,19 @@ static int columns_are(SqlContext *c, SqlLocal *local, const char *expected) {
   if (strcmp(joined, expected)) { fprintf(stderr, "columns: %s, expected %s\n", joined, expected); return 0; }
   return 1;
 }
+/* A Local Source's star sources: "at:schema.name", with ~ for a Local Source. */
+static int stars_are(SqlContext *c, SqlLocal *local, const char *expected) {
+  char joined[1024] = "";
+  for (size_t i = 0; i < local->star_count; ++i) {
+    const SqlStar *star = &c->stars[local->star_first + i];
+    char one[1100];
+    snprintf(one, sizeof(one), "%s%zu:%s%s%s%s", i ? "," : "", star->at, star->source.schema,
+      star->source.schema[0] ? "." : "", star->source.name, star->source.local ? "~" : "");
+    strcat(joined, one);
+  }
+  if (strcmp(joined, expected)) { fprintf(stderr, "stars: %s, expected %s\n", joined, expected); return 0; }
+  return 1;
+}
 
 /* Parses with the caret after the first copy of marker. */
 static void parse_after(SqlContext *c, const char *text, const char *marker) {
@@ -83,9 +96,31 @@ int main(void) {
   assert(columns_are(&c, source_local(&c, "a"), "x,y z"));
   assert(!source_local(&c, "real_b"));
   sql_context_free(&c);
+  /* A * or x.* takes the columns of its sources, at its place in the list. */
   text = "WITH c AS (SELECT * FROM dbo.customers) SELECT c.na FROM c";
   assert(sql_context_parse(text, strlen(text), strlen("WITH c AS (SELECT * FROM dbo.customers) SELECT c.na"), &c));
-  assert(c.mode == SQL_CONTEXT_COLUMN && source_local(&c, "c") && source_local(&c, "c")->star);
+  assert(c.mode == SQL_CONTEXT_COLUMN && source_local(&c, "c") && !source_local(&c, "c")->star);
+  assert(columns_are(&c, source_local(&c, "c"), "") && stars_are(&c, source_local(&c, "c"), "0:dbo.customers"));
+  parse_after(&c, "WITH c AS (SELECT o.id AS oid, x.*, total = 1 FROM dbo.orders o JOIN sales.lines AS x ON 1 = 1)"
+    " SELECT c. FROM c", "c.");
+  assert(!source_local(&c, "c")->star && columns_are(&c, source_local(&c, "c"), "oid,total"));
+  assert(stars_are(&c, source_local(&c, "c"), "1:sales.lines"));
+  parse_after(&c, "WITH a AS (SELECT 1 AS k) SELECT d. FROM dbo.x AS y JOIN (SELECT * FROM a JOIN (SELECT 2 AS m) e"
+    " ON 1 = 1) d ON 1 = 1", "d.");
+  assert(c.mode == SQL_CONTEXT_COLUMN && sources_are(&c, "x y,d d") && !source_local(&c, "d")->star);
+  assert(stars_are(&c, source_local(&c, "d"), "0:a~,0:e~"));
+  /* A recursive CTE takes its columns from its first SELECT. */
+  parse_after(&c, "WITH r AS (SELECT * FROM dbo.t UNION ALL SELECT * FROM r) SELECT r. FROM r", "r.");
+  assert(!source_local(&c, "r")->star && stars_are(&c, source_local(&c, "r"), "0:dbo.t"));
+  /* A source that Anvil cannot read, or an unknown qualifier, leaves the list incomplete. */
+  const char *incomplete[] = { "WITH c AS (SELECT * FROM dbo.t, srv.db.dbo.x) SELECT c. FROM c",
+    "WITH c AS (SELECT * FROM OPENJSON(@j) WITH (a int) j) SELECT c. FROM c",
+    "WITH c AS (SELECT q.* FROM dbo.t) SELECT c. FROM c", "WITH c AS (SELECT db.dbo.t.* FROM dbo.t) SELECT c. FROM c",
+    "SELECT * INTO #c FROM dbo.t SELECT c. FROM #c c" };
+  for (size_t i = 0; i < sizeof(incomplete) / sizeof(incomplete[0]); ++i) {
+    parse_after(&c, incomplete[i], "c.");
+    if (!source_local(&c, "c") || !source_local(&c, "c")->star) { fprintf(stderr, "complete: %s\n", incomplete[i]); return 1; }
+  }
   sql_context_free(&c);
   text = "SELECT c.na FROM dbo.customers c WITH (NOLOCK)";
   assert(sql_context_parse(text, strlen(text), 11, &c) && c.local_count == 0 && c.count == 1);

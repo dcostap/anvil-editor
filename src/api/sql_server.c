@@ -66,6 +66,16 @@ static int context(lua_State *L) {
       lua_pushstring(L, out.columns[local->first + c]); lua_rawseti(L, -2, (int)c + 1);
     }
     lua_setfield(L, -2, "columns");
+    lua_createtable(L, (int)local->star_count, 0);
+    for (size_t k = 0; k < local->star_count; ++k) {
+      const SqlStar *star = &out.stars[local->star_first + k];
+      lua_newtable(L);
+      lua_pushinteger(L, (lua_Integer)star->at); lua_setfield(L, -2, "at");
+      text(L, "schema", star->source.schema); text(L, "name", star->source.name);
+      if (star->source.local) { lua_pushinteger(L, (lua_Integer)star->source.local); lua_setfield(L, -2, "local_index"); }
+      lua_rawseti(L, -2, (int)k + 1);
+    }
+    lua_setfield(L, -2, "stars");
     lua_rawseti(L, -2, (int)i + 1);
   }
   lua_setfield(L, -2, "locals");
