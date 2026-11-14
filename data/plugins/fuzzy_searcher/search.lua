@@ -13,6 +13,32 @@ local modifiers = require "plugins.fuzzy_searcher.modifiers"
 
 local search = {}
 
+-- File, Text and Project Symbol Search match display paths. Commit Search matches
+-- repository-relative paths instead. Resolve only text here: a path can name a
+-- deleted file, a Machine file, or a fuzzy query that has no file on this PC.
+function search.path_query(query, repository)
+  query = tostring(query or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if query == "" then return query, false end
+  if query == "~" or query:match("^~[/\\]") then query = common.home_expand(query) end
+  if not common.is_absolute_path(query) then
+    while query:match("^%.[/\\]") do query = query:sub(3) end
+    return query:gsub("^%s+", ""):gsub("%s+$", ""), false
+  end
+  if repository then
+    query = common.normalize_path(query)
+    if common.path_equals(query, repository) then return "", true end
+    if common.path_belongs_to(query, repository) then
+      return common.relative_path(repository, query), true
+    end
+  else
+    local display = project_paths.display_path(query, { home_encode = false })
+    if display and display.root_role then
+      return display.text == "." and "" or display.text, true
+    end
+  end
+  return query, false
+end
+
 -- Preview draws reuse the last prepared query. Search jobs keep their own query.
 local last_literal, last_query, last_case
 function search.literal_query(query, case_sensitive)
@@ -105,6 +131,7 @@ local function revision_candidates(job, spec, visit)
     cache.repo = await_git(job, function(callback) return git.repo_for_path_async(spec.project, callback) end)
     cache.project, cache.input, cache.revision, cache.files = spec.project, nil, nil, nil
   end
+  spec.base = search.path_query(spec.base, cache.repo.root)
   if cache.input ~= spec.options.commit then
     local result = await_git(job, function(callback)
       return git.run_git(cache.repo, {

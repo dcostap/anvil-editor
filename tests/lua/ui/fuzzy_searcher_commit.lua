@@ -108,6 +108,29 @@ test.describe("Fuzzy Searcher Commit Search", function()
     test.equal(picker.preview_view.buffer.treesitter, nil)
   end)
 
+  test.it("resolves absolute historical paths from the repository, not the current Project folder", function(context)
+    local subfolder = context.root .. PATHSEP .. "subproject"
+    test.ok(common.mkdirp(subfolder))
+    core.projects = { Project(subfolder) }
+    system.chdir(subfolder)
+    project_paths.configure_workspace {}
+    local path = context.root .. PATHSEP .. "gone.txt"
+    for _, suffix in ipairs({ "", " #needle" }) do
+      local query = path .. " commit:" .. context.revision .. suffix
+      fuzzy.open(query)
+      local picker = assert(core.fuzzy_searcher_active_view)
+      test.ok(wait_until(function() return picker.status == "1 match" end), tostring(picker.status))
+      test.equal(picker.results[1].revision_path, "gone.txt")
+      test.equal(picker.results[1].revision, context.revision)
+      if suffix ~= "" then test.equal(picker.results[1].text, "needle needle") end
+      picker:close()
+    end
+    fuzzy.open(context.root .. "-outside" .. PATHSEP .. "gone.txt commit:" .. context.revision)
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return picker.status == "0 matches" end), tostring(picker.status))
+    test.equal(#picker.results, 0)
+  end)
+
   test.it("finds accent equivalents in a committed file that no longer exists", function(context)
     fuzzy.open("commit:" .. context.revision .. " #cafe")
     local picker = assert(core.fuzzy_searcher_active_view)

@@ -3212,13 +3212,6 @@ end
 
 local function build_scope(base, line, max_count, case_sensitive)
   if base:sub(1, 1) == ">" then base = "" end
-  -- Match the same Project display paths as File Search, not their absolute locations.
-  if common.is_absolute_path(base) then
-    local display = project_paths.display_path(base, { home_encode = false })
-    if display and display.root_role then
-      base = display.text == "." and "" or display.text
-    end
-  end
   local limit = max_count or 200
   local list = {}
   local meta = {
@@ -3283,7 +3276,7 @@ end
 
 function fuzzy_searcher.new_grep_scope_plan(base, line, case_sensitive)
   return {
-    base = base,
+    base = fuzzy_searcher.search.path_query(base),
     line = line,
     case_sensitive = case_sensitive,
     files = {},
@@ -3561,14 +3554,16 @@ function path_search.plan(text, options)
 
   query = trim_query(query)
   local explicit = mode == "@"
-  if query == "~" or query:match("^~[/\\]") then
+  if not explicit then
+    local project_path
+    query, project_path = fuzzy_searcher.search.path_query(query)
+    if project_path then
+      return { external = false, query = query, project_path = true, mode = mode }
+    end
+  elseif query == "~" or query:match("^~[/\\]") then
     query = common.home_expand(query)
   end
   if not common.is_absolute_path(query) then
-    if not explicit then
-      while query:match("^%.[/\\]") do query = query:sub(3) end
-      query = trim_query(query)
-    end
     if options and options.include_ignored and not explicit then
       local parts = path_search.ignored_project_path_parts(query)
       if parts then
@@ -3579,17 +3574,10 @@ function path_search.plan(text, options)
     return { external = explicit, explicit = explicit, query = query, mode = mode }
   end
 
-  local display = not explicit and project_paths.display_path(query, { home_encode = false }) or nil
-  if display and display.root_role then
-    local project_query = display.text == "." and "" or display.text
-    return { external = false, query = project_query, project_path = true, mode = mode }
-  end
-
   local parts = path_search.external_path_parts(query) or { query = query }
   if not explicit and parts.scope then
-    local scoped_display = project_paths.display_path(parts.scope, { home_encode = false })
-    if scoped_display and scoped_display.root_role then
-      local prefix = scoped_display.text == "." and "" or scoped_display.text
+    local prefix, project_path = fuzzy_searcher.search.path_query(parts.scope)
+    if project_path then
       local project_query = trim_query(parts.query)
       if prefix ~= "" and project_query ~= "" then project_query = prefix .. " " .. project_query
       elseif prefix ~= "" then project_query = prefix end
@@ -6563,7 +6551,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
 
   stream_thread_key = core.add_thread(function()
     core.log_quiet("Fuzzy grep stream started generation=%d jobs=%d", gen, #jobs)
-    local base_query = base:sub(1, 1) == ">" and "" or base
+    local base_query = scope_meta and scope_meta.query or (base:sub(1, 1) == ">" and "" or base)
     local candidates, candidate_seen = {}, {}
     processed = {}
     for _, s in ipairs(jobs) do processed[s.key] = 0 end
@@ -6648,7 +6636,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         r.path_score = 0
       end
       if base_query ~= "" then
-        local _, file_spans = fuzzy_match(base_query, r.file, self.case_sensitive)
+        local _, file_spans = fuzzy_match_file_fast(base_query, r.file, self.case_sensitive)
         r.file_spans = file_spans or {}
       end
 
@@ -6973,7 +6961,7 @@ function FSView:start_grep(base, line, grep)
       r.exact = exact
       r.grep_query = grep
       r.case_sensitive = self.case_sensitive
-      r.base_query = base:sub(1, 1) == ">" and "" or base
+      r.base_query = scope_meta and scope_meta.query or (base:sub(1, 1) == ">" and "" or base)
       local path_key = r.abs_path and common.path_compare_key(r.abs_path)
       local path_info = path_key and scope_meta and scope_meta.by_path and scope_meta.by_path[path_key]
       if path_info then
@@ -6989,7 +6977,7 @@ function FSView:start_grep(base, line, grep)
       r.fuzzy_score = fuzzy_score or 0
       r.boundary_score = boundary_score or 0
       if r.base_query ~= "" and not r.file_spans then
-        local _, file_spans = fuzzy_match(r.base_query, r.file, self.case_sensitive)
+        local _, file_spans = fuzzy_match_file_fast(r.base_query, r.file, self.case_sensitive)
         r.file_spans = file_spans or {}
       end
       begin_results()
@@ -7359,6 +7347,7 @@ function FSView:start_symbol_search(query, reset_selection, path_query)
   local limit = self:max_result_limit()
   query = trim_query(query)
   path_query = trim_query(path_query)
+  if path_query ~= "" then path_query = fuzzy_searcher.search.path_query(path_query) end
   local buffer = self.source_buffer or (self.source_view and self.source_view.buffer)
   local provider = require("core.language_intelligence").providers_for("project_symbols", buffer)[1]
   if provider then

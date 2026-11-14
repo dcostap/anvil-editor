@@ -62,6 +62,7 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
 
   test.after_each(function(context)
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
+    if context.symbols then require("core.treesitter.symbol_index").reset_for_tests() end
     project_paths.configure_workspace {}
     project_paths.load_workspace_state(nil)
     core.projects = context.original_projects
@@ -254,34 +255,64 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
     end, 15), "expected fuzzy grep to continue through all fuzzy path matches: " .. tostring(picker.status))
   end)
 
-  test.it("searches text through absolute Project paths as through their labels", function(context)
-    local folder = join_path(context.external, "string builders")
-    local target = join_path(folder, "Builder.java")
-    local other = join_path(context.root, "Builder.java")
-    mkdirp(folder)
-    write_file(target, "builder matching text\n")
-    write_file(other, "builder matching text\n")
-
-    fuzzy_searcher.open("Builder.java")
+  test.it("uses Project paths consistently across file, text, symbol and modifier searches", function(context)
+    context.symbols = true
+    require("core.treesitter.symbol_index").reset_for_tests()
+    local scopes = {
+      { folder = join_path(context.root, "owned builders"), label = "owned builders" },
+      { folder = join_path(context.external, "string builders"), label = "Java Sources/string builders" },
+      { folder = join_path(context.root, "src", "vendor", "library1", "builders"), label = "library1/builders" },
+    }
+    for _, scope in ipairs(scopes) do
+      mkdirp(scope.folder)
+      scope.file = join_path(scope.folder, "Builder.odin")
+      write_file(scope.file, "package fixture\nbuilder_write :: proc() {}\n")
+    end
+    fuzzy_searcher.open("Builder.odin")
     local picker = assert(core.fuzzy_searcher_active_view)
     test.ok(wait_until(function()
-      return picker_result_for_path(picker, target) and picker_result_for_path(picker, other)
-    end, 30), "expected both files in File Search")
+      for _, scope in ipairs(scopes) do
+        if not picker_result_for_path(picker, scope.file) then return false end
+      end
+      return true
+    end, 30), "expected all three Project Path roles in File Search")
 
-    for _, query in ipairs({
-      folder .. " #builder",
-      target .. " #builder",
-      folder .. " #builder text",
-      "Java Sources" .. PATHSEP .. "string builders #builder",
-    }) do
-      picker.input:set_text(query)
-      picker:refresh(query)
-      test.ok(wait_until(function()
-        return picker_result_for_path(picker, target) and not picker:search_running()
-      end, 30), "expected the External Project Directory match for " .. query .. ": " .. tostring(picker.status))
-      test.equal(#picker.results, 1, "the path must exclude the Root Project's matching text")
-      test.equal(picker.results[1].line, 1)
-      test.equal(picker.results[1].text, "builder matching text")
+    for _, scope in ipairs(scopes) do
+      for _, case in ipairs({
+        { scope.folder .. " $builder_write", "symbol" },
+        { scope.file .. " $builder_write", "symbol" },
+        { "./" .. scope.label .. " $builder_write", "symbol" },
+        { scope.file, "file" },
+        { scope.file .. " sort:name", "file" },
+        { scope.file .. " #builder_write", "grep" },
+        { scope.label .. " #builder_write", "grep" },
+        { scope.folder .. " #builder_write size:>0 sort:name", "grep" },
+        { scope.folder .. " #builder write", "grep" },
+        { scope.folder:gsub("\\", "/") .. "/ #builder_write", "grep" },
+        { common.home_encode(scope.folder) .. " #builder_write", "grep" },
+        { scope.file .. ":2:1 #builder_write", "grep" },
+      }) do
+        local query, kind = case[1], case[2]
+        picker.input:set_text(query)
+        picker:refresh(query)
+        test.ok(wait_until(function()
+          local row = picker_result_for_path(picker, scope.file)
+          return row and (row.kind == kind or kind == "file" and row.kind == "path")
+            and not picker:search_running()
+        end, 30), "missing result for " .. query .. ": " .. tostring(picker.status))
+        test.equal(#picker.results, 1, "exclude the other Project Paths for " .. query)
+        test.equal(picker.input:get_text(), query, "keep the user's input")
+        local row = picker.results[1]
+        if row.kind == "symbol" then
+          test.equal(row.name, "builder_write")
+          test.equal(row.line, 2)
+          test.ok(#row.file_spans > 0, "highlight the symbol's path for " .. query)
+        elseif row.kind == "grep" then
+          test.equal(row.text, "builder_write :: proc() {}")
+          test.equal(row.line, 2)
+          test.ok(#row.file_spans > 0, "highlight the text result's path for " .. query)
+        end
+      end
     end
   end)
 

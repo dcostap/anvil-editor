@@ -158,8 +158,10 @@ test.describe("File Search on a Machine", function()
 
   -- Each query uses a different search path: exact text, fuzzy text, text in the files that match a name, and
   -- text with a query modifier.
-  test.it("finds the text of the Machine's files", function()
-    for _, query in ipairs({ "#needle", "#find cafe", "steps #cafe", "#cafe sort:name", "#café" }) do
+  test.it("finds the text of the Machine's files", function(context)
+    local path = context.project .. PATHSEP .. "sub" .. PATHSEP .. "steps.md"
+    for _, query in ipairs({ "#needle", "#find cafe", "steps #cafe", "#cafe sort:name", "#café",
+      path .. " #cafe", path .. " #cafe sort:name" }) do
       fuzzy_searcher.open(query)
       local picker = test.not_nil(core.fuzzy_searcher_active_view)
       local function lines()
