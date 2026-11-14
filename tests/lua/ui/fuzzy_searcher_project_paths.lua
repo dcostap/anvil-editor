@@ -254,6 +254,37 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
     end, 15), "expected fuzzy grep to continue through all fuzzy path matches: " .. tostring(picker.status))
   end)
 
+  test.it("searches text through absolute Project paths as through their labels", function(context)
+    local folder = join_path(context.external, "string builders")
+    local target = join_path(folder, "Builder.java")
+    local other = join_path(context.root, "Builder.java")
+    mkdirp(folder)
+    write_file(target, "builder matching text\n")
+    write_file(other, "builder matching text\n")
+
+    fuzzy_searcher.open("Builder.java")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function()
+      return picker_result_for_path(picker, target) and picker_result_for_path(picker, other)
+    end, 30), "expected both files in File Search")
+
+    for _, query in ipairs({
+      folder .. " #builder",
+      target .. " #builder",
+      folder .. " #builder text",
+      "Java Sources" .. PATHSEP .. "string builders #builder",
+    }) do
+      picker.input:set_text(query)
+      picker:refresh(query)
+      test.ok(wait_until(function()
+        return picker_result_for_path(picker, target) and not picker:search_running()
+      end, 30), "expected the External Project Directory match for " .. query .. ": " .. tostring(picker.status))
+      test.equal(#picker.results, 1, "the path must exclude the Root Project's matching text")
+      test.equal(picker.results[1].line, 1)
+      test.equal(picker.results[1].text, "builder matching text")
+    end
+  end)
+
   test.it("shows new grep results after an unchanged path scope gains a file", function(context)
     local first = join_path(context.root, "fmt", "first.odin")
     local second = join_path(context.root, "fmt", "second.odin")

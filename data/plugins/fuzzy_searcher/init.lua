@@ -3212,6 +3212,13 @@ end
 
 local function build_scope(base, line, max_count, case_sensitive)
   if base:sub(1, 1) == ">" then base = "" end
+  -- Match the same Project display paths as File Search, not their absolute locations.
+  if common.is_absolute_path(base) then
+    local display = project_paths.display_path(base, { home_encode = false })
+    if display and display.root_role then
+      base = display.text == "." and "" or display.text
+    end
+  end
   local limit = max_count or 200
   local list = {}
   local meta = {
