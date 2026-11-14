@@ -3189,12 +3189,13 @@ local function draw_grep_result_row(
   return line_x, context_x
 end
 
+fuzzy_searcher.SAME_FILE_SCORE_SLACK = 500
+
 fuzzy_searcher.grep_order = {
   PATH_NONE = 0,
   PATH_LOOSE = 1,
   PATH_COMPACT = 2,
   PATH_CONTIGUOUS = 3,
-  SAME_FILE_SCORE_SLACK = 500,
   SAME_FILE_MAX_BURST = 6,
 }
 
@@ -6312,14 +6313,14 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
   self:ensure_selection_visible()
 end
 
-function fuzzy_searcher.grep_order.file_key(r)
+function fuzzy_searcher.result_file_key(r)
   local file = tostring(r and (r.abs_path or r.file) or "")
   if file == "" then return "" end
   return common.path_compare_key(file)
 end
 
 function fuzzy_searcher.grep_order.result_key(r)
-  local file_key = fuzzy_searcher.grep_order.file_key(r)
+  local file_key = fuzzy_searcher.result_file_key(r)
   if file_key == "" then return nil end
   return file_key .. "\0" .. tostring(r.line or "")
 end
@@ -6337,7 +6338,7 @@ function fuzzy_searcher.grep_order.better(a, b)
   -- Most searches look for code, so a file goes before a Terminal with the same score.
   if (a.terminal == nil) ~= (b.terminal == nil) then return a.terminal == nil end
 
-  local af, bf = fuzzy_searcher.grep_order.file_key(a), fuzzy_searcher.grep_order.file_key(b)
+  local af, bf = fuzzy_searcher.result_file_key(a), fuzzy_searcher.result_file_key(b)
   if af ~= bf then return af < bf end
 
   local al, bl = tonumber(a.line) or 0, tonumber(b.line) or 0
@@ -6349,13 +6350,15 @@ function fuzzy_searcher.grep_order.better(a, b)
   return tostring(a.text or "") < tostring(b.text or "")
 end
 
-function fuzzy_searcher.grep_order.regroup(sorted)
+-- Keep ranked rows together within one score band. Text Search also limits
+-- each group and orders its lines; symbols keep their relevance order.
+function fuzzy_searcher.group_file_results(sorted, within_file_less, max_burst)
   local out, used = {}, {}
   local buckets, bucket_positions = {}, {}
   -- Index each file group once. The old full-tail scan made completion work
   -- quadratic and caused a visible UI stall on broad searches.
   for i, result in ipairs(sorted) do
-    local file = fuzzy_searcher.grep_order.file_key(result)
+    local file = fuzzy_searcher.result_file_key(result)
     if file ~= "" then
       local key = file .. "\0" .. tostring(result.path_match_class or 0)
       local bucket = buckets[key] or {}
@@ -6370,7 +6373,7 @@ function fuzzy_searcher.grep_order.regroup(sorted)
       used[i] = true
       local group = { anchor }
 
-      local anchor_file = fuzzy_searcher.grep_order.file_key(anchor)
+      local anchor_file = fuzzy_searcher.result_file_key(anchor)
       local anchor_score = anchor.fuzzy_score or 0
       local anchor_path_class = anchor.path_match_class or 0
       local pulled = 1
@@ -6380,39 +6383,42 @@ function fuzzy_searcher.grep_order.regroup(sorted)
         for bucket_index = (bucket_positions[i] or #bucket) + 1, #bucket do
           local j = bucket[bucket_index]
           local candidate = sorted[j]
-          if anchor_score - (candidate.fuzzy_score or 0) > fuzzy_searcher.grep_order.SAME_FILE_SCORE_SLACK then
+          if anchor_score - (candidate.fuzzy_score or 0) > fuzzy_searcher.SAME_FILE_SCORE_SLACK then
             break
           end
           if not used[j] then
             group[#group+1] = candidate
             used[j] = true
             pulled = pulled + 1
-            if pulled >= fuzzy_searcher.grep_order.SAME_FILE_MAX_BURST then break end
+            if max_burst and pulled >= max_burst then break end
           end
         end
       end
-      table.sort(group, function(a, b)
-        local ab, bb = a.boundary_score or 0, b.boundary_score or 0
-        if ab ~= bb then return ab > bb end
-        local al, bl = tonumber(a.line) or 0, tonumber(b.line) or 0
-        if al ~= bl then return al < bl end
-        local ac, bc = tonumber(a.col) or 0, tonumber(b.col) or 0
-        if ac ~= bc then return ac < bc end
-        local as, bs = a.fuzzy_score or 0, b.fuzzy_score or 0
-        if as ~= bs then return as > bs end
-        return tostring(a.text or "") < tostring(b.text or "")
-      end)
+      if within_file_less then table.sort(group, within_file_less) end
       for _, result in ipairs(group) do out[#out+1] = result end
     end
   end
   return out
 end
 
+function fuzzy_searcher.grep_order.within_file_less(a, b)
+  local ab, bb = a.boundary_score or 0, b.boundary_score or 0
+  if ab ~= bb then return ab > bb end
+  local al, bl = tonumber(a.line) or 0, tonumber(b.line) or 0
+  if al ~= bl then return al < bl end
+  local ac, bc = tonumber(a.col) or 0, tonumber(b.col) or 0
+  if ac ~= bc then return ac < bc end
+  local as, bs = a.fuzzy_score or 0, b.fuzzy_score or 0
+  if as ~= bs then return as > bs end
+  return tostring(a.text or "") < tostring(b.text or "")
+end
+
 function fuzzy_searcher.grep_order.results(results)
   local out = {}
   for i, result in ipairs(results or {}) do out[i] = result end
   table.sort(out, fuzzy_searcher.grep_order.better)
-  return fuzzy_searcher.grep_order.regroup(out)
+  return fuzzy_searcher.group_file_results(out,
+    fuzzy_searcher.grep_order.within_file_less, fuzzy_searcher.grep_order.SAME_FILE_MAX_BURST)
 end
 
 function fuzzy_searcher.grep_order.worse(a, b)
@@ -7193,10 +7199,12 @@ local function symbol_result_from_item(item, query, opts)
   local col = item.col or (item.name_range and item.name_range.start and item.name_range.start.col) or item.start_col or 1
   local line2 = item.line2 or (item.name_range and item.name_range["end"] and item.name_range["end"].line) or item.end_line
   local col2 = item.col2 or (item.name_range and item.name_range["end"] and item.name_range["end"].col) or item.end_col
-  local _, name_spans = fuzzy_match(query, label, opts.case_sensitive)
+  local score, name_spans = fuzzy_match(query, label, opts.case_sensitive)
+  local search_text = item.search_text or item.text or label
+  if search_text ~= label then score = fuzzy_match(query, search_text, opts.case_sensitive) end
   local declaration_spans
   if opts.search_declaration and item.declaration and item.declaration ~= "" then
-    _, declaration_spans = fuzzy_match(query, item.declaration, opts.case_sensitive)
+    score, declaration_spans = fuzzy_match(query, item.declaration, opts.case_sensitive)
   end
   local path_query = trim_query(opts.path_query)
   local path_score, file_spans = fuzzy_match_file_fast(path_query, file, opts.case_sensitive)
@@ -7229,6 +7237,7 @@ local function symbol_result_from_item(item, query, opts)
     line2 = line2,
     col2 = col2,
     query = query,
+    fuzzy_score = score or 0,
     match_spans = name_spans or {},
     declaration_spans = declaration_spans,
     file_spans = file_spans or {},
@@ -7281,7 +7290,10 @@ local function set_symbol_results(view, query, results, source_label, status, re
     end
   end
   local own = #out
-  if opts.scope == "project" then fuzzy_searcher.add_symbol_groups(view, out, query, limit, opts) end
+  if opts.scope == "project" then
+    if query ~= "" then out = fuzzy_searcher.group_file_results(out) end
+    fuzzy_searcher.add_symbol_groups(view, out, query, limit, opts)
+  end
   view.results = out
   local selected = view.selected or 1
   local target = opts.select_preceding_position

@@ -316,6 +316,39 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
     end
   end)
 
+  test.it("groups close symbol matches by file without pulling weak matches ahead", function(context)
+    context.symbols = true
+    require("core.treesitter.symbol_index").reset_for_tests()
+    local folder = join_path(context.root, "strings")
+    mkdirp(folder)
+    write_file(join_path(folder, "builder.odin"), [[package fixture
+write_quoted_rune :: proc() {}
+write_escaped_rune :: proc() {}
+write_encoded_rune :: proc() {}
+write_string :: proc() {}
+write_rune :: proc() {}
+write_int :: proc() {}
+write_float :: proc() {}
+write_f64 :: proc() {}
+w_r_i_t_e :: proc() {}
+]])
+    write_file(join_path(folder, "strings.odin"), [[package fixture
+write_pad_string :: proc() {}
+]])
+    fuzzy_searcher.open(folder .. " $write")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function()
+      return #picker.results == 10 and not picker:search_running()
+    end, 30), "expected indexed symbol results: " .. tostring(picker.status))
+    local names = {}
+    for _, row in ipairs(picker.results) do names[#names + 1] = row.name end
+    test.same(names, {
+      "write_f64", "write_float", "write_int", "write_rune", "write_string",
+      "write_encoded_rune", "write_escaped_rune", "write_quoted_rune",
+      "write_pad_string", "w_r_i_t_e",
+    })
+  end)
+
   test.it("shows new grep results after an unchanged path scope gains a file", function(context)
     local first = join_path(context.root, "fmt", "first.odin")
     local second = join_path(context.root, "fmt", "second.odin")
