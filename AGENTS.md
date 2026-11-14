@@ -891,6 +891,27 @@ This is a personal fork with first-party ownership of the whole codebase, includ
 
 AGENTS.md and docs describe what exists now. When you remove a feature, remove its text. Do not write that it is gone. Put that history in the commit message.
 
+## Fix the shared behavior
+
+A reported failure is an example of the problem, not necessarily its full scope.
+
+Before changing code:
+
+- State the user-visible rule that should hold.
+- Find the entry points that apply that rule.
+- Compare their handling of the same input.
+- Identify intentional differences between modes, sources, and platforms.
+
+Fix the smallest shared rule, not only the first failing branch. Prefer an existing shared function. Do not add a framework to share a few lines. When several callers need the same correction, remove their separate versions.
+
+For cross-cutting behavior, make a short coverage list before implementation. Include relevant modes, input forms, data sources, and options. Use that list to choose tests. Do not test every possible combination.
+
+Add a regression through the reported entry point. Also test sibling entry points that should obey the same rule. Reuse existing tests for behavior that must stay unchanged.
+
+Before declaring completion, compare the implementation against the coverage list. Report unsupported cases and unresolved checks explicitly. Do not claim broad support from one passing example.
+
+Broader investigation does not automatically require a larger implementation or test suite.
+
 ## Tabs inside a View
 
 `core.tab` draws the Title Bar's Tabs: `tab.draw_tile`, `tab.bar_fonts` and `tab.bar_width`. A View that shows its own Tabs, such as the SQL Result Tabs (`plugins.sql_server.result_tabs`), uses them with the Title Bar's styles, so both look the same.
@@ -1148,9 +1169,9 @@ Run scenarios before and after each change to code that runs in each frame. This
 3. After the change, run the same scenarios again.
 4. In the commit message, give the p95 frame work, the maximum frame and the Lua heap size from both reports.
 
-Do not commit a change that makes one of these numbers worse, unless the commit message explains why.
-Many scenarios are over budget now. A change must not move them further over.
-See [scenario runs](tools/SCENARIOS.md) for the budgets.
+An explanation in a commit message does not approve a measured regression. If repeated measurements show worse performance, investigate it. Before committing, fix the regression or ask the user to accept the tradeoff. Record any user-approved tradeoff in the commit message.
+
+Many scenarios are over budget now. Without user approval, a change must not move them further over. See [scenario runs](tools/SCENARIOS.md) for the budgets.
 
 Do not stop garbage collection to measure allocations. The removed allocation profiler exhausted system memory and crashed other programs. `--allocation` is disabled. The shared Windows launcher limits each benchmark process tree to 4 GiB of committed memory. A `memory_limit` failure is not a passing measurement. Keep this protection in baseline worktrees too.
 
