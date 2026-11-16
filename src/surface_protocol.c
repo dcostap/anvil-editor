@@ -1,4 +1,5 @@
 #include "surface_protocol.h"
+#include "memory_stats.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -446,6 +447,7 @@ void anvil_surface_log_init(const char *role) {
     SDL_strlcpy(utf8, "path exceeds diagnostic limit", sizeof(utf8));
   SDL_Log("Native process: exe=%s version=%s protocol=%u SDL=%d diagnostics_build=%s %s",
           utf8, ANVIL_PROJECT_VERSION_STR, ANVIL_SURFACE_PROTOCOL_VERSION, SDL_GetVersion(), __DATE__, __TIME__);
+  anvil_memory_log_start();
 #else
   if (!path || !path[0]) return;
   SDL_strlcpy(log_role, role, sizeof(log_role));

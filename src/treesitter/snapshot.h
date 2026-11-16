@@ -13,6 +13,7 @@ extern "C" {
 
 typedef struct AnvilTSSnapshot {
   uint64_t id;
+  uint64_t memory_bytes;
   uint32_t refcount;
   char *bytes;
   uint32_t byte_len;

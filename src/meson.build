@@ -9,6 +9,8 @@ anvil_sources = [
     'api/process.c',
     'api/channel.c',
     'api/thread.c',
+    'api/memory_stats.c',
+    'memory_stats.c',
     'api/shmem.c',
     'api/canvas.c',
     'api/utf8.c',
@@ -40,6 +42,7 @@ anvil_sources = [
     'treesitter/project_index.c',
     'treesitter/query_cache.c',
     'treesitter/service.c',
+    'treesitter/memory.c',
     'treesitter/snapshot.c',
     'tokenizer/arena.c',
     'tokenizer/regex.c',
@@ -317,7 +320,7 @@ if host_machine.system() == 'windows'
         include_directories: anvil_includes, dependencies: [sdl_dep], c_args: anvil_cargs)
     test('shell-state', shell_state_test, env: anvil_test_env, suite: 'anvil')
     surface_log_test = executable('surface_log_test',
-        ['../tests/native/surface_log_test.c', 'surface_protocol.c', 'shell_launch.c'],
+        ['../tests/native/surface_log_test.c', 'surface_protocol.c', 'shell_launch.c', 'memory_stats.c'],
         include_directories: anvil_includes, dependencies: [sdl_dep], c_args: anvil_cargs)
     test('surface-log', surface_log_test, env: anvil_test_env, suite: 'anvil')
     test('terminal-replay', terminal_replay_test, env: anvil_test_env, suite: 'anvil')
@@ -464,7 +467,7 @@ if host_machine.system() == 'windows'
         include_directories: anvil_includes, dependencies: [sdl_dep], c_args: anvil_cargs)
     test('ipc-pipe', ipc_pipe_test, env: anvil_test_env, suite: 'anvil')
     hosted_routing_test = executable('hosted_routing_test',
-        ['../tests/native/hosted_routing_test.c', 'hosted_surface.c', 'surface_protocol.c', 'process_exit.c',
+        ['../tests/native/hosted_routing_test.c', 'hosted_surface.c', 'surface_protocol.c', 'memory_stats.c', 'process_exit.c',
          'ipc_pipe.c', 'system_events.c', 'custom_events.c', 'resize_diagnostics.c', 'input_latency_probe.c',
          'shell_adoption.c', 'shell_launch.c', 'shell_state.c'],
         include_directories: anvil_includes,
@@ -502,6 +505,8 @@ test('project-file-manifest', project_file_manifest_test, env: anvil_test_env)
 markdown_vault_index_test = executable('markdown_vault_index_test',
     [
         '../tests/native/markdown_vault_index_test.c',
+        'memory_stats.c',
+        'treesitter/memory.c',
         'fuzzy.c',
         'project_file_manifest.c',
         'markdown_vault_index.c',
@@ -525,6 +530,8 @@ endif
 worker_pool_test = executable('worker_pool_test',
     worker_pool_terminal_sources + [
         '../tests/native/worker_pool_test.c',
+        'memory_stats.c',
+        'treesitter/memory.c',
         'worker_pool.c',
         'image_decode.c',
         'shutdown_diagnostics.c',
@@ -566,6 +573,8 @@ test('language_detector', language_detector_test,
 treesitter_test = executable('treesitter_test',
     [
         '../tests/native/treesitter_test.c',
+        'memory_stats.c',
+        'treesitter/memory.c',
         'treesitter/languages.c',
         'treesitter/service.c',
         'treesitter/snapshot.c',
@@ -577,9 +586,20 @@ treesitter_test = executable('treesitter_test',
 )
 test('treesitter', treesitter_test, env: anvil_test_env)
 
+memory_stats_test = executable('memory_stats_test',
+    ['../tests/native/memory_stats_test.c', 'memory_stats.c', 'treesitter/memory.c',
+     'treesitter/snapshot.c', 'treesitter/project_file.c', 'treesitter/project_index.c', 'fuzzy.c'],
+    include_directories: anvil_includes,
+    dependencies: [tree_sitter_dep, tree_sitter_c_dep, sdl_dep],
+    c_args: anvil_cargs,
+)
+test('memory-stats', memory_stats_test, env: anvil_test_env)
+
 markdown_parser_test = executable('markdown_parser_test',
     [
         '../tests/native/markdown_parser_test.c',
+        'memory_stats.c',
+        'treesitter/memory.c',
         'markdown_parser.c',
         'treesitter/languages.c',
         'treesitter/snapshot.c',
@@ -593,6 +613,7 @@ test('markdown_parser', markdown_parser_test, env: anvil_test_env)
 markdown_extensions_test = executable('markdown_extensions_test',
     [
         '../tests/native/markdown_extensions_test.c',
+        'memory_stats.c',
         'markdown_extensions.c',
         'treesitter/snapshot.c',
     ],

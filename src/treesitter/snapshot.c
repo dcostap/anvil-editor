@@ -1,4 +1,5 @@
 #include "snapshot.h"
+#include "../memory_stats.h"
 
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -68,6 +69,9 @@ AnvilTSSnapshot *anvil_ts_snapshot_new_from_lines(
     offset += line_lengths[i];
   }
   snapshot->bytes[snapshot->byte_len] = '\0';
+  snapshot->memory_bytes = sizeof(*snapshot) + (uint64_t)snapshot->byte_len + 1
+    + (uint64_t)line_count * sizeof(uint32_t) * 2;
+  anvil_memory_account(ANVIL_MEMORY_TS_TEXT, snapshot->memory_bytes, 1);
   return snapshot;
 }
 
@@ -139,6 +143,9 @@ AnvilTSSnapshot *anvil_ts_snapshot_new_take_text(
   snapshot->line_count = line;
   snapshot->line_starts = line_starts;
   snapshot->line_lengths = line_lengths;
+  snapshot->memory_bytes = sizeof(*snapshot) + (uint64_t)byte_len + 1
+    + (uint64_t)line_count * sizeof(uint32_t) * 2;
+  anvil_memory_account(ANVIL_MEMORY_TS_TEXT, snapshot->memory_bytes, 1);
   return snapshot;
 }
 
@@ -153,6 +160,7 @@ void anvil_ts_snapshot_free(AnvilTSSnapshot *snapshot) {
     snapshot->refcount--;
     return;
   }
+  if (snapshot->memory_bytes) anvil_memory_account(ANVIL_MEMORY_TS_TEXT, -(int64_t)snapshot->memory_bytes, -1);
   free(snapshot->bytes);
   free(snapshot->line_starts);
   free(snapshot->line_lengths);

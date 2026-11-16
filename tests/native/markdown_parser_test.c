@@ -1,4 +1,6 @@
 #include "markdown_parser.h"
+#include "memory_stats.h"
+#include "treesitter/memory.h"
 #include "treesitter/languages.h"
 #include "../../subprojects/tree-sitter-markdown/tree-sitter-markdown/src/tree_sitter/parser.h"
 
@@ -448,6 +450,7 @@ static int test_bounded_large_parse(void) {
 }
 
 int main(void) {
+  anvil_ts_memory_init();
   if (test_registry() != 0) return 1;
   if (test_exact_split_ranges() != 0) return 1;
   if (test_block_fixture_ranges() != 0) return 1;
@@ -457,5 +460,7 @@ int main(void) {
   if (test_incremental_utf8_width_change() != 0) return 1;
   if (test_owned_shifted_inline_copies() != 0) return 1;
   if (test_bounded_large_parse() != 0) return 1;
+  CHECK(anvil_memory_counter(ANVIL_MEMORY_TREESITTER).bytes == 0);
+  CHECK(anvil_memory_counter(ANVIL_MEMORY_TS_TEXT).bytes == 0);
   return 0;
 }

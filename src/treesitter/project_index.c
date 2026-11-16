@@ -1,4 +1,5 @@
 #include "project_index.h"
+#include "../memory_stats.h"
 
 #include "../fuzzy.h"
 
@@ -48,6 +49,7 @@ struct AnvilTSProjectBuilder {
 
 struct AnvilTSProjectSnapshot {
   SDL_AtomicInt refcount;
+  uint64_t memory_bytes;
   char status[16];
   ProjectFileEntry *files;
   uint32_t file_count;
@@ -596,6 +598,7 @@ static int usage_ref_compare(const void *left, const void *right) {
 
 static void snapshot_destroy(AnvilTSProjectSnapshot *snapshot) {
   if (!snapshot) return;
+  if (snapshot->memory_bytes) anvil_memory_account(ANVIL_MEMORY_TS_INDEX, -(int64_t)snapshot->memory_bytes, -1);
   for (uint32_t i = 0; i < snapshot->file_count; i++) release_file_entry(&snapshot->files[i]);
   for (uint32_t i = 0; i < snapshot->usage_name_count; i++) free(snapshot->usage_names[i].usage_indices);
   free(snapshot->usage_names);
@@ -821,6 +824,25 @@ AnvilTSProjectSnapshot *anvil_ts_project_builder_snapshot_cancellable(
       return NULL;
     }
   }
+  /* Shared file records have their own counter. Count only this snapshot's storage. */
+  uint64_t bytes = sizeof(*snapshot)
+    + (uint64_t)snapshot->file_count * sizeof(*snapshot->files)
+    + (uint64_t)snapshot->path_slot_count * sizeof(*snapshot->path_slots)
+    + (uint64_t)snapshot->symbol_count * sizeof(*snapshot->symbols)
+    + (uint64_t)snapshot->usage_count * sizeof(*snapshot->usages)
+    + (uint64_t)snapshot->usage_name_capacity * sizeof(*snapshot->usage_names)
+    + (uint64_t)snapshot->usage_name_slot_count * sizeof(*snapshot->usage_name_slots);
+  for (uint32_t i = 0; i < snapshot->file_count; i++) bytes += strlen(snapshot->files[i].fingerprint) + 1;
+  for (uint32_t i = 0; i < snapshot->usage_name_count; i++)
+    bytes += (uint64_t)snapshot->usage_names[i].usage_capacity * sizeof(uint32_t);
+  const FuzzyIndex *indexes[] = { &snapshot->symbol_fuzzy, &snapshot->symbol_declaration_fuzzy };
+  for (size_t i = 0; i < SDL_arraysize(indexes); i++) {
+    const FuzzyIndex *index = indexes[i];
+    bytes += (uint64_t)index->count * sizeof(*index->entries) + index->text_arena_len
+      + index->match_arena_len + index->lower_arena_len;
+  }
+  snapshot->memory_bytes = bytes;
+  anvil_memory_account(ANVIL_MEMORY_TS_INDEX, bytes, 1);
   return snapshot;
 }
 

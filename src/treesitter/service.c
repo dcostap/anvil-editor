@@ -1,4 +1,5 @@
 #include "service.h"
+#include "memory.h"
 
 #include "../custom_events.h"
 
@@ -977,7 +978,7 @@ static void job_free(AnvilTSParseJob *job) {
   if (job->result_tree) ts_tree_delete(job->result_tree);
   if (job->retired_tree) ts_tree_delete(job->retired_tree);
   anvil_ts_snapshot_free(job->retired_snapshot);
-  free(job->changed_ranges);
+  anvil_ts_memory_free(job->changed_ranges);
   anvil_ts_snapshot_free(job->snapshot);
   free(job->error);
   AnvilTSBufferState *state = job->state;

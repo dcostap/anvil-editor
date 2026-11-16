@@ -1,4 +1,5 @@
 #include "surface_protocol.h"
+#include "memory_stats.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,6 +8,14 @@
 /* Seam: native SDL diagnostics persist without an environment switch.
  * Each child uses the real user-directory resolver and log output callback. */
 #define CHECK(value) do { if (!(value)) { fprintf(stderr, "FAIL line %d: %s (Windows error %lu)\n", __LINE__, #value, GetLastError()); return 1; } } while (0)
+
+static SDL_LogOutputFunction original_log;
+static void *original_userdata;
+static HANDLE memory_logged;
+static void SDLCALL observe_log(void *userdata, int category, SDL_LogPriority priority, const char *message) {
+  original_log(original_userdata, category, priority, message);
+  if (strstr(message, "Memory Lua states:")) SetEvent(memory_logged);
+}
 
 static int run_child(const wchar_t *exe, const wchar_t *role) {
   wchar_t command[32832];
@@ -37,6 +46,8 @@ static int check_log(const wchar_t *path, bool shared, unsigned *roles) {
   CHECK(strstr(text, "protocol=") && strstr(text, "version="));
   CHECK(strstr(text, "native test: connection failed"));
   CHECK(strstr(text, "native test: shell connection lost"));
+  CHECK(strstr(text, "Memory process:") && strstr(text, "private_commit_bytes="));
+  CHECK(strstr(text, "Memory native:") && strstr(text, "category=treesitter"));
   CHECK(DeleteFileW(path));
   return 0;
 }
@@ -44,10 +55,17 @@ static int check_log(const wchar_t *path, bool shared, unsigned *roles) {
 int main(int argc, char **argv) {
   if (argc == 3 && !strcmp(argv[1], "child")) {
     anvil_surface_log_init(argv[2]);
+    memory_logged = CreateEventW(NULL, TRUE, FALSE, NULL);
+    CHECK(memory_logged);
+    SDL_GetLogOutputFunction(&original_log, &original_userdata);
+    SDL_SetLogOutputFunction(observe_log, NULL);
     SetLastError(ERROR_BROKEN_PIPE);
     SDL_Log("native test: connection failed");
     CHECK(GetLastError() == ERROR_BROKEN_PIPE);
     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "native test: shell connection lost");
+    CHECK(WaitForSingleObject(memory_logged, 20000) == WAIT_OBJECT_0);
+    anvil_memory_log_stop();
+    CloseHandle(memory_logged);
     return 0;
   }
   wchar_t temp[MAX_PATH], root[MAX_PATH], user[MAX_PATH], logs[MAX_PATH], pattern[MAX_PATH], path[MAX_PATH];

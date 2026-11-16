@@ -855,6 +855,9 @@ See [agent control](docs/agent-control.md) for tools, discovery, security, and l
 
 ## Logging / diagnostics
 
+Windows shell, Project, Sidebar and Machine server processes write memory samples in their native logs after five seconds, then every 30 seconds. `src/memory_stats.c` owns process totals, native counters and the reporter thread. Lua states publish their own heap samples at safe waits; logs include their age. No sample forces collection. `system.memory_stats()` exposes the same data without writing a file.
+Tree-sitter allocator bytes, parser text snapshots, completed file records, completed Project index snapshots and CPU font glyph estimates have separate counters. Shared records count once. These are partial measurements, not an exact account of process commit. Keep returned Tree-sitter range arrays on `anvil_ts_memory_free`, because its allocator tracks them. See [memory diagnostics](tools/MEMORY_DIAGNOSTICS.md) for omissions and investigation steps. Run `anvil:memory-stats`, `anvil:surface-log` and `runtime/memory_stats.lua` after changes.
+
 Anvil writes persistent session logs to:
 
 ```text

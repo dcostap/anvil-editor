@@ -1,6 +1,7 @@
 #include "api.h"
 #include "../treesitter/languages.h"
 #include "../treesitter/service.h"
+#include "../treesitter/memory.h"
 #include "../treesitter/snapshot.h"
 #include "../markdown_parser.h"
 #include "../worker_pool.h"
@@ -448,7 +449,7 @@ static int state_poll(lua_State *L) {
   } else {
     lua_pushnil(L);
   }
-  free(result.changed_ranges);
+  anvil_ts_memory_free(result.changed_ranges);
   return 4;
 }
 

@@ -17,6 +17,7 @@
  */
 
 #include "channel.h"
+#include "memory_stats.h"
 
 #include <errno.h>
 #include <stdbool.h>
@@ -668,6 +669,7 @@ int m_channel_pop(lua_State *L)
  */
 int m_channel_wait(lua_State *L)
 {
+  anvil_lua_memory_sample(L, true);
   Channel* self = ((ChannelContainer*)luaL_checkudata(
     L, 1, API_TYPE_CHANNEL
   ))->channel;

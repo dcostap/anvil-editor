@@ -18,6 +18,7 @@
  */
 
 #include "channel.h"
+#include "memory_stats.h"
 
 #include <errno.h>
 #include <string.h>
@@ -108,6 +109,7 @@ static int callback(LuaThread *t)
   else
     ret = lua_tointeger(t->L, -1);
 
+  anvil_lua_memory_sample(t->L, true);
   destroy(t);
 
   return ret;
@@ -363,6 +365,7 @@ static int f_thread_create(lua_State *L)
   SDL_memset(thread, 0, sizeof(LuaThread));
   thread->L = luaL_newstate();
   luaL_openlibs(thread->L);
+  anvil_lua_memory_register(thread->L, name);
 
   ret = threadDump(L, thread->L, 2);
 

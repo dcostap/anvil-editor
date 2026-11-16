@@ -13,6 +13,8 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include "api.h"
+#include "memory_stats.h"
+#include "../memory_stats.h"
 #include "../rencache.h"
 #include "../renwindow.h"
 #include "arena_allocator.h"
@@ -646,6 +648,7 @@ bool system_wait_event(double seconds) {
 
 static int f_wait_event(lua_State *L) {
   double seconds = lua_isnoneornil(L, 1) ? -1 : fmax(0, luaL_checknumber(L, 1));
+  anvil_lua_memory_sample(L, seconds < 0 || seconds >= 1);
   anvil_timing_note("wait-event-begin", 0, seconds > 0 ? (uint64_t)(seconds * 1000000) : 0, 0);
   lua_pushboolean(L, system_wait_event(seconds));
   anvil_timing_note("wait-event-end", 0, 0, 0);
@@ -1969,18 +1972,11 @@ static int f_get_time(lua_State *L) {
 // Bytes of this process's private memory in RAM, as Task Manager's Memory column shows them,
 // or nil where the platform does not tell.
 static int f_get_private_memory(lua_State *L) {
-#ifdef _WIN32
-  // PROCESS_MEMORY_COUNTERS_EX2, which the MinGW headers do not have.
-  struct {
-    PROCESS_MEMORY_COUNTERS_EX base;
-    SIZE_T PrivateWorkingSetSize;
-    ULONG64 SharedCommitUsage;
-  } counters = { .base.cb = sizeof(counters) };
-  if (K32GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS *) &counters, sizeof(counters))) {
-    lua_pushinteger(L, (lua_Integer) counters.PrivateWorkingSetSize);
+  AnvilProcessMemory memory = anvil_memory_process();
+  if (memory.available) {
+    lua_pushinteger(L, (lua_Integer) memory.private_working_set_bytes);
     return 1;
   }
-#endif
   lua_pushnil(L);
   return 1;
 }
@@ -2031,6 +2027,7 @@ static int f_await_shell_adoption(lua_State *L) {
 
 static int f_sleep(lua_State *L) {
   double n = luaL_checknumber(L, 1);
+  anvil_lua_memory_sample(L, n >= 1);
   if (n < 0) n = 0;
   uint64_t start_ns = SDL_GetTicksNS();
   anvil_timing_note("sleep-begin", 0, (uint64_t)(n * 1000000), 0);
@@ -2054,6 +2051,7 @@ static int f_idle(lua_State *L) {
   double n = luaL_checknumber(L, 1);
   if (n < 0) n = 0;
   if (anvil_hosted_surface_active()) {
+    anvil_lua_memory_sample(L, n >= 1);
     anvil_timing_note("idle-begin", 0, (uint64_t)(n * 1000000), 0);
     lua_pushboolean(L, anvil_hosted_surface_wait_inbound(n));
     anvil_timing_note("idle-end", 0, 0, 0);
@@ -3261,6 +3259,7 @@ static const luaL_Reg lib[] = {
   { "get_process_id",        f_get_process_id        },
   { "get_time",              f_get_time              },
   { "get_private_memory",    f_get_private_memory    },
+  { "memory_stats",          anvil_lua_memory_stats   },
   { "timing_capture",        f_timing_capture        },
   { "set_native_single_instance_enabled", f_set_native_single_instance_enabled },
   { "is_hosted_surface",     f_is_hosted_surface     },

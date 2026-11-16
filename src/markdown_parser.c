@@ -1,4 +1,5 @@
 #include "markdown_parser.h"
+#include "treesitter/memory.h"
 
 #include "treesitter/languages.h"
 
@@ -603,7 +604,7 @@ void anvil_markdown_tree_free(AnvilMarkdownTree *tree) {
     release_inline_source(tree->inline_trees[i].source);
   }
   free(tree->inline_trees);
-  free(tree->changed_ranges);
+  anvil_ts_memory_free(tree->changed_ranges);
   if (tree->block_tree) ts_tree_delete(tree->block_tree);
   if (tree->snapshot) anvil_ts_snapshot_free(tree->snapshot);
   free(tree);

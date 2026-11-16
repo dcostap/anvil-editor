@@ -1,4 +1,5 @@
 #include "project_file.h"
+#include "../memory_stats.h"
 
 #include <ctype.h>
 #include <stddef.h>
@@ -69,6 +70,7 @@ typedef struct UsageSlot {
 
 struct AnvilTSProjectFileResult {
   SDL_AtomicInt refcount;
+  uint64_t memory_bytes;
   char *path;
   char *relpath;
   char *language_id;
@@ -85,6 +87,20 @@ struct AnvilTSProjectFileResult {
   uint32_t usage_count;
   uint32_t usage_capacity;
 };
+
+/* Count each retained file once, even when builders and snapshots share it. */
+static void account_file(AnvilTSProjectFileResult *file) {
+  uint64_t bytes = sizeof(*file) + strlen(file->path) + strlen(file->relpath) + strlen(file->language_id) + 3
+    + (uint64_t)file->arena_capacity
+    + (uint64_t)file->symbol_capacity * sizeof(*file->symbols)
+    + (uint64_t)file->usage_capacity * sizeof(*file->usages)
+    + (uint64_t)file->interned_label_capacity * sizeof(*file->interned_labels);
+  for (uint32_t i = 0; i < file->symbol_count; i++)
+    bytes += (uint64_t)file->symbols[i].child_capacity * sizeof(uint32_t);
+  anvil_memory_account(ANVIL_MEMORY_TS_FILES, (int64_t)bytes - (int64_t)file->memory_bytes,
+    file->memory_bytes ? 0 : 1);
+  file->memory_bytes = bytes;
+}
 
 static char *project_strdup(const char *text) {
   if (!text) text = "";
@@ -737,6 +753,7 @@ AnvilTSProjectFileResult *anvil_ts_project_file_build(
   shrink_to_fit((void **)&result->usages, &result->usage_capacity, result->usage_count, sizeof(*result->usages));
   shrink_to_fit((void **)&result->interned_labels, &result->interned_label_capacity,
     result->interned_label_count, sizeof(*result->interned_labels));
+  account_file(result);
   return result;
 }
 
@@ -793,8 +810,10 @@ bool anvil_ts_project_file_merge(AnvilTSProjectFileResult *primary, const AnvilT
         !copy_slice(primary, secondary, source->line_text, &target->line_text)) goto oom;
   }
   qsort(primary->usages, primary->usage_count, sizeof(*primary->usages), usage_compare);
+  account_file(primary);
   return true;
 oom:
+  account_file(primary);
   set_error(error, "out of memory merging C and C++ header records");
   return false;
 }
@@ -805,6 +824,7 @@ void anvil_ts_project_file_retain(AnvilTSProjectFileResult *result) {
 
 void anvil_ts_project_file_free(AnvilTSProjectFileResult *result) {
   if (!result || !SDL_AtomicDecRef(&result->refcount)) return;
+  if (result->memory_bytes) anvil_memory_account(ANVIL_MEMORY_TS_FILES, -(int64_t)result->memory_bytes, -1);
   for (uint32_t i = 0; i < result->symbol_count; i++) free(result->symbols[i].children);
   free(result->symbols);
   free(result->usages);

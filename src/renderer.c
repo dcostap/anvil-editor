@@ -18,6 +18,7 @@
 #include <hb-ft.h>
 
 #include "renderer.h"
+#include "memory_stats.h"
 #include "d3d11_backend.h"
 #include "font_raster_internal.h"
 #include "image_scale.h"
@@ -455,6 +456,7 @@ static SDL_Surface *font_allocate_glyph_surface(RenFont *font, FT_GlyphSlot slot
       .surfaces = NULL,
     };
     font->glyphs.bytesize += sizeof(GlyphAtlas);
+    anvil_memory_account(ANVIL_MEMORY_FONT_GLYPHS, sizeof(GlyphAtlas), font->glyphs.bytesize == sizeof(GlyphAtlas) ? 1 : 0);
     atlas_idx = font->glyphs.natlas[glyph_format]++;
   }
   metric->atlas_idx = atlas_idx;
@@ -485,7 +487,9 @@ static SDL_Surface *font_allocate_glyph_surface(RenFont *font, FT_GlyphSlot slot
     userdata = SDL_GetSurfaceProperties(atlas->surfaces[atlas->nsurface]);
     SDL_SetPointerProperty(userdata, "metric", NULL);
     surface_idx = atlas->nsurface++;
-    font->glyphs.bytesize += (sizeof(SDL_Surface *) + sizeof(SDL_Surface) + atlas->width * GLYPHS_PER_ATLAS * h * glyphformat_bytes_per_pixel(glyph_format));
+    size_t bytes = sizeof(SDL_Surface *) + sizeof(SDL_Surface) + atlas->width * GLYPHS_PER_ATLAS * h * glyphformat_bytes_per_pixel(glyph_format);
+    font->glyphs.bytesize += bytes;
+    anvil_memory_account(ANVIL_MEMORY_FONT_GLYPHS, bytes, font->glyphs.bytesize == bytes ? 1 : 0);
   }
   metric->surface_idx = surface_idx;
   userdata = SDL_GetSurfaceProperties(atlas->surfaces[surface_idx]);
@@ -1080,6 +1084,8 @@ static GlyphMetric *font_load_glyph_metric(RenFont *font, unsigned int glyph_id,
       if (!font->glyphs.metrics[i][row]) {
         font->glyphs.metrics[i][row] = check_alloc(SDL_calloc(sizeof(GlyphMetric), GLYPHMAP_COL));
         font->glyphs.bytesize += sizeof(GlyphMetric) * GLYPHMAP_COL;
+        anvil_memory_account(ANVIL_MEMORY_FONT_GLYPHS, sizeof(GlyphMetric) * GLYPHMAP_COL,
+          font->glyphs.bytesize == sizeof(GlyphMetric) * GLYPHMAP_COL ? 1 : 0);
       }
       GlyphMetric *metric = &font->glyphs.metrics[i][row][col];
       metric->flags |= EGlyphXAdvance;
@@ -1418,6 +1424,7 @@ static void font_clear_glyph_cache(RenFont* font) {
       font->glyphs.metrics[subpixel_idx][glyphmap_row] = NULL;
     }
   }
+  anvil_memory_account(ANVIL_MEMORY_FONT_GLYPHS, -(int64_t)font->glyphs.bytesize, font->glyphs.bytesize ? -1 : 0);
   font->glyphs.bytesize = 0;
 }
 

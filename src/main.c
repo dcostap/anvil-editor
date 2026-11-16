@@ -10,6 +10,9 @@
 #include "renderer.h"
 #include "custom_events.h"
 #include "resize_diagnostics.h"
+#include "memory_stats.h"
+#include "api/memory_stats.h"
+#include "treesitter/memory.h"
 #include "shutdown_diagnostics.h"
 #include "win32_single_instance.h"
 #include "anvil_shell.h"
@@ -302,6 +305,7 @@ static void report_run_step_error(lua_State *L, const char *message) {
 static bool init_lua_state(AppState *app) {
   app->L = luaL_newstate();
   luaL_openlibs(app->L);
+  anvil_lua_memory_register(app->L, "main");
   api_load_libs(app->L);
 
   lua_newtable(app->L);
@@ -347,6 +351,7 @@ static bool init_lua_state(AppState *app) {
   }
   lua_pcall(app->L, 0, 1, 0);
   lua_pop(app->L, 1);
+  anvil_lua_memory_sample(app->L, true);
 
   /* Store a reference to core.run_step for faster lookup on SDL_AppIterate. */
   app->core_run_step_ref = -1;
@@ -369,6 +374,7 @@ static bool init_lua_state(AppState *app) {
 static bool shell_mode = false;
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
+  anvil_ts_memory_init();
 #ifdef _WIN32
   /* ExitProcess ends every other thread first. GPU driver threads at idle priority starve on a busy CPU. */
   atexit(anvil_process_prepare_exit);
@@ -777,6 +783,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
 
 void SDL_AppQuit(void *appstate, SDL_AppResult result) {
+  anvil_memory_log_stop();
   if (shell_mode) {
     anvil_shell_quit(appstate, result);
     return;
