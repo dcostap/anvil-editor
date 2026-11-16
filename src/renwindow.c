@@ -6,6 +6,7 @@
 #include "hosted_surface.h"
 #include "resize_diagnostics.h"
 #include "system_events.h"
+#include "memory_stats.h"
 
 #ifdef ANVIL_USE_SDL_RENDERER
 #include <math.h>
@@ -94,12 +95,14 @@ static SDL_Surface *create_window_surface(int w, int h, SDL_PixelFormat format) 
   void *pixels = w > 0 && h > 0 ? SDL_calloc((size_t) h, (size_t) pitch) : NULL;
   SDL_Surface *surface = SDL_CreateSurfaceFrom(w, h, format, pixels, pitch);
   if (!surface) SDL_free(pixels);
+  anvil_memory_surface_account(surface, 1);
   return surface;
 }
 
 static void destroy_window_surface(SDL_Surface *surface) {
   if (!surface) return;
   void *pixels = surface->pixels;
+  anvil_memory_surface_account(surface, -1);
   SDL_DestroySurface(surface);
   SDL_free(pixels);
 }

@@ -600,6 +600,8 @@ static SDL_AppResult app_run_step_ex(AppState *app, bool immediate, const char *
 
   bool should_continue = lua_toboolean(app->L, -1);
   lua_pop(app->L, 2); /* result and traceback handler */
+  /* Sample outside LuaJIT traces. FFI waits bypass the Lua API bindings. */
+  anvil_lua_memory_sample(app->L, false);
   app->in_run_step = false;
   Uint64 run_end_ns = SDL_GetTicksNS();
   anvil_latency_probe_stage("step-end");

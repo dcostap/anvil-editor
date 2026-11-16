@@ -17,6 +17,7 @@
 #include "d3d11_quad_shader.h"
 #include "hosted_surface.h"
 #include "resize_diagnostics.h"
+#include "memory_stats.h"
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(p) do { if (p) { (p)->lpVtbl->Release(p); (p) = NULL; } } while (0)
@@ -225,6 +226,34 @@ typedef struct D3D11State {
 } D3D11State;
 
 static D3D11State g_d3d11;
+
+/* These textures use 32-bit RGBA/BGRA pixels. Count logical payload, not driver allocation or residency.
+ * Swapchain buffers and the shell's compositor textures are outside this backend's ownership counter. */
+static void d3d11_account_texture(ID3D11Texture2D *texture, int delta) {
+  D3D11_TEXTURE2D_DESC desc;
+  texture->lpVtbl->GetDesc(texture, &desc);
+  uint64_t bytes = 0;
+  UINT width = desc.Width, height = desc.Height;
+  for (UINT i = 0; i < desc.MipLevels; i++) {
+    bytes += (uint64_t)width * height * 4;
+    width = width > 1 ? width / 2 : 1;
+    height = height > 1 ? height / 2 : 1;
+  }
+  anvil_memory_account(ANVIL_MEMORY_D3D11_TEXTURES,
+    (int64_t)(bytes * desc.ArraySize * desc.SampleDesc.Count) * delta, delta);
+}
+
+static HRESULT d3d11_create_texture(const D3D11_TEXTURE2D_DESC *desc,
+                                   const D3D11_SUBRESOURCE_DATA *data, ID3D11Texture2D **texture) {
+  HRESULT hr = g_d3d11.device->lpVtbl->CreateTexture2D(g_d3d11.device, desc, data, texture);
+  if (SUCCEEDED(hr) && *texture) d3d11_account_texture(*texture, 1);
+  return hr;
+}
+
+static void d3d11_release_texture(ID3D11Texture2D **texture) {
+  if (*texture) d3d11_account_texture(*texture, -1);
+  SAFE_RELEASE(*texture);
+}
 
 static void d3d11_clear_texture_lookup(void);
 
@@ -898,9 +927,10 @@ static void d3d11_unbind_resize_references(void) {
 static void d3d11_release_window_buffers(D3D11Window *w) {
   if (!w) return;
   SAFE_RELEASE(w->rtv);
-  SAFE_RELEASE(w->backbuffer);
+  if (w->hosted) d3d11_release_texture(&w->backbuffer);
+  else SAFE_RELEASE(w->backbuffer);
   SAFE_RELEASE(w->shared_mutex);
-  SAFE_RELEASE(w->shared_texture);
+  d3d11_release_texture(&w->shared_texture);
   if (w->shared_handle) {
     CloseHandle(w->shared_handle);
     w->shared_handle = NULL;
@@ -924,7 +954,7 @@ static bool d3d11_create_hosted_buffers(D3D11Window *w, int width, int height) {
   desc.SampleDesc.Count = 1;
   desc.Usage = D3D11_USAGE_DEFAULT;
   desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-  HRESULT hr = g_d3d11.device->lpVtbl->CreateTexture2D(g_d3d11.device, &desc, NULL, &w->backbuffer);
+  HRESULT hr = d3d11_create_texture(&desc, NULL, &w->backbuffer);
   if (SUCCEEDED(hr)) {
     hr = g_d3d11.device->lpVtbl->CreateRenderTargetView(g_d3d11.device,
                                                          (ID3D11Resource *)w->backbuffer,
@@ -932,7 +962,7 @@ static bool d3d11_create_hosted_buffers(D3D11Window *w, int width, int height) {
   }
   if (SUCCEEDED(hr)) {
     desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-    hr = g_d3d11.device->lpVtbl->CreateTexture2D(g_d3d11.device, &desc, NULL, &w->shared_texture);
+    hr = d3d11_create_texture(&desc, NULL, &w->shared_texture);
   }
   if (SUCCEEDED(hr)) {
     hr = w->shared_texture->lpVtbl->QueryInterface(w->shared_texture, &IID_IDXGIKeyedMutex,
@@ -1245,6 +1275,9 @@ static bool d3d11_reserve_quad_instances(int extra) {
   D3D11QuadInstance *new_vertices = (D3D11QuadInstance *)realloc(g_d3d11.quad_instances,
                                                                     sizeof(D3D11QuadInstance) * (size_t)new_capacity);
   if (!new_vertices) return false;
+  anvil_memory_account(ANVIL_MEMORY_RENDER_BUFFERS,
+    (int64_t)(new_capacity - g_d3d11.quad_instance_capacity) * sizeof(D3D11QuadInstance),
+    g_d3d11.quad_instance_capacity == 0);
   g_d3d11.quad_instances = new_vertices;
   g_d3d11.quad_instance_capacity = new_capacity;
   return true;
@@ -1523,7 +1556,7 @@ static D3D11CachedTexture *d3d11_find_cached_texture(SDL_Surface *surface, int m
 static void d3d11_release_cached_texture(D3D11CachedTexture *t) {
   if (!t) return;
   SAFE_RELEASE(t->srv);
-  SAFE_RELEASE(t->texture);
+  d3d11_release_texture(&t->texture);
 }
 
 static bool d3d11_recreate_cached_texture(D3D11CachedTexture *t, SDL_Surface *surface, int mode) {
@@ -1556,7 +1589,7 @@ static bool d3d11_recreate_cached_texture(D3D11CachedTexture *t, SDL_Surface *su
     desc.BindFlags |= D3D11_BIND_RENDER_TARGET;
     desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
   }
-  HRESULT hr = g_d3d11.device->lpVtbl->CreateTexture2D(g_d3d11.device, &desc, NULL, &t->texture);
+  HRESULT hr = d3d11_create_texture(&desc, NULL, &t->texture);
   if (FAILED(hr)) return false;
 
   D3D11_SHADER_RESOURCE_VIEW_DESC sdesc;
@@ -1578,6 +1611,8 @@ static bool d3d11_ensure_texture_upload_scratch(size_t size) {
   if (size <= g_d3d11.texture_upload_scratch_capacity) return true;
   uint8_t *scratch = (uint8_t *)realloc(g_d3d11.texture_upload_scratch, size);
   if (!scratch) return false;
+  anvil_memory_account(ANVIL_MEMORY_RENDER_BUFFERS, (int64_t)size - g_d3d11.texture_upload_scratch_capacity,
+    g_d3d11.texture_upload_scratch_capacity == 0);
   g_d3d11.texture_upload_scratch = scratch;
   g_d3d11.texture_upload_scratch_capacity = size;
   return true;
@@ -1697,14 +1732,14 @@ static D3D11CachedTexture *d3d11_get_cached_texture(SDL_Surface *surface, int mo
 
 static void d3d11_release_upload_texture(void) {
   SAFE_RELEASE(g_d3d11.upload_srv);
-  SAFE_RELEASE(g_d3d11.upload_texture);
+  d3d11_release_texture(&g_d3d11.upload_texture);
   g_d3d11.upload_width = 0;
   g_d3d11.upload_height = 0;
 }
 
 static void d3d11_release_white_texture(void) {
   SAFE_RELEASE(g_d3d11.white_srv);
-  SAFE_RELEASE(g_d3d11.white_texture);
+  d3d11_release_texture(&g_d3d11.white_texture);
 }
 
 static bool d3d11_ensure_white_texture(void) {
@@ -1727,7 +1762,7 @@ static bool d3d11_ensure_white_texture(void) {
   data.pSysMem = &white;
   data.SysMemPitch = sizeof(white);
 
-  HRESULT hr = g_d3d11.device->lpVtbl->CreateTexture2D(g_d3d11.device, &desc, &data, &g_d3d11.white_texture);
+  HRESULT hr = d3d11_create_texture(&desc, &data, &g_d3d11.white_texture);
   if (FAILED(hr) || !g_d3d11.white_texture) return false;
 
   D3D11_SHADER_RESOURCE_VIEW_DESC sdesc;
@@ -1764,7 +1799,7 @@ static bool d3d11_ensure_upload_texture(int width, int height) {
   desc.Usage = D3D11_USAGE_DEFAULT;
   desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
-  HRESULT hr = g_d3d11.device->lpVtbl->CreateTexture2D(g_d3d11.device, &desc, NULL, &g_d3d11.upload_texture);
+  HRESULT hr = d3d11_create_texture(&desc, NULL, &g_d3d11.upload_texture);
   if (FAILED(hr) || !g_d3d11.upload_texture) return false;
 
   D3D11_SHADER_RESOURCE_VIEW_DESC sdesc;
@@ -2121,9 +2156,7 @@ static bool d3d11_capture_backbuffer(D3D11Window *w, const char *path) {
   staging_desc.MiscFlags = 0;
 
   ID3D11Texture2D *staging = NULL;
-  HRESULT hr = g_d3d11.device->lpVtbl->CreateTexture2D(
-    g_d3d11.device, &staging_desc, NULL, &staging
-  );
+  HRESULT hr = d3d11_create_texture(&staging_desc, NULL, &staging);
   if (FAILED(hr) || !staging) return false;
 
   g_d3d11.context->lpVtbl->CopyResource(
@@ -2137,7 +2170,7 @@ static bool d3d11_capture_backbuffer(D3D11Window *w, const char *path) {
     D3D11_MAP_READ, 0, &mapped
   );
   if (FAILED(hr)) {
-    SAFE_RELEASE(staging);
+    d3d11_release_texture(&staging);
     return false;
   }
 
@@ -2161,7 +2194,7 @@ static bool d3d11_capture_backbuffer(D3D11Window *w, const char *path) {
   g_d3d11.context->lpVtbl->Unmap(
     g_d3d11.context, (ID3D11Resource *)staging, 0
   );
-  SAFE_RELEASE(staging);
+  d3d11_release_texture(&staging);
   return saved;
 }
 
@@ -2381,6 +2414,8 @@ void anvil_d3d11_shutdown(void) {
   d3d11_clear_texture_lookup();
   d3d11_release_white_texture();
   d3d11_release_upload_texture();
+  if (g_d3d11.texture_upload_scratch) anvil_memory_account(ANVIL_MEMORY_RENDER_BUFFERS,
+    -(int64_t)g_d3d11.texture_upload_scratch_capacity, -1);
   free(g_d3d11.texture_upload_scratch);
   g_d3d11.texture_upload_scratch = NULL;
   g_d3d11.texture_upload_scratch_capacity = 0;
@@ -2394,6 +2429,8 @@ void anvil_d3d11_shutdown(void) {
   SAFE_RELEASE(g_d3d11.quad_vs);
   SAFE_RELEASE(g_d3d11.raster);
   SAFE_RELEASE(g_d3d11.blend);
+  if (g_d3d11.quad_instances) anvil_memory_account(ANVIL_MEMORY_RENDER_BUFFERS,
+    -(int64_t)(g_d3d11.quad_instance_capacity * sizeof(D3D11QuadInstance)), -1);
   free(g_d3d11.quad_instances);
   g_d3d11.quad_instances = NULL;
   g_d3d11.quad_instance_count = 0;

@@ -16,12 +16,19 @@ static AnvilLuaMemory lua_states[ANVIL_MEMORY_LUA_LIMIT];
 static uint64_t lua_sequence, lua_omitted;
 
 const char *anvil_memory_category_name(AnvilMemoryCategory category) {
-  static const char *names[] = { "treesitter", "ts_text_snapshots", "ts_file_records", "ts_index_snapshots", "font_glyphs" };
+  static const char *names[] = { "treesitter", "ts_text_snapshots", "ts_file_records", "ts_index_snapshots", "font_glyphs",
+    "render_surfaces", "render_buffers", "d3d11_textures" };
   return names[category];
 }
 
 const char *anvil_memory_category_basis(AnvilMemoryCategory category) {
+  if (category == ANVIL_MEMORY_D3D11_TEXTURES) return "texture_payload";
   return category == ANVIL_MEMORY_TREESITTER ? "allocator_usable" : "owned_estimate";
+}
+
+void anvil_memory_surface_account(const SDL_Surface *surface, int delta) {
+  if (surface) anvil_memory_account(ANVIL_MEMORY_RENDER_SURFACES,
+    (int64_t)surface->pitch * surface->h * delta, delta);
 }
 
 void anvil_memory_account(AnvilMemoryCategory category, int64_t bytes, int64_t objects) {
@@ -113,23 +120,46 @@ size_t anvil_memory_lua_read(AnvilLuaMemory *rows, size_t capacity, uint64_t *om
   return count;
 }
 
+static bool memory_changed(uint64_t a, uint64_t b) {
+  return (a > b ? a - b : b - a) >= 32ULL * 1024 * 1024;
+}
+
+bool anvil_memory_report_due(const AnvilMemoryReport *previous, const AnvilMemoryReport *current) {
+  if (!previous || current->time_ms - previous->time_ms >= 5 * 60 * 1000) return true;
+  if (current->process.available != previous->process.available
+      || memory_changed(current->process.private_commit_bytes, previous->process.private_commit_bytes)) return true;
+  for (int i = 0; i < ANVIL_MEMORY_CATEGORY_COUNT; i++) {
+    if (memory_changed(current->categories[i].bytes, previous->categories[i].bytes)
+        || memory_changed(current->categories[i].peak_bytes, previous->categories[i].peak_bytes)) return true;
+  }
+  return false;
+}
+
 #ifdef _WIN32
 static HANDLE reporter, stop_event;
 static DWORD WINAPI memory_reporter(void *unused) {
   (void)unused;
   uint64_t sequence = 0;
+  AnvilMemoryReport previous = {0};
   DWORD delay = 5000;
   while (WaitForSingleObject(stop_event, delay) == WAIT_TIMEOUT) {
     delay = 30000;
+    AnvilMemoryReport current = { .time_ms = SDL_GetTicks(), .process = anvil_memory_process() };
+    for (int i = 0; i < ANVIL_MEMORY_CATEGORY_COUNT; i++) current.categories[i] = anvil_memory_counter(i);
+    /* Keep a startup pair, then report changes or a five-minute heartbeat. */
+    if (sequence >= 2 && !anvil_memory_report_due(&previous, &current)) continue;
+    previous = current;
     uint64_t sample = ++sequence;
-    AnvilProcessMemory process = anvil_memory_process();
+    AnvilProcessMemory process = current.process;
     SDL_Log("Memory process: v=1 sample=%llu available=%d private_commit_bytes=%llu working_set_bytes=%llu private_working_set_bytes=%llu",
       (unsigned long long)sample, process.available,
       (unsigned long long)process.private_commit_bytes, (unsigned long long)process.working_set_bytes,
       (unsigned long long)process.private_working_set_bytes);
     for (int i = 0; i < ANVIL_MEMORY_CATEGORY_COUNT; i++) {
-      AnvilMemoryCounter counter = anvil_memory_counter(i);
-      SDL_Log("Memory native: sample=%llu category=%s basis=%s bytes=%llu peak_bytes=%llu objects=%llu",
+      AnvilMemoryCounter counter = current.categories[i];
+      if (!counter.peak_bytes && !counter.objects) continue;
+      SDL_Log("Memory %s: sample=%llu category=%s basis=%s bytes=%llu peak_bytes=%llu objects=%llu",
+        i == ANVIL_MEMORY_D3D11_TEXTURES ? "graphics" : "native",
         (unsigned long long)sample, anvil_memory_category_name(i),
         anvil_memory_category_basis(i),
         (unsigned long long)counter.bytes, (unsigned long long)counter.peak_bytes,
@@ -139,9 +169,17 @@ static DWORD WINAPI memory_reporter(void *unused) {
     uint64_t omitted;
     size_t count = anvil_memory_lua_read(rows, ANVIL_MEMORY_LUA_LIMIT, &omitted);
     uint64_t now = SDL_GetTicks();
-    SDL_Log("Memory Lua states: sample=%llu states=%llu omitted=%llu", (unsigned long long)sample,
-      (unsigned long long)count, (unsigned long long)omitted);
+    uint64_t bytes = 0, oldest = 0;
     for (size_t i = 0; i < count; i++) {
+      bytes += rows[i].bytes;
+      uint64_t age = now - rows[i].sampled_ms;
+      if (age > oldest) oldest = age;
+    }
+    SDL_Log("Memory Lua states: sample=%llu states=%llu omitted=%llu bytes=%llu max_age_ms=%llu", (unsigned long long)sample,
+      (unsigned long long)count, (unsigned long long)omitted, (unsigned long long)bytes, (unsigned long long)oldest);
+    for (size_t i = 0; i < count; i++) {
+      /* The API still returns every state. Logs retain the main state and large workers. */
+      if (SDL_strcmp(rows[i].name, "main") && rows[i].bytes < 1024 * 1024) continue;
       SDL_Log("Memory Lua: sample=%llu state=%llu bytes=%llu age_ms=%llu name=%s",
         (unsigned long long)sample, (unsigned long long)rows[i].id, (unsigned long long)rows[i].bytes,
         (unsigned long long)(now - rows[i].sampled_ms), rows[i].name);

@@ -15,7 +15,7 @@ Each native record has local time, process role, process ID, and thread ID. Defa
 
 `Native process` records the executable path, application version, protocol version, SDL version, and diagnostics compilation time. The compilation time identifies the diagnostics module, not a Git revision. An explicit `ANVIL_SURFACE_LOG` path keeps the shared format used by isolated probes.
 
-`Memory process`, `Memory native` and `Memory Lua` record periodic memory samples. See [memory diagnostics](MEMORY_DIAGNOSTICS.md) for coverage, sample age and limits.
+`Memory process`, `Memory native`, `Memory graphics` and `Memory Lua` record memory changes and periodic samples. See [memory diagnostics](MEMORY_DIAGNOSTICS.md) for coverage, sample age and limits.
 
 ## Find the first failure
 

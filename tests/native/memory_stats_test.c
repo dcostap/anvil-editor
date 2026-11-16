@@ -39,6 +39,24 @@ static int parse(void *unused) {
 }
 
 int main(void) {
+  AnvilMemoryReport previous = { .time_ms = 1000, .process.available = true };
+  AnvilMemoryReport current = previous;
+  current.time_ms++;
+  CHECK(anvil_memory_report_due(NULL, &current));
+  CHECK(!anvil_memory_report_due(&previous, &current));
+  current.process.private_commit_bytes = 1024ULL * 1024 * 1024;
+  CHECK(anvil_memory_report_due(&previous, &current));
+  previous.process.private_commit_bytes = current.process.private_commit_bytes;
+  current.process.private_commit_bytes = 0;
+  CHECK(anvil_memory_report_due(&previous, &current));
+  previous.process.private_commit_bytes = 0;
+  current = previous;
+  current.categories[ANVIL_MEMORY_TREESITTER].peak_bytes = 1024ULL * 1024 * 1024;
+  CHECK(anvil_memory_report_due(&previous, &current));
+  current = previous;
+  current.time_ms += 24ULL * 60 * 60 * 1000;
+  CHECK(anvil_memory_report_due(&previous, &current));
+
   anvil_ts_memory_init();
   SDL_Thread *threads[4];
   for (size_t i = 0; i < 4; i++) {

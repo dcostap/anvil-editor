@@ -30,6 +30,7 @@
 #include "win32_frame.h"
 #include "hosted_surface.h"
 #include "input_latency_probe.h"
+#include "memory_stats.h"
 
 /* a cache over the software renderer -- all drawing operations are stored as
 ** commands when issued. At the end of the frame we write the commands to a grid
@@ -307,6 +308,8 @@ static bool expand_command_buffer(RenCache *ren_cache) {
   if (!new_command_buf) {
     return false;
   }
+  anvil_memory_account(ANVIL_MEMORY_RENDER_BUFFERS, (int64_t)new_size - ren_cache->command_buf_size,
+    ren_cache->command_buf_size == 0);
   ren_cache->command_buf_size = new_size;
   ren_cache->command_buf = new_command_buf;
   return true;
@@ -445,8 +448,10 @@ static uint32_t cache_free_count = 0;
 void rencache_uninit(RenCache *rc) {
   if (rc) {
     cache_free_count++;
-    if (rc->command_buf)
+    if (rc->command_buf) {
+      anvil_memory_account(ANVIL_MEMORY_RENDER_BUFFERS, -(int64_t)rc->command_buf_size, -1);
       SDL_free(rc->command_buf);
+    }
     rencache_init(rc);
   }
 }
@@ -1297,6 +1302,7 @@ RenCaptureResult rencache_capture_end(RenCache *ren_cache, RenCapture **out) {
 
   RenCapture *capture = SDL_malloc(sizeof(RenCapture) + (end - start));
   if (!capture) return REN_CAPTURE_NO_MEMORY;
+  anvil_memory_account(ANVIL_MEMORY_RENDER_BUFFERS, sizeof(RenCapture) + (end - start), 1);
   capture->cache = ren_cache;
   capture->screen_rect = ren_cache->screen_rect;
   capture->font_free_count = ren_font_free_count();
@@ -1361,6 +1367,7 @@ RenCaptureResult rencache_capture_draw(RenCache *ren_cache, const RenCapture *ca
 }
 
 void rencache_capture_free(RenCapture *capture) {
+  if (capture) anvil_memory_account(ANVIL_MEMORY_RENDER_BUFFERS, -(int64_t)(sizeof(RenCapture) + capture->len), -1);
   SDL_free(capture);
 }
 

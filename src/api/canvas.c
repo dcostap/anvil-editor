@@ -11,6 +11,7 @@
 #include "../renderer.h"
 #include "../rencache.h"
 #include "../d3d11_backend.h"
+#include "../memory_stats.h"
 
 extern int RENDERER_FONT_REF;
 extern int RENDERER_CANVAS_REF;
@@ -34,6 +35,7 @@ static int f_new(lua_State *L) {
   luaL_setmetatable(L, API_TYPE_CANVAS);
   rencache_init(canvas);
   canvas->rensurface.surface = surface;
+  anvil_memory_surface_account(surface, 1);
   canvas->rensurface.scale_x = 1;
   canvas->rensurface.scale_y = 1;
   rencache_begin_frame(canvas);
@@ -56,6 +58,7 @@ int api_canvas_push_image(lua_State *L, SDL_Surface *surface) {
   luaL_setmetatable(L, API_TYPE_CANVAS);
   rencache_init(canvas);
   canvas->rensurface.surface = surface;
+  anvil_memory_surface_account(surface, 1);
   canvas->rensurface.scale_x = 1;
   canvas->rensurface.scale_y = 1;
   rencache_begin_frame(canvas);
@@ -411,6 +414,7 @@ static int f_copy(lua_State *L) {
   }
 
   new_canvas->rensurface.surface = surface_copy;
+  anvil_memory_surface_account(surface_copy, 1);
   new_canvas->rensurface.scale_x = 1;
   new_canvas->rensurface.scale_y = 1;
   rencache_begin_frame(new_canvas);
@@ -677,6 +681,7 @@ static int f_gc(lua_State *L) {
   RenCache* canvas = luaL_checkudata(L, 1, API_TYPE_CANVAS);
   if (canvas->rensurface.surface) {
     anvil_d3d11_forget_surface(canvas->rensurface.surface);
+    anvil_memory_surface_account(canvas->rensurface.surface, -1);
     SDL_DestroySurface(canvas->rensurface.surface);
   }
   rencache_uninit(canvas);

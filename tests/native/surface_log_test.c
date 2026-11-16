@@ -54,6 +54,7 @@ static int check_log(const wchar_t *path, bool shared, unsigned *roles) {
 
 int main(int argc, char **argv) {
   if (argc == 3 && !strcmp(argv[1], "child")) {
+    anvil_memory_account(ANVIL_MEMORY_TREESITTER, 12345, 1);
     anvil_surface_log_init(argv[2]);
     memory_logged = CreateEventW(NULL, TRUE, FALSE, NULL);
     CHECK(memory_logged);
