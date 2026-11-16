@@ -61,6 +61,8 @@ local function tool(name, description, properties, required, readonly)
       destructiveHint = not readonly, idempotentHint = true}}
 end
 local id = string_schema(128)
+tool("memory_report", "Read this Project process's memory counters and Terminal allocations without changing focus. Set collect=true only for an explicit full Lua collection and owner census; this can pause the Project. Default reads counters without forcing collection. Other processes and remote Machines are excluded.",
+  {collect = {type = "boolean"}}, nil, true)
 tool("snooze", "Set or remove Anvil's Snooze for a Terminal's Pane. Omit pane and terminal to target your own Terminal Session. For five hours, set seconds to 18000. Returns accepted when queued to the Sidebar. Snooze uses normal Pane hiding; it does not stop Pi or schedule a message.",
   {action = choice("set", "remove"), pane = id, terminal = id,
     seconds = {type = "integer", minimum = 1, maximum = 31536000}, request_id = id},
@@ -554,6 +556,14 @@ function M:transcript_read(query)
 end
 
 function M:agent_wait(args) return self:agent_read(args) end
+
+function M:memory_report(args)
+  local memory = require "core.memory_report"
+  local report = memory.capture(args.collect == true)
+  core.log_quiet("Memory report: pid=%d collected=%s collection_ms=%.2f walk_ms=%.2f",
+    report.memory_before.pid, tostring(args.collect == true), report.collection_ms or 0, report.walk_ms or 0)
+  return {pid = report.memory_before.pid, collected = args.collect == true, report = memory.format(report)}
+end
 
 function M:project(args)
   assert(system.is_hosted_surface(), "Opening and unloading Projects needs Anvil's shell")

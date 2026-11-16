@@ -26,6 +26,9 @@ test.describe("Heap Census", function()
     package.loaded[MODULE] = { rows = rows, again = rows }
     rows = nil
     local report = heap_census.run()
+    test.ok(report.memory_before, "the census must capture memory before collection")
+    test.ok(report.memory_after_collection, "the census must capture memory before its heap walk allocates tables")
+    test.ok(report.memory_after_collection.lua_bytes > 0)
     -- Both keys reach the rows. The first one that the walk reaches owns them, once.
     local children = owner_row(report, MODULE .. ".rows[n]") or owner_row(report, MODULE .. ".again[n]")
     test.equal(test.not_nil(children).tables, 40000)

@@ -1,5 +1,7 @@
 #include "terminal_model.h"
+#include "memory_stats.h"
 #include <malloc.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <SDL3/SDL.h>
@@ -55,12 +57,32 @@ static bool terminal_images_init(void) {
 }
 
 /* Ghostty passes alignment as a power of two. It asks for page-aligned terminal pages. */
+static void account_terminal(void *ctx, int64_t bytes, int64_t objects) {
+  anvil_memory_account(ANVIL_MEMORY_TERMINAL_MODEL, bytes, objects);
+  AnvilTerminalMemory *memory = ctx;
+  if (memory) {
+    memory->bytes += bytes;
+    memory->objects += objects;
+    if (memory->bytes > memory->peak_bytes) memory->peak_bytes = memory->bytes;
+  }
+}
+
 static void *terminal_alloc(
   void *ctx, size_t len, uint8_t alignment, uintptr_t ret_addr
 ) {
-  (void)ctx;
   (void)ret_addr;
-  return _aligned_malloc(len, (size_t)1 << alignment);
+  if (alignment >= sizeof(size_t) * CHAR_BIT) return NULL;
+  size_t align = (size_t)1 << alignment;
+  if (align < sizeof(void *)) align = sizeof(void *);
+  if (len > SIZE_MAX - (align - 1) - sizeof(void *)) return NULL;
+  /* MSVCRT has no _aligned_msize. Keep the base pointer so _msize includes
+     the owned alignment padding, also after Ghostty shrinks a logical span. */
+  void *base = malloc(len + align - 1 + sizeof(void *));
+  if (!base) return NULL;
+  void *memory = (void *)(((uintptr_t)base + sizeof(void *) + align - 1) & ~(uintptr_t)(align - 1));
+  ((void **)memory)[-1] = base;
+  account_terminal(ctx, _msize(base), 1);
+  return memory;
 }
 
 static bool terminal_resize(
@@ -74,25 +96,39 @@ static bool terminal_resize(
   return new_len <= memory_len;
 }
 
+static void terminal_free(
+  void *ctx, void *memory, size_t memory_len, uint8_t alignment,
+  uintptr_t ret_addr
+);
+
 static void *terminal_remap(
   void *ctx, void *memory, size_t memory_len, uint8_t alignment,
   size_t new_len, uintptr_t ret_addr
 ) {
-  (void)ctx;
-  (void)memory_len;
-  (void)ret_addr;
-  return _aligned_realloc(memory, new_len, (size_t)1 << alignment);
+  if (!memory) return terminal_alloc(ctx, new_len, alignment, ret_addr);
+  if (!new_len) {
+    terminal_free(ctx, memory, memory_len, alignment, ret_addr);
+    return NULL;
+  }
+  void *next = terminal_alloc(ctx, new_len, alignment, ret_addr);
+  if (next) {
+    memcpy(next, memory, memory_len < new_len ? memory_len : new_len);
+    terminal_free(ctx, memory, memory_len, alignment, ret_addr);
+  }
+  return next;
 }
 
 static void terminal_free(
   void *ctx, void *memory, size_t memory_len, uint8_t alignment,
   uintptr_t ret_addr
 ) {
-  (void)ctx;
   (void)memory_len;
   (void)alignment;
   (void)ret_addr;
-  _aligned_free(memory);
+  if (!memory) return;
+  void *base = ((void **)memory)[-1];
+  account_terminal(ctx, -(int64_t)_msize(base), -1);
+  free(base);
 }
 
 static const GhosttyAllocatorVtable terminal_allocator_vtable = {
@@ -106,6 +142,10 @@ const GhosttyAllocator terminal_allocator = {
   .ctx = NULL,
   .vtable = &terminal_allocator_vtable,
 };
+
+GhosttyAllocator anvil_terminal_allocator(AnvilTerminalMemory *memory) {
+  return (GhosttyAllocator){ .ctx = memory, .vtable = &terminal_allocator_vtable };
+}
 
 bool anvil_terminal_model_options(GhosttyTerminal model, const size_t *scrollback_lines) {
   /* ConPTY owns the live screen and keeps no history. Pulling saved history
@@ -132,9 +172,9 @@ bool anvil_terminal_model_options(GhosttyTerminal model, const size_t *scrollbac
 
 bool anvil_terminal_model_new(GhosttyTerminal *model, uint16_t cols, uint16_t rows,
                               uint32_t cell_width, uint32_t cell_height,
-                              const size_t *scrollback_lines) {
+                              const size_t *scrollback_lines, const GhosttyAllocator *allocator) {
   return terminal_images_init() &&
-    ghostty_terminal_new(&terminal_allocator, model, cols, rows) == GHOSTTY_SUCCESS &&
+    ghostty_terminal_new(allocator, model, cols, rows) == GHOSTTY_SUCCESS &&
     anvil_terminal_model_options(*model, scrollback_lines) &&
     ghostty_terminal_resize(*model, cols, rows, cell_width, cell_height) == GHOSTTY_SUCCESS;
 }

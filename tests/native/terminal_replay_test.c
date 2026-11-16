@@ -4,6 +4,7 @@
 #include <string.h>
 #include "../../src/terminal_model.h"
 #include "../../src/terminal_snapshot.h"
+#include "../../src/memory_stats.h"
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #x); return 1; } } while (0)
 
@@ -34,9 +35,14 @@ static int compare(GhosttyTerminal a, GhosttyTerminal b) {
 }
 
 static int round_trip(int alternate, int utf8) {
+  uint64_t before = anvil_memory_counter(ANVIL_MEMORY_TERMINAL_MODEL).bytes;
   GhosttyTerminal a = NULL, b = NULL;
   size_t lines = 1000;
-  CHECK(anvil_terminal_model_new(&a, 20, 3, 8, 16, &lines));
+  AnvilTerminalMemory owner = {0};
+  GhosttyAllocator allocator = anvil_terminal_allocator(&owner);
+  CHECK(anvil_terminal_model_new(&a, 20, 3, 8, 16, &lines, &allocator));
+  CHECK(anvil_memory_counter(ANVIL_MEMORY_TERMINAL_MODEL).bytes > before);
+  CHECK(owner.bytes == anvil_memory_counter(ANVIL_MEMORY_TERMINAL_MODEL).bytes - before);
   const char *primary = "one\r\ntwo\r\nthree\r\nfour\r\nfive";
   ghostty_terminal_vt_write(a, (const uint8_t *)primary, strlen(primary));
   if (alternate) ghostty_terminal_vt_write(a, (const uint8_t *)"\033[?1049hALT\033[2;4H", 18);
@@ -75,6 +81,8 @@ static int round_trip(int alternate, int utf8) {
   CHECK(ghostty_snapshot_decoder_decode(decoder, &b) != GHOSTTY_SUCCESS && !b);
   ghostty_snapshot_decoder_free(decoder);
   ghostty_free(&terminal_allocator, bytes, length); ghostty_terminal_free(a);
+  CHECK(anvil_memory_counter(ANVIL_MEMORY_TERMINAL_MODEL).bytes == before);
+  CHECK(owner.bytes == 0 && owner.objects == 0 && owner.peak_bytes > 0);
   return 0;
 }
 
@@ -86,7 +94,7 @@ static bool disk_encode(GhosttyTerminal model, uint8_t **bytes, size_t *length) 
 static int disk_bounds(void) {
   GhosttyTerminal model = NULL, restored = NULL;
   size_t lines = 100000;
-  CHECK(anvil_terminal_model_new(&model, 80, 24, 8, 16, &lines));
+  CHECK(anvil_terminal_model_new(&model, 80, 24, 8, 16, &lines, &terminal_allocator));
   for (int i = 0; i < 40000; i++) {
     char line[128]; int count = snprintf(line, sizeof(line), "%06d a retained row with enough text to fill many history pages\r\n", i);
     ghostty_terminal_vt_write(model, (const uint8_t *)line, count);
@@ -133,7 +141,7 @@ static int disk_atomic_and_quota(void) {
   snprintf(directory, sizeof(directory), "%sanvil-snapshots-%lu", temp, (unsigned long)GetCurrentProcessId());
   CHECK(CreateDirectoryA(directory, NULL));
   GhosttyTerminal model = NULL, restored = NULL;
-  CHECK(anvil_terminal_model_new(&model, 20, 3, 8, 16, NULL));
+  CHECK(anvil_terminal_model_new(&model, 20, 3, 8, 16, NULL, &terminal_allocator));
   ghostty_terminal_vt_write(model, (const uint8_t *)"atomic saved screen", 19);
   uint8_t *bytes = NULL; size_t length = 0; DWORD error;
   CHECK(disk_encode(model, &bytes, &length));
@@ -149,7 +157,7 @@ static int disk_atomic_and_quota(void) {
   CHECK(count == ANVIL_TERMINAL_PROJECT_SNAPSHOTS);
   CHECK(!anvil_terminal_snapshot_store(path, "project-one", id, bytes, length - 1, false, &error));
   GhosttyTerminal replacement = NULL;
-  CHECK(anvil_terminal_model_new(&replacement, 20, 3, 8, 16, NULL));
+  CHECK(anvil_terminal_model_new(&replacement, 20, 3, 8, 16, NULL, &terminal_allocator));
   ghostty_terminal_vt_write(replacement, (const uint8_t *)"unpublished text", 16);
   uint8_t *next = NULL; size_t next_length = 0;
   CHECK(disk_encode(replacement, &next, &next_length));
@@ -177,6 +185,7 @@ static int disk_atomic_and_quota(void) {
 /* Ghostty asks for page-aligned terminal pages. The allocator must honor each requested alignment. */
 static int allocator_alignment(void) {
   const GhosttyAllocatorVtable *vt = terminal_allocator.vtable;
+  uint64_t before = anvil_memory_counter(ANVIL_MEMORY_TERMINAL_MODEL).bytes;
   for (uint8_t alignment = 0; alignment <= 12; alignment++) {
     for (size_t len = 1; len <= 1 << 20; len *= 16) {
       size_t size = len;
@@ -189,7 +198,16 @@ static int allocator_alignment(void) {
         CHECK(grown[0] == 0x5a && grown[size - 1] == 0x5a);
         memory = grown; size *= 4;
       }
+      uint64_t allocated = anvil_memory_counter(ANVIL_MEMORY_TERMINAL_MODEL).bytes;
+      CHECK(allocated >= before + size);
+      CHECK(vt->alloc(NULL, SIZE_MAX, alignment, 0) == NULL);
+      CHECK(vt->remap(NULL, memory, size, alignment, SIZE_MAX, 0) == NULL);
+      CHECK(memory[0] == 0x5a && memory[len - 1] == 0x5a);
+      CHECK(vt->resize(NULL, memory, size, alignment, 1, 0));
+      CHECK(anvil_memory_counter(ANVIL_MEMORY_TERMINAL_MODEL).bytes == allocated);
+      size = 1;
       vt->free(terminal_allocator.ctx, memory, size, alignment, 0);
+      CHECK(anvil_memory_counter(ANVIL_MEMORY_TERMINAL_MODEL).bytes == before);
     }
   }
   return 0;
@@ -201,6 +219,8 @@ int main(void) {
   CHECK(disk_atomic_and_quota() == 0);
   for (int alternate = 0; alternate <= 1; alternate++)
     for (int utf8 = 0; utf8 <= 1; utf8++) CHECK(round_trip(alternate, utf8) == 0);
+  CHECK(anvil_memory_counter(ANVIL_MEMORY_TERMINAL_MODEL).bytes == 0);
+  CHECK(anvil_memory_counter(ANVIL_MEMORY_TERMINAL_MODEL).objects == 0);
   puts("snapshots preserve both screens, history, cursor, and unfinished VT/UTF-8 input");
   return 0;
 }

@@ -17,13 +17,15 @@ static uint64_t lua_sequence, lua_omitted;
 
 const char *anvil_memory_category_name(AnvilMemoryCategory category) {
   static const char *names[] = { "treesitter", "ts_text_snapshots", "ts_file_records", "ts_index_snapshots", "font_glyphs",
-    "render_surfaces", "render_buffers", "d3d11_textures" };
+    "render_surfaces", "render_buffers", "d3d11_textures", "terminal_model", "terminal_queues", "terminal_snapshots" };
   return names[category];
 }
 
 const char *anvil_memory_category_basis(AnvilMemoryCategory category) {
   if (category == ANVIL_MEMORY_D3D11_TEXTURES) return "texture_payload";
-  return category == ANVIL_MEMORY_TREESITTER ? "allocator_usable" : "owned_estimate";
+  if (category == ANVIL_MEMORY_TERMINAL_QUEUES || category == ANVIL_MEMORY_TERMINAL_SNAPSHOTS) return "owned_capacity";
+  return category == ANVIL_MEMORY_TREESITTER || category == ANVIL_MEMORY_TERMINAL_MODEL
+    ? "allocator_usable" : "owned_estimate";
 }
 
 void anvil_memory_surface_account(const SDL_Surface *surface, int delta) {

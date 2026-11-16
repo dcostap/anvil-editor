@@ -121,6 +121,7 @@ Steering and interruption return `delivered` after Pi accepts them. A steering r
 | Tool | Operation |
 | --- | --- |
 | `workspace_state` | Inspect Panes, retained Terminal Views, agent identities, and Projects. |
+| `memory_report` | Read process counters and Terminal allocations. Explicit `collect: true` adds a collection comparison and Lua owner census. |
 | `pane` | Create, split, move, focus, or close a Pane. Move it to another loaded Project. |
 | `project` | Open or unload a Project in the caller's Window. |
 | `snooze` | Set or remove Snooze for a Terminal's Pane; default to the caller's Terminal. |
@@ -138,6 +139,8 @@ Steering and interruption return `delivered` after Pi accepts them. A steering r
 | `agent_interrupt` | Interrupt active work and cancel queued Anvil tasks. |
 
 Tool schemas describe their required fields. Terminal launch currently requires Windows. Structured executable launch requires PowerShell. Literal Terminal input is not a Pi messaging API; Anvil rejects it for Pi.
+
+`memory_report` keeps focus and writes no file. It returns `pid`, `collected` and a text `report`. Its default reads counters without forcing collection. `collect: true` performs full collection and a Lua owner census on the Project's UI thread, which can pause that Project. Worker states and other processes are not collected. Both memory samples precede the census walk. See [memory diagnostics](../tools/MEMORY_DIAGNOSTICS.md) for measurement limits and per-session fields. The same tool can address another loaded `project`.
 
 `project` with `action: "open"` loads a folder in the caller's Window. The Window keeps its Selected Project unless `focus: true` selects the new Project. A Project that is already loaded stays in its Window. `action: "unload"` makes a Project Dormant through the normal close questions. The tool refuses Scratch and the Project that serves the call. Both actions return `accepted` when the shell has the request. The opened Project shows in the `projects` of `workspace_state` when its endpoint is ready.
 

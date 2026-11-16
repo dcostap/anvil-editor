@@ -52,15 +52,22 @@ end
 
 ---Walk the live heap. Returns the owners by estimated size, the tables above
 ---LARGE_TABLE_BYTES, the totals, and the walk time.
-function heap_census.run()
+---The optional snapshot callback captures counters before and after collection,
+---before the walk. It defaults to system.memory_stats.
+function heap_census.run(snapshot)
+  snapshot = snapshot or system.memory_stats
+  local memory_before = snapshot()
+  local collection_started = system.get_time()
   collectgarbage("forcecollect")
-  -- The second collection frees nothing, so its time is the cost of marking
-  -- and sweeping the live heap: the least work of one GC cycle.
+  -- A second cycle also collects objects that the first cycle's finalizers released.
   local collect_started = system.get_time()
   collectgarbage("forcecollect")
   local collect_ms = (system.get_time() - collect_started) * 1000
+  local collection_ms = (system.get_time() - collection_started) * 1000
+  -- Capture before the graph walk allocates its own large tables.
+  local memory_after_collection = snapshot()
   local started = system.get_time()
-  local heap_kb = collectgarbage("count")
+  local heap_kb = memory_after_collection.lua_bytes / 1024
 
   local seen = {}
   local queue, labels, depths = {}, {}, {}
@@ -188,6 +195,9 @@ function heap_census.run()
   table.sort(rows, function(a, b) return a.bytes > b.bytes end)
   table.sort(large, function(a, b) return a.bytes > b.bytes end)
   local report = {
+    memory_before = memory_before,
+    memory_after_collection = memory_after_collection,
+    collection_ms = collection_ms,
     owners = rows,
     large_tables = large,
     heap_kb = heap_kb,
@@ -208,9 +218,9 @@ function heap_census.format(report, limit)
   limit = limit or 60
   local lines = {
     "Lua heap census",
-    string.format("Heap after a full collection: %.1f MB. A full collection of it: %.0f ms.",
+    string.format("Heap after collection: %.1f MiB. Second collection: %.0f ms.",
       report.heap_kb / 1024, report.collect_ms),
-    string.format("Census estimate: %.1f MB in %d objects. Walk: %.0f ms.",
+    string.format("Census estimate: %.1f MiB in %d objects. Walk: %.0f ms.",
       mb(report.estimate_bytes), report.objects, report.walk_ms),
     "Sizes are estimates. Each object counts once, for the shortest path that reaches it.",
     "",

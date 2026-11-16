@@ -49,16 +49,23 @@ Do not add category peaks. They can occur at different times.
 | `font_glyphs` | The renderer's CPU glyph atlas, surface and metric size estimate. | Fonts with a non-empty glyph cache. |
 | `render_surfaces` | CPU pixel storage owned by canvases and window surfaces, including row padding. Images and wallpapers count after a canvas takes them. | Owned surfaces. |
 | `render_buffers` | Renderer command buffer capacities, Draw Captures, CPU quad arrays and texture upload scratch buffers. | Owned buffers. |
+| `terminal_model` | Ghostty screens, history, parser storage, images, render state, encoders, formatters and snapshot decoders through Anvil's Terminal allocator. Alignment padding counts. | Live allocator blocks. |
+| `terminal_queues` | Allocated client read and write queue capacities, including prepared sessions. | Allocated queues. |
+| `terminal_snapshots` | Client replay buffer capacity and retained snapshot text scratch capacity. | Allocated buffers. |
 
 `basis=allocator_usable` measures live allocator block sizes. It excludes allocator metadata, free blocks retained by the allocator and reserved address space. Anvil uses the platform's allocation-size query and adds no header to each Tree-sitter block. Supported allocator-size platforms are Windows, Linux and macOS.
 
 `basis=owned_estimate` measures owned data sizes or capacities. It excludes allocator overhead. Completed record counters omit temporary construction buffers and failed builds. A text buffer taken from a caller uses its text length, because that API has no capacity field. Fuzzy index strings use their stored lengths. Glyph sizes use the renderer's existing estimate.
 
+`basis=owned_capacity` measures the exact capacities requested for the tracked buffers. Queue occupancy does not change allocated capacity. It excludes Windows heap overhead and retained free pages.
+
+The Terminal allocator keeps its original allocation pointer before each aligned span. `_msize` supplies the whole block's usable size, including alignment padding. A logical shrink retains that allocation and its count until a remap or free. Failed allocations change no counter. This shim needs no allocation stack or heap scan.
+
 These categories do not cover all native memory. Notable omissions include:
 
 - Project index builders, query-result caches and other worker buffers.
 - Grammar scanner allocations that bypass Tree-sitter's allocator.
-- Terminal screens and history, pending image decodes, image decoder internals and display packets.
+- Terminal transport jobs, search buffers, pending image decodes, temporary SDL image storage and display packets.
 - Graphics-driver allocations and FreeType or HarfBuzz internals.
 - Other indexes, mapped files, thread stacks and allocator retention.
 
@@ -82,7 +89,30 @@ Only the state's owner samples its heap. The main state samples after startup an
 
 `system.memory_stats()` returns the same process totals and categories, plus the calling state's current `lua_bytes` and the registered state samples. It forces no collection and writes no file. Process fields are absent where the OS query is unavailable. Native category counters remain available outside Windows; automatic native logging is Windows-only.
 
-The existing `core:record_heap_census` command still supplies Lua owner estimates. It forces collections and walks the Lua object graph. Use it only when the Lua samples justify that cost.
+## On-demand capture
+
+Run **Record Memory Report** (`core:record_memory_report`) for a collection comparison and Lua owner census. It can pause the Project. It takes two full collections on the calling Lua state, then walks that state's object graph. Worker states keep running and are not collected. The report takes its second memory sample before the graph walk allocates its own tables.
+
+The command writes a timestamped text file in the temp folder through the file worker. It copies the path after the write succeeds. It changes no focus and closes no referenced Terminal. Collection can close an unreachable native session through its normal finalizer. The report names the process ID and UTC sample times. Keep reports private: owner names can contain file paths and application keys.
+
+Agents can use `memory_report` with an optional `project`. The default reads counters and session rows without forcing collection or writing a file. Set `collect: true` only for an explicit collection comparison and owner census. The reply includes `pid`, `collected` and the text `report`. Cross-Project routing uses the same discovery rules as other agent tools.
+
+`core.memory_report.capture(collect)` returns the structured capture. `memory_before` and `memory_after_collection` contain process, native, graphics, Lua and Terminal samples. The latter is absent without collection. A collected capture also has `collection_ms` and the census fields. `core.memory_report.format` returns the text report. `core:record_heap_census` saves only the Lua owner table.
+
+`terminal_native.memory_stats()` lists the calling Lua state's native sessions without keeping them alive. It includes prepared and remote sessions, also without Views. Closed sessions do not appear. `session:stats()` exposes the same fields for one session, including a closed one:
+
+- `memory_id` identifies this native session object for its lifetime, including before a host assigns `session_id`.
+- `model_bytes`, `model_peak_bytes` and `model_objects` measure that session's Ghostty allocations.
+- `read_queue_capacity` and `write_queue_capacity` report allocated capacities. An unattached remote session has no queues.
+- `read_queue_bytes` and `write_queue_bytes` report current occupancy under the queue locks. Existing high-water fields remain cumulative.
+- `replay_capacity` and `snapshot_text_capacity` report the retained buffer capacities.
+- `state`, `prepared`, `remote` and the host and session IDs identify the owner.
+
+Process-wide Terminal categories also cover native workers. Per-session rows are a breakdown, not additional allocations. Host processes and remote Machines have separate memory. A session close releases its model and queues; allocator pages can remain committed after those live counts reach zero.
+
+Census sizes are estimates from reachability, not allocation stacks or exact retained sizes. Shared objects count once by the first shortest path. Userdata and prototype payload sizes are omitted. Lua heap counters include their Lua-managed storage, so the census estimate need not equal the heap total.
+
+Before/after changes include report overhead and concurrent background work. They measure a net change, not a guaranteed amount that future collection will recover. To measure a release, compare captures before and after the same controlled close or cache release. Use native allocation tracing in an isolated reproduction when counters cannot identify an owner. This report does not provide native allocation stacks, allocator free-page ownership or driver backing sizes.
 
 ## Investigate growth
 
@@ -101,6 +131,13 @@ Persistent growth after repeated identical work needs investigation. A single la
 ```sh
 meson test -C build-windows-x86_64 anvil:memory-stats anvil:surface-log anvil:treesitter anvil:markdown_parser --print-errorlogs
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/memory_stats.lua --print-errorlogs
+meson test -C build-windows-x86_64 anvil:terminal-replay --print-errorlogs
+meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/terminal_memory.lua --print-errorlogs
+meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/heap_census.lua --print-errorlogs
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/memory_report.lua --print-errorlogs
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/agent_control.lua --print-errorlogs
 ```
 
 The native checks exercise report suppression, concurrent parser allocations, shared snapshot lifetimes and actual log output. The Lua check covers canvas lifetimes, an idle worker's heap, and fresh main-state samples from a real Machine server. Use the `prompt-typeahead` scenario to check main-loop sampling cost. Use `renderer-primitives` with both renderers to check rendering resource changes.
+
+Terminal checks cover allocation alignment, failed growth, logical shrink, snapshot decoding and release. The Lua checks cover local, prepared and unattached remote sessions, closed sessions and collection without diagnostic retention. Use `terminal-autoscroll-history` to check Terminal accounting cost. Automatic logging reads only the aggregate counters; it never runs the census or lists session objects.

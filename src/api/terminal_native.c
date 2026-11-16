@@ -21,6 +21,7 @@
 #include "../renderer.h"
 #include "../terminal_contrast.h"
 #include "../terminal_model.h"
+#include "../memory_stats.h"
 #include "../terminal_host.h"
 #include "../session_end.h"
 #include "../terminal_link.h"
@@ -75,6 +76,7 @@ typedef struct {
   AnvilTerminalLink *link;
   uint8_t *replay;
   size_t replay_length, replay_capacity;
+  volatile LONG64 replay_allocated;
   volatile LONG replay_complete;
   GhosttySnapshotDecoder decoder;
   bool replay_finished;
@@ -118,6 +120,9 @@ typedef struct {
   bool exit_code_known;
   bool mouse_button_pressed;
   GhosttyTerminal terminal;
+  AnvilTerminalMemory memory;
+  GhosttyAllocator allocator;
+  uint64_t memory_id;
   GhosttyRenderState render_state;
   GhosttyRenderStateRowIterator row_iterator;
   GhosttyRenderStateRowCells row_cells;
@@ -427,7 +432,10 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
           InterlockedExchange(&session->read_failed, 1);
           break;
         }
+        anvil_memory_account(ANVIL_MEMORY_TERMINAL_SNAPSHOTS,
+          (int64_t)capacity - (int64_t)session->replay_capacity, session->replay ? 0 : 1);
         session->replay = next; session->replay_capacity = capacity;
+        InterlockedExchange64(&session->replay_allocated, capacity);
       }
       memcpy(session->replay + session->replay_length, buffer, read);
       session->replay_length += read;
@@ -522,6 +530,10 @@ static bool start_terminal_io(TerminalSession *session) {
   session->write_queue = (uint8_t *)HeapAlloc(
     GetProcessHeap(), 0, TERMINAL_WRITE_QUEUE_CAPACITY
   );
+  if (session->read_queue)
+    anvil_memory_account(ANVIL_MEMORY_TERMINAL_QUEUES, TERMINAL_READ_QUEUE_CAPACITY, 1);
+  if (session->write_queue)
+    anvil_memory_account(ANVIL_MEMORY_TERMINAL_QUEUES, TERMINAL_WRITE_QUEUE_CAPACITY, 1);
   if (!session->read_queue || !session->write_queue) return false;
   InitializeCriticalSection(&session->read_lock);
   session->read_lock_initialized = true;
@@ -536,6 +548,30 @@ static bool start_terminal_io(TerminalSession *session) {
 
 static TerminalSession *check_session(lua_State *L, int index) {
   return (TerminalSession *)luaL_checkudata(L, index, API_TYPE_TERMINAL_SESSION);
+}
+
+/* Each Lua state lists only its own sessions. Weak keys never keep a shell alive. */
+static char memory_sessions_key;
+static volatile LONG64 memory_session_sequence;
+
+static void register_memory_session(lua_State *L) {
+  int session = lua_gettop(L);
+  lua_pushlightuserdata(L, &memory_sessions_key);
+  lua_rawget(L, LUA_REGISTRYINDEX);
+  if (lua_isnil(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+    lua_newtable(L);
+    lua_pushliteral(L, "k"); lua_setfield(L, -2, "__mode");
+    lua_setmetatable(L, -2);
+    lua_pushlightuserdata(L, &memory_sessions_key);
+    lua_pushvalue(L, -2);
+    lua_rawset(L, LUA_REGISTRYINDEX);
+  }
+  lua_pushvalue(L, session);
+  lua_pushboolean(L, true);
+  lua_rawset(L, -3);
+  lua_pop(L, 1);
 }
 
 static void close_handle(HANDLE *handle) {
@@ -872,6 +908,7 @@ static void release_terminal_transport(TerminalSession *session) {
   }
   if (session->read_queue) {
     HeapFree(GetProcessHeap(), 0, session->read_queue);
+    anvil_memory_account(ANVIL_MEMORY_TERMINAL_QUEUES, -(int64_t)TERMINAL_READ_QUEUE_CAPACITY, -1);
     session->read_queue = NULL;
   }
   if (session->write_lock_initialized) {
@@ -880,6 +917,7 @@ static void release_terminal_transport(TerminalSession *session) {
   }
   if (session->write_queue) {
     HeapFree(GetProcessHeap(), 0, session->write_queue);
+    anvil_memory_account(ANVIL_MEMORY_TERMINAL_QUEUES, -(int64_t)TERMINAL_WRITE_QUEUE_CAPACITY, -1);
     session->write_queue = NULL;
   }
 }
@@ -1133,8 +1171,10 @@ static bool cancel_reconnect(TerminalSession *session, uint16_t type) {
 static void clear_replay(TerminalSession *session) {
   if (session->decoder) ghostty_snapshot_decoder_free(session->decoder);
   session->decoder = NULL;
+  if (session->replay) anvil_memory_account(ANVIL_MEMORY_TERMINAL_SNAPSHOTS, -(int64_t)session->replay_capacity, -1);
   free(session->replay); session->replay = NULL;
   session->replay_length = session->replay_capacity = 0;
+  InterlockedExchange64(&session->replay_allocated, 0);
 }
 
 static void terminate_terminal_process(TerminalSession *session) {
@@ -1176,6 +1216,7 @@ static void close_session(TerminalSession *session) {
   free(session->colors); session->colors = NULL;
   if (session->snapshot_text) {
     HeapFree(GetProcessHeap(), 0, session->snapshot_text);
+    anvil_memory_account(ANVIL_MEMORY_TERMINAL_SNAPSHOTS, -(int64_t)session->snapshot_text_capacity, -1);
     session->snapshot_text = NULL;
     session->snapshot_text_capacity = 0;
   }
@@ -1266,44 +1307,44 @@ static bool initialize_terminal(
 ) {
   if (!anvil_terminal_model_new(
     &session->terminal, session->cols, session->rows,
-    session->cell_width, session->cell_height, scrollback_max_lines
+    session->cell_width, session->cell_height, scrollback_max_lines, &session->allocator
   )) {
     return false;
   }
   if (ghostty_render_state_new(
-    &terminal_allocator, &session->render_state
+    &session->allocator, &session->render_state
   ) != GHOSTTY_SUCCESS) return false;
   if (ghostty_render_state_row_iterator_new(
-    &terminal_allocator, &session->row_iterator
+    &session->allocator, &session->row_iterator
   ) != GHOSTTY_SUCCESS) return false;
   if (ghostty_render_state_row_cells_new(
-    &terminal_allocator, &session->row_cells
+    &session->allocator, &session->row_cells
   ) != GHOSTTY_SUCCESS) return false;
   if (ghostty_key_encoder_new(
-    &terminal_allocator, &session->key_encoder
+    &session->allocator, &session->key_encoder
   ) != GHOSTTY_SUCCESS) return false;
   if (ghostty_key_event_new(
-    &terminal_allocator, &session->key_event
+    &session->allocator, &session->key_event
   ) != GHOSTTY_SUCCESS) return false;
   if (ghostty_mouse_encoder_new(
-    &terminal_allocator, &session->mouse_encoder
+    &session->allocator, &session->mouse_encoder
   ) != GHOSTTY_SUCCESS) return false;
   if (ghostty_mouse_event_new(
-    &terminal_allocator, &session->mouse_event
+    &session->allocator, &session->mouse_event
   ) != GHOSTTY_SUCCESS) return false;
   if (ghostty_selection_gesture_new(
-    &terminal_allocator, &session->selection_gesture
+    &session->allocator, &session->selection_gesture
   ) != GHOSTTY_SUCCESS) return false;
   if (ghostty_selection_gesture_event_new(
-    &terminal_allocator, &session->selection_press,
+    &session->allocator, &session->selection_press,
     GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_PRESS
   ) != GHOSTTY_SUCCESS) return false;
   if (ghostty_selection_gesture_event_new(
-    &terminal_allocator, &session->selection_drag,
+    &session->allocator, &session->selection_drag,
     GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_DRAG
   ) != GHOSTTY_SUCCESS) return false;
   if (ghostty_selection_gesture_event_new(
-    &terminal_allocator, &session->selection_release,
+    &session->allocator, &session->selection_release,
     GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_RELEASE
   ) != GHOSTTY_SUCCESS) return false;
 
@@ -1476,10 +1517,13 @@ static int f_terminal_new(lua_State *L) {
   lua_pop(L, 1);
   TerminalSession *session = (TerminalSession *)lua_newuserdata(L, sizeof(*session));
   memset(session, 0, sizeof(*session));
+  session->allocator = anvil_terminal_allocator(&session->memory);
+  session->memory_id = InterlockedIncrement64(&memory_session_sequence);
   session->state = TERMINAL_STATE_NEW;
   session->state_revision = 1;
   session->busy = session->reported_busy = -1;
   luaL_setmetatable(L, API_TYPE_TERMINAL_SESSION);
+  register_memory_session(L);
   session->has_scrollback_lines = has_scrollback_max_lines;
   session->scrollback_lines = scrollback_max_lines;
   session->colors = malloc(sizeof(colors));
@@ -1859,13 +1903,13 @@ static bool service_replay(TerminalSession *session, bool *changed) {
     GhosttyRenderState render = NULL;
     GhosttySelectionGesture gesture = NULL;
     size_t continuation = ANVIL_TERMINAL_CONTINUATION_LIMIT;
-    if (ghostty_snapshot_decoder_new_buf(&terminal_allocator, &session->decoder,
+    if (ghostty_snapshot_decoder_new_buf(&session->allocator, &session->decoder,
         session->replay, session->replay_length) != GHOSTTY_SUCCESS ||
         ghostty_snapshot_decoder_set(session->decoder, GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_CONTINUATION_BYTES,
           &continuation) != GHOSTTY_SUCCESS ||
         ghostty_snapshot_decoder_ready(session->decoder, &restored) != GHOSTTY_SUCCESS ||
-        ghostty_render_state_new(&terminal_allocator, &render) != GHOSTTY_SUCCESS ||
-        ghostty_selection_gesture_new(&terminal_allocator, &gesture) != GHOSTTY_SUCCESS) {
+        ghostty_render_state_new(&session->allocator, &render) != GHOSTTY_SUCCESS ||
+        ghostty_selection_gesture_new(&session->allocator, &gesture) != GHOSTTY_SUCCESS) {
       clear_replay(session);
       if (gesture) ghostty_selection_gesture_free(gesture, restored);
       if (render) ghostty_render_state_free(render);
@@ -2165,15 +2209,34 @@ static int f_terminal_paste(lua_State *L) {
   return ok ? 1 : 2;
 }
 
-static int f_terminal_stats(lua_State *L) {
-  TerminalSession *session = check_session(L, 1);
+static void push_terminal_stats(lua_State *L, TerminalSession *session) {
   uint64_t read_queue_high_water = 0;
+  size_t read_queue_bytes = 0, write_queue_bytes = 0;
   if (session->read_lock_initialized) {
     EnterCriticalSection(&session->read_lock);
     read_queue_high_water = session->read_queue_high_water;
+    read_queue_bytes = session->read_queue_count;
     LeaveCriticalSection(&session->read_lock);
   } else read_queue_high_water = session->read_queue_high_water;
-  lua_createtable(L, 0, 9);
+  if (session->write_lock_initialized) {
+    EnterCriticalSection(&session->write_lock);
+    write_queue_bytes = session->write_queue_count;
+    LeaveCriticalSection(&session->write_lock);
+  }
+  lua_createtable(L, 0, 30);
+  set_integer_field(L, "memory_id", session->memory_id);
+  set_integer_field(L, "model_bytes", session->memory.bytes);
+  set_integer_field(L, "model_peak_bytes", session->memory.peak_bytes);
+  set_integer_field(L, "model_objects", session->memory.objects);
+  set_integer_field(L, "read_queue_capacity", session->read_queue ? TERMINAL_READ_QUEUE_CAPACITY : 0);
+  set_integer_field(L, "write_queue_capacity", session->write_queue ? TERMINAL_WRITE_QUEUE_CAPACITY : 0);
+  set_integer_field(L, "read_queue_bytes", read_queue_bytes);
+  set_integer_field(L, "write_queue_bytes", write_queue_bytes);
+  set_integer_field(L, "replay_capacity", InterlockedCompareExchange64(&session->replay_allocated, 0, 0));
+  set_integer_field(L, "snapshot_text_capacity", session->snapshot_text_capacity);
+  lua_pushboolean(L, session->prepared); lua_setfield(L, -2, "prepared");
+  lua_pushboolean(L, session->remote); lua_setfield(L, -2, "remote");
+  lua_pushstring(L, terminal_state_name(session->state)); lua_setfield(L, -2, "state");
   set_integer_field(L, "output_bytes_read", (lua_Integer)InterlockedCompareExchange64(
     &session->output_bytes_read, 0, 0));
   set_integer_field(L, "output_bytes_parsed", (lua_Integer)session->output_bytes_parsed);
@@ -2188,6 +2251,30 @@ static int f_terminal_stats(lua_State *L) {
   set_integer_field(L, "replay_bytes", InterlockedCompareExchange64((LONG64 *)&session->replay_bytes, 0, 0));
   lua_pushstring(L, session->id); lua_setfield(L, -2, "session_id");
   set_integer_field(L, "attach_count", session->attach_count);
+}
+
+static int f_terminal_stats(lua_State *L) {
+  push_terminal_stats(L, check_session(L, 1));
+  return 1;
+}
+
+static int f_memory_stats(lua_State *L) {
+  lua_newtable(L);
+  int result = lua_gettop(L), count = 0;
+  lua_pushlightuserdata(L, &memory_sessions_key);
+  lua_rawget(L, LUA_REGISTRYINDEX);
+  if (lua_istable(L, -1)) {
+    lua_pushnil(L);
+    while (lua_next(L, -2)) {
+      TerminalSession *session = lua_touserdata(L, -2);
+      lua_pop(L, 1);
+      if (!session->closed) {
+        push_terminal_stats(L, session);
+        lua_rawseti(L, result, ++count);
+      }
+    }
+  }
+  lua_pop(L, 1);
   return 1;
 }
 
@@ -2795,15 +2882,15 @@ static int f_terminal_selected_text(lua_State *L) {
   bool unwrap = true;
   uint8_t *buffer = NULL;
   size_t length = 0;
-  bool ok = ghostty_formatter_terminal_new(&terminal_allocator, &formatter,
+  bool ok = ghostty_formatter_terminal_new(&session->allocator, &formatter,
       session->terminal) == GHOSTTY_SUCCESS &&
     ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_SELECTION, &selection) == GHOSTTY_SUCCESS &&
     ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_UNWRAP, &unwrap) == GHOSTTY_SUCCESS &&
-    ghostty_formatter_format_alloc(formatter, &terminal_allocator, &buffer, &length) == GHOSTTY_SUCCESS;
+    ghostty_formatter_format_alloc(formatter, &session->allocator, &buffer, &length) == GHOSTTY_SUCCESS;
   ghostty_formatter_free(formatter);
   if (ok) lua_pushlstring(L, buffer ? (const char *)buffer : "", length);
   else lua_pushnil(L);
-  ghostty_free(&terminal_allocator, buffer, length);
+  ghostty_free(&session->allocator, buffer, length);
   return 1;
 }
 
@@ -4018,6 +4105,8 @@ static bool ensure_snapshot_text(TerminalSession *session, uint16_t cols) {
     ? (uint8_t *)HeapReAlloc(GetProcessHeap(), 0, session->snapshot_text, capacity)
     : (uint8_t *)HeapAlloc(GetProcessHeap(), 0, capacity);
   if (!text) return false;
+  anvil_memory_account(ANVIL_MEMORY_TERMINAL_SNAPSHOTS,
+    (int64_t)capacity - (int64_t)session->snapshot_text_capacity, session->snapshot_text ? 0 : 1);
   session->snapshot_text = text;
   session->snapshot_text_capacity = capacity;
   return true;
@@ -4077,7 +4166,7 @@ static void push_terminal_images(lua_State *L, TerminalSession *session) {
   GhosttyKittyGraphicsPlacementIterator iterator = NULL;
   if (ghostty_terminal_get(session->terminal, GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS,
         &graphics) != GHOSTTY_SUCCESS ||
-      ghostty_kitty_graphics_placement_iterator_new(&terminal_allocator, &iterator) != GHOSTTY_SUCCESS)
+      ghostty_kitty_graphics_placement_iterator_new(&session->allocator, &iterator) != GHOSTTY_SUCCESS)
     goto done;
   if (ghostty_kitty_graphics_get(graphics, GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR,
         &iterator) != GHOSTTY_SUCCESS) goto done;
@@ -4431,6 +4520,7 @@ static int f_read_session_record(lua_State *L) {
 
 static const luaL_Reg terminal_module[] = {
   { "new", f_terminal_new },
+  { "memory_stats", f_memory_stats },
   { "finish_close_commands", f_finish_close_commands },
   { "read_session_record", f_read_session_record },
   { "_break_transport_for_tests", f_break_transport_for_tests },

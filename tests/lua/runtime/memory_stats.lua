@@ -1,5 +1,6 @@
 local test = require "core.test"
 local canvas = require "canvas"
+local heap_census = require "core.heap_census"
 
 test.describe("Memory diagnostics", function()
   test.it("reports process memory and the calling Lua heap", function()
@@ -25,8 +26,10 @@ test.describe("Memory diagnostics", function()
     test.equal(live.bytes - before.bytes, 32768 + 32768 + 8192 + 2048)
     test.equal(live.objects - before.objects, 4)
     for i = 1, #images do images[i] = nil end
-    collectgarbage("forcecollect")
-    local after = system.memory_stats().categories.render_surfaces
+    local capture = heap_census.run()
+    test.equal(capture.memory_before.categories.render_surfaces.bytes, live.bytes)
+    test.equal(capture.memory_before.categories.render_surfaces.objects, live.objects)
+    local after = capture.memory_after_collection.categories.render_surfaces
     test.equal(after.bytes, before.bytes)
     test.equal(after.objects, before.objects)
     test.ok(after.peak_bytes >= live.bytes)

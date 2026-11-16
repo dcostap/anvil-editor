@@ -19,6 +19,18 @@ test.describe("Agent editor control", function()
     panes.reset_for_tests()
     core.root_panel, core.active_view, core.set_active_view = saved.root, saved.active, saved.focus
   end)
+  test.it("reports memory without taking focus, with collection only on request", function()
+    local source = panes.create { factory = function() return View() end }
+    local plain = control:call("memory_report", {}, "test-client")
+    test.equal(plain.pid, system.get_process_id())
+    test.equal(plain.collected, false)
+    test.ok(plain.report:find("private_commit_bytes", 1, true))
+    local collected = control:call("memory_report", {collect = true}, "test-client")
+    test.equal(collected.collected, true)
+    test.ok(collected.report:find("Lua heap census", 1, true))
+    test.equal(panes.active(), source)
+    test.equal(core.active_view, source.current_view)
+  end)
   test.it("creates a named split once without taking focus", function()
     local source = panes.create { factory = function() return View() end }
     local args = { action = "split", pane = source.id, direction = "right", request_id = "split-one" }

@@ -95,6 +95,22 @@ function RootPanel:draw()
   draw_hud()
 end
 
+local function save_report(prefix, name, text)
+  local path = perf.output_path(prefix .. system.get_process_id() .. "_" .. math.floor(system.get_time() * 1000) .. "_", ".txt")
+  hud.last_saved_path = nil
+  local job, err = require("core.worker_pool").system():submit {
+    kind = "buffer_write", priority = "background", payload = {path = path, text = text},
+    on_result = function(message)
+      if message.type ~= "final" then return end
+      hud.last_saved_path = path
+      system.set_clipboard(path)
+      core.log("%s saved and copied to clipboard: %s", name, path)
+    end,
+    on_error = function(message) core.error("Could not save %s: %s", name, message.error) end,
+  }
+  if not job then core.error("Could not save %s: %s", name, err) end
+end
+
 command.add(nil, {
   ["core:toggle_performance_hud"] = command.palette(function()
     hud.visible = not hud.visible
@@ -114,13 +130,11 @@ command.add(nil, {
   end),
   ["core:record_heap_census"] = command.palette(function()
     local heap_census = require "core.heap_census"
-    local text = heap_census.format(heap_census.run())
-    local path = perf.output_path("anvil_heap_", ".txt")
-    local file = assert(io.open(path, "wb"))
-    file:write(text)
-    file:close()
-    system.set_clipboard(path)
-    core.log("Heap census saved and copied to clipboard: %s", path)
+    save_report("anvil_heap_", "Heap census", heap_census.format(heap_census.run()))
+  end),
+  ["core:record_memory_report"] = command.palette(function()
+    local memory = require "core.memory_report"
+    save_report("anvil_memory_", "Memory report", memory.format(memory.capture(true)))
   end),
 })
 

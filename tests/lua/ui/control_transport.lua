@@ -148,6 +148,12 @@ test.describe("Anvil MCP", function()
       test.ok(success)
       test.equal(result.result.isError, false)
       test.ok(result.result.structuredContent.panes)
+      success, result = post("/mcp", {jsonrpc = "2.0", id = "memory", method = "tools/call",
+        params = {name = "memory_report", arguments = {}}}, headers)
+      test.ok(success)
+      test.equal(result.result.isError, false)
+      test.equal(result.result.structuredContent.pid, system.get_process_id())
+      test.equal(result.result.structuredContent.collected, false)
       success = post("/mcp", {jsonrpc = "2.0", id = 4, method = "tools/list"}, {})
       test.equal(success, false)
       headers.Origin = "https://example.com"

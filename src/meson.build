@@ -209,7 +209,7 @@ if host_machine.system() == 'windows'
         'terminal_contrast.c',
     ]
     terminal_replay_test = executable('terminal_replay_test',
-        '../tests/native/terminal_replay_test.c', 'terminal_model.c', 'terminal_snapshot.c', 'zig_abi_compat.c',
+        '../tests/native/terminal_replay_test.c', 'terminal_model.c', 'terminal_snapshot.c', 'zig_abi_compat.c', 'memory_stats.c',
         dependencies: [ghostty_vt_dep, sdl_dep, sdl_image],
     )
     if embedded_runtime
