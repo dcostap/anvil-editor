@@ -303,7 +303,7 @@ function SidebarView:context_menu(row)
       local times = {}
       for _, hours in ipairs(SNOOZE_HOURS) do
         local label = hours < 1 and hours * 60 .. " Minutes" or hours == 1 and "1 Hour"
-          or hours >= 48 and hours / 24 .. " Days" or hours .. " Hours"
+          or hours == 24 and "1 Day" or hours >= 48 and hours / 24 .. " Days" or hours .. " Hours"
         times[#times + 1] = {label = label, command = "sidebar:snooze",
           args = {self, target, hours}}
       end
