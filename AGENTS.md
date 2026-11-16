@@ -235,6 +235,7 @@ Show only one logo: the detected model provider or Pi as the fallback. Logos hav
 Run `ui/terminal_agent_resume.lua` after model-report changes. It checks startup and model changes on Node and Bun.
 
 A Terminal without that icon shows the Terminal View's icon. Terminal Tabs have no status dot.
+A Sidebar Tab's name that does not fit wraps onto a second line, which ends with an ellipsis when the name is still too long. The icon, the attention dot and the note stay on the first line. The row grows by one line.
 The Project Sidebar marks only an Unread Result or an agent that waits for an answer.
 The mark is a dot, a bold name, and a coloured stripe that fades out to the right.
 It saves when the user last looked at each Terminal Session. Run `ui/sidebar_view.lua` after changes.

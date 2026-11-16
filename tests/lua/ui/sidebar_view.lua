@@ -1038,6 +1038,42 @@ test.describe("Sidebar agent status", function()
     end
   end)
 
+  test.it("wraps a long Tab name onto a second line and shortens it there", function()
+    local medium = "\u{03C0} - Pending software tasks report for Dario"
+    local long = "\u{03C0} - Viabilidad de la eliminaci\u{00F3}n de R imputada en el informe mensual de todas las sucursales"
+    local function session(id, title)
+      return {id=id,title=title,cwd="C:/P",state="running",busy=0,activity=now,agent_state="done",agent_since=now}
+    end
+    local view = SidebarView(function() end)
+    view:set_size(300, 800)
+    view:set_model({{row_id=1,id=1,path="C:/P",state="ready",window_id=1,exists=true,activity=now,terminals={
+      session("a", medium), session("b", long), session("c", "short")},
+      panes={active=1,visible=1,{id="pane-1",group=1,name="init.lua"}}},
+      windows={{id=1,selected_project=1}}}, 1)
+    local heights = {}
+    for _, row in ipairs(view.rows) do
+      if row.kind == "terminal" then heights[row.terminal.id] = row.h end
+    end
+    test.ok(heights.a > heights.c, "A wrapped name does not make its row taller")
+    test.equal(heights.b, heights.a, "A name grows past two lines")
+    local texts = drawn(view, 300, 800)
+    local function lines_after(prefix)
+      for index, item in ipairs(texts) do
+        if item.text:sub(1, #prefix) == prefix then return item, texts[index + 1], texts[index + 2] end
+      end
+      error("no text " .. prefix .. " in " .. joined(texts))
+    end
+    local first, second, status = lines_after("\u{03C0} - Pending")
+    test.equal(first.text .. " " .. second.text, medium)
+    test.equal(second.x, first.x, "The second line does not start below the first")
+    test.ok(second.y > first.y and status.y > second.y, "The lines do not stack: " .. joined(texts))
+    test.equal(status.text, "Done")
+    first, second, status = lines_after("\u{03C0} - Viabilidad")
+    test.ok(second.text:find("\u{2026}$"), "The second line is not shortened: " .. second.text)
+    test.equal(status.text, "Done", "The name draws more than two lines")
+    test.ok(first.right <= 300 and second.right <= 300, "The name runs past the Sidebar's edge")
+  end)
+
   test.it("keeps the agent's run timer counting when its current step changes", function()
     local view = SidebarView(function() end)
     local clock = now

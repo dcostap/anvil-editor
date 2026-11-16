@@ -133,6 +133,8 @@ function SidebarView:metrics()
     terminal = h + 9 * SCALE,
     -- An agent's Tab adds a line for what the agent does.
     agent = 2 * h + 11 * SCALE,
+    -- A Tab's long name wraps onto a second line of this height.
+    line = h,
     indent = 14 * SCALE,
     radius = 6 * SCALE,
     badge = badge,
@@ -832,10 +834,14 @@ function SidebarView:rebuild_rows()
     end
     return row
   end
+  local function tab_height(row)
+    row.lines = #self:name_lines(row, self.width, now)
+    return (row.agent and m.agent or m.terminal) + (row.lines - 1) * m.line
+  end
   local function add_tab(row, agent)
     mark(row, agent)
     if only_attention and not row.attention then return end
-    add(row, agent and m.agent or m.terminal)
+    add(row, tab_height(row))
   end
   local function add_terminal(project, terminal, depth)
     local item = tab.describe_session(terminal)
@@ -945,7 +951,7 @@ function SidebarView:rebuild_rows()
       for _, row in ipairs(snoozed) do fold.attention = fold.attention or needs_user(row.attention, row.agent) end
       if not only_attention or fold.attention then add(fold, m.terminal) end
       if not only_attention and (searching or not fold.collapsed) then
-        for _, row in ipairs(snoozed) do add(row, row.agent and m.agent or m.terminal) end
+        for _, row in ipairs(snoozed) do add(row, tab_height(row)) end
       end
     end
   end
@@ -1409,9 +1415,8 @@ function SidebarView:get_tooltip()
         age == "now" and "just now" or age .. " ago")
     end
   end
-  local name = tab.display_name(item)
-  local available = tab.name_width(item, width, self:metrics().terminal, {number_gutter = self:metrics().number_gutter})
-  if name ~= item.name or tab.fit(style.font, name, available) ~= name then return item.name end
+  local _, cut = self:name_lines(row, self.width, os.time())
+  if cut or tab.display_name(item) ~= item.name then return item.name end
 end
 
 -- Returns true when the hover or a dragged scrollbar changed and the view needs a redraw.
@@ -2303,6 +2308,28 @@ local function font_variant(name)
   return fonts[name]
 end
 
+-- A Tab's name wraps onto at most this many lines.
+local NAME_LINES = 2
+
+-- The parts of a Tab's first line: its Snooze's note at the right edge, the width that the note and the attention dot
+-- leave for the Tab's content, and the name's font.
+function SidebarView:tab_line(row, width, now)
+  local note = row.snooze and snooze_text(row.snooze, now) or row.woke and woke_text(row.woke, now)
+  if note then width = width - snooze_note_width(note) - 6 * SCALE end
+  if not row.attention then return note, width, style.font end
+  return note, width - ATTENTION_DOT * SCALE * 2 - 6 * SCALE, font_variant("bold")
+end
+
+-- The lines of a Tab's name in a Sidebar `width` wide, and true when the last line cuts the name.
+function SidebarView:name_lines(row, width, now)
+  local m = self:metrics()
+  local _, tab_width = self:tab_bounds(row, width)
+  local note, content_width, font = self:tab_line(row, tab_width, now)
+  local available = tab.name_width(row.tab, content_width, m.terminal,
+    {note = not note, now = now, number_gutter = m.number_gutter})
+  return tab.wrap(font, tab.display_name(row.tab), available, NAME_LINES)
+end
+
 -- What a row shows that needs the user: the attention kind, and how many Terminals it stands for. A Terminal's mark
 -- counts one. A Dormant Project's or collapsed age group's pill counts its Terminals, which show no rows. A collapsed
 -- loaded Project still shows its Terminals that need the user, so its pill does not count. Nil when the row needs
@@ -2609,32 +2636,30 @@ local function draw_snooze(label, right, cy)
   text(label, right - label_w, math.floor(cy - font:get_height() / 2), style.dim)
   local size = math.floor(font:get_height() * 0.6 + 0.5)
   clock(right - label_w - 4 * SCALE - size, cy, style.dim)
-  return snooze_note_width(label)
 end
 
 -- A Tab's or Terminal Session's content in [x, x + width): its icon, name and status, and an agent's step below.
+-- A long name wraps onto a second line, which pushes the agent's step down.
 function SidebarView:draw_tab(row, x, y, width, now)
   local m = self:metrics()
   -- A working Terminal shimmers its agent's line, or its name when it has no such line.
   local shimmer = tab.working(row.tab.terminal or {}, row.agent) and self:shimmer_phase() or nil
   -- A Terminal that needs the user has a dot at the right edge of its name's line and a bold name.
-  local name_font, right = nil, x + width
-  local note = row.snooze and snooze_text(row.snooze, now) or row.woke and woke_text(row.woke, now)
-  if note then
-    width = width - draw_snooze(note, x + width, y + m.terminal / 2) - 6 * SCALE
-  end
+  local right = x + width
+  local note, content_width, name_font = self:tab_line(row, width, now)
+  if note then draw_snooze(note, right, y + m.terminal / 2) end
   if row.attention then
     local radius = ATTENTION_DOT * SCALE
-    dot(x + width - radius, y + m.terminal / 2, radius, tab.attention_color(row.attention))
-    width = width - radius * 2 - 6 * SCALE
-    name_font = font_variant("bold")
+    dot(x + content_width + 6 * SCALE + radius, y + m.terminal / 2, radius, tab.attention_color(row.attention))
   end
   -- A Snooze's note replaces the Terminal's age.
-  local spinning, name_x = tab.draw(row.tab, x, y, width, m.terminal, {name_color = style.text, now = now,
-    clock = self.clock, name_font = name_font, note = not note, dir = true, number_font = font_variant("number"), number_gutter = m.number_gutter, shimmer = not row.agent and shimmer or nil})
+  local spinning, name_x = tab.draw(row.tab, x, y, content_width, m.terminal, {name_color = style.text, now = now,
+    clock = self.clock, name_font = name_font, note = not note, dir = true, number_font = font_variant("number"), number_gutter = m.number_gutter, shimmer = not row.agent and shimmer or nil,
+    lines = row.lines})
   if spinning then self.spinning = true end
   local unread = row.attention == "done" or row.attention == "error"
-  if row.agent and tab.draw_agent(row.agent, name_x, y + m.terminal - 6 * SCALE, right - name_x,
+  local step_y = y + m.terminal - 6 * SCALE + ((row.lines or 1) - 1) * m.line
+  if row.agent and tab.draw_agent(row.agent, name_x, step_y, right - name_x,
       m.terminal, {now = now, unread = unread, shimmer = shimmer}) then
     self.ticking = true
   end

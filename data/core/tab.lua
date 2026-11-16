@@ -197,6 +197,21 @@ function tab.fit(font, text, width)
   return text:sub(1, ends[low] or 0) .. ELLIPSIS
 end
 
+-- Splits text into at most `max_lines` lines of `width`. A line breaks after a word, or between letters when a word
+-- does not fit. The last line shortens with an ellipsis. Returns the lines, and true when the ellipsis cut the text.
+function tab.wrap(font, text, width, max_lines)
+  local lines = {}
+  if max_lines > 1 and font:get_width(text) > width + 0.5 then
+    local starts = font:text_layout(text):wrap(width, "word")
+    for index = 1, math.min(max_lines - 1, #starts - 1) do
+      lines[index] = (text:sub(starts[index] + 1, starts[index + 1]):gsub("%s+$", ""))
+    end
+    text = text:sub(starts[#lines + 1] + 1)
+  end
+  lines[#lines + 1] = tab.fit(font, text, width)
+  return lines, lines[#lines] ~= text
+end
+
 -- Shortens a folder path from its start, one folder at a time, until it fits in `width`. Nil when no folder fits.
 local function fit_dir(font, dir, width)
   if font:get_width(dir) <= width + 0.5 then return dir end
@@ -335,8 +350,9 @@ end
 -- Returns true when it drew a spinner frame, so the caller can draw the next one, and the name's left edge.
 -- `shimmer` is the phase of a shimmer through the name, from 0 to 1. `number_gutter` is the right edge of a gutter
 -- left of the Tab. The number draws there, so Tabs with and without a number align. `dir` draws the file's folder
--- dim before its name, in the space that the name leaves.
----@param opts {name_color: renderer.color, number_font: renderer.font?, number_gutter: number?, name_font: renderer.font?, now: number?, clock: number?, shimmer: number?, note: boolean?, dir: boolean?}
+-- dim before its name, in the space that the name leaves. `lines` lets a long name wrap onto up to that many lines
+-- below the first. Only the name wraps; the icon and the note stay on the first line, which is `h` tall.
+---@param opts {name_color: renderer.color, number_font: renderer.font?, number_gutter: number?, name_font: renderer.font?, now: number?, clock: number?, shimmer: number?, note: boolean?, dir: boolean?, lines: integer?}
 function tab.draw(item, x, y, w, h, opts)
   local number_font, name_font = opts.number_font or style.font, opts.name_font or style.font
   local right = x + w
@@ -358,18 +374,25 @@ function tab.draw(item, x, y, w, h, opts)
   local name, spinning = tab.display_name(item), false
   local spun = item.terminal and item.terminal.state == "running" and tab.spinner_title(name, opts.clock or 0)
   if spun then name, spinning = spun, true end
-  name = tab.fit(name_font, name, name_width)
+  local wrapped = (opts.lines or 1) > 1 and name_font:get_width(name) > name_width + 0.5
+    and tab.wrap(name_font, name, name_width, opts.lines)
+  if not wrapped then name = tab.fit(name_font, name, name_width) end
   local name_y = middle(name_font)
-  local dir = opts.dir and item.dir and fit_dir(name_font, item.dir, name_width - name_font:get_width(name))
+  local dir = not wrapped and opts.dir and item.dir
+    and fit_dir(name_font, item.dir, name_width - name_font:get_width(name))
   if dir then x = renderer.draw_text(name_font, dir, x, name_y, style.dim) end
-  if opts.shimmer then
-    tab.draw_shimmer(name_font, name, x, name_y, color, style.accent, opts.shimmer)
-  else
-    renderer.draw_text(name_font, name, x, name_y, color)
-  end
-  if item.missing and name ~= "" then
-    renderer.draw_rect(x, name_y + math.floor(name_font:get_height() / 2), name_font:get_width(name),
-      math.max(1, SCALE), color)
+  for index = 1, wrapped and #wrapped or 1 do
+    local line = wrapped and wrapped[index] or name
+    local line_y = name_y + (index - 1) * name_font:get_height()
+    if opts.shimmer then
+      tab.draw_shimmer(name_font, line, x, line_y, color, style.accent, opts.shimmer)
+    else
+      renderer.draw_text(name_font, line, x, line_y, color)
+    end
+    if item.missing and line ~= "" then
+      renderer.draw_rect(x, line_y + math.floor(name_font:get_height() / 2), name_font:get_width(line),
+        math.max(1, SCALE), color)
+    end
   end
   if note then renderer.draw_text(style.font, note, right - style.font:get_width(note), middle(style.font), style.dim) end
   return spinning, x
