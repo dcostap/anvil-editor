@@ -38,6 +38,8 @@ Do not add working sets across processes as a measure of unique physical RAM. Sh
 
 Each `Memory native` row has current `bytes`, lifetime `peak_bytes`, and current `objects`. Peak bytes do not reset when objects close. These are process-wide counters, including worker allocations. Concurrent allocation can change a counter between fields or rows.
 
+Do not add category peaks. They can occur at different times.
+
 | Category | Coverage | Objects |
 | --- | --- | --- |
 | `treesitter` | Allocations through Tree-sitter's allocator: parser buffers, syntax trees, queries, cursors and returned range arrays. | Live allocator blocks. |

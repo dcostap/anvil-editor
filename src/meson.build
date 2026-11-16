@@ -618,7 +618,7 @@ markdown_extensions_test = executable('markdown_extensions_test',
         'treesitter/snapshot.c',
     ],
     include_directories: anvil_includes,
-    dependencies: [tree_sitter_dep],
+    dependencies: [tree_sitter_dep, sdl_dep],
     c_args: anvil_cargs,
 )
 test('markdown_extensions', markdown_extensions_test, env: anvil_test_env)
