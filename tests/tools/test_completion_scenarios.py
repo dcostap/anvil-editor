@@ -42,5 +42,27 @@ class CompletionScenarioTests(unittest.TestCase):
                                 for finding in verdict["findings"]))
 
 
+class ScenarioScoringTests(unittest.TestCase):
+    def run_with_stall(self, frame=2, action=2):
+        return {"metrics": {"work_ms_p95": 2, "work_ms_max": frame}, "actions": {
+            "navigate": {"latency_ms_p50": 2, "latency_ms_p95": 2,
+                         "latency_ms_max": action, "redraws_p50": 1}}}
+
+    def test_one_slow_frame_cannot_disappear_between_fast_runs(self):
+        result = scenarios.score(scenarios.SCENARIOS["markdown-gallery-caret"], [
+            self.run_with_stall(), self.run_with_stall(frame=36), self.run_with_stall()])
+        self.assertEqual(result["frame"]["work_ms_p95"], 2)
+        self.assertTrue(any(item["metric"] == "frame work_ms max" and item["value"] == 36
+                            for item in result["findings"]))
+
+    def test_one_slow_response_cannot_hide_below_the_action_percentile(self):
+        result = scenarios.score(scenarios.SCENARIOS["autocomplete-navigation-latency"], [
+            self.run_with_stall(), self.run_with_stall(action=120), self.run_with_stall()])
+        self.assertIsNone(result["frame"], "response mode must still exclude presentation waits")
+        self.assertEqual(result["actions"]["navigate"]["latency_ms_p95"], 2)
+        self.assertTrue(any(item["metric"] == "navigate latency max" and item["value"] == 120
+                            for item in result["findings"]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -64,6 +64,29 @@ The burst sends twelve frame-driven commands with a minimum 20 ms interval. It d
 python tools/run_scenarios.py --suite preview --runs 1 --no-build
 ```
 
+## Markdown navigation
+
+`--suite navigation` measures one wrapped Markdown Pane. Each cycle runs Navigation History Back and Forward, Previous Paragraph and Next Paragraph, then 23 Down and 23 Up press/release pairs. It finds movement keys from the private app's keymap. It does not set user shortcuts or send OS input.
+
+| Scenario | Coverage |
+| --- | --- |
+| `markdown-navigation` | A generated 1,800-line note, with prose, Unicode, inline formatting, links, lists, quotes, tables and fenced code. This case also runs in `smoke`. |
+| `markdown-navigation-hosted` | The same actions in a hosted Project, with uncapped frame-work limits. |
+| `markdown-navigation-response` | The hosted case with normal pacing and no harness-supplied measurement redraws. It scores completed-action latency. |
+| `markdown-gallery-navigation` | The same actions in the complete 19,000-line gallery, to expose document-size costs. |
+
+Setup saves a distant Navigation Place without drawing it. Action names separate the first cycle from return visits. Each paragraph and history move checks its exact destination. Bursts check movement in the requested direction. Every action requires unchanged text, retained focus, completed wrapping, settled scrolling, and a fresh draw of the target line with its caret position inside the View. A previous draw cannot complete a later action. The scene's visibility query adds measurement overhead.
+
+```sh
+python tools/run_scenarios.py --suite navigation --runs 3 --diagnose
+meson test -C build-windows-x86_64 anvil:scenario-harness
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/perf_markdown_navigation.lua
+```
+
+The medium fixture has no images. Keep the render runner's `markdown-three-pane-caret-burst` case for shared-Buffer Panes and local images. The navigation suite measures Lua input routing and Project redraw completion. Hosted mode includes the Project's shell configuration, but not native input delivery, shell presentation completion or physical display scanout. The separate surface-latency probe covers delivery and presentation with a short text file, not this Markdown workload.
+
+Performance scenarios remain local hardware checks, not release CI tests. Meson runs their scoring regressions and the scene's behavior tests. A passing ordinary correctness suite does not prove that navigation meets its time limits.
+
 ## Heading Outline navigation
 
 `markdown-gallery-outline-sections` moves between adjacent and distant sections in the complete gallery. `markdown-gallery-outline-click` clicks visible headings in both directions. Both keep transitions enabled and require an outline longer than its visible area.
@@ -204,9 +227,7 @@ See [redraw ownership](REDRAW_SCHEDULING.md) for the background publication audi
 
 ## Scoring and attribution
 
-Each scoring run records frames without detail instrumentation. The verdict
-uses the median of each run's p95 frame work time (frame time minus sleep) and
-each action's p95 latency.
+Each scoring run records frames without detail instrumentation. The verdict uses the median of each run's p95 frame work time (frame time minus sleep) and each action's p95 latency. Maximum frame work and maximum action latency retain the worst sample from all runs. One slow run cannot disappear between fast runs. Both p95 and maximum action latency must meet the action's limit. A timing failure needs investigation; it is not proof of its cause.
 
 The gallery typing and newline scenes report two latencies:
 

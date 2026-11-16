@@ -64,6 +64,10 @@ MARKDOWN_GALLERY = NoteSpec("markdown-gallery", "tests/fixtures/markdown/gallery
 GALLERY_SETTINGS = {"note": MARKDOWN_GALLERY.note, "start_note": MARKDOWN_GALLERY.start_note}
 # A prose line in the middle copy of the gallery.
 GALLERY_MIDDLE_LINE = 8736
+# A medium note with 90 mixed Markdown sections. The scene writes it before measurement.
+MARKDOWN_NAVIGATION = FolderSpec("markdown-navigation", files=1)
+NAVIGATION_SETTINGS = {"mode": "navigation", "generate": True, "note": "navigation.md",
+                       "line": 605, "previous_line": 602, "far_line": 1405, "burst_count": 23}
 # A to-do vault: a task note and 8 linked project notes of 300 lines each.
 MARKDOWN_VAULT = VaultSpec("markdown-vault")
 # A 1440p monitor: 1.6 times the rows and about 3 times the area of the default window.
@@ -279,6 +283,23 @@ SCENARIOS: dict[str, Scenario] = {
         "markdown_gallery", MARKDOWN_GALLERY, actions=80, suites=("markdown",),
         settings=dict(GALLERY_SETTINGS, mode="caret", line=GALLERY_MIDDLE_LINE),
         action_budget_ms=200.0),
+    # A complete cycle visits distant history, moves by paragraph, then sends two key bursts.
+    # Keep the medium case in smoke; the larger gallery checks document-size costs separately.
+    "markdown-navigation": Scenario(
+        "markdown_navigation", MARKDOWN_NAVIGATION, actions=36, suites=("smoke", "markdown", "navigation"),
+        settings=NAVIGATION_SETTINGS, action_budget_ms=200.0, blocking_call_budget=0, writes=True),
+    "markdown-navigation-hosted": Scenario(
+        "markdown_navigation", MARKDOWN_NAVIGATION, actions=36, suites=("shell", "markdown", "navigation"),
+        settings=NAVIGATION_SETTINGS, launch="shell", action_budget_ms=200.0,
+        blocking_call_budget=0, writes=True),
+    "markdown-navigation-response": Scenario(
+        "markdown_navigation", MARKDOWN_NAVIGATION, actions=36, suites=("response", "markdown", "navigation"),
+        settings=dict(NAVIGATION_SETTINGS, cadence="normal"), launch="shell", action_budget_ms=200.0,
+        blocking_call_budget=0, writes=True),
+    "markdown-gallery-navigation": Scenario(
+        "markdown_navigation", MARKDOWN_GALLERY, actions=24, suites=("markdown", "navigation"),
+        settings=dict(GALLERY_SETTINGS, mode="navigation", line=8737, previous_line=8735,
+                      far_line=17, burst_count=23), action_budget_ms=200.0, blocking_call_budget=0),
     "markdown-gallery-type": Scenario(
         "markdown_gallery", MARKDOWN_GALLERY, actions=60, suites=("markdown",),
         settings=dict(GALLERY_SETTINGS, mode="type", line=GALLERY_MIDDLE_LINE)),
@@ -509,18 +530,18 @@ def run_heap(name: str, scenario: Scenario, args, exe: Path, work: Path, log) ->
 
 
 def score(scenario: Scenario, runs: list[dict[str, Any]]) -> dict[str, Any]:
-    """Score with the median of each run's p95, so one noisy run cannot pass or fail alone."""
+    """Use median percentiles, but retain every run's worst frame and action."""
     def median(values: list[float]) -> float:
         return statistics.median(values) if values else 0.0
     # A paced frame can include a vsync wait. Score response latency, not renderer throughput, there.
     frame = None if scenario.self_driven or scenario.settings.get("cadence") == "normal" else {
-        key: median([run["metrics"].get(key, 0.0) for run in runs])
+        key: (max if key.endswith("_max") else median)([run["metrics"].get(key, 0.0) for run in runs])
         for key in ("work_ms_p50", "work_ms_p95", "work_ms_p99", "work_ms_max",
                     "lua_heap_kib_avg", "gc_ms_p95", "frames")}
     actions = {}
     for action in sorted({name for run in runs for name in run.get("actions", {})}):
         values = [run["actions"][action] for run in runs if action in run.get("actions", {})]
-        actions[action] = {key: median([value[key] for value in values])
+        actions[action] = {key: (max if key.endswith("_max") else median)([value[key] for value in values])
                            for key in ("latency_ms_p50", "latency_ms_p95", "latency_ms_max", "redraws_p50")}
         for key in ("visible_ms_p50", "visible_ms_p95"):
             samples = [value[key] for value in values if key in value]
@@ -536,9 +557,10 @@ def score(scenario: Scenario, runs: list[dict[str, Any]]) -> dict[str, Any]:
     for action, values in actions.items():
         budget = scenario.action_budgets.get(action, scenario.action_budget_ms)
         values["budget_ms"] = budget
-        if values["latency_ms_p95"] > budget:
-            findings.append({"metric": f"{action} latency p95", "value": values["latency_ms_p95"],
-                             "budget": budget})
+        for statistic in ("p95", "max"):
+            if values[f"latency_ms_{statistic}"] > budget:
+                findings.append({"metric": f"{action} latency {statistic}",
+                                 "value": values[f"latency_ms_{statistic}"], "budget": budget})
         samples = [run["actions"][action]["blocking_calls_max"] for run in runs
                    if "blocking_calls_max" in run.get("actions", {}).get(action, {})]
         if samples:

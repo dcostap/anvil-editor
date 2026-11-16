@@ -530,6 +530,15 @@ if not get_option('source-only')
         suite : 'anvil',
         timeout : 60,
     )
+    test('scenario-harness', render_perf_test_python,
+        args : ['-m', 'unittest', 'tests.tools.test_perf_diagnostics',
+                'tests.tools.test_completion_scenarios',
+                'tests.tools.test_response_latency.ResponseBudgetTests', '-v'],
+        workdir : anvil_source_root,
+        env : anvil_test_env,
+        suite : 'anvil',
+        timeout : 60,
+    )
     test('benchmark-memory', render_perf_test_python,
         args : [anvil_source_root / 'tests/tools/test_benchmark_memory.py', '-v'],
         env : anvil_test_env,
