@@ -5,6 +5,7 @@
 #include <luajit.h>
 #endif
 #include "terminal_host.h"
+#include "process_identity.h"
 #include "surface_protocol.h"
 #include <windows.h>
 #include <stdlib.h>
@@ -319,7 +320,7 @@ static void terminal_records(AnvilSidebarScan *job, lua_State *L) {
         SetLastError(ERROR_SUCCESS);
         if (waited == WAIT_OBJECT_0)
           terminal.state = ANVIL_SIDEBAR_TERMINAL_LOST;
-        else if (!anvil_terminal_host_identity(process, terminal.host_pid, created)) {
+        else if (!anvil_process_identity(process, terminal.host_pid, created)) {
           if (waited == WAIT_TIMEOUT && GetLastError() == ERROR_SUCCESS)
             terminal.state = ANVIL_SIDEBAR_TERMINAL_LOST;
           else

@@ -16,9 +16,6 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
 /* Deletes the record, screen and agent report of a session whose host has ended. */
 void anvil_terminal_host_discard(const char *userdir, const char *id);
 bool anvil_terminal_id_valid(const char *id);
-bool anvil_terminal_host_identity(HANDLE process, DWORD pid, const char *creation_time);
-/* NULL with ERROR_PROCESS_ABORTED proves the saved process ended. Other errors do not. */
-HANDLE anvil_terminal_host_open(DWORD pid, const char *creation_time, DWORD *error);
 /* Authentication and handshake. This may wait; recurring reconnects use a worker. */
 bool anvil_terminal_host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
                                  DWORD *shell_pid, const char *id, AnvilTerminalSize *size,

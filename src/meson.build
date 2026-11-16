@@ -203,6 +203,7 @@ if host_machine.system() == 'windows'
         'terminal_model.c',
         'terminal_snapshot.c',
         'terminal_host.c',
+        'process_identity.c',
         'terminal_recovery.c',
         'session_end.c',
         'shared_file.c',

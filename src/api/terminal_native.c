@@ -23,6 +23,7 @@
 #include "../terminal_model.h"
 #include "../memory_stats.h"
 #include "../terminal_host.h"
+#include "../process_identity.h"
 #include "../session_end.h"
 #include "../terminal_link.h"
 
@@ -1591,13 +1592,13 @@ static int f_terminal_new(lua_State *L) {
     char expected[128]; snprintf(expected, sizeof(expected), "\\\\.\\pipe\\anvil-terminal-%s", id);
     if (anvil_terminal_id_valid(id) && pid > 0 && (uint64_t)pid <= UINT32_MAX &&
         name && strcmp(name, expected) == 0) {
-      session->process = anvil_terminal_host_open((DWORD)pid, created, &error);
+      session->process = anvil_process_open((DWORD)pid, created, &error);
       if (session->process) {
         /* Keep the verified handle while requesting optional termination rights. */
         HANDLE full = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
           FALSE, (DWORD)pid);
         if (full) {
-          if (anvil_terminal_host_identity(full, (DWORD)pid, created)) {
+          if (anvil_process_identity(full, (DWORD)pid, created)) {
             close_handle(&session->process); session->process = full;
           } else CloseHandle(full);
         }

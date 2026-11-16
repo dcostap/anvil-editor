@@ -5,6 +5,7 @@
    Lua never waits for a link: its threads connect, read and write. */
 #include "../terminal_link.h"
 #include "../terminal_host.h"
+#include "../process_identity.h"
 #include "../ipc_pipe.h"
 #include <lauxlib.h>
 #include <stdlib.h>
@@ -349,7 +350,7 @@ static int f_link_connect(lua_State *L) {
   if (!anvil_terminal_id_valid(id)) luaL_argerror(L, 1, "invalid Terminal Session ID");
   AnvilTerminalLink *link = options_link(L);
   HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-  if (!anvil_terminal_host_identity(process, pid, created)) {
+  if (!anvil_process_identity(process, pid, created)) {
     if (process) CloseHandle(process);
     anvil_terminal_link_release(link);
     lua_pushnil(L);
@@ -511,7 +512,7 @@ static int f_link_host_alive(lua_State *L) {
   const char *created = luaL_checkstring(L, 2);
   HANDLE process = pid > 0 && pid <= UINT32_MAX
     ? OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid) : NULL;
-  lua_pushboolean(L, anvil_terminal_host_identity(process, (DWORD)pid, created));
+  lua_pushboolean(L, anvil_process_identity(process, (DWORD)pid, created));
   if (process) CloseHandle(process);
   return 1;
 }

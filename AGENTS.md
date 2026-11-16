@@ -832,7 +832,7 @@ The connection logs with the tag `AnvilMachine`. Read them with `adb logcat -s A
 
 ## Agent control
 
-`core.control` owns editor operations. `core.control_server` exposes them through authenticated loopback MCP. `core.control_runtime` publishes private discovery files and follows Terminal ownership. Cross-Project discovery runs in a worker. Do not move editor behavior into the transport or Pi extension.
+`core.control` owns editor operations. `core.control_server` exposes them through authenticated loopback MCP. `core.control_runtime` publishes private discovery files and follows Terminal ownership. Cross-Project discovery runs in a worker. It uses a Project's discovery file only while its process runs with the file's `pid` and `created` time (`system.process_state`). It deletes the files of ended processes, which a crash or a Windows shutdown leaves. `src/process_identity.c` owns that check for Terminal hosts too. Do not move editor behavior into the transport or Pi extension.
 
 Interactive Pi gets `data/tools/agent-sessions/pi-control.cjs` through the existing preload. It registers Anvil's MCP server and handles attributed messages, steering, interruption, and settled results. Pi remains a TUI. Pi launches require explicit provider, model, and thinking choices.
 

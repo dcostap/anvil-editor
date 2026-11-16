@@ -8,6 +8,7 @@
 #include "terminal_snapshot.h"
 #include "session_end.h"
 #include "terminal_recovery.h"
+#include "process_identity.h"
 #include <tlhelp32.h>
 #include <winternl.h>
 #include <stdio.h>
@@ -157,14 +158,6 @@ static void host_log(TerminalHost *host, const char *format, ...) {
   fclose(file);
 }
 
-static bool creation_time(HANDLE process, char out[17]) {
-  FILETIME created, exited, kernel, user;
-  if (!GetProcessTimes(process, &created, &exited, &kernel, &user)) return false;
-  uint64_t value = ((uint64_t)created.dwHighDateTime << 32) | created.dwLowDateTime;
-  snprintf(out, 17, "%016llx", (unsigned long long)value);
-  return true;
-}
-
 static bool random_bytes(uint8_t *bytes, ULONG count) {
   typedef BOOLEAN (WINAPI *RandomFunction)(void *, ULONG);
   HMODULE library = LoadLibraryW(L"advapi32.dll");
@@ -179,74 +172,6 @@ bool anvil_terminal_id_valid(const char *id) {
   for (size_t i = 0; i < ANVIL_TERMINAL_ID_LENGTH; i++)
     if (!((id[i] >= '0' && id[i] <= '9') || (id[i] >= 'a' && id[i] <= 'f'))) return false;
   return true;
-}
-
-bool anvil_terminal_host_identity(HANDLE process, DWORD pid, const char *time) {
-  char actual[17];
-  return process && time && GetProcessId(process) == pid &&
-    WaitForSingleObject(process, 0) == WAIT_TIMEOUT && creation_time(process, actual) &&
-    strcmp(actual, time) == 0;
-}
-
-/* A protected process can reuse the PID of an old host. The system list gives its creation time
-   without granting a process handle. A failed or incomplete query proves nothing. */
-static DWORD inaccessible_host_state(DWORD pid, const char *time) {
-  typedef NTSTATUS (NTAPI *QueryProcesses)(SYSTEM_INFORMATION_CLASS, void *, ULONG, ULONG *);
-  HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-  QueryProcesses query = ntdll ? (QueryProcesses)GetProcAddress(ntdll, "NtQuerySystemInformation") : NULL;
-  if (!query) return ERROR_ACCESS_DENIED;
-  ULONG capacity = 65536;
-  for (unsigned attempt = 0; attempt < 4 && capacity <= 16 * 1024 * 1024; attempt++) {
-    uint8_t *bytes = malloc(capacity);
-    if (!bytes) return ERROR_NOT_ENOUGH_MEMORY;
-    ULONG length = 0;
-    NTSTATUS status = query(SystemProcessInformation, bytes, capacity, &length);
-    if ((ULONG)status == 0xc0000004u) { /* STATUS_INFO_LENGTH_MISMATCH */
-      free(bytes);
-      capacity = length > capacity ? length : capacity * 2;
-      continue;
-    }
-    DWORD result = ERROR_ACCESS_DENIED;
-    if (status >= 0 && length <= capacity) {
-      size_t offset = 0;
-      while (offset <= length && length - offset >= sizeof(SYSTEM_PROCESS_INFORMATION)) {
-        SYSTEM_PROCESS_INFORMATION *entry = (SYSTEM_PROCESS_INFORMATION *)(bytes + offset);
-        if ((uintptr_t)entry->UniqueProcessId == pid) {
-          char actual[17];
-          snprintf(actual, sizeof(actual), "%016llx", (unsigned long long)entry->CreateTime.QuadPart);
-          result = strcmp(actual, time) ? ERROR_PROCESS_ABORTED : ERROR_ACCESS_DENIED;
-          break;
-        }
-        if (!entry->NextEntryOffset) { result = ERROR_PROCESS_ABORTED; break; }
-        if (entry->NextEntryOffset < sizeof(*entry) || entry->NextEntryOffset > length - offset) break;
-        offset += entry->NextEntryOffset;
-      }
-    }
-    free(bytes);
-    return result;
-  }
-  return ERROR_ACCESS_DENIED;
-}
-
-HANDLE anvil_terminal_host_open(DWORD pid, const char *time, DWORD *error) {
-  *error = ERROR_INVALID_DATA;
-  if (!pid || !time || strlen(time) != 16 || strspn(time, "0123456789abcdef") != 16) return NULL;
-  HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-  if (!process) {
-    *error = GetLastError();
-    if (*error == ERROR_INVALID_PARAMETER) *error = ERROR_PROCESS_ABORTED;
-    else if (*error == ERROR_ACCESS_DENIED) *error = inaccessible_host_state(pid, time);
-    return NULL;
-  }
-  char actual[17];
-  DWORD waited = WaitForSingleObject(process, 0);
-  if (waited == WAIT_OBJECT_0) *error = ERROR_PROCESS_ABORTED;
-  else if (waited != WAIT_TIMEOUT || !creation_time(process, actual)) *error = GetLastError();
-  else if (strcmp(actual, time)) *error = ERROR_PROCESS_ABORTED;
-  else { *error = ERROR_SUCCESS; return process; }
-  if (*error == ERROR_SUCCESS) *error = ERROR_GEN_FAILURE;
-  CloseHandle(process);
-  return NULL;
 }
 
 /* Registry strings use Lua decimal escapes, including quotes and backslashes. */
@@ -279,7 +204,7 @@ static bool registry_host_live(TerminalHost *host) {
       sscanf(time_field, "host_creation_time = \"%llx", &expected) != 1) return true;
   char wanted[17]; snprintf(wanted, sizeof(wanted), "%016llx", expected);
   DWORD error;
-  HANDLE process = anvil_terminal_host_open(pid, wanted, &error);
+  HANDLE process = anvil_process_open(pid, wanted, &error);
   if (process) CloseHandle(process);
   return error != ERROR_PROCESS_ABORTED;
 }
@@ -308,7 +233,7 @@ static bool write_registry(TerminalHost *host) {
      Keep the last running identity until Windows cancels sign-out or ends this host. */
   if (host->prepared) return true;
   char temporary[32772], created[17];
-  if (!creation_time(GetCurrentProcess(), created)) { InterlockedExchange(&host->registry_failed, 1); return false; }
+  if (!anvil_process_creation_time(GetCurrentProcess(), created)) { InterlockedExchange(&host->registry_failed, 1); return false; }
   HANDLE mutex = registry_lock(host->id);
   if (!mutex) { InterlockedExchange(&host->registry_failed, 1); return false; }
   snprintf(temporary, sizeof(temporary), "%s.tmp", host->record_path);

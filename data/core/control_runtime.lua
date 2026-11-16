@@ -80,7 +80,8 @@ function M.start()
     discovery = directory .. "/" .. system.get_process_id() .. ".json"
     local project = core.root_project()
     local written, err = write_json(discovery, {version = 1, url = server.url, token = server.token,
-      project = project and project.path, executable = EXEFILE, pid = system.get_process_id()})
+      project = project and project.path, executable = EXEFILE, pid = system.get_process_id(),
+      created = system.get_process_creation_time()})
     if not written then core.log_quiet("Control: Project discovery failed: %s", tostring(err)) end
     for _, view in ipairs(require("plugins.terminal").open_views()) do M.observe(view) end
     core.log_quiet("Control: listening at %s", server.url)

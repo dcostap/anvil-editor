@@ -32,7 +32,7 @@ local DEFAULT_PORT, OWNER_CHECK_SECONDS = 7690, 1
 -- A Client that does not read its replies holds them in memory. Above MAX_PENDING unsent bytes the server reads
 -- no more requests from it, and after STALL_SECONDS without progress it closes the connection.
 local MAX_PENDING, STALL_SECONDS = 64 * 1024 * 1024, 30
-local server, test_root, lose_reply, fixed_port, owner, waiting
+local server, test_root, lose_reply, fixed_port, owner, owner_created, waiting
 
 -- A server often ends by a forced stop, and it logs little. So each record goes to disk at once.
 local function log(...)
@@ -588,6 +588,8 @@ function core.init()
     end
     first = first + 2
   end
+  -- Windows reuses process IDs, so the creation time names the owner.
+  if owner then owner_created = system.get_process_creation_time(owner) end
   local listed
   for i = first, #ARGS do
     local path = system.absolute_path(ARGS[i])
@@ -634,7 +636,7 @@ function core.run_step()
     if name == "quit" then shutdown(); return false end
   end
   if owner and (not server or system.get_time() >= server.owner_check) then
-    if not machine.process_alive(owner) then
+    if system.process_state(owner, owner_created) == "ended" then
       log("Machine server ends: its Anvil ended")
       shutdown()
       return false

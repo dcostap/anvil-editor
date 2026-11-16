@@ -1,5 +1,6 @@
 #include "project_sidebar_scan.h"
 #include "terminal_host.h"
+#include "process_identity.h"
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,7 +13,7 @@
     }                                                                                              \
   } while (0)
 /* External process identity boundary. These fixtures are exited records. */
-bool anvil_terminal_host_identity(HANDLE p, DWORD pid, const char *time) { return false; }
+bool anvil_process_identity(HANDLE p, DWORD pid, const char *time) { return false; }
 bool anvil_terminal_id_valid(const char *id) {
   return strlen(id) == 32 && strspn(id, "0123456789abcdef") == 32;
 }

@@ -178,17 +178,30 @@ test.describe("Anvil MCP", function()
 end)
 
 test.describe("Anvil Project routing", function()
-  test.it("routes an explicit Project without changing the source Project", function()
+  test.it("routes an explicit Project past records of ended processes, and removes them", function()
     local Control = require "core.control"
     local Server = require "core.control_server"
     local remote = Server.open(Control.new(USERDIR .. "/other-project"))
     local source = Server.open()
-    require("core.common").mkdirp(USERDIR .. "/control")
-    local path = USERDIR .. "/control/987654321.json"
-    local file = assert(io.open(path, "wb"))
-    file:write(json.encode {version = 1, url = remote.url, token = remote.token,
-      project = USERDIR .. "/other-project", executable = EXEFILE})
-    file:close()
+    local common = require "core.common"
+    common.mkdirp(USERDIR .. PATHSEP .. "control" .. PATHSEP .. "terminals")
+    local function record(name, value)
+      local file = assert(io.open(USERDIR .. "/control/" .. name, "wb"))
+      file:write(json.encode(value)); file:close()
+      return USERDIR .. "/control/" .. name
+    end
+    local function endpoint(url, token, pid, created)
+      return {version = 1, url = url, token = token, project = USERDIR .. "/other-project",
+        executable = EXEFILE, pid = pid, created = created}
+    end
+    local pid, created = system.get_process_id(), system.get_process_creation_time()
+    local stale_url, stale_token = "http://127.0.0.1:9", string.rep("a", 64)
+    local path = record("987654320.json", endpoint(remote.url, remote.token, pid, created))
+    -- A crash leaves the record of a process that ended, or whose ID Windows gave to another process.
+    local ended = record("987654324.json", endpoint(stale_url, stale_token, 987654324, "01d0000000000000"))
+    local reused = record("987654328.json", endpoint(stale_url, stale_token, pid, "01d0000000000000"))
+    local stale_terminal = record("terminals/" .. string.rep("5", 32) .. ".json", {version = 1, url = stale_url, token = stale_token})
+    local live_terminal = record("terminals/" .. string.rep("6", 32) .. ".json", {version = 1, url = remote.url, token = stale_token})
     local ok, err = pcall(function()
       local done, result, failure
       http.post(source.url .. "/mcp", "application/json", {jsonrpc = "2.0", id = 7, method = "tools/call",
@@ -198,9 +211,14 @@ test.describe("Anvil Project routing", function()
       local deadline = system.get_time() + 20
       repeat source:poll(); remote:poll(); coroutine.yield() until done or system.get_time() > deadline
       test.ok(done and not failure, failure or "Project request timed out")
-      test.equal(result.result.isError, false)
+      test.equal(result.result.isError, false, result.result.content and result.result.content[1].text)
       test.equal(result.result.structuredContent.project, USERDIR .. "/other-project")
       test.not_equal(core.root_project().path, USERDIR .. "/other-project")
+      test.not_ok(system.get_file_info(ended), "The record of an ended process must be removed")
+      test.not_ok(system.get_file_info(reused), "The record of a reused process ID must be removed")
+      test.not_ok(system.get_file_info(stale_terminal), "Terminal records of an ended endpoint must be removed")
+      test.ok(system.get_file_info(path), "The live record must stay")
+      test.ok(system.get_file_info(live_terminal), "Terminal records of a live endpoint must stay")
       -- Empty arrays must survive both the target response and Project forwarding.
       remote.control:exchange("remote-pi", {instance = "pi-one", receipts = {}, tasks = {}, capabilities = {transcript = true}})
       done, result, failure = nil, nil, nil
@@ -225,7 +243,8 @@ test.describe("Anvil Project routing", function()
       test.not_ok(result.result.isError, result.result.content[1].text)
       test.ok(protocol_json.is_array(result.result.structuredContent.messages), "An empty history must remain a JSON array")
     end)
-    source:close(); remote:close(); os.remove(path)
+    source:close(); remote:close()
+    for _, name in ipairs {path, ended, reused, stale_terminal, live_terminal} do os.remove(name) end
     assert(ok, err)
   end)
 end)

@@ -177,11 +177,11 @@ Pi persists accepted task receipts in its session. Reload does not replay accept
 
 Queues, receipts, and output have bounds. Full queues reject new tasks. Capacity errors require a new Pi conversation or Project process, as their error states. Terminal reads contain at most 32 KB. Task answers contain at most 8 KB; use `agent_transcript` to read longer answers.
 
-Only loaded Projects accept operations. Use `project` to load one. Cross-Project calls do not load or select Projects. Discovery is limited to the same executable and user folder. A stale endpoint after a crash returns an availability error.
+Only loaded Projects accept operations. Use `project` to load one. Cross-Project calls do not load or select Projects. Discovery is limited to the same executable and user folder. A Project that ends without its normal exit, such as in a crash or a Windows shutdown, leaves its discovery file. Discovery uses a file only while a process with its `pid` and `created` time runs, because Windows reuses process IDs. It deletes the file of an ended process, and the Terminal discovery files that name its endpoint.
 
 ## Other MCP clients
 
-Read `USERDIR/control/<pid>.json` for a loaded Project. It contains `url`, `token`, `project`, and `executable`. Connect to `<url>/mcp` through Streamable HTTP. Send `Authorization: Bearer <token>`.
+Read `USERDIR/control/<pid>.json` for a loaded Project. It contains `url`, `token`, `project`, `executable`, `pid` and `created`, the process creation time. Connect to `<url>/mcp` through Streamable HTTP. Send `Authorization: Bearer <token>`.
 
 The server supports initialization, tool discovery, tool calls, and ping. It returns JSON responses and supports notifications. It does not provide SSE streams or an arbitrary Lua evaluation tool.
 

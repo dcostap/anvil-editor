@@ -41,12 +41,14 @@
   #include <psapi.h>
   #include "../utfconv.h"
   #include "../shared_file.h"
+  #include "../process_identity.h"
   #define fileno _fileno
   #define ftruncate _chsize
 #else
 
 #include <dirent.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <unistd.h>
 #if defined(__linux__) || defined(__APPLE__)
 #include <sys/xattr.h>
@@ -1963,6 +1965,58 @@ static int f_get_process_id(lua_State *L) {
 }
 
 
+/* system.get_process_creation_time([pid]) gives the creation time that names a running process with its ID,
+   by default this process. Windows reuses process IDs. Other platforms, and a failed query, give nil. */
+static int f_get_process_creation_time(lua_State *L) {
+#ifdef _WIN32
+  lua_Integer pid = luaL_optinteger(L, 1, GetCurrentProcessId());
+  HANDLE process = pid == GetCurrentProcessId() ? GetCurrentProcess()
+    : pid > 0 && pid <= UINT32_MAX ? OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid) : NULL;
+  char created[ANVIL_PROCESS_TIME_LENGTH + 1];
+  bool ok = process && anvil_process_creation_time(process, created);
+  if (process && process != GetCurrentProcess()) CloseHandle(process);
+  if (ok) {
+    lua_pushstring(L, created);
+    return 1;
+  }
+#endif
+  lua_pushnil(L);
+  return 1;
+}
+
+
+/* system.process_state(pid [, creation_time]) gives "running", "ended" or "unknown".
+   On Windows, "running" needs the creation time from system.get_process_creation_time().
+   Without it, only "ended" is proof. Other platforms check the ID only. */
+static int f_process_state(lua_State *L) {
+  lua_Integer pid = luaL_checkinteger(L, 1);
+  const char *created = luaL_optstring(L, 2, NULL);
+  const char *state = "unknown";
+  if (pid > 0 && pid <= UINT32_MAX) {
+#ifdef _WIN32
+    if (created) {
+      DWORD error;
+      HANDLE process = anvil_process_open((DWORD)pid, created, &error);
+      if (process) { CloseHandle(process); state = "running"; }
+      else if (error == ERROR_PROCESS_ABORTED) state = "ended";
+    } else {
+      HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)pid);
+      if (!process) { if (GetLastError() == ERROR_INVALID_PARAMETER) state = "ended"; }
+      else {
+        if (WaitForSingleObject(process, 0) == WAIT_OBJECT_0) state = "ended";
+        CloseHandle(process);
+      }
+    }
+#else
+    if (kill((pid_t)pid, 0) == 0) state = "running";
+    else if (errno == ESRCH) state = "ended";
+#endif
+  }
+  lua_pushstring(L, state);
+  return 1;
+}
+
+
 static int f_get_time(lua_State *L) {
   double n = SDL_GetPerformanceCounter() / (double) SDL_GetPerformanceFrequency();
   lua_pushnumber(L, n);
@@ -3257,6 +3311,8 @@ static const luaL_Reg lib[] = {
   { "get_primary_selection", f_get_primary_selection },
   { "set_primary_selection", f_set_primary_selection },
   { "get_process_id",        f_get_process_id        },
+  { "get_process_creation_time", f_get_process_creation_time },
+  { "process_state",         f_process_state         },
   { "get_time",              f_get_time              },
   { "get_private_memory",    f_get_private_memory    },
   { "memory_stats",          anvil_lua_memory_stats   },

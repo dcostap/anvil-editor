@@ -8,9 +8,7 @@
 #include <SDL3/SDL.h>
 #include "../utfconv.h"
 #else
-#include <errno.h>
 #include <fcntl.h>
-#include <signal.h>
 #include <sys/file.h>
 #include <unistd.h>
 #endif
@@ -165,19 +163,6 @@ static int f_claim(lua_State *L) {
   return 1;
 }
 
-/* machine.process_alive(pid) tells if a process with this ID runs. */
-static int f_process_alive(lua_State *L) {
-  lua_Integer pid = luaL_checkinteger(L, 1);
-#ifdef _WIN32
-  HANDLE process = pid > 0 ? OpenProcess(SYNCHRONIZE, FALSE, (DWORD)pid) : NULL;
-  lua_pushboolean(L, process && WaitForSingleObject(process, 0) == WAIT_TIMEOUT);
-  if (process) CloseHandle(process);
-#else
-  lua_pushboolean(L, pid > 0 && (kill((pid_t)pid, 0) == 0 || errno == EPERM));
-#endif
-  return 1;
-}
-
 static const luaL_Reg machine_lib[] = {
   { "frame",           f_frame           },
   { "decoder",         f_decoder         },
@@ -185,7 +170,6 @@ static const luaL_Reg machine_lib[] = {
   { "protect",         f_protect         },
   { "unprotect",       f_unprotect       },
   { "claim",           f_claim           },
-  { "process_alive",   f_process_alive   },
   { NULL, NULL }
 };
 
