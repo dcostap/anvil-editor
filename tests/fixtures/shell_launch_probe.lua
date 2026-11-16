@@ -384,7 +384,8 @@ elseif names[path] then
       "launch did not focus an Untitled Editor")
      assert(view.busy == false, "launch opened an Editor before the command ended")
      assert(view.session == session and view.state == "running", "launch closed the Terminal Session")
-     assert(panes.close(panes.active()))
+     -- The Editor opens in the Terminal's Pane. Closing it shows the Terminal again.
+     assert(panes.close_view(panes.active()))
      assert(panes.focus(pane))
      assert(pane.current_view == view, "launch did not retain the Terminal")
     end
@@ -409,6 +410,15 @@ elseif names[path] then
     assert(view:write_input("anvil --version; Write-Output 'ANVIL_ARGS_DONE'\r"))
     wait(function() return output("ANVIL_ARGS_DONE") end, 15)
     assert(pane.current_view == view, "a CLI argument opened an Untitled Editor")
+    -- A program in the Terminal, such as a GUI app, opens a file as any other program does. It does not wait for
+    -- the Terminal's command, which sleeps longer than the wait. A job runs it, so the shell is not its parent.
+    local program_file = path .. "/from a program.txt"
+    file = assert(io.open(program_file, "wb")); file:write("from a program\n"); file:close()
+    assert(view:write_input("$exe = " .. quote(EXEFILE) .. "; $file = " .. quote(program_file) ..
+     "; Start-Job { & $using:exe $using:file } | Out-Null; Start-Sleep 120\r"))
+    wait(function() return core.buffer_registry:find(program_file) end, 40,
+     "a program in the Terminal did not open its file: " .. view.session:text_capture().text)
+    assert(core.root_project().path:gsub("\\", "/") == path, "the program's file changed the Project")
    end)
    if view then view:on_close() end
    save("terminal-editor", {ok=ok, error=ok and nil or tostring(err)})

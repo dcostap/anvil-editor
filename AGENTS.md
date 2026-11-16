@@ -172,7 +172,8 @@ Launches with options, CLI commands, or directory arguments keep their normal be
 The request uses the Terminal Session and its Project, even after its current directory changes.
 The Terminal host confirms idle with a fresh probe before Lua runs the command. A cached idle status is not sufficient.
 The request does not change focus if another Pane or View has taken focus.
-New Terminal hosts set `ANVIL_TERMINAL_ID` and `ANVIL_TERMINAL_PROJECT`. Existing hosts need new Terminal Sessions for this feature.
+These rules apply only to a command at the prompt: the Terminal's shell starts the launcher, directly or through `anvil.com`. A program in the Terminal, such as a GUI app that opens a file with Anvil, gets a normal external launch. The Terminal's focus and busy state do not affect it.
+New Terminal hosts set `ANVIL_TERMINAL_ID`, `ANVIL_TERMINAL_PROJECT` and `ANVIL_TERMINAL_HOST_PID`. Existing hosts need new Terminal Sessions for this feature. Their launches use the normal external launch.
 Run `ui/terminal_editor_open.lua` and the `launch-terminal-editor` shell probe after changes.
 
 A Pane with a running Terminal Session can move to another Project. The source detaches the session before the export.

@@ -1353,6 +1353,9 @@ int anvil_terminal_host_main(int argc, char **argv) {
   set_agent_environment(&host, argv[13]);
   /* Overwrite inherited context when an Anvil Terminal starts another Anvil. */
   SetEnvironmentVariableA("ANVIL_TERMINAL_ID", host.id);
+  char host_pid[16];
+  snprintf(host_pid, sizeof(host_pid), "%lu", (unsigned long)GetCurrentProcessId());
+  SetEnvironmentVariableA("ANVIL_TERMINAL_HOST_PID", host_pid);
   wchar_t *terminal_project = wide_string(host.project);
   SetEnvironmentVariableW(L"ANVIL_TERMINAL_PROJECT", terminal_project);
   free(terminal_project);

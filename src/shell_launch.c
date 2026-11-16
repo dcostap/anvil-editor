@@ -4,6 +4,7 @@
 #include "surface_protocol.h"
 #include <SDL3/SDL.h>
 #include <sddl.h>
+#include <tlhelp32.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -243,6 +244,45 @@ static bool append_text(char **buffer, size_t *size, const char *text) {
   return length <= LAUNCH_MAX_TEXT && append(buffer, size, &length, sizeof(length)) && append(buffer, size, text, length);
 }
 
+/* Finds the parent and the executable name of `pid` in a process snapshot. */
+static bool process_entry(HANDLE snapshot, DWORD pid, DWORD *parent, wchar_t *name, size_t name_size) {
+  PROCESSENTRY32W entry = {.dwSize = sizeof(entry)};
+  for (BOOL more = Process32FirstW(snapshot, &entry); more; more = Process32NextW(snapshot, &entry)) {
+    if (entry.th32ProcessID != pid) continue;
+    *parent = entry.th32ParentProcessID;
+    if (name) wcsncpy_s(name, name_size, entry.szExeFile, _TRUNCATE);
+    return true;
+  }
+  return false;
+}
+
+/* The Terminal route is for a command at the Terminal's prompt: the shell that the Terminal host started runs this
+ * launcher, directly or through anvil.com. A program that runs in the Terminal, such as an app that opens a file
+ * with Anvil, inherits the Terminal's environment, but gets a normal external launch. */
+static bool terminal_command(void) {
+  const char *host = SDL_getenv("ANVIL_TERMINAL_HOST_PID");
+  DWORD host_pid = host ? strtoul(host, NULL, 10) : 0;
+  wchar_t module[MAX_PATH], wrapper[MAX_PATH], name[MAX_PATH];
+  DWORD length = GetModuleFileNameW(NULL, module, MAX_PATH);
+  if (!host_pid || !length || length >= MAX_PATH) return false;
+  const wchar_t *base = wcsrchr(module, L'\\') ? wcsrchr(module, L'\\') + 1 : module;
+  wcsncpy_s(wrapper, MAX_PATH, base, _TRUNCATE);
+  wchar_t *extension = wcsrchr(wrapper, L'.');
+  if (extension) *extension = 0;
+  wcsncat_s(wrapper, MAX_PATH, L".com", _TRUNCATE);
+  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if (snapshot == INVALID_HANDLE_VALUE) return false;
+  DWORD shell = 0, parent = 0;
+  bool found = process_entry(snapshot, GetCurrentProcessId(), &shell, NULL, 0) &&
+               process_entry(snapshot, shell, &parent, name, MAX_PATH);
+  if (found && !_wcsicmp(name, wrapper)) {
+    shell = parent;
+    found = process_entry(snapshot, shell, &parent, NULL, 0);
+  }
+  CloseHandle(snapshot);
+  return found && parent == host_pid;
+}
+
 static char *encode_request(int argc, char **argv, bool foreground, size_t *size) {
   char *buffer = NULL, *cwd = SDL_GetCurrentDirectory();
   uint32_t header[3] = {LAUNCH_MAGIC, LAUNCH_VERSION, foreground ? LAUNCH_FLAG_FOREGROUND : 0};
@@ -254,7 +294,7 @@ static char *encode_request(int argc, char **argv, bool foreground, size_t *size
         (SDL_GetPathInfo(argv[i], &info) && info.type == SDL_PATHTYPE_DIRECTORY))
       files_only = false;
   }
-  const char *terminal_id = files_only ? SDL_getenv("ANVIL_TERMINAL_ID") : NULL;
+  const char *terminal_id = files_only && terminal_command() ? SDL_getenv("ANVIL_TERMINAL_ID") : NULL;
   const char *terminal_project = terminal_id ? SDL_getenv("ANVIL_TERMINAL_PROJECT") : NULL;
   bool terminal = terminal_id && strlen(terminal_id) == ANVIL_SURFACE_TERMINAL_ID_LEN &&
     strspn(terminal_id, "0123456789abcdef") == ANVIL_SURFACE_TERMINAL_ID_LEN && terminal_project && *terminal_project;
