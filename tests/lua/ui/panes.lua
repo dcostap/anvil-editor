@@ -510,19 +510,23 @@ test.describe("Pane manager", function()
     test.equal(panes.visible_group(), two.group)
   end)
 
-  test.it("skips attention marks when the active Pane closes", function()
+  test.it("skips attention marks only outside the closed Pane's Pane Group", function()
+    local function mark(pane, id)
+      pane.current_view.terminal_view, pane.current_view.session_id = true, id
+      pane.current_view.state, pane.current_view.bell_at = "running", os.time()
+    end
     local closing = panes.create { factory = factory("closing") }
-    local unread = panes.split(closing, "right", { factory = factory("unread") })
-    unread.current_view.terminal_view, unread.current_view.session_id = true, "close-unread"
-    unread.current_view.state, unread.current_view.bell_at = "running", os.time()
+    local sibling = panes.split(closing, "right", { factory = factory("sibling") })
+    mark(sibling, "close-sibling")
+    mark(panes.create { factory = factory("unread") }, "close-unread")
     local next_pane = panes.create { factory = factory("next") }
     panes.focus(closing)
 
     test.ok(panes.close(closing, { force = true }))
+    test.equal(panes.active(), sibling, "a marked Pane of the same Pane Group must take focus")
 
-    test.equal(panes.active(), next_pane, "automatic selection consumed an attention mark")
-    panes.focus(unread)
-    test.equal(panes.active(), unread, "manual selection must still reach an Unread Result")
+    test.ok(panes.close(sibling, { force = true }))
+    test.equal(panes.active(), next_pane, "automatic selection consumed an attention mark in another group")
   end)
 
   test.it("shows the Launcher after a close leaves only attention marks and Snoozed Panes", function()

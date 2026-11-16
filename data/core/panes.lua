@@ -1593,12 +1593,13 @@ local function navigable_index(pane)
   return index
 end
 
--- Automatic focus replacement never reads a pending result or enters a Snoozed Pane.
--- Explicit navigation and View moves use their requested target instead.
-local function focus_after_removal(group, member_index, old_index, previous_view, attention)
+-- Automatic focus replacement never enters a Snoozed Pane. A Pane of the same Pane Group takes focus even with an
+-- attention mark, because it already showed beside the removed Pane. Outside that group, it skips attention marks.
+-- `skip` is a Pane of that group that must not take focus. Explicit navigation and View moves use their target.
+local function focus_after_removal(group, member_index, old_index, previous_view, attention, skip)
   attention = attention or require("core.pending_panes").local_attention()
   local survivors = group and group.root and not group.snoozed and layout.leaves(group.root) or {}
-  local next_pane = nearest_after_removal(survivors, member_index, attention)
+  local next_pane = nearest_after_removal(survivors, member_index, skip and { [skip.id] = true } or {})
     or nearest_after_removal(M.navigable(), old_index, attention)
   M.active_pane, M.visible_group_value = next_pane, next_pane and next_pane.group
   if next_pane then
@@ -1663,7 +1664,7 @@ function M.close_view(target, opts)
         for index, member in ipairs(layout.leaves(pane.group.root)) do
           if member == pane then member_index = index; break end
         end
-        focus_after_removal(pane.group, member_index, navigable_index(pane), previous_view, attention)
+        focus_after_removal(pane.group, member_index, navigable_index(pane), previous_view, attention, pane)
       else
         M.focus(pane)
       end
