@@ -383,6 +383,39 @@ function GitView:pane_view(name)
     view:set_wrapping_enabled(false)
     view.git_owner_view = self
     view.git_pane = name
+    view.context_menu = function(v, x, y)
+      local items = TextView.context_menu(v, x, y)
+      if not items then return nil end
+      self:sync_selection_from_pane()
+      local icons = require("core.context_menu").icons
+      local actions = {}
+      if name == "log-list" or name == "history-list" then
+        local commit = self.model:selected_commit(self:model_tab())
+        if commit and commit.hash then
+          actions[#actions + 1] = { label = "Copy Commit Hash", icon = icons.copy,
+            command = "git:copy_selected_commit_hash" }
+          actions[#actions + 1] = { label = "Copy Commit Message", icon = icons.copy,
+            command = "git:copy_selected_commit_message" }
+        end
+        actions[#actions + 1] = { label = "Copy Range Patch", icon = icons.copy,
+          command = "git:copy_range_patch" }
+      elseif name == "file-list" then
+        local line = v.buffer:get_selection()
+        local file_row = not v.git_file_line_to_index or v.git_file_line_to_index[line]
+        local request = file_row and self.model:selected_historical_buffer(self:model_tab())
+        if request then
+          actions[#actions + 1] = { label = "Open Historical File", icon = icons.file,
+            command = "git:open_selected_historical_buffer" }
+        end
+        actions[#actions + 1] = { label = "Commit Selected Files", icon = icons.run,
+          command = "git:commit_selected_files" }
+        actions[#actions + 1] = { label = "Amend Selected Files", icon = icons.edit,
+          command = "git:commit_amend_selected_files" }
+      end
+      actions[#actions + 1] = "-"
+      for i, item in ipairs(actions) do table.insert(items, i, item) end
+      return items
+    end
     if commit_list then
       -- Commit rows have room around their text and ref pills, like list rows in the Project Sidebar.
       view.get_line_height = function(v) return TextView.get_line_height(v) + math.floor(6 * SCALE) end

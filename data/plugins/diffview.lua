@@ -2977,7 +2977,8 @@ local function open_historical_file_at_caret()
 end
 
 command.add(function()
-  return active_diff_side() ~= nil
+  local _, _, _, content = active_diff_side()
+  return source_path_for_content(content) ~= nil
 end, {
   ["diff:open_file_at_caret"] = command.palette(open_diff_source_at_caret, {
     keywords = { "compare", "source" },
@@ -3104,6 +3105,68 @@ end, {
     opens_view = true,
   }),
 })
+
+local menu_icons = require("core.context_menu").icons
+local DIFF_OPTIONS_MENU = {
+  { label = "Switch Diff Layout", icon = menu_icons.split_right, command = "diff:toggle_layout" },
+  { label = "Swap Sides", icon = menu_icons.sort, command = "diff:swap_sides" },
+  { label = "Fold/Unfold Unchanged Lines", icon = menu_icons.preview, command = "diff:toggle_folding" },
+  { label = "Change Whitespace Mode", icon = menu_icons.text, command = "diff:cycle_whitespace_mode" },
+  "-",
+  { label = "Replace Left with File", icon = menu_icons.file, command = "diff:replace_left_with_file" },
+  { label = "Replace Right with File", icon = menu_icons.file, command = "diff:replace_right_with_file" },
+}
+
+-- Both layouts use the same commands and keep the clicked selection.
+local textview_context_menu = TextView.context_menu
+function TextView:context_menu(x, y)
+  local items = textview_context_menu(self, x, y)
+  if not items or not self.diff_view_parent then return items end
+  local selected = self.buffer:has_any_selection()
+  local focus = self.get_focus_state and self:get_focus_state()
+  if focus then
+    local a, b = focus.anchor, focus.caret
+    selected = a.other ~= b.other or a.line ~= b.line or a.col ~= b.col
+  end
+  local actions = {
+    selected
+      and { label = "Copy Selection Patch", icon = menu_icons.copy, command = "diff:copy_diff_patch_for_selection" }
+      or { label = "Copy Change Patch", icon = menu_icons.copy, command = "diff:copy_diff_patch_under_cursor" },
+    { label = "Copy File Patch", icon = menu_icons.copy, command = "diff:copy_diff_patch_for_file" },
+    "-",
+    { label = "Open File at Caret", icon = menu_icons.file, command = "diff:open_file_at_caret" },
+    { label = "Open Historical File at Caret", icon = menu_icons.file, command = "diff:open_historical_file_at_caret" },
+    { label = "Previous Change", icon = menu_icons.row_above, command = "diff:prev_change" },
+    { label = "Next Change", icon = menu_icons.row_below, command = "diff:next_change" },
+    { label = "Diff Options", icon = menu_icons.preview, items = DIFF_OPTIONS_MENU },
+    "-",
+  }
+  for i, item in ipairs(actions) do table.insert(items, i, item) end
+  return items
+end
+
+-- Keep Markdown and language-specific menus, and add comparisons where text is selected.
+local editor_context_menu = Editor.context_menu
+function Editor:context_menu(x, y)
+  local items = editor_context_menu(self, x, y)
+  if not items then return nil end
+  if x and y and require("core.markdown.live_render").is_markdown_buffer(self.buffer)
+    and require("core.markdown.image_controls").at_point(self, x, y) then
+    return items
+  end
+  items[#items + 1] = "-"
+  if self.buffer:has_any_selection() then
+    items[#items + 1] = { label = "Compare Selection with Clipboard", icon = menu_icons.paste,
+      command = "diff:compare_selection_with_clipboard" }
+    items[#items + 1] = { label = "Select Text for Comparison", icon = menu_icons.select_all,
+      command = "diff:select_text_for_compare" }
+    items[#items + 1] = { label = "Compare Text with Selected", icon = menu_icons.preview,
+      command = "diff:compare_text_with_selected" }
+  end
+  items[#items + 1] = { label = "Compare File with Clipboard", icon = menu_icons.file,
+    command = "diff:compare_file_with_clipboard" }
+  return items
+end
 
 
 

@@ -2,6 +2,7 @@ local core = require "core"
 local common = require "core.common"
 local command = require "core.command"
 local config = require "core.config"
+local context_menu = require "core.context_menu"
 local process = require "core.process"
 local panes = require "core.panes"
 local test = require "core.test"
@@ -84,6 +85,7 @@ test.describe("Copy range patch", function()
   end)
 
   test.after_each(function(context)
+    context_menu.close()
     if context.view then context.view.model:cancel_jobs() end
     system.set_clipboard = context.set_clipboard
     core.warn = context.warn
@@ -97,7 +99,8 @@ test.describe("Copy range patch", function()
     local _, list, first = open_log(context)
     test.ok(not command.is_valid("git:copy_range_patch"))
     list:set_selection_state({ selections = { 1, 1, 2, 1 } })
-    test.ok(command.perform("git:copy_range_patch"))
+    test.ok(command.perform("core:show_context_menu"))
+    test.ok(context_menu.choose("Copy Range Patch"))
     wait_for(function() return context.copied ~= "unchanged clipboard" end)
     local patch = context.copied
     test.ok(patch:find("-before\n+after\n", 1, true), patch)
@@ -118,6 +121,16 @@ test.describe("Copy range patch", function()
     test.ok(context.copied:find("--- /dev/null\n+++ b/kept.txt", 1, true), context.copied)
     test.ok(context.copied:find("+after\n", 1, true), context.copied)
     test.ok(not context.copied:find("temporary.txt", 1, true), context.copied)
+  end)
+
+  test.it("copies the focused commit's hash from its Context Menu", function(context)
+    local _, list = open_log(context)
+    local expected = run(context.root, "rev-parse", "HEAD^")
+    list:set_selection_state({ selections = { 2, 1, 2, 1 } })
+    test.ok(command.perform("core:show_context_menu"))
+    test.ok(context_menu.choose("Copy Commit Hash"))
+    test.equal(context.copied, expected)
+    test.same(list:get_selected_rows(), { 2 })
   end)
 
   test.it("leaves the clipboard unchanged for a selection with gaps", function(context)
