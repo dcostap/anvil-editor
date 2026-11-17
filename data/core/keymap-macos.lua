@@ -20,8 +20,6 @@ local function keymap_macos(keymap)
     ["cmd+1"] = "pane:focus_number_1",
     ["cmd+2"] = "pane:focus_number_2",
     ["cmd+3"] = "pane:focus_number_3",
-    ["cmd+4"] = "pane:focus_number_4",
-    ["cmd+5"] = "pane:focus_number_5",
     ["wheel"] = "core:scroll",
     ["hwheel"] = "core:horizontal_scroll",
     ["shift+hwheel"] = "core:horizontal_scroll",

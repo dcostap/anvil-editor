@@ -66,11 +66,11 @@ test.describe("Pending Pane numbers", function()
       test.is_nil(numbers[numbered.key("C:/A", "never")])
       return result
     end
-    test.same(targets(), {"pending", "recent", "older", "oldest", "last"})
+    test.same(targets(), {"pending", "recent", "older"})
     projects[1].panes[4].focused = 85
-    test.same(targets(), {"pending", "older", "recent", "oldest", "last"})
+    test.same(targets(), {"pending", "older", "recent"})
     projects[1].panes[2].terminal.bell = nil
-    test.same(targets(), {"pending", "older", "recent", "oldest", "last"})
+    test.same(targets(), {"pending", "older", "recent"})
   end)
 
   test.it("numbers unread results and waiting agents newest first across Projects", function()
@@ -132,7 +132,7 @@ test.describe("Pending Pane numbers", function()
     test.equal(numbered.target(projects, 1, {}).id, "active")
   end)
 
-  test.it("keeps a focused waiting agent ahead of history and caps navigation at five", function()
+  test.it("keeps a focused waiting agent ahead of history and bounds numbered navigation", function()
     local projects = {{id = 1, path = "C:/A", panes = {active = 1,
       {id = "active", focused = 100, terminal = {session = "s", state = "running"}},
       {id = "previous", focused = 90}},
@@ -147,8 +147,7 @@ test.describe("Pending Pane numbers", function()
       projects[2].panes[#projects[2].panes + 1] = {
         id = "bell" .. n, terminal = {session = "b" .. n, state = "running", bell = 10 + n}}
     end
-    test.equal(numbered.target(projects, 5, {}).id, "bell1")
-    test.is_nil(numbered.target(projects, 6, {}))
+    test.equal(numbered.target(projects, 3, {}).id, "bell3")
     local numbers = numbered.numbers(projects, {})
     test.is_nil(numbers[numbered.key("C:/A", "previous")])
     test.is_nil(numbers[numbered.key("C:/B", "remote")])

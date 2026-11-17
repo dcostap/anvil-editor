@@ -1,5 +1,5 @@
 -- Recent Panes: the Panes, from this Window's Projects, that had focus most recently before the current
--- Pane. The latest five get the numbers 1 to 5, newest first, so the first one is the previous Pane.
+-- Pane. The latest three get the numbers 1 to 3, newest first, so the first one is the previous Pane.
 -- Each Project's Pane report stamps its Panes with the time they last took focus. system.get_time() reads one clock
 -- for every process on the computer, so stamps from different Projects compare.
 local core = require "core"
@@ -8,7 +8,7 @@ local pane_history = require "core.pane_history"
 
 local recent_panes = {}
 
-recent_panes.COUNT = 5
+recent_panes.COUNT = 3
 
 -- When each Pane of this Project last took focus, by Pane ID. The active Pane and the keyboard focus at the last
 -- observation.

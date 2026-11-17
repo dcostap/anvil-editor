@@ -367,8 +367,6 @@ keymap.add_direct {
   ["alt+1"] = "pane:focus_number_1",
   ["alt+2"] = "pane:focus_number_2",
   ["alt+3"] = "pane:focus_number_3",
-  ["alt+4"] = "pane:focus_number_4",
-  ["alt+5"] = "pane:focus_number_5",
   ["wheel"] = "core:scroll",
   ["hwheel"] = "core:horizontal_scroll",
   ["shift+wheel"] = "core:horizontal_scroll",

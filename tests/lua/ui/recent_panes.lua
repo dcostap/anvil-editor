@@ -18,7 +18,7 @@ local function factory(name)
 end
 
 test.describe("Recent Pane numbers", function()
-  test.it("numbers the five Panes that had focus before the current one, across Projects", function()
+  test.it("numbers recent Panes across Projects without numbering the current Pane", function()
     local numbers = recent_panes.numbers({
       {path = "C:/A", panes = {{id = "a1", focused = 10}, {id = "a2", focused = 70}, {id = "a3"}}},
       {path = "C:/B", panes = {{id = "b1", focused = 60}, {id = "b2", focused = 50}, {id = "b3", focused = 40},
@@ -26,9 +26,8 @@ test.describe("Recent Pane numbers", function()
     })
     local function number(path, id) return numbers[recent_panes.key(path, id)] end
     test.is_nil(number("C:/A", "a2"), "The current Pane has a number")
-    test.same({number("C:/B", "b1"), number("C:/B", "b2"), number("C:/B", "b3"), number("C:/B", "b4"),
-      number("C:/B", "b5")}, {1, 2, 3, 4, 5})
-    test.is_nil(number("C:/A", "a1"), "A sixth Pane has a number")
+    test.same({number("C:/B", "b1"), number("C:/B", "b2"), number("C:/B", "b3")}, {1, 2, 3})
+    test.is_nil(number("C:/A", "a1"), "An older Pane has a number")
     test.is_nil(number("C:/A", "a3"), "A Pane that never had focus has a number")
   end)
 end)
