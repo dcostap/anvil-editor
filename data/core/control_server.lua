@@ -150,7 +150,7 @@ function M:dispatch(client, body)
         end)
       end
       if ok and params.name == "agent_wait" and value.connected
-          and (value.status == "pending" or value.status == "queued" or value.status == "running" or value.status == "accepted") then
+          and (value.status == "pending" or value.status == "running" or value.status == "accepted") then
         client.waiting = {args = params.arguments, result = tool_result,
           until_time = system.get_time() + (params.arguments.timeout_ms or 30000) / 1000}
         client.deadline = client.waiting.until_time + 5
