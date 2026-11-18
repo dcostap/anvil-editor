@@ -6303,6 +6303,15 @@ function TextView:get_line_render_position_col(render_line, x, y)
     if row then
       local col = row.source_col1 or 1
       local col2 = row.source_col2 or col
+      if not row.runs then
+        -- Image text rows use the ordinary fragments. Map their origin back
+        -- to that line, so widgets keep atomic source boundaries.
+        local source_x = get_line_render_raw_col_x_offset(self, render_line, col)
+          + x - (render_line.x_offset or 0) - (row.x_offset or 0)
+        return common.clamp(
+          self:get_line_render_x_offset_col(render_line, source_x), col, col2
+        ), row_index
+      end
       local previous_x = self:get_line_render_col_x_offset(render_line, col, row)
       if x <= previous_x then return col, row_index end
       local source = render_line.source_text or ""

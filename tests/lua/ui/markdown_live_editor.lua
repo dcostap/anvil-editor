@@ -139,14 +139,15 @@ local function live_body_font(view)
   return style.markdown_body_font
 end
 
-local function with_inline_image_text_fixture(callback)
+local function with_inline_image_text_fixture(callback, prefix)
   local image_path = USERDIR .. PATHSEP .. "markdown-live-caret-rows-" .. system.get_process_id() .. ".png"
   local fp = test.not_nil(io.open(image_path, "wb"))
   fp:write("png")
   fp:close()
   local image_url = common.basename and common.basename(image_path)
     or image_path:match("[^" .. PATHSEP .. "]+$")
-  local prefix, image_source, suffix = "aaaa ", "![[" .. image_url .. "]]", " Testing this change"
+  local image_source, suffix = "![[" .. image_url .. "]]", " Testing this change"
+  prefix = prefix or "aaaa "
   local source = prefix .. image_source .. suffix
   local image_end = #prefix + #image_source + 1
   local view, buffer = make_view(source .. "\nnext", USERDIR .. PATHSEP .. "caret-rows-note.md")
@@ -4833,6 +4834,55 @@ test.describe("Markdown Live Preview", function()
     test.equal(table.concat(wiki_visible), wiki_source)
   end)
 
+  for _, wrapped in ipairs({ true, false }) do
+    for _, prefix in ipairs({ "  - [ ] ", "  - " }) do
+      test.it("pastes after " .. prefix .. " above an image / wrapping " .. tostring(wrapped), function()
+        with_inline_image_text_fixture(function(view, buffer)
+          buffer:insert(1, 1, "above text long enough\n")
+          buffer:clear_undo_redo()
+          view:set_wrapping_enabled(wrapped)
+          buffer:set_selection(1, 1)
+          refresh(view)
+          local original = buffer.lines[2]
+          local content_col = #prefix + 1
+          local x = view:get_col_x_offset(2, content_col)
+          local above_col = view:get_x_offset_col(1, x)
+          local old_active = core.active_view
+          local old_clipboard = system.get_clipboard
+          local ok, err = pcall(function()
+            core.active_view = view
+            system.get_clipboard = function() return "pruebas " end
+            for _, route in ipairs({ "down", "up", "pointer" }) do
+              buffer:set_selection(1, above_col)
+              refresh(view)
+              if route == "pointer" then
+                local screen_x, screen_y = view:get_line_screen_position(2, content_col)
+                local line, col = view:resolve_screen_position(screen_x, screen_y + 1)
+                test.equal(command.perform("core:set_cursor", screen_x, screen_y + 1), true)
+                test.same({ line, col }, { 2, content_col })
+              else
+                test.equal(command.perform("core:move_to_next_line"), true)
+                if route == "up" then
+                  test.equal(command.perform("core:move_to_next_line"), true)
+                  test.equal(command.perform("core:move_to_previous_line"), true)
+                end
+              end
+              local line, col = buffer:get_selection()
+              test.same({ line, col }, { 2, content_col }, route)
+              test.equal(command.perform("core:paste"), true)
+              test.equal(buffer.lines[2], prefix .. "pruebas " .. original:sub(content_col))
+              test.equal(command.perform("core:undo"), true)
+              test.equal(buffer.lines[2], original)
+            end
+          end)
+          system.get_clipboard = old_clipboard
+          core.active_view = old_active
+          if not ok then error(err, 0) end
+        end, prefix .. "body ")
+      end)
+    end
+  end
+
   test.it("moves up from the following Buffer line into text below an inline image", function()
     with_inline_image_text_fixture(function(view, buffer, fixture)
       local old_active = core.active_view
@@ -4858,6 +4908,36 @@ test.describe("Markdown Live Preview", function()
       line, col = buffer:get_selection()
       test.equal(line, 2)
       test.equal(col, 1)
+    end)
+  end)
+
+  test.it("anchors autocomplete to the caret row above an inline image", function()
+    with_inline_image_text_fixture(function(view, buffer)
+      view.size.y = 600
+      local old_active = core.active_view
+      local ok, err = pcall(function()
+        core.active_view = view
+        buffer:set_selection(1, 5)
+        refresh(view)
+        autocomplete.add_provider("test-image-row-layout", function(active_view)
+          if active_view ~= view then return nil end
+          return { query = "aaaa", line = 1, query_col = 1, items = {
+            { text = "aaaaa" }, { text = "aaaab" },
+          } }
+        end)
+        autocomplete.trigger()
+        test.ok(autocomplete.is_open())
+        local _, caret_y = view:get_caret_screen_position(1, 5)
+        local caret_height = view:get_position_caret_height(1, 5)
+        local _, popup_y, _, popup_height = autocomplete._test.get_suggestions_rect(view)
+        test.ok(popup_height > 0)
+        test.equal(popup_y, caret_y + caret_height,
+          "the popup must start at the caret row, not below its image")
+      end)
+      autocomplete.close()
+      autocomplete.remove_provider("test-image-row-layout")
+      core.active_view = old_active
+      if not ok then error(err, 0) end
     end)
   end)
 
