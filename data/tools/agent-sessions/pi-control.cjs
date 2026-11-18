@@ -14,7 +14,7 @@ module.exports = function (pi) {
   const discovery = path.join(path.dirname(report), "..", "control", "terminals", path.basename(report, ".agent") + ".json");
   const inspect = require("./pi-inspection.cjs")(pi);
   let ctx, stopped = true, timer, controller, connection, inFlight;
-  let active, lastMessage, starting = false;
+  let active, lastMessage;
   let instance;
   const receipts = new Map(), tasks = new Map();
   const reported = new Map();
@@ -31,26 +31,6 @@ module.exports = function (pi) {
     }
   }
 
-  function schedule() {
-    if (stopped || starting || active || !ctx.isIdle()) return;
-    const task = [...tasks.values()].find(t => t.status === "queued");
-    if (!task) return;
-    starting = true;
-    active = task;
-    lastMessage = null;
-    task.status = "running";
-    save(); // A reload after dispatch must not send this prompt again.
-    try {
-      pi.sendMessage({ customType: "anvil-task", content: `Anvil agent task from ${task.from || "local client"}\n\n${task.text}`, display: true,
-        details: { requestId: task.id, from: task.from } }, { triggerTurn: true });
-    } catch (error) {
-      task.status = "failed";
-      task.error = String(error.message || error);
-      active = null;
-      save();
-    } finally { starting = false; }
-  }
-
   function receive(command) {
     if (!command || typeof command.id !== "string" || command.id.length > 128) return;
     if (receipts.has(command.id)) return;
@@ -59,36 +39,35 @@ module.exports = function (pi) {
     receipts.set(command.id, receipt);
     try {
       if (command.action === "interrupt") {
-        for (const task of tasks.values()) {
-          if (task.status === "queued") task.status = "interrupted";
-        }
         save();
         ctx.abort();
       } else if (command.action === "send") {
         if (typeof command.text !== "string" || !command.text.trim() || command.text.length > 32768) {
           throw new Error("Invalid task text");
         }
-        if (command.delivery === "steer") {
-          if (ctx.isIdle()) throw new Error("Pi has no active turn to steer");
-          save();
-          pi.sendMessage({ customType: "anvil-steering", content: `Anvil agent steering from ${command.from || "local client"}\n\n${command.text}`, display: true,
-            details: { requestId: command.id, from: command.from } }, { triggerTurn: true, deliverAs: "steer" });
-          receipt.task = active?.id;
-        } else if (command.delivery === "queue") {
-          if ([...tasks.values()].filter(t => t.status === "queued" || t.status === "running").length >= 16) {
-            throw new Error("Pi task queue is full");
-          }
-          tasks.set(command.id, { id: command.id, text: command.text, from: command.from,
-            status: "queued", created: Date.now() });
-          receipt.task = command.id;
-        } else throw new Error("Invalid message delivery");
+        const startsTurn = ctx.isIdle();
+        if (startsTurn) {
+          active = {id: command.id, text: command.text, from: command.from, status: "running", created: Date.now()};
+          tasks.set(command.id, active);
+          lastMessage = null;
+        }
+        receipt.task = active?.id;
+        save(); // A reload after dispatch must not send this message again.
+        const kind = startsTurn ? "task" : "steering";
+        pi.sendMessage({ customType: "anvil-" + kind, content: `Anvil agent ${kind} from ${command.from || "local client"}\n\n${command.text}`, display: true,
+          details: { requestId: command.id, from: command.from } }, { triggerTurn: true, deliverAs: "steer" });
       } else throw new Error("Unknown Pi control operation");
     } catch (error) {
       receipt.status = "failed";
       receipt.error = String(error.message || error).slice(0, 512);
+      const task = tasks.get(command.id);
+      if (task) {
+        task.status = "failed";
+        task.error = receipt.error;
+        active = null;
+      }
     }
     save();
-    schedule();
   }
 
   async function exchange() {
@@ -120,7 +99,7 @@ module.exports = function (pi) {
           return true;
         });
         const currentTasks = [...tasks.values()].sort((a, b) => {
-          const live = t => t.status === "queued" || t.status === "running";
+          const live = t => t.status === "running";
           return Number(live(b)) - Number(live(a)) || (b.finished || b.created) - (a.finished || a.created);
         }).slice(0, 32).map(({ text, ...task }) => task);
         const response = await fetch(next.url + "/agent", { method: "POST", redirect: "error",
@@ -155,7 +134,6 @@ module.exports = function (pi) {
           if (Array.isArray(data.commands)) for (const command of data.commands) receive(command);
         }
       } finally { clearTimeout(deadline); controller = null; }
-      schedule();
     } catch {
       // Anvil can restart while its terminals continue. Discovery reconnects to the new endpoint.
     } finally {
@@ -178,8 +156,8 @@ module.exports = function (pi) {
       persisted.set(kind + ":" + value.id, JSON.stringify(value));
     }
     for (const task of tasks.values()) {
-      // A run does not survive replacement of Pi's session runtime.
-      if (task.status === "running") task.status = "interrupted";
+      // Runtime replacement interrupts runs and queued work saved by older extensions.
+      if (task.status === "running" || task.status === "queued") task.status = "interrupted";
     }
     stopped = false;
     tick();
@@ -205,8 +183,6 @@ module.exports = function (pi) {
       active = null;
       save();
     }
-    // Settlement handlers must not start another run before Pi finishes settlement.
-    setImmediate(schedule);
   });
   pi.on("session_shutdown", async () => {
     stopped = true;

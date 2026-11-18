@@ -353,14 +353,23 @@ test.describe("Agent editor control", function()
   test.it("sends a task once to the selected Pi instance and keeps its result", function()
     control:exchange("terminal-b", {instance = "pi-one", session = "session.jsonl", busy = false,
       receipts = {}, tasks = {}})
-    local args = {terminal = "terminal-b", instance = "pi-one", text = "Review the change",
-      delivery = "queue", request_id = "review"}
+    local args = {terminal = "terminal-b", instance = "pi-one", text = "Review the change", request_id = "review"}
     local sent = control:call("agent_send", args, "terminal-a")
     local response = control:exchange("terminal-b", {instance = "pi-one", busy = false, receipts = {}, tasks = {}})
     test.equal(#response.commands, 1)
     test.equal(response.commands[1].id, sent.task)
     test.equal(response.commands[1].from, "terminal-a")
     test.equal(control:call("agent_send", args, "terminal-a").task, sent.task)
+    control:exchange("terminal-b", {instance = "pi-one", busy = true,
+      receipts = {{id = sent.task, status = "accepted", task = sent.task}},
+      tasks = {{id = sent.task, status = "running"}}})
+    local steering = control:call("agent_send", {terminal = "terminal-b", instance = "pi-one",
+      text = "Check the tests too", request_id = "review-tests"}, "terminal-a")
+    control:exchange("terminal-b", {instance = "pi-one", busy = true,
+      receipts = {{id = steering.task, status = "accepted", task = sent.task}}, tasks = {}})
+    local delivered = control:call("agent_wait", {terminal = "terminal-b", instance = "pi-one", task = steering.task}, "terminal-a")
+    test.equal(delivered.status, "delivered")
+    test.equal(delivered.related_task, sent.task)
     control:exchange("terminal-b", {instance = "pi-one", busy = false,
       receipts = {{id = sent.task, status = "accepted"}},
       tasks = {{id = sent.task, status = "completed", result = "No issues"}}})
@@ -370,7 +379,7 @@ test.describe("Agent editor control", function()
     control:exchange("terminal-b", {instance = "pi-two", busy = false, receipts = {}, tasks = {}})
     test.equal(pcall(function()
       control:call("agent_send", {terminal = "terminal-b", instance = "pi-one", text = "Again",
-        delivery = "queue", request_id = "review-new"}, "terminal-a")
+        request_id = "review-new"}, "terminal-a")
     end), false, "A stale request cannot target a replacement conversation")
   end)
 

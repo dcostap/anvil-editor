@@ -67,9 +67,9 @@ tool("snooze", "Set or remove Anvil's Snooze for a Terminal's Pane. Omit pane an
   {action = choice("set", "remove"), pane = id, terminal = id,
     seconds = {type = "integer", minimum = 1, maximum = 31536000}, request_id = id},
   {"action", "request_id"}, false)
-tool("agent_send", "Send a task to a specific Pi conversation. Queue waits until idle; steer changes active work. Returns a task ID, not a completed answer.",
-  {terminal = id, instance = id, text = string_schema(32768), delivery = choice("queue", "steer"), request_id = id},
-  {"terminal", "instance", "text", "delivery", "request_id"}, false)
+tool("agent_send", "Send a message to a specific Pi conversation. Steers active work or starts a turn when idle. Returns a task ID, not a completed answer.",
+  {terminal = id, instance = id, text = string_schema(32768), request_id = id},
+  {"terminal", "instance", "text", "request_id"}, false)
 tool("agent_read", "Read Pi status, live activity, parallel tools, session_file, or a saved task result. Omit instance to read the Terminal's current conversation. Activity includes command/path details and start times. Set include_activity=false for status only. Disconnected activity is stale; a finished tool call does not prove its background command finished.",
   {terminal = id, instance = id, task = id, include_activity = {type = "boolean"}}, {"terminal"}, true)
 tool("agent_transcript", "Read a Pi conversation without starting a turn. Omit instance to read the Terminal's current conversation. overview=true gives the first request, last answer, counts, tools, models, tokens and cost. Otherwise returns the latest limit entries (default 10, chronological); before pages older, after or from_start pages newer. query keeps entries that contain its literal text, ignoring case. include_tools adds tool calls and results, each cut to tool_chars (default 400). include_thinking adds thinking text. max_chars is a shared budget (default 12000). Continue cut text with entry_id and offset. Output is compact text; format=json gives fields. Reads use the current branch.",
@@ -81,7 +81,7 @@ tool("agent_transcript", "Read a Pi conversation without starting a turn. Omit i
     include_tools = {type = "boolean"}, include_thinking = {type = "boolean"}, include_summaries = {type = "boolean"},
     include_partial = {type = "boolean"}, format = choice("text", "json")},
   {"terminal"}, true)
-tool("agent_interrupt", "Interrupt Pi's active work and cancel its queued Anvil tasks. Keep its Terminal Session open.",
+tool("agent_interrupt", "Interrupt Pi's active work. Keep its Terminal Session open.",
   {terminal = id, instance = id, request_id = id}, {"terminal", "instance", "request_id"}, false)
 tool("agent_wait", "Wait up to 30 seconds for a task. Timeout does not cancel it. A question or disconnect ends the wait.",
   {terminal = id, instance = id, task = id, timeout_ms = {type = "integer", minimum = 1, maximum = 30000}},
@@ -341,7 +341,7 @@ function M:tick()
           if peer then result.instance = peer.instance end
           if job.task and matches then
             local ok, sent = pcall(self.agent_send, self, {terminal = view.session_id, instance = peer.instance,
-              text = job.task, delivery = "queue"}, job.caller)
+              text = job.task}, job.caller)
             if ok then result.task = sent.task else result.status, result.error = "failed", tostring(sent) end
           end
         end
@@ -421,7 +421,7 @@ function M:exchange(terminal, report)
   end
   for _, task in ipairs(report.tasks) do
     check(id, task.id, "task ID")
-    assert(task.status == "queued" or task.status == "running" or terminal_status[task.status], "Invalid task state")
+    assert(task.status == "running" or terminal_status[task.status], "Invalid task state")
     assert(task.result == nil or type(task.result) == "string" and #task.result <= 32768, "Invalid task result")
     local previous = peer.tasks[task.id]
     if not previous or not terminal_status[previous.status] then peer.tasks[task.id] = task end
@@ -469,7 +469,7 @@ function M:send(args, caller, action)
   assert(count < peer.capacity, "Pi control capacity reached; start a new Pi conversation")
   local task = net.random_token()
   peer.order = (peer.order or 0) + 1
-  peer.commands[task] = {id = task, action = action, text = args.text, delivery = args.delivery,
+  peer.commands[task] = {id = task, action = action, text = args.text,
     from = caller or "local", order = peer.order}
   return {terminal = args.terminal, instance = peer.instance, task = task, status = "pending"}
 end
@@ -511,7 +511,7 @@ function M:agent_read(args)
 end
 
 -- The transport waits on this read-only ticket while Pi answers through its next exchange.
--- Tickets never enter the model's task queue or the session's delivery receipts.
+-- Tickets never start model turns or enter the session's delivery receipts.
 function M:agent_transcript(args)
   local peer = self:peer(args, true)
   assert(peer.capabilities and peer.capabilities.transcript, "Pi needs /reload to enable conversation reads")

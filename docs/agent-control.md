@@ -33,7 +33,7 @@ The result reports `accepted` when Anvil queues the request to the Project Sideb
 
 The result contains an `operation` ID. Poll `operation_read` until its status becomes `ready` or `failed`. Pi readiness includes its exact selected model and thinking level. An optional initial `task` starts only after this check.
 
-Use `agent_send` with `delivery: "queue"` to wait for an idle Pi. Use `delivery: "steer"` to change active work. Messages retain their source Terminal and appear as agent messages, not human messages.
+Use `agent_send` to steer active work or start a turn when Pi is idle. Steering reaches Pi after the current assistant turn finishes its tool calls, before the next model request. It does not cancel running tools. Messages retain their source Terminal and appear as agent messages, not human messages.
 
 Use `agent_read` or `agent_wait` with the returned task ID. Completion follows Pi's `agent_settled` event, after retries and automatic recovery. Results include the final assistant text and a truncation flag when necessary.
 
@@ -112,7 +112,7 @@ Reads fail when a cursor ID is not on the current branch, the conversation insta
 
 Each transcript reply has a 256 KiB limit, including metadata and JSON escaping. An oversized reply fails that read without blocking status reports or commands.
 
-A wait timeout does not cancel work. A disconnect does not mean completion. A reported question ends the wait with `waiting_for_user`. Use `agent_interrupt` to stop active work and cancel queued Anvil tasks without closing the Terminal.
+A wait timeout does not cancel work. A disconnect does not mean completion. A reported question ends the wait with `waiting_for_user`. Use `agent_interrupt` to stop active work without closing the Terminal.
 
 Steering and interruption return `delivered` after Pi accepts them. A steering receipt can include `related_task`, the active Anvil task. Wait for that task to retrieve its final answer.
 
@@ -132,11 +132,11 @@ Steering and interruption return `delivered` after Pi accepts them. A steering r
 | `terminal` | Read terminal text, send literal input, or close a Terminal View. |
 | `pi_start` | Start an independent interactive Pi with explicit model choices. |
 | `operation_read` | Read launch or diff progress and readiness. |
-| `agent_send` | Queue a task or steer active work. |
+| `agent_send` | Steer active work or start a turn when idle. |
 | `agent_read` | Read agent status, live activity, a receipt, or a task result. |
 | `agent_transcript` | Read paged conversation text, summaries, and optional tool messages. |
 | `agent_wait` | Wait for completion, a question, a disconnect, or a timeout. |
-| `agent_interrupt` | Interrupt active work and cancel queued Anvil tasks. |
+| `agent_interrupt` | Interrupt active work. |
 
 Tool schemas describe their required fields. Terminal launch currently requires Windows. Structured executable launch requires PowerShell. Literal Terminal input is not a Pi messaging API; Anvil rejects it for Pi.
 
@@ -175,7 +175,7 @@ Retry receipts belong to the running Project process. Repeating an ID with diffe
 
 Pi persists accepted task receipts in its session. Reload does not replay accepted tasks. An interrupted run remains interrupted. Discovery reconnects when Anvil restarts while Terminal hosts keep running.
 
-Queues, receipts, and output have bounds. Full queues reject new tasks. Capacity errors require a new Pi conversation or Project process, as their error states. Terminal reads contain at most 32 KB. Task answers contain at most 8 KB; use `agent_transcript` to read longer answers.
+Pending commands, receipts, and output have bounds. A full command buffer rejects new messages. Capacity errors require a new Pi conversation or Project process, as their error states. Terminal reads contain at most 32 KB. Task answers contain at most 8 KB; use `agent_transcript` to read longer answers.
 
 Only loaded Projects accept operations. Use `project` to load one. Cross-Project calls do not load or select Projects. Discovery is limited to the same executable and user folder. A Project that ends without its normal exit, such as in a crash or a Windows shutdown, leaves its discovery file. Discovery uses a file only while a process with its `pid` and `created` time runs, because Windows reuses process IDs. It deletes the file of an ended process, and the Terminal discovery files that name its endpoint.
 

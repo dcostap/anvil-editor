@@ -37,7 +37,6 @@ local core_plugins = {
   keyboard_map = true,
   anvil_language_json = true,
   anvil_language_rust = true,
-  scale_debug_log = true,
   selection_surround = true,
   smart_indent_rules = true,
   tabular_data_preview = true,
@@ -245,7 +244,6 @@ require_core_plugin "anvil_language_rust"
 require_core_plugin "document_format"
 require_core_plugin "untitled_recovery"
 require_core_plugin "untitled_tabs"
-reload_core_plugin "scale_debug_log"
 require_core_plugin "selection_surround"
 require_core_plugin "smart_indent_rules"
 require_core_plugin "tabular_data_preview"
