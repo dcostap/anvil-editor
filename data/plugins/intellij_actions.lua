@@ -403,23 +403,6 @@ local function open_terminal_at_active_file(dv)
   end
 end
 
-local selection_debug_log = USERDIR .. PATHSEP .. "selection-expansion-debug.log"
-
-local function selection_debug_write(message)
-  local fp = io.open(selection_debug_log, "a")
-  if fp then
-    fp:write(os.date("!%Y-%m-%dT%H:%M:%SZ"), " ", message, "\n")
-    fp:close()
-  end
-end
-
-local function selection_debug_repr(text)
-  text = tostring(text or "")
-  text = text:gsub("\r", "\\r"):gsub("\n", "\\n")
-  if #text > 500 then text = text:sub(1, 500) .. "..." end
-  return text
-end
-
 local function build_text_index(buffer)
   local starts, text, offset = {}, {}, 0
   for i, line in ipairs(buffer.lines) do
@@ -598,22 +581,14 @@ local function smart_selection_blocks(text)
   return blocks
 end
 
-local function set_selection_offsets(buffer, starts, start_offset, end_offset, reason)
-  local caret_l, caret_c, anchor_l, anchor_c = buffer:get_selection(false)
+local function set_selection_offsets(buffer, starts, start_offset, end_offset)
+  local caret_l, caret_c = buffer:get_selection(false)
   local old_l1, old_c1, old_l2, old_c2 = buffer:get_selection(true)
   local old_start = pos_to_offset(starts, old_l1, old_c1)
   local old_end = pos_to_offset(starts, old_l2, old_c2)
   local caret_offset = pos_to_offset(starts, caret_l, caret_c)
-  local old_text = buffer:get_text(old_l1, old_c1, old_l2, old_c2)
   local l1, c1 = offset_to_pos(buffer, starts, start_offset)
   local l2, c2 = offset_to_pos(buffer, starts, end_offset)
-  local new_text = buffer:get_text(l1, c1, l2, c2)
-  selection_debug_write(string.format(
-    "reason=%s old=%d..%d (%d:%d-%d:%d) caret=%d (%d:%d) new=%d..%d (%d:%d-%d:%d) old_text=\"%s\" new_text=\"%s\"",
-    tostring(reason or "unknown"), old_start, old_end, old_l1, old_c1, old_l2, old_c2,
-    caret_offset, caret_l, caret_c, start_offset, end_offset, l1, c1, l2, c2,
-    selection_debug_repr(old_text), selection_debug_repr(new_text)
-  ))
 
   -- Anvil selections can only place the caret at one end of the range.
   -- Preserve the caret side instead of always forcing it to the selection start:
@@ -659,7 +634,7 @@ local function select_next_candidate(buffer, starts, sel_start, sel_end, candida
   local cand = next_selection_candidate(sel_start, sel_end, candidates)
   if cand then
     push_selection_history(buffer, sel_start, sel_end)
-    set_selection_offsets(buffer, starts, cand.start_offset, cand.end_offset, cand.reason)
+    set_selection_offsets(buffer, starts, cand.start_offset, cand.end_offset)
     return true
   end
   return false
@@ -668,8 +643,8 @@ end
 local function add_block_candidates(candidates, blocks, sel_start, sel_end)
   for _, b in ipairs(blocks) do
     if b.open <= sel_start and b.close >= sel_end then
-      candidates[#candidates + 1] = { start_offset = b.open + 1, end_offset = b.close, reason = "block-content" }
-      candidates[#candidates + 1] = { start_offset = b.open, end_offset = b.close + 1, reason = "block-full" }
+      candidates[#candidates + 1] = { start_offset = b.open + 1, end_offset = b.close }
+      candidates[#candidates + 1] = { start_offset = b.open, end_offset = b.close + 1 }
     end
   end
 end
@@ -857,22 +832,22 @@ local function smart_selection_candidates(buffer, text, starts, blocks, l1, c1, 
   while word_end < line_end and text:sub(word_end + 1, word_end + 1):match("[%w_]") do
     word_end = word_end + 1
   end
-  candidates[#candidates + 1] = { start_offset = word_start, end_offset = word_end, reason = "word" }
+  candidates[#candidates + 1] = { start_offset = word_start, end_offset = word_end }
 
   local content_start_col = line_text:find("%S")
   local sentence_start = content_start_col and (line_start + content_start_col - 1) or line_start
   local sentence_end = line_start + #(line_text:match("^(.-)%s*$") or line_text)
-  candidates[#candidates + 1] = { start_offset = sentence_start, end_offset = sentence_end, reason = "sentence" }
+  candidates[#candidates + 1] = { start_offset = sentence_start, end_offset = sentence_end }
 
   local opens_named_block = false
   local line_block = block_opening_on_line(blocks, starts, l1, line_text)
   if line_block and sel_start >= line_start and sel_end <= line_block.close + 1 then
     opens_named_block = true
-    candidates[#candidates + 1] = { start_offset = line_start, end_offset = line_block.close + 1, reason = "named-block-full" }
+    candidates[#candidates + 1] = { start_offset = line_start, end_offset = line_block.close + 1 }
   end
 
   if not opens_named_block then
-    candidates[#candidates + 1] = { start_offset = line_start, end_offset = line_end, reason = "line" }
+    candidates[#candidates + 1] = { start_offset = line_start, end_offset = line_end }
   end
 
   local block = innermost_enclosing_block(blocks, sel_start, sel_end)
@@ -908,13 +883,12 @@ local function smart_selection_candidates(buffer, text, starts, blocks, l1, c1, 
     end
     candidates[#candidates + 1] = {
       start_offset = math.max(starts[p1], block_content_start),
-      end_offset = math.min(paragraph_end, block_content_end),
-      reason = "paragraph"
+      end_offset = math.min(paragraph_end, block_content_end)
     }
   end
 
   add_block_candidates(candidates, blocks, sel_start, sel_end)
-  candidates[#candidates + 1] = { start_offset = 0, end_offset = #text, reason = "buffer" }
+  candidates[#candidates + 1] = { start_offset = 0, end_offset = #text }
   return candidates, sel_start, sel_end
 end
 
@@ -1012,7 +986,7 @@ local function shrink_smart_selection(dv)
     set_selection_list(buffer, prev.selections, prev.last_selection)
     core.blink_reset()
   else
-    set_selection_offsets(buffer, starts, prev[1], prev[2], "shrink-history")
+    set_selection_offsets(buffer, starts, prev[1], prev[2])
   end
 end
 
@@ -1389,4 +1363,3 @@ end, {
 keymap.add({
   ["escape"] = "editor:restore_selection_origin_or_select_none",
 })
-
