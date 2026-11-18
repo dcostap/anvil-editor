@@ -1700,6 +1700,8 @@ end
 function live._formatted_link_label_fragments(view, line_text, line, span, opts, reveal_units)
   local link = span.link
   if link.kind ~= "markdown" and link.kind ~= "reference" then return nil end
+  -- Keep the source around comments, as for labels without formatting.
+  if semantic_comment_overlaps(view, line, span.col1, span.col2) then return nil end
   local label = textual_link_label(link)
   local col1, col2 = span.col1 + 1, span.col1 + 1 + #label
   local nested = false

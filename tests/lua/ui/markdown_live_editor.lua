@@ -2499,15 +2499,15 @@ test.describe("Markdown Live Preview", function()
   end)
 
   test.it("keeps visible raw source around links overlapping comments", function()
-    local source = "[visible %%hidden%% tail](target.md)\nplain"
-    local view, buffer = make_view(source, "note.md")
-    buffer:set_selection(2, 1)
-    refresh(view)
-    local visible = {}
-    for _, fragment in ipairs(view:iter_line_render_fragments(view:get_line_render(1))) do
-      if not fragment.hidden then visible[#visible + 1] = fragment.text or "" end
+    for _, case in ipairs({
+      { "[visible %%hidden%% tail](target.md)", "[visible  tail](target.md)" },
+      { "[visible %%hidden%% tail][ref]", "[visible  tail][ref]" },
+    }) do
+      local view, buffer = make_view(case[1] .. "\nplain\n\n[ref]: target.md", "note.md")
+      buffer:set_selection(2, 1)
+      refresh(view)
+      test.equal(visible_render_text(view, 1), case[2])
     end
-    test.equal(table.concat(visible), "[visible  tail](target.md)")
   end)
 
   test.it("preserves empty semantic Markdown labels as full targets", function()
