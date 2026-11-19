@@ -109,7 +109,7 @@ test.describe("Simple Mode", function()
       return title
     end
 
-    test.it("follows the Sidebar toggle, while the Sidebar shows and while it is hidden", function(context)
+    test.it("follows the Project name, while the Sidebar shows and while it is hidden", function(context)
       config.simple_mode = false
       test.equal(#title_bar(0).menu_rects, 0)
       config.simple_mode = true
@@ -117,19 +117,20 @@ test.describe("Simple Mode", function()
         local title = title_bar(content_x)
         local rects = title.menu_rects
         test.equal(#rects, #simple_menu.MENUS)
-        local toggle, last = title.sidebar_toggle_rect, rects[#rects]
-        test.equal(rects[1].x, toggle.x + toggle.w)
-        test.ok(title.project_rect.x >= last.x + last.w, "The Project name covers the Menu Bar")
-        -- The labels take the pointer, so a press on them does not drag the Window.
-        local client_x, client_w = context.hit[6], context.hit[7]
+        local toggle, name, last = title.sidebar_toggle_rect, title.project_rect, rects[#rects]
+        test.equal(name.x, toggle.x + toggle.w)
+        test.ok(rects[1].x > name.x + name.w, "No gap keeps the Menu Bar apart from the Project name")
+        -- The labels take the pointer, so a press on them does not drag the Window. The name still drags it.
+        local client_x, client_w = context.hit[4], context.hit[5]
         test.ok(client_x <= rects[1].x and client_x + client_w >= last.x + last.w,
           "The Menu Bar is not in the Title Bar's client area")
+        test.ok(client_x >= name.x + name.w, "The Project name does not drag the Window")
       end
-      -- Without the Sidebar, Tabs follow the Menu Bar.
+      -- Without the Sidebar, Tabs follow the Menu Bar after a gap.
       local title = title_bar(0)
       local entry = test.not_nil(title:get_pane_entries()[1])
       local last = title.menu_rects[#title.menu_rects]
-      test.ok(entry.x >= last.x + last.w, "A Tab covers the Menu Bar")
+      test.ok(entry.x > last.x + last.w, "No gap keeps the Tabs apart from the Menu Bar")
     end)
 
     test.it("opens a menu below its label, changes menus under the pointer and runs items here", function()

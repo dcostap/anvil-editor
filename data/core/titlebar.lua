@@ -250,16 +250,6 @@ function TitleBar:update_geometry()
     and {x = self.position.x, y = self.position.y, w = math.min(h, math.max(0, caption_start - self.position.x)), h = h}
     or nil
   local project_x = self.position.x + (self.sidebar_toggle_rect and self.sidebar_toggle_rect.w or 0)
-  -- Simple Mode's Menu Bar follows the toggle, so it shows also while the Sidebar is hidden.
-  self.menu_rects = {}
-  if config.simple_mode then
-    for i, menu in ipairs(simple_menu().MENUS) do
-      local w = math.min(math.ceil(style.font:get_width(menu.label) + style.padding.x * 1.5),
-        math.max(0, caption_start - project_x))
-      self.menu_rects[i] = {x = project_x, y = self.position.y, w = w, h = h}
-      project_x = project_x + w
-    end
-  end
   local project_font = project_title_font()
   local project_width = math.min(220 * SCALE, math.ceil(
     project_font:get_width(project_name()) + style.padding.x * 2 + TEXT_FIT_RESERVE
@@ -271,6 +261,19 @@ function TitleBar:update_geometry()
     h = h,
   }
   local start_x = self.project_rect.x + self.project_rect.w
+  -- Simple Mode's Menu Bar follows the Project name, so it shows also while the Sidebar is hidden. A gap on each
+  -- side keeps it apart from the name and the Tabs.
+  self.menu_rects = {}
+  if config.simple_mode then
+    local x = start_x + style.padding.x
+    for i, menu in ipairs(simple_menu().MENUS) do
+      local w = math.min(math.ceil(style.font:get_width(menu.label) + style.padding.x * 1.5),
+        math.max(0, caption_start - x))
+      self.menu_rects[i] = {x = x, y = self.position.y, w = w, h = h}
+      x = x + w
+    end
+    start_x = math.min(caption_start, x + style.padding.x)
+  end
   local available = math.max(0, caption_start - start_x)
   self.tab_lane = { x = start_x, y = self.position.y, w = available, h = h }
   local ordered = tabs_shown() and panes().ordered() or {}
@@ -321,7 +324,13 @@ function TitleBar:configure_hit_test(enabled)
     end
     return
   end
+  -- The first client region holds the Menu Bar and the Tabs after it. The Project name between the toggle and the
+  -- Menu Bar still drags the Window.
   local interactive_x, interactive_right
+  for _, rect in ipairs(self.menu_rects) do
+    interactive_x = math.min(interactive_x or rect.x, rect.x)
+    interactive_right = math.max(interactive_right or rect.x + rect.w, rect.x + rect.w)
+  end
   for _, rect in pairs(self.entries) do
     local left = math.max(rect.x, self.tab_lane.x)
     local right = math.min(rect.x + rect.w, self.tab_lane.x + self.tab_lane.w)
@@ -330,11 +339,8 @@ function TitleBar:configure_hit_test(enabled)
   end
   local interactive_width = interactive_x and interactive_right - interactive_x or 0
   interactive_x = interactive_x or 0
-  -- The second client region holds the toggle and the Menu Bar after it.
   local toggle = self.sidebar_toggle_rect
-  local first, last = toggle or self.menu_rects[1], self.menu_rects[#self.menu_rects] or toggle
-  local toggle_x = first and first.x or 0
-  local toggle_width = first and last.x + last.w - toggle_x or 0
+  local toggle_x, toggle_width = toggle and toggle.x or 0, toggle and toggle.w or 0
   local _, _, resize_border = window_frame_metrics()
   local signature = table.concat({
     tostring(core.window), tostring(self.size.y), tostring(interactive_x),
@@ -436,7 +442,7 @@ function TitleBar:on_mouse_moved(x, y, ...)
     end
     if self.dragged_pane then
       local now = system.get_time()
-      local lane_left = self.project_rect.x + self.project_rect.w
+      local lane_left = self.tab_lane.x
       local lane_right = self.caption_rects[1] and self.caption_rects[1].x
         or self.position.x + self.size.x
       if y >= self.position.y and y < self.position.y + self.size.y
@@ -517,7 +523,7 @@ function TitleBar:resolve_pane_drag_target(x, y)
   local index, rect = self:entry_at(x, y)
   local target = index and panes().ordered()[index]
   if not target then
-    local lane_left = self.project_rect.x + self.project_rect.w
+    local lane_left = self.tab_lane.x
     local lane_right = self.caption_rects[1] and self.caption_rects[1].x
       or self.position.x + self.size.x
     if y >= self.position.y and y < self.position.y + self.size.y
@@ -856,9 +862,10 @@ function TitleBar:draw()
     end
     draw_centered_text(font, simple_menu().MENUS[i].label, rect, style.text)
   end
-  draw_centered_text(project_font,
-    fit_text(project_font, project_name(), math.max(0, self.project_rect.w - style.padding.x * 2)),
-    self.project_rect, style.text)
+  local project_rect = self.project_rect
+  local name_width = math.max(0, project_rect.w - style.padding.x * 2)
+  common.draw_text(project_font, style.text, fit_text(project_font, project_name(), name_width), "left",
+    project_rect.x + style.padding.x, project_rect.y, name_width, project_rect.h)
   core.push_clip_rect(self.tab_lane.x, self.tab_lane.y, self.tab_lane.w, self.tab_lane.h)
   for i, entry in ipairs(pane_entries) do
     local rect = self.entries[i]

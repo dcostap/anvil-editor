@@ -45,7 +45,7 @@ A saved choice for users who edit text and Markdown files and do not use the Com
 _Avoid_: User Mode, beginner mode, menu mode
 
 **Menu Bar**:
-The row of menus (File, Edit, Format, View and Help) in the Title Bar in Simple Mode, after the Project Sidebar toggle. It shows also while the Project Sidebar is hidden. An item that cannot act now shows dim.
+The row of menus (File, Edit, Format, View and Help) in the Title Bar in Simple Mode, after the Project name. It shows also while the Project Sidebar is hidden. An item that cannot act now shows dim.
 _Avoid_: toolbar, main menu
 
 **Peek**:
