@@ -171,6 +171,19 @@ test.describe("Modal input routing", function()
     test.ok(ok, err)
   end)
 
+  test.it("closes a confirmation whose choice fails", function()
+    local nag = NagView()
+    core.nag_view = nag
+    nag:show("Confirm", "Choose", {
+      { text = "Continue", default_yes = true },
+      { text = "Cancel", default_no = true },
+    }, function() error("choice failed") end)
+
+    command.perform("core:select_dialog_entry")
+    test.ok(not nag.visible, "the card should close after its choice runs")
+    test.is_nil(root:modal_input_owner())
+  end)
+
   test.it("gives confirmation buttons complete mouse interaction", function()
     local selected
     local nag = NagView()

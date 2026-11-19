@@ -24,7 +24,9 @@ command.add("core.nagview", {
   end,
   ["core:select_dialog_entry"] = function(v)
     if v.hovered_item then
-      if v.on_selected(v.options[v.hovered_item]) ~= false then v:next() end
+      -- A choice that fails still closes the card. core.try shows its error.
+      local ok, keep = core.try(v.on_selected, v.options[v.hovered_item])
+      if not ok or keep ~= false then v:next() end
     end
   end
 })
