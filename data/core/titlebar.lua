@@ -33,6 +33,9 @@ local function panes()
   return core.panes or require "core.panes"
 end
 
+local function simple_menu() return require "core.simple_menu" end
+local function context_menu() return require "core.context_menu" end
+
 local function window_frame_metrics()
   if core.window and system.get_window_frame_metrics then
     return system.get_window_frame_metrics(core.window)
@@ -194,6 +197,7 @@ function TitleBar:new()
   self.drag_target = nil
   self.entries = {}
   self.caption_rects = {}
+  self.menu_rects = {}
   self.tab_scroll = 0
   self.tab_scroll_target = 0
   self.tab_scroll_max = 0
@@ -246,6 +250,16 @@ function TitleBar:update_geometry()
     and {x = self.position.x, y = self.position.y, w = math.min(h, math.max(0, caption_start - self.position.x)), h = h}
     or nil
   local project_x = self.position.x + (self.sidebar_toggle_rect and self.sidebar_toggle_rect.w or 0)
+  -- Simple Mode's Menu Bar follows the toggle, so it shows also while the Sidebar is hidden.
+  self.menu_rects = {}
+  if config.simple_mode then
+    for i, menu in ipairs(simple_menu().MENUS) do
+      local w = math.min(math.ceil(style.font:get_width(menu.label) + style.padding.x * 1.5),
+        math.max(0, caption_start - project_x))
+      self.menu_rects[i] = {x = project_x, y = self.position.y, w = w, h = h}
+      project_x = project_x + w
+    end
+  end
   local project_font = project_title_font()
   local project_width = math.min(220 * SCALE, math.ceil(
     project_font:get_width(project_name()) + style.padding.x * 2 + TEXT_FIT_RESERVE
@@ -316,8 +330,11 @@ function TitleBar:configure_hit_test(enabled)
   end
   local interactive_width = interactive_x and interactive_right - interactive_x or 0
   interactive_x = interactive_x or 0
+  -- The second client region holds the toggle and the Menu Bar after it.
   local toggle = self.sidebar_toggle_rect
-  local toggle_x, toggle_width = toggle and toggle.x or 0, toggle and toggle.w or 0
+  local first, last = toggle or self.menu_rects[1], self.menu_rects[#self.menu_rects] or toggle
+  local toggle_x = first and first.x or 0
+  local toggle_width = first and last.x + last.w - toggle_x or 0
   local _, _, resize_border = window_frame_metrics()
   local signature = table.concat({
     tostring(core.window), tostring(self.size.y), tostring(interactive_x),
@@ -369,6 +386,30 @@ function TitleBar:caption_at(x, y)
   end
 end
 
+-- The index of the Menu Bar label at the point, or nil.
+function TitleBar:menu_at(x, y)
+  for i, rect in ipairs(self.menu_rects or {}) do
+    if contains(rect, x, y) then return i end
+  end
+end
+
+-- Opens menu `index` below its label. While it shows, the pointer on another label opens that label's menu.
+function TitleBar:open_menu(index)
+  local rect = self.menu_rects[index]
+  self.open_menu_index = index
+  core.log_quiet("Menu Bar: open %s", simple_menu().MENUS[index].label)
+  context_menu().open(rect.x, rect.y + rect.h, simple_menu().items(index), {
+    button = "left",
+    on_mouse_moved = function(x, y)
+      local other = self:menu_at(x, y)
+      if not other or other == self.open_menu_index then return false end
+      self:open_menu(other)
+      return true
+    end,
+  })
+  core.redraw = true
+end
+
 function TitleBar:get_external_drop_target(x, y)
   if not self.visible or self.size.y <= 0 then return end
   local rect = {
@@ -384,6 +425,7 @@ function TitleBar:on_mouse_moved(x, y, ...)
   self.hovered_entry = self:entry_at(x, y)
   self.hovered_caption = self:caption_at(x, y)
   self.hovered_sidebar_toggle = contains(self.sidebar_toggle_rect, x, y)
+  self.hovered_menu = self:menu_at(x, y)
   if self.pressed_pane then
     self.drag_x, self.drag_y = x, y
     if not self.dragged_pane and common.distance(
@@ -421,7 +463,7 @@ end
 
 function TitleBar:on_mouse_left()
   self.mouse_x, self.mouse_y = nil, nil
-  self.hovered_entry, self.hovered_caption, self.hovered_sidebar_toggle = nil, nil, false
+  self.hovered_entry, self.hovered_caption, self.hovered_sidebar_toggle, self.hovered_menu = nil, nil, false, nil
   if not self.pressed_pane then self.pressed_caption, self.pressed_sidebar_toggle = nil, false end
   core.redraw = true
 end
@@ -630,6 +672,11 @@ function TitleBar:on_mouse_pressed(button, x, y, clicks)
     core.redraw = true
     return true
   end
+  local menu = self:menu_at(x, y)
+  if menu then
+    self:open_menu(menu)
+    return true
+  end
   local index = self:entry_at(x, y)
   if index then
     local pane = panes().ordered()[index]
@@ -799,6 +846,15 @@ function TitleBar:draw()
         self.pressed_sidebar_toggle and style.titlebar_control_pressed or style.titlebar_control_hover)
     end
     draw_sidebar_glyph(toggle, self.hovered_sidebar_toggle and style.text or style.dim)
+  end
+  local menu_open = context_menu().is_open() and self.open_menu_index
+  for i, rect in ipairs(self.menu_rects) do
+    if menu_open == i then
+      draw_tab_tile(rect.x, rect.y, rect.w, rect.h, style.titlebar_control_pressed)
+    elseif self.hovered_menu == i then
+      draw_tab_tile(rect.x, rect.y, rect.w, rect.h, style.titlebar_tab_hover)
+    end
+    draw_centered_text(font, simple_menu().MENUS[i].label, rect, style.text)
   end
   draw_centered_text(project_font,
     fit_text(project_font, project_name(), math.max(0, self.project_rect.w - style.padding.x * 2)),

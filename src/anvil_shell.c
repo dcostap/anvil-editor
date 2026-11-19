@@ -1762,8 +1762,7 @@ static void send_configure(ShellProject *project) {
     config.configuration++;
     if (project == window->selected)
       SDL_ClearComposition(window->window);
-    /* The Sidebar's Menu Bar keeps its place in the caption strip. The Sidebar sends it again when it moves. */
-    if (!project->sidebar) project->hit = (AnvilSurfaceHitTest){0};
+    project->hit = (AnvilSurfaceHitTest){0};
   }
   /* A Project that starts hidden draws nothing. Its first-frame deadline starts when the shell shows it. */
   if (config.render_enabled && !project->last_config.render_enabled && project->state == SHELL_STARTING &&
@@ -4743,14 +4742,6 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     break;
   }
   case ANVIL_SURFACE_MSG_HIT_TEST:
-    /* The Sidebar's client region is its Menu Bar in the caption strip. It does not change the Window controls. */
-    if (project->sidebar && message->size == sizeof(AnvilSurfaceHitTest)) {
-      memcpy(&project->hit, payload, sizeof(project->hit));
-      project->hit.title_height = SDL_clamp(project->hit.title_height, 0, (int)(96 * window->scale));
-      project->hit.client_x = SDL_max(0, project->hit.client_x);
-      project->hit.client_width = SDL_max(0, project->hit.client_width);
-      break;
-    }
     if (message->size == sizeof(AnvilSurfaceHitTest) &&
         ((AnvilSurfaceHitTest *)payload)->configuration == project->last_config.configuration) {
       memcpy(&project->hit, payload, sizeof(project->hit));
@@ -6334,14 +6325,6 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       LRESULT result = win32_frame_hwnd_hit_test(hwnd, &hit, lparam);
       POINT point = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
       ScreenToClient(hwnd, &point);
-      /* Simple Mode's Menu Bar labels sit in the caption strip over the Sidebar. A sliding Sidebar shows its
-       * surface moved left. */
-      const AnvilSurfaceHitTest *bar = window->sidebar_client ? &window->sidebar_client->hit : NULL;
-      int bar_x = point.x + window->sidebar_full_w - window->sidebar_w;
-      if (result == HTCAPTION && bar && bar->client_width > 0 && point.y < bar->title_height &&
-          sidebar_takes_pointer(window, (float)point.x) && bar_x >= bar->client_x &&
-          bar_x < bar->client_x + bar->client_width)
-        return HTCLIENT;
       RECT sidebar_button = sidebar_restart_rect(window), client;
       if (sidebar_restart_offered() && PtInRect(&sidebar_button, point))
         return HTCLIENT;

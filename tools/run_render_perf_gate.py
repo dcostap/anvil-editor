@@ -207,8 +207,6 @@ SCENARIOS["project-sidebar-pills"] = dict(SCENARIOS["project-sidebar"], window_h
 SCENARIOS["project-sidebar-pills-dark"] = dict(SCENARIOS["project-sidebar"], window_height=520, theme="default")
 # A loaded Project that asks "Unload?" after Left.
 SCENARIOS["project-sidebar-unload"] = dict(SCENARIOS["project-sidebar"], theme="default")
-# Simple Mode's Menu Bar with its File menu open. Items that the Selected Project cannot run now are dim.
-SCENARIOS["project-sidebar-menu"] = dict(SCENARIOS["project-sidebar"], window_height=700)
 # A confirmation in the nag bar over a document: one line, and a File Tree operation list.
 SCENARIOS["nag-bar"] = {
     "start_line": 1700,
@@ -253,6 +251,8 @@ SCENARIOS["titlebar-file-drop"] = {
     "visual": True,
     "paced": False,
 }
+# Simple Mode's Menu Bar before the Title Bar Tabs, with its File menu open.
+SCENARIOS["titlebar-simple-menu"] = dict(SCENARIOS["titlebar-file-drop"])
 for wallpaper_theme in ("light", "light2", "dark3"):
     SCENARIOS[f"wallpaper-{wallpaper_theme}"] = {
         "start_line": 1700,

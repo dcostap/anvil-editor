@@ -2,14 +2,15 @@ local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
 local launcher = require "core.project_launcher"
-local pane_report = require "core.pane_report"
 local panes = require "core.panes"
 local simple_menu = require "core.simple_menu"
-local SidebarView = require "core.sidebar_view"
+local TitleBar = require "core.titlebar"
+local View = require "core.view"
+local context_menu = require "core.context_menu"
 local test = require "core.test"
 
--- Seams: the Simple Mode toggle command, the Project's Pane report, the Project Launcher's buttons, and the Sidebar
--- View's pointer handlers and emitted actions.
+-- Seams: the Simple Mode toggle command, the Project Launcher's buttons, the Title Bar's pointer handlers and the
+-- Context Menu.
 
 local function each_item(items, fn)
   for _, entry in ipairs(items) do
@@ -56,18 +57,13 @@ test.describe("Simple Mode", function()
     end
   end)
 
-  test.it("saves the toggle, reports the menu commands and hides the Terminal buttons", function()
+  test.it("saves the toggle and hides the Terminal buttons", function()
     config.simple_mode = false
-    test.not_ok(pane_report.build().menu, "The Pane report has a menu outside Simple Mode")
     test.ok(launcher_labels():find("Terminal", 1, true))
 
     command.perform("core:toggle_simple_mode")
     test.equal(config.simple_mode, true)
     test.equal(read_user_settings().simple_mode, true)
-    local menu = test.not_nil(pane_report.build().menu)
-    -- The toggle that turns Simple Mode off is on, and a command that cannot run now is absent.
-    test.equal(menu["core:toggle_simple_mode"].on, true)
-    test.not_ok(menu["markdown:surround_bold"], "Bold can run without a Markdown Editor")
     local labels = launcher_labels()
     test.not_ok(labels:find("Terminal", 1, true) or labels:find("Pi", 1, true), labels)
     test.ok(labels:find("New File", 1, true), labels)
@@ -87,60 +83,73 @@ test.describe("Simple Mode", function()
   end)
 
   test.describe("Menu Bar", function()
-    local function sidebar(report)
-      local actions = {}
-      local view = SidebarView(function(...) actions[#actions + 1] = {...} end, {})
-      view:set_size(320, 600)
-      view:set_model({{row_id=7,id=31,path="C:/Notes",state="ready",window_id=5,terminals={},panes=report},
-        windows={{id=5,selected_project=31}}}, 5)
-      return view, actions
+    test.before_each(function(context)
+      context.saved = {controls = system.get_window_controls, content_x = system.get_window_content_x,
+        hit_test = system.set_window_hit_test}
+      -- The shell's Window controls at the right end of the Title Bar.
+      system.get_window_controls = function() return 760, 0, 140, 32 end
+      context.hit = nil
+      system.set_window_hit_test = function(_, ...) context.hit = {...} end
+      panes.create { factory = function() return View() end }
+    end)
+
+    test.after_each(function(context)
+      context_menu.close()
+      system.get_window_controls = context.saved.controls
+      system.get_window_content_x = context.saved.content_x
+      system.set_window_hit_test = context.saved.hit_test
+      config.simple_mode = false
+    end)
+
+    local function title_bar(content_x)
+      system.get_window_content_x = function() return content_x end
+      local title = TitleBar()
+      title.size.x = 900
+      title:update()
+      return title
     end
 
-    test.it("shows only in Simple Mode", function()
+    test.it("follows the Sidebar toggle, while the Sidebar shows and while it is hidden", function(context)
       config.simple_mode = false
-      local view = sidebar({})
-      test.not_ok(view:menu_bar())
+      test.equal(#title_bar(0).menu_rects, 0)
       config.simple_mode = true
-      local bar = test.not_nil(view:menu_bar())
-      test.equal(#bar, #simple_menu.MENUS)
-      config.simple_mode = false
+      for _, content_x in ipairs {240, 0} do
+        local title = title_bar(content_x)
+        local rects = title.menu_rects
+        test.equal(#rects, #simple_menu.MENUS)
+        local toggle, last = title.sidebar_toggle_rect, rects[#rects]
+        test.equal(rects[1].x, toggle.x + toggle.w)
+        test.ok(title.project_rect.x >= last.x + last.w, "The Project name covers the Menu Bar")
+        -- The labels take the pointer, so a press on them does not drag the Window.
+        local client_x, client_w = context.hit[6], context.hit[7]
+        test.ok(client_x <= rects[1].x and client_x + client_w >= last.x + last.w,
+          "The Menu Bar is not in the Title Bar's client area")
+      end
+      -- Without the Sidebar, Tabs follow the Menu Bar.
+      local title = title_bar(0)
+      local entry = test.not_nil(title:get_pane_entries()[1])
+      local last = title.menu_rects[#title.menu_rects]
+      test.ok(entry.x >= last.x + last.w, "A Tab covers the Menu Bar")
     end)
 
-    test.it("opens a menu below its label, and its items run in the Selected Project", function()
+    test.it("opens a menu below its label, changes menus under the pointer and runs items here", function()
       config.simple_mode = true
-      local view, actions = sidebar({menu = {["editor:save"] = {key = "ctrl+s"}}})
-      local bar = view:menu_bar()
-      local label = bar[1]
-      local x, y = label.x + label.w / 2, label.y + label.h / 2
-      test.equal(view:menu_bar_at(x, y), 1)
-      view:on_mouse_pressed("left", x, y, 1)
-      local opened = test.not_nil(actions[#actions])
-      test.same({opened[1], opened[3], opened[4]}, {"menu", label.x, label.y + label.h})
-      test.equal(view.menu_bar_open, 1)
+      local title = title_bar(0)
+      local file, edit = title.menu_rects[1], title.menu_rects[2]
+      test.ok(title:on_mouse_pressed("left", file.x + 2, file.y + 2, 1))
+      test.ok(context_menu.is_open())
+      test.equal(context_menu.labels()[1], "New File")
+      -- No Editor is active, so Save cannot run: it shows, but choosing it does nothing.
+      test.ok(context_menu.choose("Save"))
+      test.ok(context_menu.is_open(), "Choosing a dim item closed the menu")
 
-      local items = opened[2]
-      local save = find(items, "Save")
-      test.equal(save.shortcut, "ctrl+s")
-      test.not_ok(save.disabled)
-      -- The Project did not report it, so it cannot run there now.
-      test.ok(find(items, "Save As…").disabled)
+      core.on_event("mousemoved", edit.x + 2, edit.y + 2, 0, 0)
+      test.equal(context_menu.labels()[1], "Undo")
 
-      local before = #actions
-      command.perform(save.command, table.unpack(save.args))
-      test.same({actions[before + 1], actions[before + 2]}, {{"return_focus"},
-        {"request", "select", "C:/Notes", {action = "perform", command = "editor:save"}}})
-      config.simple_mode = false
-    end)
-
-    test.it("shows each item as available before the Project's first report", function()
-      config.simple_mode = true
-      local view, actions = sidebar(nil)
-      local label = view:menu_bar()[2]
-      view:on_mouse_pressed("left", label.x + 1, label.y + 1, 1)
-      local disabled = 0
-      each_item(actions[#actions][2], function(item) if item.disabled then disabled = disabled + 1 end end)
-      test.equal(disabled, 0)
-      config.simple_mode = false
+      core.on_event("mousemoved", title.menu_rects[5].x + 2, edit.y + 2, 0, 0)
+      test.ok(context_menu.choose("Exit Simple Mode"))
+      test.not_ok(context_menu.is_open())
+      test.equal(config.simple_mode, false)
     end)
   end)
 end)

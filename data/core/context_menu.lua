@@ -19,8 +19,7 @@ local LineInput = require "core.line_input"
 ---  `command` a command name, or a list of names; the first valid one runs
 ---  `args`    arguments for the command and its predicate
 ---  `items`   a submenu instead of a command
----  `shortcut` a binding, such as "ctrl+s", to show instead of the command's own binding
----  `disabled` shows the item dimmed, so it cannot run
+---  `show_disabled` shows the item dim when no command can run, instead of leaving it out
 ---
 ---Typed text filters the menu with a fuzzy query, also the items of submenus.
 ---
@@ -124,9 +123,10 @@ local function resolve(items)
       if #children > 0 then rows[#rows + 1] = { label = item.label, icon = item.icon, items = children } end
     else
       local name = valid_command(item)
-      if name then
-        rows[#rows + 1] = { label = item.label, icon = item.icon, command = name, args = item.args or {},
-          shortcut = shortcut_text(item.shortcut) or binding_for(item, name), disabled = item.disabled }
+      local shown = name or item.show_disabled and (type(item.command) == "table" and item.command[1] or item.command)
+      if shown then
+        rows[#rows + 1] = { label = item.label, icon = item.icon, command = shown, args = item.args or {},
+          shortcut = binding_for(item, shown), disabled = not name or nil }
       end
     end
   end
@@ -261,9 +261,10 @@ end
 ---@param x number
 ---@param y number
 ---@param items table[]
----@param opts? { button: string?, host: table? } `button` is the mouse button that opened the menu, so its release
----does not choose an item. A menu without `button` opened from the keyboard, so its first item is selected.
----`host` is the panel that the menu opens over, the Root Panel by default.
+---@param opts? { button: string?, host: table?, on_mouse_moved: function? } `button` is the mouse button that opened
+---the menu, so its release does not choose an item. A menu without `button` opened from the keyboard, so its first
+---item is selected. `host` is the panel that the menu opens over, the Root Panel by default. `on_mouse_moved(x, y)`
+---sees each pointer move first; it returns true when it handled the move, such as by opening another menu.
 function context_menu.open(x, y, items, opts)
   context_menu.close()
   local rows = resolve(items)
@@ -278,6 +279,7 @@ function context_menu.open(x, y, items, opts)
     started = now(),
     progress = config.transitions and 0 or 1,
     origin = { x = x, y = y, button = opts.button },
+    on_mouse_moved = opts.on_mouse_moved,
     root_size = { host.size.x, host.size.y },
     rows = rows,
     input = LineInput(),
@@ -420,6 +422,7 @@ end
 
 local function on_mouse_moved(x, y)
   if not state then return false end
+  if state.on_mouse_moved and state.on_mouse_moved(x, y) then return true end
   core.request_cursor("arrow")
   local depth, index = hit(x, y)
   if depth and index then

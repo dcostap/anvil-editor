@@ -256,13 +256,13 @@ New items, Reopen, Duplicate and Close go through the select route, so the user 
 The `perform` Pane request runs a named command in its Pane, or in the Project. A View that it opens takes a new Pane.
 Run `ui/sidebar_view.lua`, `ui/context_menu.lua` and the `project-menu`, `project-menu-background`, `terminal-focus` and `windows-move` shell probes after changes.
 
-Simple Mode (`config.simple_mode`, `core:toggle_simple_mode`) adds the Menu Bar to the Sidebar's caption strip. It is for users who edit text and Markdown files and do not use the Command Palette. Help > Exit Simple Mode turns it off.
-The toggle saves `simple_mode` in `user_settings.lua`. It sends `ANVIL_SURFACE_MSG_SIMPLE_MODE_SAVED`, and the shell sends `simplemodechanged` to the other Projects and the Sidebar. The Sidebar process reads the saved value at startup, as it does for `sidebar_peek`.
-`core.simple_menu` defines the menus. Each item names one command. The Selected Project reports the commands that can run now as `menu` in its Pane report, with each command's first binding and its toggle state. The Sidebar draws an absent command dim, and a toggle that is on with a check. Before the first report, all items show as available.
-A label opens its menu with `core.context_menu`. The item runs its command in the Selected Project through the `perform` Pane request, and the keyboard goes back to the Project. While a menu shows, the pointer on another label opens that label's menu.
-The caption strip drags the Window. The Sidebar sends the labels' area with `system.set_window_hit_test`, and the shell answers `HTCLIENT` there.
+Simple Mode (`config.simple_mode`, `core:toggle_simple_mode`) adds the Menu Bar to the Title Bar, after the Sidebar toggle. It is for users who edit text and Markdown files and do not use the Command Palette. Help > Exit Simple Mode turns it off.
+The Title Bar shows the Menu Bar while the Sidebar shows and while it is hidden. The Menu Bar and the toggle share the Title Bar's second client region, so a press on a label does not drag the Window.
+The toggle saves `simple_mode` in `user_settings.lua`. It sends `ANVIL_SURFACE_MSG_SIMPLE_MODE_SAVED`, and the shell sends `simplemodechanged` to the other Projects and the Sidebar. The Sidebar reads the saved value at startup, as it does for `sidebar_peek`.
+`core.simple_menu` defines the menus. Each item names one command and runs in its own Project. A label opens its menu with `core.context_menu`. Items with `show_disabled` show dim when their command cannot run. A View toggle that is on shows a check. While a menu shows, the pointer on another label opens that label's menu (`on_mouse_moved` of `context_menu.open`).
+The menus read command state only when they open. Do not put menu state in the Pane report: a change there makes the Sidebar rebuild its model, also during a Sidebar slide.
 Simple Mode also hides New Terminal and New Pi in the Project menu, and puts a New File button in place of the Terminal and Pi buttons in the Project Launcher.
-Run `ui/simple_mode.lua`, `ui/sidebar_view.lua` and `ui/project_launcher.lua` after changes. Check the `project-sidebar-menu` render scenario after visual changes.
+Run `ui/simple_mode.lua`, `ui/titlebar.lua`, `ui/context_menu.lua` and `ui/project_launcher.lua` after changes. Check the `titlebar-simple-menu` render scenario after visual changes.
 
 A right-click on a Terminal Tab in the Sidebar sets or removes a Snooze.
 The Sidebar saves each Snooze as a Unix time in `storage/sidebar/snoozes`, beside the seen times.

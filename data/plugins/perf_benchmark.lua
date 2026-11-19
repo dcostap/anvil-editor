@@ -347,7 +347,7 @@ end
 
 local function setup_tabs(primary)
   if benchmark.scenario ~= "tab-heavy-titlebar"
-    and benchmark.scenario ~= "titlebar-file-drop" then return end
+    and benchmark.scenario ~= "titlebar-file-drop" and benchmark.scenario ~= "titlebar-simple-menu" then return end
   assert(benchmark.tab_dir ~= "", "tab-heavy-titlebar requires a tab fixture directory")
   local panes = require "core.panes"
   for i = 1, benchmark.tab_count do
@@ -839,6 +839,13 @@ local function setup_scenario()
     core.on_event("dropmoved", core.title_bar.position.x + 20 * SCALE,
       core.title_bar.position.y + core.title_bar.size.y / 2)
   end
+  if benchmark.scenario == "titlebar-simple-menu" then
+    -- Simple Mode's Menu Bar before the Tabs, with its File menu open.
+    config.simple_mode = true
+    core.root_panel:update_layout()
+    core.title_bar:update()
+    core.title_bar:open_menu(1)
+  end
   if benchmark.scenario == "code-tour" then
     view = require("core.code_tour").open({title = "How the renderer handles rows", entries = {
       {path = benchmark.fixture, line = 5, end_line = 12, text = "These are the **inputs** for this section."},
@@ -901,9 +908,7 @@ local function setup_scenario()
       placement = "current", focus = true, reason = "perf-focus-feedback",
     })
   elseif benchmark.scenario:find("^project%-sidebar") then
-    if benchmark.scenario == "project-sidebar-search" or benchmark.scenario == "project-sidebar-menu" then
-      core.title_bar.visible = false
-    end
+    if benchmark.scenario == "project-sidebar-search" then core.title_bar.visible = false end
     view = require("core.sidebar_scene")(benchmark.scenario:match("^project%-sidebar%-(%a+)"))
     require("core.panes").place(function() return view end, {
       placement = "current", focus = true, reason = "perf-project-sidebar",

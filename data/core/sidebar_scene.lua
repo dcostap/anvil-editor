@@ -1,5 +1,4 @@
 -- Private renderer check for the Project Sidebar: a fixed model with every row kind.
-local config = require "core.config"
 local style = require "core.style"
 local View = require "core.view"
 local SidebarView = require "core.sidebar_view"
@@ -100,20 +99,7 @@ function Scene:new(mode)
   table.insert(model[1].panes, snoozed)
   model[4].terminals[2] = terminal("j", "\u{03C0} - notes", 5 * 60 * 60, {agent_app = "pi", agent_state = "done",
     agent_since = os.time() - 4 * 60 * 60})
-  -- Simple Mode's Menu Bar, with its File menu open. The Selected Project can save, but not rename, its Tab.
-  local action = function() end
-  if mode == "menu" then
-    config.simple_mode = true
-    model[1].panes.menu = {["editor:open"] = {key = "ctrl+n"}, ["editor:save"] = {key = "ctrl+s"},
-      ["editor:save_as"] = {key = "ctrl+shift+s"}, ["pane:close"] = {key = "ctrl+w"}, ["fuzzy:open_files"] = {key = "ctrl+p"},
-      ["core:new_anvil_window"] = {key = "ctrl+shift+n"}, ["core:close_current_window"] = {key = "alt+f4"},
-      ["core:pick_file_with_system_picker"] = {key = "ctrl+o"}, ["core:open_project_folder_system_file_picker"] = {key = ""}}
-    action = function(name, items, x, y, button)
-      if name == "menu" then require("core.context_menu").open(x, y, items, {button = button}) end
-    end
-  end
-  self.menu = mode == "menu"
-  self.sidebar = SidebarView(action,
+  self.sidebar = SidebarView(function() end,
     {["project:D:/Work/Israel Mallo Mart\u{00ED}nez - ManualSistemas"] = true, ["project:C:/Projects/docs-site"] = true},
     {}, false,
     {c = os.time() + 3 * 60 * 60}, {deepseek = {from = os.time() - 3 * DAY - 25 * MINUTE, to = os.time() - 25 * MINUTE}})
@@ -189,12 +175,6 @@ function Scene:draw()
     self.sidebar:set_size(width, height)
     self.sidebar:on_mouse_wheel(-9, height, 100 * SCALE)
     for _ = 1, 90 do self.sidebar:step(1 / 30) end
-  end
-  if self.menu then
-    self.menu = false
-    self.sidebar:set_size(width, height)
-    local label = self.sidebar:menu_bar()[1]
-    self.sidebar:on_mouse_pressed("left", label.x + label.w / 2, label.y + label.h / 2)
   end
   if self.hover_arrow then
     self.hover_arrow = false

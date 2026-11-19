@@ -227,7 +227,6 @@ local function menu_host(surface)
   end
   function host:pop_modal_input()
     self.handlers = nil
-    surface.view.menu_bar_open = nil
     if menu_surface == surface then menu_surface = nil end
     -- The next frame reports no areas, so the shell hides the menu.
     surface.redraw = true
@@ -259,12 +258,7 @@ local function menu_event(handlers, name, ...)
   elseif name == "keyreleased" then keymap.on_key_released(...)
   elseif name == "mousepressed" then handlers.mouse_pressed(...)
   elseif name == "mousereleased" then handlers.mouse_released(...)
-  elseif name == "mousemoved" then
-    handlers.mouse_moved(...)
-    -- While a Menu Bar menu is open, the pointer on another label opens that label's menu.
-    local view = current.view
-    local index = view.menu_bar_open and view:menu_bar_at(...)
-    if index and index ~= view.menu_bar_open then view:open_menu_bar(index, "hover") end
+  elseif name == "mousemoved" then handlers.mouse_moved(...)
   elseif name == "mousewheel" then handlers.mouse_wheel()
   elseif name == "focuslost" then
     -- The Window lost focus. The Sidebar View also takes the event.
@@ -294,17 +288,6 @@ local function draw_menu(surface, width, height)
   end
   system.set_surface_overlay(surface.window, nil, nil, nil, nil, #host.areas > 0 and host.areas or nil)
   return moves
-end
-
--- The shell drags the Window from the caption strip. Simple Mode's Menu Bar labels there take the pointer instead.
-local function publish_menu_bar(surface)
-  local bar = surface.view:menu_bar()
-  local signature = bar and string.format("%d:%d:%d", bar.caption, bar.x, bar.w) or "none"
-  -- The first frame also sends "none", so the shell forgets the area of an earlier Sidebar process.
-  if signature == surface.menu_bar_signature then return end
-  surface.menu_bar_signature = signature
-  system.set_window_hit_test(surface.window, bar and bar.caption or 0, 0, 0, bar and bar.x or 0, bar and bar.w or 0)
-  core.log_quiet("Sidebar Menu Bar area: Window=%d %s", surface.id, signature)
 end
 
 local function add_surface(id, window)
@@ -482,6 +465,7 @@ function core.init()
   if type(saved_config) == "table" and type(saved_config.sidebar_peek) == "boolean" then
     require("core.config").sidebar_peek = saved_config.sidebar_peek
   end
+  -- Simple Mode hides the Terminal items of the Project menu.
   if type(saved_config) == "table" and type(saved_config.simple_mode) == "boolean" then
     require("core.config").simple_mode = saved_config.simple_mode
   end
@@ -727,8 +711,6 @@ function core.run_step()
     elseif event[1] == "simplemodechanged" then
       require("core.config").simple_mode = event[2]
       core.log_quiet("Sidebar Simple Mode: %s", tostring(event[2]))
-      for _, surface in pairs(surfaces) do surface.redraw = true end
-      core.redraw = true
     elseif event[1] == "projectsidebarchanged" and not native_id then
       for _, surface in pairs(surfaces) do surface.request, surface.query_needed = nil, true end
       core.project_sidebar_request = nil
@@ -779,7 +761,6 @@ function core.run_step()
           wallpapers.draw(backdrop, 0, 0, width, height, false)
         end
         surface.view:draw(strip_size(core.window), height)
-        publish_menu_bar(surface)
         local menu_moves = draw_menu(surface, width, height)
         renderer.end_frame()
         core.redraw = false

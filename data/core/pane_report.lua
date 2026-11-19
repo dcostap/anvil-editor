@@ -3,7 +3,6 @@
 local core = require "core"
 local common = require "core.common"
 local fs = require "core.fs"
-local config = require "core.config"
 local panes = require "core.panes"
 local tab = require "core.tab"
 local recent_panes = require "core.recent_panes"
@@ -25,7 +24,6 @@ local sent, built_at
 -- the Project's Pane History entries.
 -- A Project on a Machine also sends `terminals`, the Machine's Terminal Sessions of the Project. The shell's scan
 -- reads only this PC's session records.
--- In Simple Mode, `menu` holds the Menu Bar commands that can run now, with their shortcuts (`core.simple_menu`).
 function pane_report.build()
   local report, groups, held = {navigation_window = system.get_anvil_window_id()}, {}, {}
   local active, visible = panes.active(), panes.visible_group()
@@ -49,7 +47,6 @@ function pane_report.build()
   local history = pane_history.entries()
   if #history > 0 then report.history = {table.unpack(history)} end
   if fs.machine then report.terminals = require("core.machine_terminal").sessions(fs.machine, fs.roots[1]) end
-  if config.simple_mode then report.menu = require("core.simple_menu").state() end
   return report
 end
 

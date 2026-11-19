@@ -1,13 +1,13 @@
 -- Simple Mode's Menu Bar: File, Edit, Format, View and Help, for users who edit text and Markdown files and do not
--- use the Command Palette. The Project Sidebar draws the bar and its menus. Each item runs its command in the
--- Selected Project, which reports in its Pane report the commands that can run now, with their shortcuts.
+-- use the Command Palette. The Title Bar shows the bar and opens its menus.
 local command = require "core.command"
-local keymap = require "core.keymap"
 local icons = require("core.context_menu").icons
 
 local simple_menu = {}
 
 local function item(label, name, icon) return {label = label, command = name, icon = icon} end
+-- A toggle that is on shows a check in place of its icon.
+local function toggle(label, name, icon) return {label = label, command = name, icon = icon, toggle = true} end
 
 simple_menu.MENUS = {
   {label = "File", items = {
@@ -74,14 +74,14 @@ simple_menu.MENUS = {
     }},
   }},
   {label = "View", items = {
-    item("Markdown Source", "markdown:toggle_source_mode"),
+    toggle("Markdown Source", "markdown:toggle_source_mode"),
     "-",
-    item("Sidebar", "core:toggle_project_sidebar"),
+    toggle("Sidebar", "core:toggle_project_sidebar"),
     item("File Tree", "filetree:open_at_project_root", icons.file_tree),
     "-",
-    item("Word Wrap", "editor:toggle_line_wrapping"),
-    item("Centered Text", "editor:toggle_centered"),
-    item("Line Numbers", "core:toggle_line_numbers"),
+    toggle("Word Wrap", "editor:toggle_line_wrapping"),
+    toggle("Centered Text", "editor:toggle_centered"),
+    toggle("Line Numbers", "core:toggle_line_numbers"),
     "-",
     item("Zoom In", "editor:zoom_in", icons.zoom_in),
     item("Zoom Out", "editor:zoom_out", icons.zoom_out),
@@ -89,7 +89,7 @@ simple_menu.MENUS = {
     "-",
     item("Theme…", "core:select_theme", icons.theme),
     item("Wallpaper…", "core:select_wallpaper", icons.wallpaper),
-    item("Full Screen", "core:toggle_fullscreen", icons.fullscreen),
+    toggle("Full Screen", "core:toggle_fullscreen", icons.fullscreen),
   }},
   {label = "Help", items = {
     item("Settings", "settings:open", icons.settings),
@@ -99,37 +99,9 @@ simple_menu.MENUS = {
   }},
 }
 
--- Every command of the menus, in menu order.
-local commands = {}
-local function collect(items)
-  for _, entry in ipairs(items) do
-    if entry ~= "-" then
-      if entry.items then collect(entry.items) else commands[#commands + 1] = entry.command end
-    end
-  end
-end
-for _, menu in ipairs(simple_menu.MENUS) do collect(menu.items) end
-
----The Project's part of its Pane report: each menu command that can run now, with its first binding ("" without one)
----and `on = true` for a toggle that is on. A command that cannot run is absent.
----@return table<string, {key: string, on: boolean?}>
-function simple_menu.state()
-  local state = {}
-  for _, name in ipairs(commands) do
-    local ok, valid = pcall(command.is_valid, name)
-    if ok and valid then
-      state[name] = {key = keymap.get_binding(name) or "", on = command.get_status(name) == true or nil}
-    end
-  end
-  return state
-end
-
----The Context Menu items of menu `index`. `state` is the Project's report, or nil before its first report, when each
----item shows as available. `run(name)` gives an item's `command` and `args` to run the command `name`.
+---The Context Menu items of menu `index`. An item whose command cannot run now shows dim.
 ---@param index integer
----@param state table?
----@param run fun(name: string): string, table
-function simple_menu.items(index, state, run)
+function simple_menu.items(index)
   local function convert(items)
     local result = {}
     for _, entry in ipairs(items) do
@@ -138,11 +110,9 @@ function simple_menu.items(index, state, run)
       elseif entry.items then
         result[#result + 1] = {label = entry.label, icon = entry.icon, items = convert(entry.items)}
       else
-        local name, args = run(entry.command)
-        local info = state and state[entry.command]
-        result[#result + 1] = {label = entry.label, command = name, args = args,
-          icon = info and info.on and icons.check or entry.icon,
-          shortcut = info and info.key, disabled = state ~= nil and not info or nil}
+        local on = entry.toggle and command.get_status(entry.command) == true
+        result[#result + 1] = {label = entry.label, command = entry.command, show_disabled = true,
+          icon = on and icons.check or entry.icon}
       end
     end
     return result

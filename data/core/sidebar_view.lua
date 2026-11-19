@@ -9,7 +9,6 @@ local FocusFeedback = require "core.focus_feedback"
 local look = require "core.project_look"
 local command = require "core.command"
 local icons = require("core.context_menu").icons
-local simple_menu = require "core.simple_menu"
 
 -- The shell owns identity and lifecycle. This view sends only Project, Pane and Terminal Session actions.
 -- A right-click on a Project or a Terminal Tab, or the Context Menu key on the cursor's row, opens that row's
@@ -270,11 +269,6 @@ end, {
   ["sidebar:perform"] = function(view, path, name, pane)
     view.action("request", "select", path, {action = "perform", command = name, pane = pane})
   end,
-  -- A Menu Bar item acts in the Project's active Pane, which then takes the keyboard, as after a Project click.
-  ["sidebar:menu_perform"] = function(view, path, name)
-    view.action("return_focus")
-    view.action("request", "select", path, {action = "perform", command = name})
-  end,
   ["sidebar:close_pane"] = function(view, path, pane)
     view.action("request", "select", path, {action = "close", pane = pane})
   end,
@@ -388,74 +382,6 @@ function SidebarView:open_cursor_menu()
   if not self.focused or self.hours or not self.cursor then return false end
   local row, m = self:get_cursor(), self:metrics()
   return self:open_menu(row, row.kind == "project" and m.pad or m.tab_x, self:row_y(self.cursor) + row.h)
-end
-
--- Simple Mode's Menu Bar: one label for each menu of `core.simple_menu`, in the caption strip. Returns its layout:
--- `caption`, the strip's height, the bar's `x` and `w`, and one `{x, y, w, h}` for each label. Nil outside Simple Mode.
-function SidebarView:menu_bar()
-  if not config.simple_mode then return nil end
-  local m = self:metrics()
-  local width = self.width or 0
-  local bar = self.menu_bar_layout
-  if bar and bar.metrics == m and bar.width == width then return bar end
-  local font = style.font
-  local caption = m.search_y - 2 * SCALE
-  local h = math.floor(font:get_height() + 10 * SCALE + 0.5)
-  local y, x = math.floor((caption - h) / 2), math.floor(m.pad / 2)
-  -- A narrow Sidebar puts the labels closer together. The narrowest one clips them at its edge.
-  local text = 0
-  for _, menu in ipairs(simple_menu.MENUS) do text = text + font:get_width(menu.label) end
-  local fit = (width - 2 * x - text) / (2 * #simple_menu.MENUS)
-  local pad = math.max(2 * SCALE, math.min(8 * SCALE, fit))
-  bar = {metrics = m, width = width, caption = math.floor(caption), x = x}
-  for index, menu in ipairs(simple_menu.MENUS) do
-    local w = math.floor(font:get_width(menu.label) + 2 * pad + 0.5)
-    bar[index] = {x = x, y = y, w = w, h = h}
-    x = x + w
-  end
-  bar.w = x - bar.x
-  self.menu_bar_layout = bar
-  return bar
-end
-
--- The index of the Menu Bar label at the point, or nil.
-function SidebarView:menu_bar_at(x, y)
-  local bar = self:menu_bar()
-  if not bar or y < 0 or y >= bar.caption then return nil end
-  for index, label in ipairs(bar) do
-    if x >= label.x and x < label.x + label.w then return index end
-  end
-end
-
--- Opens menu `index` below its label. Its items run in this Window's Selected Project. Without that Project's report,
--- the items show as available; without a Selected Project, none can run.
-function SidebarView:open_menu_bar(index, button)
-  local bar, project = self:menu_bar(), self:selected_project()
-  local state, path = {}, nil
-  if project then state, path = (project.panes or {}).menu, project.path end
-  local items = simple_menu.items(index, state, function(name)
-    return "sidebar:menu_perform", {self, path, name}
-  end)
-  self.focus_pending, self.unload_ask = nil, nil
-  self:on_mouse_left()
-  local label = bar[index]
-  self.action("menu", items, label.x, label.y + label.h, button, 0)
-  -- Opening a menu closes the one before it, which clears the open label.
-  self.menu_bar_open = index
-end
-
-function SidebarView:draw_menu_bar(width, height)
-  local bar = self:menu_bar()
-  if not bar then return end
-  renderer.set_clip_rect(0, 0, width - bar.x, bar.caption)
-  for index, menu in ipairs(simple_menu.MENUS) do
-    local label = bar[index]
-    local color = self.menu_bar_open == index and style.sidebar_selection
-      or self.menu_bar_hover == index and style.sidebar_hover
-    if color then renderer.draw_rounded_rect(label.x, label.y, label.w, label.h, 5 * SCALE, color) end
-    common.draw_text(style.font, style.text, menu.label, "center", label.x, label.y, label.w, label.h)
-  end
-  renderer.set_clip_rect(0, 0, width, height)
 end
 
 -- Opens the field that takes a Snooze time in whole hours for the Pane `target`.
@@ -1333,11 +1259,6 @@ function SidebarView:on_mouse_pressed(button, x, y)
   if button ~= "left" and button ~= "right" and button ~= "middle" then return end
   self.focus_pending = nil
   self.unload_ask = nil
-  local menu = button == "left" and self:menu_bar_at(x, y)
-  if menu then
-    self:open_menu_bar(menu, button)
-    return
-  end
   if self:in_search(x, y) then
     -- A press places the caret. A drag from it selects.
     if button == "left" then
@@ -1443,10 +1364,8 @@ function SidebarView:update_hover()
   if scrollbar or pill then hover = nil end
   scrollbar = scrollbar and scrollbar.field
   pill = pill and pill.id or nil
-  local menu = inside and self:menu_bar_at(self.hover_x, self.hover_y) or nil
   local changed = hover ~= self.hover or scrollbar ~= self.scrollbar_hover or pill ~= self.pill_hover
-    or menu ~= self.menu_bar_hover
-  self.hover, self.scrollbar_hover, self.pill_hover, self.menu_bar_hover = hover, scrollbar, pill, menu
+  self.hover, self.scrollbar_hover, self.pill_hover = hover, scrollbar, pill
   local tooltip = self:get_tooltip()
   if tooltip ~= self.tooltip_text then
     self.tooltip_text, self.tooltip_started = tooltip, system.get_time()
@@ -2987,7 +2906,6 @@ function SidebarView:draw(width, height)
   renderer.draw_rect(0, 0, width, height,
     system.is_surface_transparent() and style.wallpaper_surface(style.background2) or style.background2)
   renderer.draw_rect(width - math.max(1, SCALE), 0, math.max(1, SCALE), height, style.divider)
-  self:draw_menu_bar(width, height)
   self:draw_search(width, height)
   local top, main_bottom = self:shown_list_top(), self:main_bottom(self.shown.bottom_h)
   local bottom_top = self:bottom_area(self.shown.bottom_h)
