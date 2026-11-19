@@ -8268,13 +8268,21 @@ local function open_link_resolution(resolution, target)
 end
 
 -- Without a Project file list there is nothing to resolve against yet; open once the index is ready.
+-- A later activation in the same view replaces the waiting one, so repeated presses open one link.
 local function open_when_indexed(view, link, index)
   core.log_quiet("Markdown link waits for the note index: %s", tostring(link.raw_target))
+  local request = {}
+  view.__markdown_link_waiting = request
   core.add_thread(function()
     local deadline = system.get_time() + 30
     while not index:can_resolve() and index.status ~= "error" and system.get_time() < deadline do
       coroutine.yield(0.05)
     end
+    if view.__markdown_link_waiting ~= request then
+      core.log_quiet("Markdown link wait replaced by a later activation: %s", tostring(link.raw_target))
+      return
+    end
+    view.__markdown_link_waiting = nil
     if not index:can_resolve() then
       core.warn("Markdown link not opened because the note index is not ready: %s", tostring(link.raw_target))
       return

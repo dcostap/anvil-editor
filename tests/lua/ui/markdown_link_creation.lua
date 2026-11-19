@@ -26,7 +26,10 @@ test.describe("Markdown missing link activation", function()
     test.ok(c.index:can_resolve())
     live.refresh_view(c.view)
     c.show, c.open, c.warn = core.nag_view.show, core.open_file, core.warn
-    core.nag_view.show = function(_, title, text, choices, submit) c.confirm = submit end
+    c.confirmations = 0
+    core.nag_view.show = function(_, title, text, choices, submit)
+      c.confirm, c.confirmations = submit, c.confirmations + 1
+    end
     core.open_file = function(path, options) c.opened, c.open_options = path, options; return {} end
     core.warn = function(...) c.warning = string.format(...) end
   end)
@@ -54,6 +57,24 @@ test.describe("Markdown missing link activation", function()
     c.confirm({ text = "Create Note" })
     test.equal(system.get_file_info(path).type, "file")
     test.equal(c.opened, path)
+  end)
+
+  test.it("asks once when the link is activated again while the note index loads", function(c)
+    local ready = false
+    c.index.can_resolve = function() return ready end
+    c.index.resolve_preview = function(self, link, path)
+      if not ready then return { status = "pending" } end
+      return getmetatable(self).resolve_preview(self, link, path)
+    end
+    local link = links.from_target("wiki", "New")
+    test.ok(live.open_link(c.view, { link = link }))
+    test.ok(live.open_link(c.view, { link = link }))
+    ready = true
+    local deadline = system.get_time() + 5
+    while not c.confirm and system.get_time() < deadline do coroutine.yield(0.01) end
+    for _ = 1, 10 do coroutine.yield(0.01) end
+    c.index.can_resolve, c.index.resolve_preview = nil, nil
+    test.equal(c.confirmations, 1)
   end)
 
   test.it("does not offer to create missing images or attachments", function(c)
