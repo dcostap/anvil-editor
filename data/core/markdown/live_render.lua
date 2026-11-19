@@ -8292,6 +8292,26 @@ local function open_when_indexed(view, link, index)
   return true
 end
 
+-- The note index has only notes and attachments. A standard link can name another file, such as `todo.txt`.
+-- It is beside the note, as in CommonMark, or else under the Project root, as in Obsidian.
+local function existing_link_file(view, link)
+  if link.kind ~= "markdown" and link.kind ~= "reference" then return nil end
+  local path = (link.path or ""):match("^[^#?]*") or ""
+  if not path:match("%.[^.\\/]+$") or vault_index.is_markdown(path) or common.is_absolute_path(path)
+    or path:match("^[%a][%w+.-]*:")
+  then
+    return nil
+  end
+  local owner = view.__markdown_live_owner
+  local index = owner and owner.link_index
+  local source = view.buffer.abs_filename
+  for _, base in ipairs({ source and common.dirname(source), index and index.root }) do
+    local abs = common.normalize_path(base .. PATHSEP .. path)
+    local info = system.get_file_info(abs)
+    if info and info.type == "file" then return abs end
+  end
+end
+
 function live.open_link(view, opts)
   opts = opts or live.link_at_caret(view)
   if not opts then return false, "no link at caret" end
@@ -8309,6 +8329,12 @@ function live.open_link(view, opts)
     end
   end
   if resolution.status == "missing" then
+    local file = existing_link_file(view, link)
+    if file then
+      core.log_quiet("Markdown link opens a file outside the note index: %s", file)
+      record_navigation_origin()
+      return core.open_file(file) and true or false, "resolved"
+    end
     local offered, reason = live.create_link_target(view, { link = link, resolution = resolution }, true)
     if not offered then
       core.warn("Markdown link target not found: %s (%s)", tostring(link.path), tostring(reason))
@@ -8385,7 +8411,10 @@ function live.create_link_target(view, target, confirm)
   local owner = view.__markdown_live_owner
   local index = owner and owner.link_index
   if not index then return false, "index unavailable" end
-  local abs, reason = index:new_note_path(link_path, view.buffer.abs_filename)
+  -- A standard link names a file, with its extension. A Wikilink names a note.
+  local kind = target.link.kind
+  local abs, reason = index:new_note_path(link_path, view.buffer.abs_filename,
+    { keep_extension = kind == "markdown" or kind == "reference" })
   if not abs then return false, reason end
   local function create()
     local info = system.get_file_info(abs)
@@ -8401,7 +8430,7 @@ function live.create_link_target(view, target, confirm)
       if not file then return false, err end
       local closed, close_err = file:close()
       if not closed then return false, close_err end
-      core.log_quiet("Markdown link created note: %s", abs)
+      core.log_quiet("Markdown link created file: %s", abs)
       index:update_path(abs)
     end
     record_navigation_origin()
@@ -8412,13 +8441,15 @@ function live.create_link_target(view, target, confirm)
     return true, abs
   end
   if not confirm then return create() end
-  core.nag_view:show("Create Markdown Note", "Create note?\n" .. abs, {
+  local note = vault_index.is_markdown(abs)
+  core.nag_view:show(note and "Create Markdown Note" or "Create File",
+    (note and "Create note?\n" or "Create file?\n") .. abs, {
     { text = "Create Note", default_yes = true },
     { text = "Cancel", default_no = true },
   }, function(item)
     if item.text ~= "Create Note" then return end
     local ok, err = create()
-    if not ok then core.error("Could not create Markdown note: %s", tostring(err)) end
+    if not ok then core.error("Could not create %s: %s", abs, tostring(err)) end
   end)
   return true, "confirmation"
 end

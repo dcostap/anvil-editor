@@ -898,12 +898,13 @@ end
 ---Returns where Obsidian would create the note for a missing link target, or nil and a reason.
 ---Paths with a folder start at the Project root; "./" and "../" paths start at the note's folder.
 ---Bare names follow the vault's new-note location.
-function Index:new_note_path(target, source_path)
+---`opts.keep_extension` keeps a name's extension, as a standard link names a file: `todo.txt` stays `todo.txt`.
+function Index:new_note_path(target, source_path, opts)
   local path = display_path(strip_target_fragment(target)):gsub("/+$", "")
   if path == "" then return nil, "empty target" end
   local ext = extension(path)
   if ext and not MARKDOWN_EXTENSIONS[ext] and is_attachment(path) then return nil, "not a note" end
-  if not (ext and MARKDOWN_EXTENSIONS[ext]) then path = path .. ".md" end
+  if not (ext and (MARKDOWN_EXTENSIONS[ext] or opts and opts.keep_extension)) then path = path .. ".md" end
   local source_dir = source_path and common.dirname(source_path)
   local base = self.root
   if path:match("^%.%.?/") then

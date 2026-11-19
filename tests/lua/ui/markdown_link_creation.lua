@@ -77,6 +77,19 @@ test.describe("Markdown missing link activation", function()
     test.equal(c.confirmations, 1)
   end)
 
+  test.it("creates the file that a Markdown link names, and opens it the next time", function(c)
+    local link = links.from_target("markdown", "notes/todo.txt")
+    test.ok(live.open_link(c.view, { link = link }))
+    c.confirm({ text = "Create Note" })
+    local path = common.normalize_path(c.root .. PATHSEP .. "notes" .. PATHSEP .. "todo.txt")
+    test.equal(system.get_file_info(path).type, "file")
+    test.equal(c.opened, path)
+    c.confirm, c.opened = nil, nil
+    test.ok(live.open_link(c.view, { link = link }))
+    test.is_nil(c.confirm)
+    test.equal(c.opened, path)
+  end)
+
   test.it("does not offer to create missing images or attachments", function(c)
     for _, link in ipairs({ links.from_target("image", "image.png"), links.from_target("wiki", "file.pdf") }) do
       test.ok(not live.open_link(c.view, { link = link }))
