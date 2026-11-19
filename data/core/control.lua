@@ -47,7 +47,7 @@ end
 M.tools = {
   { name = "workspace_state", description = "List this Project's Panes and identify the caller. IDs, not Pane numbers, select targets.",
     inputSchema = object({}, nil), annotations = { readOnlyHint = true, destructiveHint = false } },
-  { name = "pane", description = "Create, split, move, focus or close a Pane. Move takes a target and direction, or target_project to move the Pane to another loaded Project as a new Pane Group; that move returns accepted, and its Terminals keep running. Focus stays unchanged unless requested. Close approves only the calling agent's own running Terminal; other Views keep normal confirmation. Self-close can stop the agent before the reply arrives. Reuse request_id only for retries of the same operation.",
+  { name = "pane", description = "Create, split, move, focus or close a Pane. Move takes a target and direction, or target_project to move the Pane to another loaded Project as a new Pane Group; that move returns accepted, and its Terminals keep running. Focus stays unchanged unless requested. A focus also selects the Project in its Window. Close approves only the calling agent's own running Terminal; other Views keep normal confirmation. Self-close can stop the agent before the reply arrives. Reuse request_id only for retries of the same operation.",
     inputSchema = object({ action = choice("create", "split", "move", "focus", "close"),
       pane = string_schema(), target = string_schema(), direction = choice("left", "right", "up", "down"),
       target_project = string_schema(32768), focus = {type = "boolean"}, request_id = string_schema(128) },
@@ -201,6 +201,14 @@ function M:snooze(args, caller)
   return {status = "accepted", pane = pane.id, terminal = session, until_time = until_time}
 end
 
+-- An explicit focus also shows the Pane. Without this, a background Project changes only its own focus, and the
+-- Window keeps showing another Project. The shell selects this Project in its Window, as a Sidebar row click does.
+function M:show(pane)
+  local sent = system.pane_request("select", require("core.machine_project").root_key(self.project),
+    common.serialize({action = "focus", pane = pane}, {escape = true}))
+  core.log_quiet("Control: show Pane=%s sent=%s", pane, tostring(sent))
+end
+
 local function place_options(args)
   if args.pane then assert(panes.find(args.pane), "Pane not found") end
   if args.placement == "split" then assert(args.pane and args.direction, "Split needs a Pane and direction") end
@@ -214,7 +222,9 @@ function M:open_file(args)
   local view, err = core.open_file(args.path, opts)
   if view == false then return {status = "confirmation_required"} end
   assert(view, err)
-  return {pane = panes.pane_for_view(view).id, status = "completed"}
+  local pane = panes.pane_for_view(view).id
+  if opts.focus then self:show(pane) end
+  return {pane = pane, status = "completed"}
 end
 
 -- A revision is a Git argument. It must not read as an option or hold spaces.
@@ -242,6 +252,7 @@ function M:diff_open(args)
     left = left, right = right, title = args.title, notes = notes, place = place,
   }, function(opened)
     result.status, result.error, result.pane = opened.error and "failed" or "ready", opened.error, opened.pane
+    if place.focus and opened.pane then self:show(opened.pane) end
     if not opened.error then
       result.files, result.unplaced = protocol_json.array(opened.files), protocol_json.array(opened.unplaced)
     end
@@ -265,6 +276,7 @@ function M:code_open(args)
   require("core.code_tour").open({title = args.title, entries = entries}, place, function(view, err)
     result.status, result.error = view and "ready" or "failed", err
     result.pane = view and panes.pane_for_view(view).id or nil
+    if place.focus and result.pane then self:show(result.pane) end
     core.log_quiet("Control: Code Tour %s status=%s", operation, result.status)
   end)
   return result
@@ -304,6 +316,7 @@ function M:launch(args, caller, pi)
   view.input_used = true
   local operation = net.random_token()
   local result = {operation = operation, pane = panes.pane_for_view(view).id, status = "starting"}
+  if options.focus then self:show(result.pane) end
   self.jobs[operation] = {result = result, view = view, command = command, pi = pi, task = args.task,
     caller = caller, provider = args.provider, model = args.model, thinking = args.thinking,
     deadline = system.get_time() + 60}
@@ -622,7 +635,9 @@ function M:pane(args, caller)
     assert(source, "Close needs a Pane")
     return { pane = source.id, status = panes.close(source, {close_caller = caller}) and "closed" or "confirmation_required" }
   end
-  if args.action ~= "focus" and not args.focus and previous and panes.contains(previous) then
+  if args.action == "focus" or args.focus then
+    if panes.active() then self:show(panes.active().id) end
+  elseif previous and panes.contains(previous) then
     panes.focus(previous)
     if active_view and active_view ~= core.active_view then core.set_active_view(active_view) end
   end

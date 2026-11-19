@@ -17,7 +17,7 @@ Right-click a running Pi's Tab and choose **Copy Agent Address**. This works in 
 
 The receiving agent can read that agent at once: `agent_read` and `agent_transcript` take the copied `project` and `terminal` and read the Terminal's current conversation. To send, it calls `workspace_state` for that `project`, finds the copied `terminal`, and uses its current `agent_instance` as `instance` for `agent_send`. The address identifies the Terminal, not a fixed Pi conversation. Inspect state again after a Project move.
 
-The default target is the caller's Project. Operations preserve focus unless `focus: true` requests a change. A confirmation can take focus. Snooze hides its Pane through the normal Snooze behavior.
+The default target is the caller's Project. Operations preserve focus unless `focus: true` requests a change. A focus request, also `pane` with `action: "focus"`, selects the Project in its Window, as a Sidebar row click does. Otherwise a background Project changes focus that no Window shows. A confirmation can take focus. Snooze hides its Pane through the normal Snooze behavior.
 
 A `pane` or `terminal` close request approves the calling agent's own running Terminal Session, identified by its credential. Other Views keep their normal close checks, including unsaved files and busy Terminals in Navigation History. Reconnecting sessions still require confirmation. No `force` argument is available. Self-close can stop the agent before the tool reply arrives.
 

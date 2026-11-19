@@ -256,6 +256,38 @@ test.describe("Agent editor control", function()
     assert(ok, err)
   end)
 
+  test.it("shows a focused Pane through the shell, which selects its Project in its Window", function()
+    local sent = {}
+    local send = system.pane_request
+    system.pane_request = function(route, path, text)
+      sent[#sent + 1] = {route = route, path = path, request = assert(load("return " .. text, "request", "t", {}))()}
+      return true
+    end
+    local folder = USERDIR .. "/control-show"
+    require("core.common").mkdirp(folder)
+    local file = assert(io.open(folder .. "/note.txt", "wb"))
+    file:write("first\n"); file:close()
+    local ok, err = pcall(function()
+      local source = panes.create {factory = function() return View() end}
+      local other = panes.create {factory = function() return View() end}
+      local result = control:call("pane", {action = "focus", pane = source.id, request_id = "focus"}, "test-client")
+      test.equal(result.status, "completed")
+      test.equal(panes.active(), source)
+      test.same(sent, {{route = "select", path = control.project, request = {action = "focus", pane = source.id}}})
+      control:call("pane", {action = "create", request_id = "create"}, "test-client")
+      test.equal(#sent, 1, "A Pane without a focus request does not show")
+      local created = control:call("pane", {action = "split", pane = other.id, direction = "right", focus = true,
+        request_id = "split"}, "test-client")
+      test.same(sent[2].request, {action = "focus", pane = created.pane})
+      local opened = control:call("open_file", {path = folder .. "/note.txt", focus = true, request_id = "open"},
+        "test-client")
+      test.same(sent[3].request, {action = "focus", pane = opened.pane})
+    end)
+    system.pane_request = send
+    test.ok(test.remove_tree(folder))
+    assert(ok, err)
+  end)
+
   test.it("opens Projects without selecting them and refuses to unload its own Project or Scratch", function()
     local saved_system = {hosted = system.is_hosted_surface, load = system.load_project,
       select = system.select_project, unload = system.unload_project}
