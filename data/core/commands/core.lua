@@ -428,6 +428,23 @@ command.add_toggle("core:toggle_tabs", {
   end,
 })
 
+command.add_toggle("core:toggle_simple_mode", {
+  palette = true,
+  metadata = { keywords = { "menu bar", "user mode", "menus" } },
+  get = function()
+    return config.simple_mode
+  end,
+  set = function(enabled)
+    config.simple_mode = enabled
+    local settings = package.loaded["plugins.settings"]
+    if settings then settings.set("simple_mode", enabled) end
+    -- Other Projects and the Sidebar show the same mode.
+    local shared = system.simple_mode_saved(enabled)
+    core.redraw = true
+    core.log_quiet("Simple Mode: enabled=%s shared=%s", tostring(enabled), tostring(shared))
+  end,
+})
+
 command.add_toggle("core:toggle_line_numbers", {
   palette = true,
   get = function()

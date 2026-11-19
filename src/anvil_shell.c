@@ -546,6 +546,7 @@ static void notify_sidebar_changes(void);
 static void reorder_project(const AnvilSurfaceReorderProject *request);
 static void broadcast_color_theme(ShellProject *source);
 static void broadcast_zoom(ShellProject *source, const AnvilSurfaceZoom *zoom);
+static void broadcast_simple_mode(ShellProject *source, int enabled);
 static void preview_color_theme(ShellProject *source, const char *preview, uint32_t size);
 static void end_color_theme_preview(ShellProject *source);
 static void sidebar_source(const AnvilSurfaceSidebarSource *source, uint32_t size);
@@ -1285,6 +1286,8 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     return size == sizeof(float);
   case ANVIL_SURFACE_MSG_ZOOM_SAVED:
     return size == sizeof(AnvilSurfaceZoom);
+  case ANVIL_SURFACE_MSG_SIMPLE_MODE_SAVED:
+    return size == sizeof(AnvilSurfaceInt);
   case ANVIL_SURFACE_MSG_RAISE:
   case ANVIL_SURFACE_MSG_SIDEBAR_REFRESH:
   case ANVIL_SURFACE_MSG_EXIT_INTENT:
@@ -1759,7 +1762,8 @@ static void send_configure(ShellProject *project) {
     config.configuration++;
     if (project == window->selected)
       SDL_ClearComposition(window->window);
-    project->hit = (AnvilSurfaceHitTest){0};
+    /* The Sidebar's Menu Bar keeps its place in the caption strip. The Sidebar sends it again when it moves. */
+    if (!project->sidebar) project->hit = (AnvilSurfaceHitTest){0};
   }
   /* A Project that starts hidden draws nothing. Its first-frame deadline starts when the shell shows it. */
   if (config.render_enabled && !project->last_config.render_enabled && project->state == SHELL_STARTING &&
@@ -4480,6 +4484,9 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
   case ANVIL_SURFACE_MSG_ZOOM_SAVED:
     broadcast_zoom(project, (const AnvilSurfaceZoom *)payload);
     break;
+  case ANVIL_SURFACE_MSG_SIMPLE_MODE_SAVED:
+    broadcast_simple_mode(project, value);
+    break;
   case ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEW:
     preview_color_theme(project, (const char *)payload, message->size);
     break;
@@ -4736,6 +4743,14 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     break;
   }
   case ANVIL_SURFACE_MSG_HIT_TEST:
+    /* The Sidebar's client region is its Menu Bar in the caption strip. It does not change the Window controls. */
+    if (project->sidebar && message->size == sizeof(AnvilSurfaceHitTest)) {
+      memcpy(&project->hit, payload, sizeof(project->hit));
+      project->hit.title_height = SDL_clamp(project->hit.title_height, 0, (int)(96 * window->scale));
+      project->hit.client_x = SDL_max(0, project->hit.client_x);
+      project->hit.client_width = SDL_max(0, project->hit.client_width);
+      break;
+    }
     if (message->size == sizeof(AnvilSurfaceHitTest) &&
         ((AnvilSurfaceHitTest *)payload)->configuration == project->last_config.configuration) {
       memcpy(&project->hit, payload, sizeof(project->hit));
@@ -6319,6 +6334,14 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       LRESULT result = win32_frame_hwnd_hit_test(hwnd, &hit, lparam);
       POINT point = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
       ScreenToClient(hwnd, &point);
+      /* Simple Mode's Menu Bar labels sit in the caption strip over the Sidebar. A sliding Sidebar shows its
+       * surface moved left. */
+      const AnvilSurfaceHitTest *bar = window->sidebar_client ? &window->sidebar_client->hit : NULL;
+      int bar_x = point.x + window->sidebar_full_w - window->sidebar_w;
+      if (result == HTCAPTION && bar && bar->client_width > 0 && point.y < bar->title_height &&
+          sidebar_takes_pointer(window, (float)point.x) && bar_x >= bar->client_x &&
+          bar_x < bar->client_x + bar->client_width)
+        return HTCLIENT;
       RECT sidebar_button = sidebar_restart_rect(window), client;
       if (sidebar_restart_offered() && PtInRect(&sidebar_button, point))
         return HTCLIENT;
@@ -8071,6 +8094,22 @@ static void broadcast_zoom(ShellProject *source, const AnvilSurfaceZoom *zoom) {
     count++;
   }
   SDL_Log("Shell Zoom saved by Project %u; notified %d processes", source->id, count);
+}
+
+/* Simple Mode is one setting for every Project and the Sidebar. The saving Project already shows it. */
+static void broadcast_simple_mode(ShellProject *source, int enabled) {
+  AnvilSurfaceInt mode = {enabled ? 1 : 0};
+  int count = 0;
+  for (ShellProject *item = shell.projects; item; item = item->next)
+    if (item != source && item->connected) {
+      shell_send(item, ANVIL_SURFACE_MSG_SIMPLE_MODE_CHANGED, &mode, sizeof(mode), NULL, 0);
+      count++;
+    }
+  if (shell.sidebar_process && shell.sidebar_process->connected) {
+    shell_send(shell.sidebar_process, ANVIL_SURFACE_MSG_SIMPLE_MODE_CHANGED, &mode, sizeof(mode), NULL, 0);
+    count++;
+  }
+  SDL_Log("Shell Simple Mode %d saved by Project %u; notified %d processes", mode.value, source->id, count);
 }
 
 static void probe_sidebar_model(ShellWindow *window, WPARAM action, LPARAM value) {

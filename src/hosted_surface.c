@@ -607,6 +607,13 @@ static void dispatch_message(HostedMessage *message) {
       SDL_Log("Color Theme change event dropped: %s", SDL_GetError());
     goto complete;
   }
+  if (type == ANVIL_SURFACE_MSG_SIMPLE_MODE_CHANGED) {
+    CustomEvent event = {0};
+    event.code = ((AnvilSurfaceInt *)payload)->value;
+    if (!push_custom_event("simplemodechanged", &event))
+      SDL_Log("Simple Mode change dropped: %s", SDL_GetError());
+    goto complete;
+  }
   if (type == ANVIL_SURFACE_MSG_ZOOM_WHEEL) {
     CustomEvent event = {0};
     event.code = ((AnvilSurfaceInt *)payload)->value;
@@ -890,6 +897,9 @@ static int SDLCALL reader_thread(void *data) {
         break;
       case ANVIL_SURFACE_MSG_ZOOM_CHANGED:
         if (size != sizeof(AnvilSurfaceZoom)) goto failed;
+        break;
+      case ANVIL_SURFACE_MSG_SIMPLE_MODE_CHANGED:
+        if (size != sizeof(AnvilSurfaceInt)) goto failed;
         break;
       case ANVIL_SURFACE_MSG_DIALOG_RESULT:
         if (!anvil_surface_dialog_result_valid(body, size)) goto failed;
@@ -1318,6 +1328,13 @@ bool anvil_hosted_surface_zoom_saved(double interface_zoom, double code_zoom) {
   if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
   AnvilSurfaceZoom zoom = {interface_zoom, code_zoom};
   send_message(ANVIL_SURFACE_MSG_ZOOM_SAVED, &zoom, sizeof(zoom));
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
+bool anvil_hosted_surface_simple_mode_saved(bool enabled) {
+  if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
+  AnvilSurfaceInt mode = {enabled ? 1 : 0};
+  send_message(ANVIL_SURFACE_MSG_SIMPLE_MODE_SAVED, &mode, sizeof(mode));
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
@@ -1868,6 +1885,7 @@ bool anvil_hosted_surface_color_theme_saved(void) { return false; }
 bool anvil_hosted_surface_zoom_saved(double interface_zoom, double code_zoom) {
   (void)interface_zoom; (void)code_zoom; return false;
 }
+bool anvil_hosted_surface_simple_mode_saved(bool enabled) { (void)enabled; return false; }
 bool anvil_hosted_surface_toggle_sidebar(void) { return false; }
 bool anvil_hosted_surface_toggle_alt_navigation(void) { return false; }
 bool anvil_hosted_surface_close_all_windows(void) { return false; }

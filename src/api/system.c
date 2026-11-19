@@ -2491,6 +2491,12 @@ static int f_color_theme_saved(lua_State *L) {
   return 1;
 }
 
+/* Returns false outside a shell, where no other process shows Simple Mode. */
+static int f_simple_mode_saved(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_simple_mode_saved(lua_toboolean(L, 1)));
+  return 1;
+}
+
 /* Returns false outside a shell, where no other Project shows this Zoom. */
 static int f_zoom_saved(lua_State *L) {
   lua_pushboolean(L, anvil_hosted_surface_zoom_saved(luaL_checknumber(L, 1), luaL_checknumber(L, 2)));
@@ -2666,6 +2672,11 @@ static int imagedecoded_callback(lua_State *L, SDL_Event *event) {
 }
 static int altnavigation_callback(lua_State *L, SDL_Event *event) {
   lua_pushstring(L, "altnavigation");
+  lua_pushboolean(L, event->user.code != 0);
+  return 2;
+}
+static int simplemodechanged_callback(lua_State *L, SDL_Event *event) {
+  lua_pushstring(L, "simplemodechanged");
   lua_pushboolean(L, event->user.code != 0);
   return 2;
 }
@@ -3339,6 +3350,7 @@ static const luaL_Reg lib[] = {
   { "new_anvil_window",      f_new_anvil_window      },
   { "color_theme_saved",     f_color_theme_saved     },
   { "zoom_saved",            f_zoom_saved            },
+  { "simple_mode_saved",     f_simple_mode_saved     },
   { "set_shell_colors", f_set_shell_colors },
   { "preview_color_theme", f_preview_color_theme },
   { "get_anvil_window_id",   f_get_anvil_window_id   },
@@ -3413,6 +3425,8 @@ int luaopen_system(lua_State *L) {
     return luaL_error(L, "Unable to register the image decode event: %s", SDL_GetError());
   if (!register_custom_event("zoomchanged", zoomchanged_callback))
     return luaL_error(L, "Unable to register the Zoom event: %s", SDL_GetError());
+  if (!register_custom_event("simplemodechanged", simplemodechanged_callback))
+    return luaL_error(L, "Unable to register the Simple Mode event: %s", SDL_GetError());
   if (!register_custom_event("zoomwheel", zoomwheel_callback))
     return luaL_error(L, "Unable to register the Sidebar Zoom wheel event: %s", SDL_GetError());
   if (!register_custom_event("altnavigation", altnavigation_callback))

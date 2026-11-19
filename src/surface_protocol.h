@@ -64,6 +64,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_TERMINAL_QUIT_CONTEXT = 18,
   /* The answer to ANVIL_SURFACE_MSG_TOGGLE_ALT_NAVIGATION. Payload: AnvilSurfaceInt, 1 when Alt Navigation is on. */
   ANVIL_SURFACE_MSG_ALT_NAVIGATION = 19,
+  /* Another Project saved Simple Mode. Payload: AnvilSurfaceInt, 1 when Simple Mode is on. */
+  ANVIL_SURFACE_MSG_SIMPLE_MODE_CHANGED = 20,
 
   /* Surface process to shell. */
   ANVIL_SURFACE_MSG_HELLO = 64,
@@ -145,6 +147,9 @@ typedef enum {
   /* Drag these files out to other programs while the left button stays down on the Project. Payload: a file
    * drag list (file_drag.h). The shell sends the button release when the drag starts. */
   ANVIL_SURFACE_MSG_FILE_DRAG = 121,
+  /* This Project saved Simple Mode. The shell sends it to every other Project and the Sidebar.
+   * Payload: AnvilSurfaceInt, 1 when Simple Mode is on. */
+  ANVIL_SURFACE_MSG_SIMPLE_MODE_SAVED = 122,
 } AnvilSurfaceMessageType;
 
 typedef enum {

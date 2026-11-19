@@ -1205,6 +1205,8 @@ local function load_settings()
   if settings.config.dirmonitor_backend then
     config.dirmonitor_backend = settings.config.dirmonitor_backend
   end
+  -- Simple Mode has no Settings option. `core:toggle_simple_mode` saves it and tells the other processes.
+  if type(settings.config.simple_mode) == "boolean" then config.simple_mode = settings.config.simple_mode end
 end
 
 ---Save current config options into the USERDIR user_settings.lua
@@ -1259,6 +1261,17 @@ function core.on_event(type, ...)
   settings.config.theme = name
   core.try(core.reload_module, color_theme.module_name(name))
   core.log_quiet("Theme %s reloaded after another Project saved it", name)
+  return true
+end
+
+-- Another Project saved Simple Mode. Keep settings.config in step so a later save here keeps it.
+local on_simple_mode_event = core.on_event
+function core.on_event(type, ...)
+  if type ~= "simplemodechanged" then return on_simple_mode_event(type, ...) end
+  local enabled = (...)
+  config.simple_mode, settings.config.simple_mode = enabled, enabled
+  core.redraw = true
+  core.log_quiet("Simple Mode: enabled=%s by another Project", tostring(enabled))
   return true
 end
 

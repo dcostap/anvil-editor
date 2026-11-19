@@ -40,6 +40,14 @@ _Avoid_: Active Project, Current Project, hosted app
 The application sidebar listing recent Projects. A loaded Project shows its Tabs and the Terminal Sessions that no Pane shows. A Terminal Session in a Pane's Navigation History shows only when it has an Unread Result or an agent that waits for an answer. A collapsed loaded Project still shows the Terminals with an Unread Result or an agent that waits for an answer. Dormant Projects are grouped by age below the loaded ones; each one shows how many of its Terminal Sessions run. Each Anvil Window lists its own Projects at the top. Projects shown in other Windows sit at the bottom, above the age groups. Selecting a Project shown in another Anvil Window brings that window to the front. The Scratch Project is the exception: it moves to the Anvil Window where the user selects it.
 _Avoid_: Project panel, app switcher, side panel
 
+**Simple Mode**:
+A saved choice for users who edit text and Markdown files and do not use the Command Palette. It adds the Menu Bar and hides the Terminal and Pi buttons. It applies to all Anvil Windows until the user turns it off.
+_Avoid_: User Mode, beginner mode, menu mode
+
+**Menu Bar**:
+The row of menus (File, Edit, Format, View and Help) at the top of the Project Sidebar in Simple Mode. Its items act in the Selected Project, and an item that cannot act there now shows dim.
+_Avoid_: toolbar, main menu
+
 **Peek**:
 The content of the Project Sidebar's cursor row, shown in the Project area while the Project Sidebar has the keyboard. A Peek changes nothing: the Selected Project, the keyboard, Pane History, Pane numbers, Unread Results and Terminal sizes stay as they are. A Tab row shows its Project with that Tab's Pane Group. A Dormant Project or a Project in another Anvil Window has no content to show. Activating the row selects it as usual.
 _Avoid_: Preview, hover preview, quick look
@@ -767,7 +775,7 @@ A named set of colors for Anvil's interface and language text. The chosen Color 
 _Avoid_: Color scheme
 
 **Project Launcher**:
-What a Project shows in place of its Panes while no Pane Group shows: its badge and name, and buttons for File Tree, Terminal, Pi and Open in OS File Explorer. Each button opens its View in a new Pane, or the Project's folder in File Explorer. A new Project starts with it.
+What a Project shows in place of its Panes while no Pane Group shows: its badge and name, and buttons for File Tree, Terminal, Pi and Open in OS File Explorer. In Simple Mode, a New File button replaces the Terminal and Pi buttons. Each button opens its View in a new Pane, or the Project's folder in File Explorer. A new Project starts with it.
 _Avoid_: start page, welcome screen, empty state
 
 **Wallpaper**:

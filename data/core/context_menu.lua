@@ -19,6 +19,8 @@ local LineInput = require "core.line_input"
 ---  `command` a command name, or a list of names; the first valid one runs
 ---  `args`    arguments for the command and its predicate
 ---  `items`   a submenu instead of a command
+---  `shortcut` a binding, such as "ctrl+s", to show instead of the command's own binding
+---  `disabled` shows the item dimmed, so it cannot run
 ---
 ---Typed text filters the menu with a fuzzy query, also the items of submenus.
 ---
@@ -36,6 +38,11 @@ context_menu.icons = {
   bullet_list = "\u{F0279}", numbered_list = "\u{F027B}", task_list = "\u{F0756}", quote = "\u{F0757}",
   table = "\u{F04EB}", code_block = "\u{F0169}", callout = "\u{F02FD}", footnote = "\u{F0283}",
   note = "\u{F1782}", edit = "\u{F0CB6}", delete = "\u{F09E7}", preview = "\u{F06D0}", source = "\u{F0F5B}",
+  save = "\u{F0193}", save_as = "\u{F0CFC}", open_file = "\u{F0770}", folder = "\u{F0256}",
+  file_search = "\u{F0C7D}", text_search = "\u{F13B8}", replace = "\u{F06D4}", heading = "\u{F0274}",
+  undo = "\u{F054C}", redo = "\u{F044E}", back = "\u{F004D}", forward = "\u{F0054}", file_tree = "\u{F0645}",
+  zoom_in = "\u{F06ED}", zoom_out = "\u{F06EC}", theme = "\u{F0E0C}", wallpaper = "\u{F0E09}",
+  fullscreen = "\u{F0293}", settings = "\u{F08BB}", update = "\u{F06B0}", exit = "\u{F0206}", check = "\u{F012C}",
   row_above = "\u{F04F4}", row_below = "\u{F04F3}", row_delete = "\u{F04F5}",
   column_left = "\u{F04ED}", column_right = "\u{F04EC}", column_delete = "\u{F04EE}",
   align_left = "\u{F0262}", align_center = "\u{F0260}", align_right = "\u{F0263}",
@@ -119,7 +126,7 @@ local function resolve(items)
       local name = valid_command(item)
       if name then
         rows[#rows + 1] = { label = item.label, icon = item.icon, command = name, args = item.args or {},
-          shortcut = binding_for(item, name) }
+          shortcut = shortcut_text(item.shortcut) or binding_for(item, name), disabled = item.disabled }
       end
     end
   end
@@ -128,7 +135,7 @@ local function resolve(items)
 end
 
 -- Rows that the keyboard and pointer can select: not separators and not the query field.
-local function selectable(row) return not (row.separator or row.field) end
+local function selectable(row) return not (row.separator or row.field or row.disabled) end
 
 -- The next selectable row after `from` in the direction of `delta`, wrapping around. Without `from`, the first or last.
 local function step(level, from, delta)
@@ -150,7 +157,7 @@ local function filtered_rows(rows, query)
     for _, row in ipairs(list) do
       if row.items then
         collect(row.items, path and path .. PATH_SEPARATOR .. row.label or row.label)
-      elseif row.command then
+      elseif row.command and not row.disabled then
         candidates[#candidates + 1] = { row = row, path = path, text = path and path .. " " .. row.label or row.label }
       end
     end
@@ -567,8 +574,10 @@ local function draw_level(level)
     else
       local selected = level.selected == index
       local tx, tw = row.x + m.row_x, row.w - m.row_x * 2
+      local text_color = row.disabled and style.dim or style.text
+      local secondary = row.disabled and style.dim or style.card_text
       if row.icon then
-        local color = selected and style.text or style.card_text
+        local color = selected and style.text or secondary
         if type(row.icon) == "function" then
           row.icon(tx, row.y, row.h, color)
         else
@@ -579,9 +588,9 @@ local function draw_level(level)
       if row.path then
         lx = common.draw_text(m.font, style.card_text, row.path .. PATH_SEPARATOR, "left", lx, row.y, 0, row.h)
       end
-      common.draw_text(m.font, style.text, row.label, "left", lx, row.y, tx + tw - lx, row.h)
+      common.draw_text(m.font, text_color, row.label, "left", lx, row.y, tx + tw - lx, row.h)
       if row.shortcut then
-        common.draw_text(m.font, style.card_text, row.shortcut, "right", tx, row.y, tw, row.h)
+        common.draw_text(m.font, secondary, row.shortcut, "right", tx, row.y, tw, row.h)
       elseif row.items then
         draw_chevron(row.x + row.w - m.row_x - math.floor(3 * SCALE), row.y, row.h, style.card_text)
       end

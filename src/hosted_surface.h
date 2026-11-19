@@ -123,6 +123,8 @@ uint32_t anvil_hosted_surface_peek_pane(void);
 bool anvil_hosted_surface_color_theme_saved(void);
 /* Sends the Zoom that this Project saved to the shell, so other Projects and the Sidebar apply it. */
 bool anvil_hosted_surface_zoom_saved(double interface_zoom, double code_zoom);
+/* Tells the shell that this Project saved Simple Mode. Returns false outside a shell. */
+bool anvil_hosted_surface_simple_mode_saved(bool enabled);
 /* The shell draws this Project's Window controls in these colours while the Project is selected. */
 bool anvil_hosted_surface_set_shell_colors(const AnvilSurfaceShellColors *colors);
 bool anvil_hosted_surface_sidebar_source(const char *userdir, const char *recents);

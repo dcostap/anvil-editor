@@ -1,6 +1,7 @@
 local core = require "core"
 local common = require "core.common"
 local command = require "core.command"
+local config = require "core.config"
 local keymap = require "core.keymap"
 local style = require "core.style"
 local look = require "core.project_look"
@@ -18,11 +19,12 @@ local function open_folder()
 end
 
 -- `folder` buttons act on the Project's folder, so the Scratch Project, whose folder holds no work, has none.
--- `local_folder` buttons need a folder on this PC.
+-- `local_folder` buttons need a folder on this PC. Simple Mode shows the `simple` buttons and no `terminal` buttons.
 local ITEMS = {
+  { label = "New File", icon = "\u{F0EED}", command = "editor:open", simple = true },
   { label = "File Tree", icon = "\u{F0645}", command = "filetree:open_at_project_root", folder = true },
-  { label = "Terminal", icon = "\u{F018D}", command = "terminal:open_at_project_root" },
-  { label = "Pi", agent = "pi", command = "terminal:open_pi" },
+  { label = "Terminal", icon = "\u{F018D}", command = "terminal:open_at_project_root", terminal = true },
+  { label = "Pi", agent = "pi", command = "terminal:open_pi", terminal = true },
   { label = "Open in OS File Explorer", icon = ui.icons.reveal, run = open_folder, folder = true, local_folder = true },
 }
 
@@ -40,12 +42,14 @@ end
 local function project_items()
   local project = core.root_project()
   local path = project and project.path
-  if state.path ~= path then
-    state.path, state.items, state.selected = path, {}, nil
+  local simple = config.simple_mode
+  if state.path ~= path or state.simple ~= simple then
+    state.path, state.simple, state.items, state.selected = path, simple, {}, nil
     local scratch = path and core.is_scratch_project(path)
     local machine = path and require("core.fs").on_machine(path)
     for _, item in ipairs(ITEMS) do
-      if not (item.folder and scratch) and not (item.local_folder and machine) then
+      if not (item.folder and scratch) and not (item.local_folder and machine)
+          and not (item.terminal and simple) and not (item.simple and not simple) then
         state.items[#state.items + 1] = setmetatable({}, { __index = item })
       end
     end

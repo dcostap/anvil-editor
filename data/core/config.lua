@@ -223,6 +223,13 @@ config.line_limit = 80
 ---@type boolean
 config.sidebar_peek = false
 
+---Simple Mode: a Menu Bar in the Project Sidebar for users who edit text and Markdown files, and no Terminal
+---buttons. All Windows and Projects share it. `core:toggle_simple_mode` saves it.
+---
+---Defaults to false.
+---@type boolean
+config.simple_mode = false
+
 ---Enables/disables all transitions.
 ---
 ---Defaults to true.

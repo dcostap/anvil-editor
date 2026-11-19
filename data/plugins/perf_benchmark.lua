@@ -901,7 +901,9 @@ local function setup_scenario()
       placement = "current", focus = true, reason = "perf-focus-feedback",
     })
   elseif benchmark.scenario:find("^project%-sidebar") then
-    if benchmark.scenario == "project-sidebar-search" then core.title_bar.visible = false end
+    if benchmark.scenario == "project-sidebar-search" or benchmark.scenario == "project-sidebar-menu" then
+      core.title_bar.visible = false
+    end
     view = require("core.sidebar_scene")(benchmark.scenario:match("^project%-sidebar%-(%a+)"))
     require("core.panes").place(function() return view end, {
       placement = "current", focus = true, reason = "perf-project-sidebar",

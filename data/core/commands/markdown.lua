@@ -506,3 +506,9 @@ end, {
     markdown_tables.paste_table(view)
   end),
 })
+
+-- The Command Palette and Simple Mode's Menu Bar show whether the active Markdown Editor shows its source.
+command.set_status("markdown:toggle_source_mode", function()
+  local view = core.active_view
+  return view ~= nil and view:extends(Editor) and markdown_live.is_source_mode(view)
+end)
