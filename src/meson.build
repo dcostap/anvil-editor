@@ -1,4 +1,5 @@
 anvil_sources = [
+    'file_trash.c',
     'api/api.c',
     'api/dirmonitor.c',
     'api/renderer.c',

@@ -212,7 +212,15 @@ function files.new(server)
       paths[i] = change_path(client, id, path)
       if not paths[i] then return end
     end
-    finish(client, id, file_ops.delete(paths, params.trash == true))
+    if file_ops.trashes(params.trash == true) then
+      core.add_thread(function()
+        if client.dead then return end
+        local ok, err = file_ops.delete(paths, true)
+        if not client.dead then finish(client, id, ok, err) end
+      end)
+    else
+      finish(client, id, file_ops.delete(paths, false))
+    end
   end
 
   return {["files.list"] = list, ["files.changes"] = changes, ["files.stat"] = stat_paths,

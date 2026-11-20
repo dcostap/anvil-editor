@@ -90,6 +90,22 @@ test.describe("File Tree Context Menu", function()
     test.not_nil(system.get_file_info(context.root .. PATHSEP .. "docs"))
   end)
 
+  test.it("keeps the UI available while a folder moves to the Recycle Bin", function(context)
+    test.skip_if(PLATFORM ~= "Windows", "The Recycle Bin is Windows-only")
+    config.plugins.filetree.delete_to_trash = true
+    write_file(context.root .. PATHSEP .. "docs" .. PATHSEP .. "résumé.txt", "notes")
+    right_click_row(context.tree, "docs/")
+    test.ok(context_menu.choose("Delete"))
+    command.perform("core:select_dialog_yes")
+    test.ok(context.tree.applying, "Recycle Bin deletion must return control before it completes")
+    test.equal(core.active_view, context.tree)
+    local deadline = system.get_time() + 30
+    while context.tree.applying and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.not_ok(context.tree.applying, "Recycle Bin deletion did not complete")
+    test.is_nil(system.get_file_info(context.root .. PATHSEP .. "docs"))
+    test.not_nil(system.get_file_info(context.root .. PATHSEP .. "notes.txt"))
+  end)
+
   test.it("keeps the file and its row when the deletion is cancelled", function(context)
     right_click_row(context.tree, "notes.txt")
     test.ok(context_menu.choose("Delete"))

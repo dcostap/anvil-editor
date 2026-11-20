@@ -3223,7 +3223,7 @@ local function apply_plan_now(self, plan)
 end
 
 ---Applies the plan's changes to the disk, then lists the tree again. `on_done(changed)` runs after it.
----On a Machine the changes run in the background, so the result is nil; locally it is `changed`.
+---Machine and Recycle Bin changes run in the background, so the result is nil; otherwise it is `changed`.
 ---The tree takes no edits and no second apply until the changes end, because the list that follows replaces its text.
 function FileTreeView:apply_plan(plan, on_done)
   if self.applying then
@@ -3240,7 +3240,7 @@ function FileTreeView:apply_plan(plan, on_done)
     if not ok then error(result, 0) end
     changed = result or false
     if on_done then on_done(changed) end
-  end)
+  end, #plan.trashes > 0 and file_ops.trashes(filetree_config.delete_to_trash))
   return changed
 end
 

@@ -117,6 +117,22 @@ test.describe("system", function()
     end
   end)
 
+  test.it("validates a Recycle Bin batch before changing files", function(context)
+    test.skip_if(PLATFORM ~= "Windows", "The Recycle Bin is Windows-only")
+    test.ok(system.trash_files({}))
+    local keep = context.temp_root .. PATHSEP .. "keep.txt"
+    local file = assert(io.open(keep, "wb")); file:write("keep"); file:close()
+    for _, invalid in ipairs { "relative.txt", "", context.temp_root .. PATHSEP .. "*",
+      context.temp_root .. PATHSEP .. "bad\255", context.temp_root .. PATHSEP .. string.rep("x", 40000) } do
+      local ok, err = system.trash_files { keep, invalid }
+      test.not_ok(ok, "Invalid batch must fail")
+      test.type(err, "string")
+      test.not_nil(system.get_file_info(keep), "Validation must precede deletion")
+    end
+    test.not_ok(pcall(system.trash_files, { keep .. "\0.txt" }))
+    test.ok(system.trash_files { context.temp_root .. PATHSEP .. "missing.txt" })
+  end)
+
   test.test("provides process, time and environment helpers", function()
     local pid = system.get_process_id()
     test.ok(pid > 0)

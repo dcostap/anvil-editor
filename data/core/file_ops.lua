@@ -98,156 +98,25 @@ local function delete_permanent(path)
   return true
 end
 
-local function ps_single_quote(s)
-  return "'" .. s:gsub("'", "''") .. "'"
-end
-
-local function shell_quote_arg(s)
-  return '"' .. s:gsub('"', '\\"') .. '"'
-end
-
-local function wait_paths_gone(paths, timeout)
-  local deadline = system.get_time() + (timeout or 30)
-  while system.get_time() < deadline do
-    local remaining = false
-    for _, path in ipairs(paths) do
-      if system.get_file_info(path) then remaining = true; break end
-    end
-    if not remaining then return true end
-    system.sleep(0.05)
-  end
-  for _, path in ipairs(paths) do
-    if system.get_file_info(path) then return nil, "Recycle Bin operation did not complete: " .. path end
-  end
-  return true
-end
-
-local ffi_defined = false
-
-local function trash_windows_ffi(paths)
-  local ok, ffi = pcall(require, "ffi")
-  if not ok then return nil, "LuaJIT FFI unavailable" end
-  local ok_bit, bit = pcall(require, "bit")
-  if not ok_bit then return nil, "LuaJIT bit library unavailable" end
-
-  if not ffi_defined then
-    ffi.cdef[[
-typedef void* HWND;
-typedef unsigned int UINT;
-typedef int BOOL;
-typedef const wchar_t* LPCWSTR;
-typedef struct _SHFILEOPSTRUCTW {
-  HWND hwnd;
-  UINT wFunc;
-  LPCWSTR pFrom;
-  LPCWSTR pTo;
-  unsigned short fFlags;
-  BOOL fAnyOperationsAborted;
-  void* hNameMappings;
-  LPCWSTR lpszProgressTitle;
-} SHFILEOPSTRUCTW;
-int SHFileOperationW(SHFILEOPSTRUCTW *lpFileOp);
-int MultiByteToWideChar(UINT CodePage, unsigned long dwFlags, const char *lpMultiByteStr,
-  int cbMultiByte, wchar_t *lpWideCharStr, int cchWideChar);
-unsigned long GetLastError(void);
-]]
-    ffi_defined = true
-  end
-
-  local shell32 = ffi.load("shell32")
-  local kernel32 = ffi.load("kernel32")
-  local CP_UTF8 = 65001
-  local FO_DELETE = 0x0003
-  local FOF_SILENT = 0x0004
-  local FOF_NOCONFIRMATION = 0x0010
-  local FOF_ALLOWUNDO = 0x0040
-  local FOF_NOCONFIRMMKDIR = 0x0200
-  local FOF_NOERRORUI = 0x0400
-
-  local converted, total = {}, 1
-  for _, path in ipairs(paths) do
-    local normalized = common.normalize_path(path):gsub("/", "\\")
-    local len = kernel32.MultiByteToWideChar(CP_UTF8, 0, normalized, #normalized, nil, 0)
-    if len <= 0 then
-      return nil, string.format("MultiByteToWideChar length failed for %s (%s)", path, tonumber(kernel32.GetLastError()))
-    end
-    converted[#converted + 1] = { path = normalized, len = len }
-    total = total + len + 1
-  end
-
-  local from = ffi.new("wchar_t[?]", total)
-  local offset = 0
-  for _, item in ipairs(converted) do
-    local written = kernel32.MultiByteToWideChar(CP_UTF8, 0, item.path, #item.path, from + offset, item.len)
-    if written ~= item.len then
-      return nil, string.format("MultiByteToWideChar failed for %s (%s)", item.path, tonumber(kernel32.GetLastError()))
-    end
-    offset = offset + item.len
-    from[offset] = 0
-    offset = offset + 1
-  end
-  from[offset] = 0
-
-  local op = ffi.new("SHFILEOPSTRUCTW")
-  op.hwnd = nil
-  op.wFunc = FO_DELETE
-  op.pFrom = from
-  op.pTo = nil
-  op.fFlags = bit.bor(FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_SILENT, FOF_NOERRORUI, FOF_NOCONFIRMMKDIR)
-
-  local rc = shell32.SHFileOperationW(op)
-  if rc ~= 0 then return nil, "SHFileOperationW failed: " .. tostring(tonumber(rc)) end
-  if op.fAnyOperationsAborted ~= 0 then return nil, "SHFileOperationW operation was aborted" end
-  return wait_paths_gone(paths, 30)
-end
-
-local function trash_windows_powershell(paths)
-  local dir = USERDIR .. PATHSEP .. "storage"
-  common.mkdirp(dir)
-  local script = path_join(dir, "trash-" .. tostring(system.get_time()):gsub("%W", "") .. ".ps1")
-  local fp, err = io.open(script, "wb")
-  if not fp then return nil, err end
-  fp:write("$ErrorActionPreference = 'Stop'\r\n")
-  fp:write("$paths = @(\r\n")
-  for i, path in ipairs(paths) do
-    fp:write("  " .. ps_single_quote(path) .. (i < #paths and "," or "") .. "\r\n")
-  end
-  fp:write(")\r\n")
-  fp:write("$shell = New-Object -ComObject 'Shell.Application'\r\n")
-  fp:write("foreach ($literal in $paths) {\r\n")
-  fp:write("  if (-not (Test-Path -LiteralPath $literal)) { continue }\r\n")
-  fp:write("  $path = Get-Item -LiteralPath $literal\r\n")
-  fp:write("  $folder = $shell.NameSpace($path.DirectoryName)\r\n")
-  fp:write("  if ($null -eq $folder) { throw 'Could not open parent shell namespace' }\r\n")
-  fp:write("  $item = $folder.ParseName($path.Name)\r\n")
-  fp:write("  if ($null -eq $item) { throw 'Could not resolve shell item' }\r\n")
-  fp:write("  $item.InvokeVerb('delete')\r\n")
-  fp:write("}\r\n")
-  fp:write("$deadline = (Get-Date).AddSeconds(30)\r\n")
-  fp:write("while ((Get-Date) -lt $deadline) {\r\n")
-  fp:write("  $remaining = @($paths | Where-Object { Test-Path -LiteralPath $_ })\r\n")
-  fp:write("  if ($remaining.Count -eq 0) { exit 0 }\r\n")
-  fp:write("  Start-Sleep -Milliseconds 50\r\n")
-  fp:write("}\r\n")
-  fp:write("throw ('Recycle Bin operation did not complete: ' + (($paths | Where-Object { Test-Path -LiteralPath $_ }) -join ', '))\r\n")
-  fp:close()
-  local ok, why, code = os.execute("powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " .. shell_quote_arg(script))
-  os.remove(script)
-  if ok ~= true and ok ~= 0 then
-    return nil, string.format("PowerShell trash failed (%s %s)", tostring(why), tostring(code))
-  end
-  return true
+local function trash_in_worker(paths)
+  local done, success, failure
+  local job, err = require("core.worker_pool").named("file-operations", { worker_count = 1 }):submit {
+    kind = "file_trash", payload = { paths = paths },
+    on_result = function(message)
+      done, success, failure = true, message.payload.success, message.payload.error
+    end,
+    on_error = function(message) done, failure = true, message.error end,
+    on_cancelled = function() done, failure = true, "Recycle Bin operation cancelled" end,
+  }
+  if not job then return nil, err end
+  while not done do coroutine.yield(0.01) end
+  return success, failure
 end
 
 local function trash_paths(paths, trash)
   if #paths == 0 then return true end
   if file_ops.trashes(trash) then
-    local ok, err = trash_windows_ffi(paths)
-    if ok then return true end
-    core.log("SHFileOperationW trash failed, falling back to PowerShell: %s", err)
-    local ps_ok, ps_err = trash_windows_powershell(paths)
-    if ps_ok then return true end
-    return nil, string.format("%s; PowerShell fallback: %s", err, ps_err)
+    return trash_in_worker(paths)
   end
   for _, path in ipairs(paths) do
     local ok, err = delete_permanent(path)
@@ -263,10 +132,9 @@ local function machine_change(method, params)
   return true
 end
 
--- Runs `fn()` now for a path on this PC. For a path on a Machine it runs `fn` in a thread,
--- because each change there waits for a reply.
-function file_ops.run(path, fn)
-  if fs.on_machine(path) then core.add_thread(fn) else fn() end
+-- Runs changes that wait for a Machine or a worker in a UI coroutine.
+function file_ops.run(path, fn, background)
+  if background or fs.on_machine(path) then core.add_thread(fn) else fn() end
 end
 
 -- `{type, size, modified}` of the path, nil when it does not exist, or nil and an error.
@@ -322,7 +190,8 @@ function file_ops.copy(from, to)
   return copy_recursive(from, to)
 end
 
--- Deletes the paths. `trash` moves them to the Recycle Bin on Windows. Missing paths are skipped.
+-- Deletes the paths. Recycle Bin and Machine operations yield; call them from a coroutine.
+-- Missing paths are skipped.
 function file_ops.delete(paths, trash)
   if #paths > 0 and fs.on_machine(paths[1]) then
     return machine_change("files.delete", {paths = paths, trash = trash or nil})

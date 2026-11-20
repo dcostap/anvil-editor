@@ -66,20 +66,21 @@ test.describe("Machine server", function()
 
   -- Reads replies until each ID has one, or the time ends. Gives the replies by ID.
   local function replies(client, ids, seconds)
-    local got, missing = {}, #ids
+    local got, missing, order = {}, #ids, {}
     local deadline = system.get_time() + seconds
     while missing > 0 and system.get_time() < deadline do
       local kind, reply_id, body = client.decoder:next()
       if kind then
         if not got[reply_id] then missing = missing - 1 end
         got[reply_id] = json.decode(body)
+        order[#order + 1] = reply_id
       else
         local chunk = client.socket:read(1024 * 1024)
         if not chunk then break end
         if chunk == "" then coroutine.yield(0.01) else client.decoder:feed(chunk) end
       end
     end
-    return got, missing
+    return got, missing, order
   end
 
   test.before_each(function(context)
@@ -361,6 +362,25 @@ test.describe("Machine server", function()
       end
     end
     test.ok(listed, table.concat(seen, ", "))
+  end)
+
+  test.it("answers other requests while moving files to the Recycle Bin", function(context)
+    test.skip_if(PLATFORM ~= "Windows", "The Recycle Bin is Windows-only")
+    local folder = context.project .. PATHSEP .. "trash"
+    test.ok(common.mkdirp(folder))
+    write_file(folder .. PATHSEP .. "résumé.txt", "private test file")
+    local client = owner(context)
+    local ids = send(client, {
+      { "files.delete", { paths = { folder }, trash = true } },
+      { "projects.list", {} },
+    })
+    local got, missing, order = replies(client, ids, 30)
+    test.equal(missing, 0, "Both requests must finish")
+    test.equal(order[1], ids[2], "Project listing must not wait for Recycle Bin work")
+    test.is_nil(got[ids[1]].error)
+    test.is_nil(got[ids[2]].error)
+    test.is_nil(system.get_file_info(folder))
+    test.not_nil(system.get_file_info(context.project))
   end)
 
   test.it("makes, moves, copies and deletes files in its Projects only", function(context)

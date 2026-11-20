@@ -13,6 +13,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include "api.h"
+#include "../file_trash.h"
 #include "memory_stats.h"
 #include "../memory_stats.h"
 #include "../rencache.h"
@@ -3274,7 +3275,31 @@ static int f_log_shutdown(lua_State *L) {
   return 0;
 }
 
+static int f_trash_files(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  size_t count = lua_rawlen(L, 1);
+  if (count > SIZE_MAX / sizeof(char *)) return luaL_error(L, "Too many Recycle Bin paths");
+  const char **paths = lua_newuserdata(L, (count ? count : 1) * sizeof(*paths));
+  for (size_t i = 0; i < count; ++i) {
+    lua_rawgeti(L, 1, (lua_Integer)i + 1);
+    luaL_checktype(L, -1, LUA_TSTRING);
+    size_t length;
+    paths[i] = luaL_checklstring(L, -1, &length);
+    if (memchr(paths[i], '\0', length)) return luaL_error(L, "Recycle Bin path contains NUL");
+    lua_pop(L, 1);
+  }
+  char error[256];
+  if (!anvil_file_trash(paths, count, error, sizeof(error))) {
+    lua_pushnil(L);
+    lua_pushstring(L, error);
+    return 2;
+  }
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
 static const luaL_Reg lib[] = {
+  { "trash_files",           f_trash_files           },
   { "set_shutdown_log",      f_set_shutdown_log      },
   { "log_shutdown",          f_log_shutdown          },
   { "poll_event",            f_poll_event            },

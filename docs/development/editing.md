@@ -22,6 +22,22 @@ A binary Buffer does not keep its bytes exactly, so Autosave does not save it. O
 
 A new image cannot start as text. Run `ui/binary_file_open.lua` after changes.
 
+## Link activation
+
+Markdown and Terminal links share the URI scheme rule in `core.system_link`: only `http`, `https`, `mailto` and `file` are allowed. Markdown attachments and absolute file links use the same system-opening check, inside or outside the vault. File URIs are decoded before the check.
+
+System opening asks before known program, script, installer and shortcut file types. Cancel is the default, and approval applies only to that activation. This check is not a sandbox for external apps or custom file associations. Terminal file links still open through the editor, including its binary-file dialog.
+
+Run `ui/markdown_live_editor.lua`, `ui/terminal.lua` and `ui/binary_file_open.lua` after changes.
+
+## Recycle Bin
+
+Windows Recycle Bin operations run through the `file_trash` worker. `src/file_trash.c` owns the blocking shell call. The File Tree keeps its edit guard until the worker finishes. Machine requests use the same worker without blocking other requests.
+
+`file_ops.delete(paths, true)` yields on Windows. Use a coroutine, or `file_ops.run(path, fn, true)`, when calling it. Other local operations keep their synchronous behavior. A failed Recycle Bin operation reports an error; it does not retry through another shell command. Once the shell call starts, it can finish even if its caller disconnects.
+
+Run `runtime/system.lua`, `runtime/machine_guard.lua`, `runtime/machine_serve.lua` and `ui/filetree_context_menu.lua` after changes.
+
 ## Table images
 
 A table cell that holds only an image link shows the attachment link above the image, scaled to its column. A cell with text and an image keeps the link label. Table images use the same Image Controls as prose: hover buttons, Image Overlay, link editing, corner resize and Context Menu.
