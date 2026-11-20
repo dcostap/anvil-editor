@@ -297,7 +297,7 @@ static void writer(void) {
 
 /* An adoption record names one Project process. A damaged record adopts nothing. */
 static void adoption_records(void) {
-  AnvilAdoptionRecord record = {4242, 0x01dc1234abcd5678ull, 9, "C:\\Projects\\R\xc3\xa9cord"}, decoded;
+  AnvilAdoptionRecord record = {4242, 0x01dc1234abcd5678ull, 9, "C:\\Projects\\R\xc3\xa9" "cord"}, decoded;
   size_t size = 0;
   char *data = anvil_adoption_encode(&record, &size);
   CHECK(data, "record encode failed");

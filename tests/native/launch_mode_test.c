@@ -25,9 +25,9 @@ int main(void) {
   /* A plain launch, a path, or a launch option opens the shell. */
   given = (const char *[]){ "anvil" };
   CHECK(runs_shell(1, given, &argc, argv));
-  CHECK(LAUNCH("C:\Projects\a"));
+  CHECK(LAUNCH("C:\\Projects\\a"));
   CHECK(LAUNCH("--new-window"));
-  CHECK(LAUNCH("--shell", "C:\Projects\a"));
+  CHECK(LAUNCH("--shell", "C:\\Projects\\a"));
 
   /* --direct runs the application and is not passed on. */
   CHECK(!LAUNCH("--direct", "notes.md"));
@@ -40,13 +40,13 @@ int main(void) {
   CHECK(!LAUNCH("repl"));
   CHECK(!LAUNCH("run", "script.lua"));
   CHECK(!LAUNCH("edit", "notes.md"));
-  CHECK(!LAUNCH("serve", "C:\Projects\a"));
+  CHECK(!LAUNCH("serve", "C:\\Projects\\a"));
   CHECK(!LAUNCH("machine", "devices"));
   CHECK(!LAUNCH("--version"));
   CHECK(!LAUNCH("-h"));
 
   /* The shell's own Project and Sidebar processes run the application. */
-  CHECK(!LAUNCH(ANVIL_PROJECT_ARG, "C:\Projects\a", ANVIL_SURFACE_PIPE_ARG "x"));
+  CHECK(!LAUNCH(ANVIL_PROJECT_ARG, "C:\\Projects\\a", ANVIL_SURFACE_PIPE_ARG "x"));
   CHECK(!LAUNCH("--internal-sidebar", ANVIL_SURFACE_PIPE_ARG "x"));
   return 0;
 }

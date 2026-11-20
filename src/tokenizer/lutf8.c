@@ -105,7 +105,7 @@ static size_t utf8_length (const char *s, const char *e) {
   return i;
 }
 
-static const char *utf8_offset(const char *s, const char *e, size_t offset, size_t idx) {
+static const char *utf8_offset(const char *s, const char *e, size_t offset, int64_t idx) {
   const char *p = s + offset - 1;
   if (idx >= 0) {
     while (p < e && idx > 0)
