@@ -614,9 +614,9 @@ function core.init()
     core.log_quiet("Session log unavailable: %s", tostring(session_log_error or "unknown error"))
   end
   core.log_quiet("Input trace: enabled; native keyboard events and Lua routes enter the session log")
-  if config.plugins and config.plugins.ipc and config.plugins.ipc.single_instance == false and system.set_native_single_instance_enabled then
+  if config.single_instance == false and system.set_native_single_instance_enabled then
     system.set_native_single_instance_enabled(false)
-    core.log_quiet("Native single-instance handoff disabled by config.plugins.ipc.single_instance=false")
+    core.log_quiet("Native single-instance handoff disabled by config.single_instance=false")
   end
 
   style = startup_measure("load_default_colors", function() return require "colors.default" end)
@@ -1099,6 +1099,8 @@ function core.exit(quit_fn, force)
     core.save_app_state()
     system.log_shutdown("App State save end; exit callback begin")
     quit_fn()
+    -- An exit from a background coroutine must leave background-only scheduling.
+    core.redraw = true
     system.log_shutdown("exit callback end")
   else
     core.confirm_close_buffers(core.buffers, core.exit, nil, quit_fn, true)

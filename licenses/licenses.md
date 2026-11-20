@@ -1,6 +1,6 @@
 # Licenses
 
-Additional dependency notes and license text for Tree-sitter are in `tree-sitter.md`.
+See [third-party notices](third-party.md) for native libraries and the bundled ripgrep helper. See [Tree-sitter notices](tree-sitter.md) and [ConPTY notices](conpty.md) for those components.
 
 ## Betlang
 

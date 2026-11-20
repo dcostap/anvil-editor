@@ -217,7 +217,7 @@ def capture(scene: str, theme: str, real_pi: str, keep: bool) -> Image:
             "local open = shmem.open\n"
             f'shmem.open = function(name, capacity) return open(name == "anvil-ipc" and "{namespace}" or name, capacity) end\n'
             'local config = require "core.config"\n'
-            "config.plugins.ipc.single_instance = false\n"
+            "config.single_instance = false\n"
             'config.plugins.terminal.shell = "powershell.exe -NoLogo -NoProfile"\n'
             "config.plugins.terminal.prepare_session = false\n", encoding="utf-8")
         capture_dir = work / "capture"

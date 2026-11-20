@@ -73,6 +73,16 @@ try {
   Assert-True ($formatOutput.Contains('{ "one": 1 }')) "The extracted dprint formatter returned unexpected JSON."
 
   $dataRoot = Split-Path -Parent $startFile.Directory.FullName
+  $licenseRoot = Join-Path $PSScriptRoot "..\..\..\licenses"
+  foreach ($license in Get-ChildItem -LiteralPath $licenseRoot -File -Recurse) {
+    $relative = $license.FullName.Substring((Get-Item $licenseRoot).FullName.Length + 1)
+    $extracted = Join-Path $dataRoot ("doc\" + $relative)
+    Assert-True (Test-Path $extracted) ("The embedded runtime omitted license file: " + $relative)
+    $actualBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($extracted))
+    $expectedBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($license.FullName))
+    Assert-True ($actualBytes -ceq $expectedBytes) `
+      ("The embedded license differs from its source: " + $relative)
+  }
   Assert-True (Test-Path (Join-Path $dataRoot "conpty\conpty.dll")) "The embedded runtime omitted conpty.dll."
   Assert-True (Test-Path (Join-Path $dataRoot "conpty\OpenConsole.exe")) "The embedded runtime omitted OpenConsole.exe."
 

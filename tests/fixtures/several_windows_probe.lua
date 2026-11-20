@@ -69,6 +69,13 @@ local function trace()
   local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
   local text = file:read("*a"); file:close(); return text
 end
+local function project_starts(name)
+  local count = 0
+  for path in trace():gmatch("Shell started Project pid=%d+ path=(.-) Project=%d+") do
+    if common.path_equals(path, root .. "/" .. name) then count = count + 1 end
+  end
+  return count
+end
 local function window_id(window)
   for id, hex in trace():gmatch("Shell Window record: id=(%d+) SDL=%d+ hwnd=(%x+)") do
     if ffi.cast("void *", tonumber(hex, 16)) == window then return tonumber(id) end
@@ -248,8 +255,7 @@ if path:find("/driver$", 1) then
         wait_for(function() return user32.IsIconic(original) == 0 end, 5,
           "duplicate selection did not raise the Project's owning Window")
         assert(#windows(a.shell_pid) == 2, "duplicate Project selection created another Window")
-        local _, first = trace():gsub("\\", "/"):gsub("Shell started Project pid=%d+ path=[^\r\n]+/Project[\r\n]", "")
-        local _, second = trace():gsub("\\", "/"):gsub("Shell started Project pid=%d+ path=[^\r\n]+/Replacement[\r\n]", "")
+        local first, second = project_starts("Project"), project_starts("Replacement")
         assert(first == 1 and second == 1, "duplicate selection created another Project runtime")
         user32.PostMessageW(original, 0x112, 0xf020, 0)
         wait_for(function() return user32.IsIconic(original) ~= 0 end, 3)
@@ -290,7 +296,7 @@ if path:find("/driver$", 1) then
         local all = windows(a.shell_pid)
         return #all == 2 and all
       end, 8, "New Window did not belong to the existing shell")
-      local _, projects = trace():gsub("\\", "/"):gsub("Shell started Project pid=%d+ path=[^\r\n]+/Project[\r\n]", "")
+      local projects = project_starts("Project")
       assert(projects == 1, "New Window loaded another Project")
       local empty = owned[1] == original and owned[2] or owned[1]
       if action:match("^windows%-picker") then
@@ -415,7 +421,7 @@ else
     end
     if action == "windows-open" or action == "windows-owner-close" or shared then
       wait_for(function() return load("open") end, 15)
-      require("core.config").plugins.ipc.single_instance = true
+      require("core.config").single_instance = true
       assert(command.perform("core:open_project_folder_in_new_window"))
       core.global_prompt_bar:set_text(root .. "/Replacement")
       core.global_prompt_bar:submit()

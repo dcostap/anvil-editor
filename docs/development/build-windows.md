@@ -39,9 +39,11 @@ Zig's own HTTP and Git clients fail on some Windows machines. `subprojects/packa
 
 The standalone option is `-Dembedded_runtime=true`. It is off by default. `scripts\build-standalone-windows.sh` enables it, strips the executable, runs the standalone smoke test, and promotes the result only after the test passes.
 
-The Windows runtime excludes source artwork, platform app icons, icon compiler inputs, and the unused `fd.exe`. Keep these files in the source tree. Runtime UI icons, fonts, licenses, and `rg.exe` stay packaged.
+The Windows runtime excludes source artwork, platform app icons, and icon compiler inputs. Keep these files in the source tree. Runtime UI icons, fonts, licenses, and `rg.exe` stay packaged.
 
 Run `anvil:embedded-runtime` after packaging changes.
+
+Both the embedded runtime and Meson installs include the complete `licenses/` tree. `licenses/third-party.md` lists native dependency notices and the bundled ripgrep notice. Update the copied license texts and component versions when dependencies change. Keep upstream license text unchanged.
 
 ### GitHub releases
 

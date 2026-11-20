@@ -428,16 +428,6 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 #endif
 #ifndef _WIN32
   signal(SIGPIPE, SIG_IGN);
-#else
-  /* Allow console output when called from anvil.com wrapper.
-   * See: https://stackoverflow.com/q/73987850
-   *      https://stackoverflow.com/q/17111308
-  */
-  if (getenv("ANVIL_COM_WRAP") && AttachConsole(ATTACH_PARENT_PROCESS)) {
-    freopen("CONOUT$", "w", stdout);
-    freopen("CONOUT$", "w", stderr);
-    freopen("CONIN$", "r", stdin);
-  }
 #endif
 
 #ifdef __linux__

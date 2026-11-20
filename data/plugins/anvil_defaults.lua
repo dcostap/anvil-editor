@@ -195,10 +195,7 @@ plugin_defaults("gitdiff_highlight", {
   overview = true,
   gutter = true,
 })
-plugin_defaults("ipc", {
-  single_instance = true,
-  dirs_instance = "new",
-})
+if config.single_instance == nil then config.single_instance = true end
 config.worker_pool_drain_budget_ms = config.worker_pool_drain_budget_ms or 1.0
 config.worker_pool_drain_max_messages = config.worker_pool_drain_max_messages or 64
 config.lsp = common.merge({

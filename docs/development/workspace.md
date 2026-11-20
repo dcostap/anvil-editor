@@ -1,5 +1,7 @@
 # Panes, Sidebar and Windows
 
+The native Windows shell owns single-instance launch routing. Set `config.single_instance = false` to disable the direct editor's native handoff. No Lua IPC service runs alongside it. Run the `launch-forward`, `launch-files`, and `windows-new` shell probes after launch changes.
+
 ## Pane History and focus replacement
 
 Pane History is the order of the Panes that the user visited across Projects in one Window. Each Window has its own history. `pane:history_back` and `pane:history_forward` move through it; `pane:history_oldest` and `pane:history_newest` go to its ends.

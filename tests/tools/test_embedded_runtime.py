@@ -1,6 +1,7 @@
 """Check the files shipped by the Windows runtime generator."""
 
 from pathlib import Path
+import re
 import struct
 import subprocess
 import sys
@@ -13,6 +14,21 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class EmbeddedRuntimeTests(unittest.TestCase):
+    def test_dependency_notices_have_bundled_license_texts(self):
+        notices = ROOT / "licenses/third-party.md"
+        text = notices.read_text(encoding="utf-8")
+        for component in (
+            "FreeType", "LuaJIT", "PCRE2", "Mbed TLS", "TF-PSA-Crypto",
+            "libpng", "zlib", "libjpeg-turbo", "HarfBuzz", "SDL3", "uchardet", "ripgrep",
+        ):
+            with self.subTest(component=component):
+                self.assertIn(component, text)
+        for target in re.findall(r"\]\((third-party/[^)]+)\)", text):
+            with self.subTest(license=target):
+                self.assertTrue((notices.parent / target).read_text(encoding="utf-8").strip())
+        self.assertIn("This software is based in part on the work of the Independent JPEG Group.", text)
+        self.assertIn("This software is based in part on the work of the FreeType Team.", text)
+
     def test_packages_runtime_assets_without_build_inputs_or_unused_helpers(self):
         with tempfile.TemporaryDirectory(prefix="anvil-runtime-test-") as directory:
             root = Path(directory)
@@ -20,7 +36,6 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 "data/core/start.lua": b"unconfigured start",
                 "data/core/init.lua": b"core",
                 "data/plugins/fuzzy_searcher/rg.exe": b"ripgrep",
-                "data/plugins/fuzzy_searcher/fd.exe": b"unused helper",
                 "data/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf": b"regular font",
                 "data/fonts/CaskaydiaCoveNerdFontMono-SemiLight.ttf": b"selectable font",
                 "resources/icons/logo.png": b"Linux icon",
@@ -38,6 +53,8 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 "licenses/licenses.md": b"dependency licenses",
                 "licenses/tree-sitter.md": b"parser licenses",
                 "licenses/conpty.md": b"ConPTY license",
+                "licenses/third-party.md": b"dependency credits",
+                "licenses/third-party/freetype.txt": b"FreeType license",
                 "build/start.lua": b"configured start",
                 "build/vmdef.lua": b"configured VM",
                 "build/conpty.dll": b"ConPTY library",
@@ -96,6 +113,8 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 "doc/licenses.md": b"dependency licenses",
                 "doc/tree-sitter.md": b"parser licenses",
                 "doc/conpty.md": b"ConPTY license",
+                "doc/third-party.md": b"dependency credits",
+                "doc/third-party/freetype.txt": b"FreeType license",
             })
 
 

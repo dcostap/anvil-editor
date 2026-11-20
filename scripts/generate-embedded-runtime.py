@@ -25,7 +25,6 @@ WINDOWS_RUNTIME_EXCLUDES = (
     "icons/icon.rc",
     "icons/logo-source.png",
     "icons/logo.png",
-    "plugins/fuzzy_searcher/fd.exe",
 )
 
 
@@ -92,9 +91,7 @@ def collect_files(args: argparse.Namespace) -> dict[str, Path]:
                     add_file(files, name, path)
 
     add_file(files, "doc/LICENSE", source_root / "LICENSE")
-    add_file(files, "doc/licenses.md", source_root / "licenses" / "licenses.md")
-    add_file(files, "doc/tree-sitter.md", source_root / "licenses" / "tree-sitter.md")
-    add_file(files, "doc/conpty.md", source_root / "licenses" / "conpty.md")
+    add_tree(files, source_root / "licenses", "doc")
 
     missing = [str(path) for path in files.values() if not path.is_file()]
     if missing:

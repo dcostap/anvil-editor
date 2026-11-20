@@ -430,7 +430,7 @@ else
     endif
 endif
 
-install_data('licenses/licenses.md', 'licenses/tree-sitter.md', 'licenses/conpty.md', install_dir : anvil_docdir)
+install_subdir('licenses', install_dir : anvil_docdir, strip_directory : true)
 
 install_subdir('data/core' , install_dir : anvil_datadir, exclude_files : 'start.lua')
 install_subdir('data/models', install_dir : anvil_datadir)
