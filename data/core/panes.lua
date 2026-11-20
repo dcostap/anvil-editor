@@ -1562,14 +1562,26 @@ local function navigable_index(pane)
   return index
 end
 
--- Automatic focus replacement never enters a Snoozed Pane. A Pane of the same Pane Group takes focus even with an
--- attention mark, because it already showed beside the removed Pane. Outside that group, it skips attention marks.
+-- Automatic focus replacement uses the most recent eligible Pane in this Project. It skips Snoozed Panes and
+-- attention marks outside the old Pane Group. Without focus history, it uses the nearest Pane, same group first.
 -- `skip` is a Pane of that group that must not take focus. Explicit navigation and View moves use their target.
 local function focus_after_removal(group, member_index, old_index, previous_view, attention, skip)
   attention = attention or require("core.pending_panes").local_attention()
   local survivors = group and group.root and not group.snoozed and layout.leaves(group.root) or {}
-  local next_pane = nearest_after_removal(survivors, member_index, skip and { [skip.id] = true } or {})
-    or nearest_after_removal(M.navigable(), old_index, attention)
+  local navigable = M.navigable()
+  local recent = require "core.recent_panes"
+  local next_pane, latest
+  for _, pane in ipairs(navigable) do
+    if pane ~= skip and (pane.group == group or not attention[pane.id]) then
+      local focused = recent.focused_at(pane)
+      if focused and (not latest or focused > latest) then
+        next_pane, latest = pane, focused
+      end
+    end
+  end
+  next_pane = next_pane
+    or nearest_after_removal(survivors, member_index, skip and { [skip.id] = true } or {})
+    or nearest_after_removal(navigable, old_index, attention)
   M.active_pane, M.visible_group_value = next_pane, next_pane and next_pane.group
   if next_pane then
     focus_view(next_pane)
@@ -1661,8 +1673,8 @@ function M.is_snoozed(target)
   return pane ~= nil and pane.group.snoozed == true
 end
 
--- Snoozes `target`: it leaves its Pane Group for its own Snoozed one. If it had focus, the nearest Pane that
--- navigation reaches without an attention mark takes focus. Without one, the Project Launcher shows.
+-- Snoozes `target`: it leaves its Pane Group for its own Snoozed one. If it had focus, the shared automatic
+-- selection rule chooses another Pane. Without one, the Project Launcher shows.
 function M.snooze(target, keep_focus)
   local pane = M.find(target)
   if not pane then return nil, "invalid Pane" end

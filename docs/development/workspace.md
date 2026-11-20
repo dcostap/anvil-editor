@@ -16,7 +16,9 @@ Each entry has the Pane ID and the time in milliseconds. A move entry also names
 
 Moves skip closed, Snoozed and Dormant Panes. Visits are not saved across restarts. Run `ui/global_pane_history.lua`, `ui/recent_panes.lua` and `ui/pane_requests.lua` after changes.
 
-Automatic Pane focus replacement skips Snoozed Panes. It prefers a Pane in the same Pane Group, also one with an attention mark, because that Pane already showed. Then it takes the nearest navigable Pane without an attention mark.
+Automatic Pane focus replacement returns to the most recently focused eligible Pane in the same Project. It skips Snoozed Panes and attention marks outside the old Pane Group. A marked Pane in that group remains eligible because it already showed beside the removed Pane.
+
+Without recorded focus, it prefers the nearest eligible Pane in the same Pane Group, then another group. It does not switch Projects. Closing a background Pane keeps the current focus.
 
 It checks all marks, not only numbered Panes. When the Current View closes and its history reveals a marked Terminal, that Pane does not take focus. With none, the Project shows its Project Launcher.
 
@@ -24,7 +26,7 @@ Close, Snooze, Terminal exit and completed cross-Project Pane transfers use this
 
 Explicit selection, navigation, View moves and valid saved selections keep their targets. Alt+Left reopens the last closed Pane. Close keeps the keyboard in the Project or Sidebar that has it.
 
-Run `ui/panes.lua`, `ui/pane_requests.lua` and `ui/pane_workspace.lua` after changes.
+Run `ui/panes.lua`, `ui/recent_panes.lua`, `ui/snoozed_panes.lua`, `ui/pane_requests.lua` and `ui/pane_workspace.lua` after changes.
 
 ## Project Launcher
 
