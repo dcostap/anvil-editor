@@ -110,7 +110,7 @@ test.describe("Terminal revival", function()
         return screen_text(restored):find("ANVIL_REVIVED_INPUT", 1, true)
       end), "revived shell did not accept input: " .. screen_text(restored))
       local revived = screen_text(restored):sub(marker)
-      test.ok(not revived:find("997", 1, true), "the revived shell got a report as input: " .. revived)
+      test.ok(not revived:find("997;[12]n"), "the revived shell got an appearance report as input: " .. revived)
       local path = record(restored.session_id).snapshot_path
       restored:on_close()
       require("terminal_native").finish_close_commands()

@@ -148,17 +148,23 @@ test.describe("Markdown heading geometry", function()
       renderer.begin_frame(core.window)
       local ok, err = pcall(function()
         local x, y = view:get_line_screen_position(1)
+        view:prepare_line_body_draw_cache(1, 1)
         view:draw_line_body(1, x, y)
       end)
       renderer.end_frame()
       renderer.draw_rect = draw_rect
       if not ok then error(err, 0) end
-      test.ok(#rects >= 2, "selection must cover heading text and the remaining row")
       local y, height = view:get_position_highlight_geometry(1, 1, false)
+      local left = view:get_line_screen_position(1, 1)
+      local right = view.position.x + view.size.x
+      table.sort(rects, function(a, b) return a.x < b.x end)
       for _, rect in ipairs(rects) do
         test.equal(rect.y, y, "selection must exclude the heading's leading gap")
         test.equal(rect.h, height, "selection must use one content height across the row")
+        test.ok(rect.x <= left, "gap in the heading selection")
+        left = math.max(left, rect.x + rect.w)
       end
+      test.ok(left >= right, "selection must cover heading text through the right edge")
     end)
   end
 end)

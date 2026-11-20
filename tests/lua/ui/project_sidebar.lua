@@ -85,6 +85,9 @@ test.describe("Project Sidebar snapshots", function()
 
     core.on_event("projectsidebarchanged")
     reply("done", 2)
+    -- The old number stays valid briefly after a new result arrives.
+    test.is_nil(numbered.target(core.project_sidebar, 1, {}))
+    coroutine.yield(require("core.pending_panes").HOLD + 0.01)
     test.equal((numbered.target(core.project_sidebar, 1, {}) or {}).id, "result",
       "A new result did not become a Pending Pane")
 

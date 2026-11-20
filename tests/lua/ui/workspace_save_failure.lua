@@ -42,7 +42,7 @@ test.describe("Workspace save failure audit", function()
   local started = false
   test.before_each(function()
     if not started then
-      test.ok(wait_for(function() return panes.count() > 0 end, 30), "initial Workspace did not open")
+      test.ok(wait_for(function() return core.workspace_restored end, 30), "Workspace restore did not finish")
       started = true
     end
     old_view = core.active_view

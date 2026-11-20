@@ -19,6 +19,13 @@ local function near(actual, expected)
 end
 
 test.describe("Window wallpaper", function()
+  local launcher = require "core.project_launcher"
+  test.before_each(function(context)
+    -- Measure the backdrop, not the Project Launcher drawn over it.
+    context.draw_launcher = launcher.draw
+    launcher.draw = function() end
+  end)
+  test.after_each(function(context) launcher.draw = context.draw_launcher end)
   test.it("keeps Pane content out of translucent Title and Status Bars", function()
     local config = require "core.config"
     local old_wallpaper = config.wallpaper

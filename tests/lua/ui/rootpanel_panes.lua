@@ -72,7 +72,11 @@ test.describe("Root Panel Pane presentation", function()
   local saved
   local root
 
-  test.before_each(function()
+  test.before_each(function(context)
+    -- The Launcher has separate render tests. This fixture draws without a window.
+    local launcher = require "core.project_launcher"
+    context.draw_launcher = launcher.draw
+    launcher.draw = function() end
     autocomplete.close()
     Widget.destroy_floating_widgets()
     panes.reset_for_tests()
@@ -113,7 +117,8 @@ test.describe("Root Panel Pane presentation", function()
     core.cursor_change_req = nil
   end)
 
-  test.after_each(function()
+  test.after_each(function(context)
+    require("core.project_launcher").draw = context.draw_launcher
     autocomplete.close()
     panes.reset_for_tests()
     renderer.draw_rect = saved.draw_rect

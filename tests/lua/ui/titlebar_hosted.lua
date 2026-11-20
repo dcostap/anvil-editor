@@ -1,6 +1,8 @@
 local core = require "core"
 local TitleBar = require "core.titlebar"
 local RootPanel = require "core.rootpanel"
+local panes = require "core.panes"
+local View = require "core.view"
 local test = require "core.test"
 
 test.describe("Hosted Title Bar ownership", function()
@@ -9,10 +11,12 @@ test.describe("Hosted Title Bar ownership", function()
     getter = system.get_window_controls
     saved_title = core.title_bar
     system.get_window_controls = function() return 640, 0, 160, 40 end
+    panes.create { factory = function() return View() end }
   end)
   test.after_each(function()
     system.get_window_controls = getter
     core.title_bar = saved_title
+    panes.reset_for_tests()
   end)
   test.it("keeps Tabs and drop targets outside shell controls", function()
     local title = TitleBar()
@@ -23,7 +27,6 @@ test.describe("Hosted Title Bar ownership", function()
     test.equal(title:get_external_drop_target(720, 20), nil, "native controls accept Project drops")
   end)
   test.it("shows Tabs only while the Project Sidebar is hidden", function()
-    local panes = require "core.panes"
     local content_x = system.get_window_content_x
     local sidebar_width = 240
     system.get_window_content_x = function() return sidebar_width end

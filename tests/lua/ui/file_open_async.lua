@@ -16,7 +16,7 @@ test.describe("Large file opening", function()
   local started = false
   test.before_each(function(context)
     if not started then
-      wait_for(function() return panes.count() > 0 end)
+      wait_for(function() return core.workspace_restored end)
       started = true
     end
     context.old_view = core.active_view

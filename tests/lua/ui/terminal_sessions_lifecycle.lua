@@ -27,14 +27,7 @@ local function wait_for_project_workspace(path)
   local deadline = system.get_time() + 30
   while system.get_time() < deadline do
     local project = core.root_project()
-    if project and common.path_equals(project.path, path) then
-      for _, pane in ipairs(panes.ordered()) do
-        for _, view in ipairs(panes.views(pane)) do
-          local name = view.get_name and view:get_name() or ""
-          if name:match("^File Tree:") then return true end
-        end
-      end
-    end
+    if project and common.path_equals(project.path, path) and core.workspace_restored then return true end
     coroutine.yield(0.01)
   end
   return false

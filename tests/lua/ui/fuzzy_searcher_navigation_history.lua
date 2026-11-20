@@ -62,7 +62,7 @@ local function drawn_result_text(picker)
   picker.list_scroll.y = (picker.viewport_offset - 1) * metrics.lh
   picker.list_scroll.move_data_y = nil
   local saved, drawn = {}, {}
-  for _, name in ipairs { "draw_rect", "draw_rounded_rect", "draw_text_known_bounds",
+  for _, name in ipairs { "draw_rect", "draw_poly", "draw_rounded_rect", "draw_text_known_bounds",
     "set_clip_rect", "draw_canvas", "draw_canvas_scaled", "draw_text" } do
     saved[name] = renderer[name]
     renderer[name] = function() end
@@ -443,7 +443,7 @@ test.describe("Fuzzy Searcher Navigation History Search", function()
     test.not_nil(picker:update_selected_preview())
     picker:set_size(1600, 750)
     local saved, drawn = {}, {}
-    for _, name in ipairs { "draw_rect", "draw_rounded_rect", "draw_text_known_bounds",
+    for _, name in ipairs { "draw_rect", "draw_poly", "draw_rounded_rect", "draw_text_known_bounds",
       "set_clip_rect", "draw_canvas", "draw_canvas_scaled", "draw_text" } do
       saved[name] = renderer[name]
       renderer[name] = function() end

@@ -211,6 +211,7 @@ test.describe("Terminal View", function()
   end)
 
   test.after_each(function(context)
+    if context.get_file_info then system.get_file_info = context.get_file_info end
     require("core.image_overlay").close()
     if context.previous_time then system.get_time = context.previous_time end
     if context.previous_defer_draw then core.root_panel.defer_draw = context.previous_defer_draw end
@@ -1961,15 +1962,20 @@ test.describe("Terminal View", function()
   end)
 
   test.it("detects plain absolute file and folder paths when Ctrl is held", function(context)
-    context.link_folder = USERDIR .. PATHSEP .. "terminal-plain-path"
-    local file = context.link_folder .. PATHSEP .. "sheet-v2.txt"
-    test.ok(common.mkdirp(context.link_folder))
-    assert(io.open(file, "wb")):close()
     local view = terminal.open()
+    -- Plain paths stop at whitespace. The real user folder can contain spaces.
+    local folder = "C:\\terminal-plain-path"
+    local file = folder .. "\\sheet-v2.txt"
+    context.get_file_info = system.get_file_info
+    system.get_file_info = function(path, ...)
+      if common.path_equals(path, file) then return {type = "file"} end
+      if common.path_equals(path, folder) then return {type = "dir"} end
+      return context.get_file_info(path, ...)
+    end
     keymap.modkeys.ctrl = true
     for _, case in ipairs({
       { text = "The file is " .. file .. ".", path = file },
-      { text = "(" .. context.link_folder:gsub("\\", "/") .. ")", path = context.link_folder },
+      { text = "(" .. folder:gsub("\\", "/") .. ")", path = folder },
     }) do
       local columns = {}
       for index = 1, #case.text do columns[index] = index - 1 end
