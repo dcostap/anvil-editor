@@ -62,6 +62,45 @@ test.describe("process stream", function()
     test.not_nil(stream.error)
   end)
 
+  test.it("keeps reading both pipes after the process exits until their output ends", function()
+    -- The output collector can publish bytes after the process reports exit.
+    local process_api = require "process"
+    local pipes = {
+      [process_api.STREAM_STDOUT] = { "", "", "last output" },
+      [process_api.STREAM_STDERR] = { "", "", "", "last error" },
+    }
+    local child = {
+      read = function(_, stream) return table.remove(pipes[stream], 1) end,
+      running = function() return false end,
+      returncode = function() return 17 end,
+      kill = function() end,
+    }
+    local old_process = _G.process
+    _G.process = setmetatable({ start = function() return child end }, { __index = process_api })
+    local out, err, code = {}, {}
+    local deadline = system.get_time() + 5
+    local ok, failure = pcall(function()
+      require("core.workers.process_stream").run({ command = { "fake-child" }, stderr = "pipe" }, {
+        cancelled = function() return system.get_time() >= deadline end,
+        send = function(message)
+          local payload = message.payload
+          if message.type == "chunk" then
+            out[#out + 1] = payload.stdout
+            err[#err + 1] = payload.stderr
+          elseif message.type == "final" then
+            code = payload.code
+          end
+          return true
+        end,
+      })
+    end)
+    _G.process = old_process
+    if not ok then error(failure, 0) end
+    test.equal(table.concat(out), "last output")
+    test.equal(table.concat(err), "last error")
+    test.equal(code, 17)
+  end)
+
   test.it("marks a stream cancelled before its worker reports termination", function()
     local original_named = worker_pool.named
     local callbacks

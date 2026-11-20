@@ -15,14 +15,16 @@ local DEFAULT_WINDOW = 1024 * 1024
 
 local function read_available(proc, stream, max)
   local chunks, total = {}, 0
+  local eof = false
   while total < max do
-    local chunk = proc:read(stream, math.min(READ_CHUNK, max - total))
-    if not chunk or chunk == "" then break end
+    local chunk, err = proc:read(stream, math.min(READ_CHUNK, max - total))
+    if err then error(err) end
+    if chunk == nil then eof = true break end
+    if chunk == "" then break end
     chunks[#chunks + 1] = chunk
     total = total + #chunk
   end
-  if total == 0 then return nil end
-  return table.concat(chunks)
+  return total > 0 and table.concat(chunks) or nil, eof
 end
 
 function worker.run(payload, ctx)
@@ -49,7 +51,7 @@ function worker.run(payload, ctx)
     ctx.send { type = "cancelled", payload = {} }
   end
 
-  local exited = false
+  local stdout_done, stderr_done = false, not pipe_stderr
   while true do
     if ctx.cancelled() then return abort() end
     if ack then
@@ -61,20 +63,23 @@ function worker.run(payload, ctx)
       end
     end
     local open = not ack or outstanding < window
-    local out = open and read_available(proc, process.STREAM_STDOUT, window) or nil
-    local err = pipe_stderr and read_available(proc, process.STREAM_STDERR, READ_CHUNK) or nil
+    local out, err
+    if open and not stdout_done then
+      out, stdout_done = read_available(proc, process.STREAM_STDOUT, window)
+    end
+    if not stderr_done then
+      err, stderr_done = read_available(proc, process.STREAM_STDERR, READ_CHUNK)
+    end
     if out or err then
       if out and ack then outstanding = outstanding + #out end
       if not ctx.send { type = "chunk", payload = { stdout = out, stderr = err } } then
         return abort()
       end
-    elseif exited and open then
+    elseif stdout_done and stderr_done then
       break
-    elseif not exited and not proc:running() then
-      -- Read once more after exit: output written just before exit is still
-      -- in the pipe.
-      exited = true
     else
+      -- Process exit can precede the output collector. Only nil means EOF;
+      -- an empty read means that the pipe has no bytes available yet.
       system.sleep(POLL_SECONDS)
     end
   end
