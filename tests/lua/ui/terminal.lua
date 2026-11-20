@@ -278,6 +278,21 @@ test.describe("Terminal View", function()
     test.ok(ok, err)
   end)
 
+  test.it("opens a Terminal without closing the current Untitled Editor", function(context)
+    local editor = Editor(Buffer())
+    editor.buffer:insert(1, 1, "keep this note")
+    local pane = panes.present(editor)
+    context.previous_nag_show = core.nag_view.show
+    core.nag_view.show = function() error("opening a Terminal must not ask to close the note") end
+
+    test.ok(command.perform("terminal:open_at_project_root"))
+
+    test.equal(pane.current_view, editor)
+    test.equal(table.concat(editor.buffer.lines), "keep this note\n")
+    test.not_equal(panes.active().group, pane.group)
+    test.ok(panes.active().current_view:is(terminal.TerminalView))
+  end)
+
   test.it("replaces an unused terminal without keeping it in Pane history", function(context)
     local view = terminal.open()
     local pane = panes.pane_for_view(view)

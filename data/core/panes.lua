@@ -889,16 +889,7 @@ function M.is_disposable(target, next_view)
     return false
   end
   local view = pane.current_view
-  if view and view.is_disposable then return view:is_disposable(next_view) end
-  local buffer = view and view.buffer
-  local Editor = require "core.editor"
-  return view.extends and view:extends(Editor)
-    and buffer
-    and buffer.new_file
-    and not buffer.filename
-    and not buffer.abs_filename
-    and #buffer.lines == 1
-    and buffer.lines[1] == "\n"
+  return view and view.is_disposable and view:is_disposable(next_view) or false
 end
 
 function M.move_and_merge(source_target, destination_target)
@@ -1129,6 +1120,7 @@ function M.present(view, opts)
     end
   end
   local current = pane.current_view
+  local suspendable = not current.can_suspend or current:can_suspend() ~= false
   local blocked = current.can_open_view and not current:can_open_view(view)
   if current ~= view and (blocked or not M.accepts(pane, view)) then
     if existing then return nil, "View is owned by an incompatible Pane" end
@@ -1141,9 +1133,8 @@ function M.present(view, opts)
   local disposable = M.is_disposable(pane, view)
   local disposable_replacement = disposable
     and (not M.constraint(pane) or M.constraint(pane) ~= M.view_constraint(view))
-  if current ~= view and (disposable_replacement
-      or current.can_suspend and current:can_suspend() == false) then
-    if not existing and disposable then
+  if current ~= view and (disposable_replacement or not suspendable) then
+    if not existing then
       local committed = false
       local function approved()
         if not M.contains(pane) or pane.current_view ~= current then return end
@@ -1154,7 +1145,7 @@ function M.present(view, opts)
       if committed then return pane end
       return nil, "View replacement is pending or was canceled"
     end
-    return nil, "Current View requires transactional replacement"
+    return nil, "Current View cannot suspend"
   end
   if existing == pane and current == view then
     M.record_location(pane)
@@ -1421,36 +1412,13 @@ function M.replace_view(target, factory, opts)
   local pane = M.find(target or opts.pane or M.active_pane)
   if not pane then return nil, "invalid target Pane" end
   assert(type(factory) == "function", "View replacement requires a factory")
-  local old = pane.current_view
-  local suspendable = not old.can_suspend or old:can_suspend() ~= false
-  if suspendable or M.constraint(pane) then
-    local view, err = construct_view(factory)
-    if not view then return nil, err end
-    local placed, present_err = M.present(view, { pane = pane, focus = opts.focus })
-    return placed and view or nil, present_err
-  end
-
-  local result, failure
-  local function approved()
-    local view, err = construct_view(factory)
-    if not view then
-      old.discard_buffer_on_close = nil
-      failure = err
-      return
-    end
-    if not M.accepts(pane, view) then
-      old.discard_buffer_on_close = nil
-      local placed
-      placed, failure = M.present(view, { pane = pane, focus = opts.focus })
-      result = placed and view or nil
-      return
-    end
-    commit_replacement(pane, old, view, opts)
-    result = view
-  end
-  if opts.force or not old.can_close then approved() else old:can_close(approved) end
-  if result then return result end
-  return nil, failure or "View replacement is pending or was canceled"
+  local view, err = construct_view(factory)
+  if not view then return nil, err end
+  local placed, present_err = M.present(view, {
+    pane = pane, focus = opts.focus, force = opts.force,
+    history_limit = opts.history_limit,
+  })
+  return placed and view or nil, present_err
 end
 
 function M.place(factory, opts)

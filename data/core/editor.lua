@@ -115,6 +115,12 @@ function Editor:can_suspend()
   return self.buffer.abs_filename ~= nil
 end
 
+function Editor:is_disposable()
+  local buffer = self.buffer
+  return not buffer.filename and not buffer.abs_filename
+    and #buffer.lines == 1 and buffer.lines[1] == "\n"
+end
+
 function Editor:get_navigation_state()
   return {
     selection_state = self:get_selection_state(),

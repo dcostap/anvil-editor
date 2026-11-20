@@ -517,7 +517,7 @@ The retention of a non-current View through Pane Navigation History without clos
 _Avoid_: hidden tab, background tab
 
 **Untitled Editor**:
-An Editor showing an Untitled Buffer. It must close before another View takes its place, including through Navigation History. Unsaved changes require confirmation.
+An Editor showing an Untitled Buffer, kept in its Pane while it has content. A blank one permits replacement; closing unsaved content requires confirmation.
 _Avoid_: scratch Editor, unnamed Editor
 
 **Focused View**:

@@ -4,7 +4,7 @@ local Editor = require "core.editor"
 local layout = require "core.pane_layout"
 local panes = require "core.panes"
 local test = require "core.test"
-local View = require "core.view"
+local Buffer = require "core.buffer"
 
 local function write_file(path, text)
   local file = assert(io.open(path, "wb"))
@@ -93,32 +93,23 @@ test.describe("File opening through Panes", function()
     test.equal(panes.forward(), first)
   end)
 
-  test.it("keeps a file Buffer alive while replacement approval is pending", function()
-    local approve
-    local PendingView = View:extend()
-    function PendingView:can_suspend() return false end
-    function PendingView:can_close(callback) approve = callback end
+  test.it("opens a file in a new Pane and preserves the current Untitled Editor", function()
+    local previous = core.open_file(first_path)
+    local untitled = Editor(Buffer(nil, nil, true))
+    untitled.buffer:insert(1, 1, "keep this note")
+    local pane = panes.present(untitled)
+    core.global_prompt_bar = { enter = function() error("unexpected close prompt") end }
 
-    local pane = panes.create { factory = function() return PendingView() end }
-    test.is_nil(core.open_file(first_path))
-    test.is_nil(core.buffer_registry:find(first_path))
-    test.equal(core.buffer_registry:collect(), 0)
+    local editor = core.open_file(first_path)
 
-    test.not_nil(approve)
-    approve()
-    local editor = pane.current_view
-    test.ok(editor:is(Editor))
-    test.equal(editor.buffer.highlighter.buffer, editor.buffer)
-
-    local original = table.concat(editor.buffer.lines)
-    local ok, err = pcall(editor.buffer.insert, editor.buffer, 1, 1, "x")
-    test.ok(ok, err)
-    editor.buffer:undo()
-    test.equal(table.concat(editor.buffer.lines), original)
-
-    write_file(first_path, "changed on disk\n")
-    editor.buffer:reload()
-    test.equal(table.concat(editor.buffer.lines), "changed on disk\n")
+    test.ok(editor and editor:is(Editor))
+    test.not_equal(panes.active().group, pane.group)
+    test.equal(pane.current_view, untitled)
+    test.equal(table.concat(untitled.buffer.lines), "keep this note\n")
+    test.equal(table.concat(editor.buffer.lines), "first line\nsecond line\n")
+    test.same(panes.views(pane), { previous, untitled })
+    test.not_equal(editor, previous)
+    test.equal(editor.buffer, previous.buffer)
   end)
 
   test.it("uses independent Editor Selection State for one Buffer in two Panes", function()

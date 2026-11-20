@@ -417,12 +417,13 @@ test.describe("File Tree instances", function()
     local pane = panes.create { factory = function() return tree end }
     local blocker = View()
     function blocker:can_suspend() return false end
-    function blocker:can_close() self.close_requested = true end
+    function blocker:can_close() error("opening a File Tree must not close the current View") end
     panes.present(blocker, { pane = pane })
 
     test.ok(command.perform("filetree:open_at_project_root"))
     test.equal(pane.current_view, blocker)
-    test.ok(blocker.close_requested)
+    test.not_equal(panes.active().group, pane.group)
+    test.ok(panes.active().current_view:is(filetree.View))
   end)
 
 end)

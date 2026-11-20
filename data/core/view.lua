@@ -113,7 +113,8 @@ end
 ---Return false to open a new unrelated View in another Pane Group.
 ---This opening rule does not restrict back/forward navigation or Pane ownership.
 function View:can_open_view(view)
-  return true
+  return not self.can_suspend or self:can_suspend() ~= false
+    or self.is_disposable and self:is_disposable(view) or false
 end
 
 ---Return this View's ordered Surface Focus Targets.
