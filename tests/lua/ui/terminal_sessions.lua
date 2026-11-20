@@ -30,6 +30,21 @@ local function wait_for(view, predicate, seconds)
   end
 end
 
+local function read_record(view, predicate)
+  local id = view:get_state().session_id
+  local record, read_error
+  test.ok(wait_for(view, function()
+    -- The host can replace this file during a read. Use its shared reader and
+    -- retry a failed open, rather than aborting the wait in loadfile.
+    local text
+    text, read_error = require("terminal_native").read_session_record(id)
+    if not text then return false end
+    record = assert(load(text, "@Terminal record", "t", {}))()
+    return not predicate or predicate(record)
+  end), "Terminal record did not become ready: " .. tostring(read_error))
+  return record
+end
+
 local function printed(view, marker)
   local capture = view.session:text_capture()
   return capture and ("\n" .. capture.text .. "\n"):find("\n" .. marker .. "\n", 1, true) ~= nil
@@ -163,7 +178,7 @@ test.describe("Terminal Session restoration", function()
     local view = open(context)
     mark(view, "before_share_marker")
     local native = require "terminal_native"
-    local record = assert(loadfile(USERDIR .. "/terminal-sessions/" .. view:get_state().session_id .. ".lua"))()
+    local record = read_record(view)
     test.equal(record.shared, true)
     local other, err = native.new {
       session_id = record.session_id, host_pid = record.host_pid,
@@ -222,12 +237,12 @@ test.describe("Terminal Session restoration", function()
     mark(view, "preserved_reused_pid_history")
     local state = view:get_state()
     local path = USERDIR .. "/terminal-sessions/" .. state.session_id .. ".lua"
-    local snapshot = assert(loadfile(path))().snapshot_path
+    local snapshot = read_record(view).snapshot_path
     os.remove(snapshot)
     view:detach_session()
-    test.ok(wait_for(view, function()
-      return assert(loadfile(path))().attached == false and system.get_file_info(snapshot)
-    end))
+    read_record(view, function(record)
+      return record.attached == false and system.get_file_info(snapshot)
+    end)
     local host = context.processes[1][1]
     test.ok(context.kernel.TerminateProcess(host, 99) ~= 0)
     test.equal(context.kernel.WaitForSingleObject(host, 5000), 0)
