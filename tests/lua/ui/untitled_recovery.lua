@@ -88,6 +88,10 @@ test.describe("untitled recovery integration", function()
   end)
 
   test.after_each(function(context)
+    if context.panes then
+      context.panes.reset_for_tests()
+      core.set_active_view = context.original_set_active_view
+    end
     if context.markdown_view then
       context.markdown_view:on_close()
       markdown.model.close(context.markdown_view.buffer, "test")
@@ -379,6 +383,61 @@ test.describe("untitled recovery integration", function()
     local manifest = recovery.load_manifest(context.project_dir)
     test.equal(#manifest.buffers, 0)
   end)
+
+  local function check_shared_untitled_close(context, close_command, close_source)
+    local panes = require "core.panes"
+    context.panes = panes
+    context.original_set_active_view = core.set_active_view
+    core.set_active_view = function(view) core.active_view = view end
+    panes.reset_for_tests()
+    local buffer = tag_untitled(core.open_buffer(), "Untitled-Shared", "shared-close")
+    buffer:insert(1, 1, "keep this text")
+    local source = panes.create { factory = function() return Editor(buffer) end }
+    test.ok(command.perform("pane:copy_view_to_split_right"))
+    local copy = panes.active()
+    test.not_equal(copy, source)
+    test.equal(copy.current_view.buffer, buffer)
+    test.equal(#core.get_views_referencing_buffer(buffer), 2)
+    local first, last = copy, source
+    if close_source then
+      first, last = source, copy
+      panes.focus(source)
+    end
+
+    local prompt
+    core.nag_view = {
+      show = function(_, title, text, items, callback)
+        prompt = { callback = callback }
+      end,
+    }
+    test.ok(command.perform(close_command))
+    test.is_nil(prompt, "closing one shared View must not warn")
+    test.not_ok(panes.contains(first))
+    test.ok(panes.contains(last))
+    test.equal(last.current_view.buffer:get_text(1, 1, math.huge, math.huge), "keep this text")
+    test.ok(buffer.intellij_untitled)
+
+    test.ok(command.perform(close_command))
+    test.not_nil(prompt, "closing the last View must warn")
+    test.ok(panes.contains(last))
+    prompt.callback { text = "Cancel" }
+    test.ok(panes.contains(last))
+    prompt = nil
+    test.ok(command.perform(close_command))
+    test.not_nil(prompt)
+    prompt.callback { text = "Close" }
+    test.not_ok(panes.contains(last))
+    test.is_nil(buffer.intellij_untitled)
+  end
+
+  for _, close_command in ipairs { "pane:close", "pane:close_view" } do
+    for _, close_source in ipairs { false, true } do
+      test.test(close_command .. " warns only for the last Untitled View, closing "
+        .. (close_source and "source first" or "copy first"), function(context)
+        check_shared_untitled_close(context, close_command, close_source)
+      end)
+    end
+  end
 
   test.test("Editor.from_state reuses one Buffer for multiple views of the same untitled id", function(context)
     local paths = recovery.project_paths(context.project_dir)
