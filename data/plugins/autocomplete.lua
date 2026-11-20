@@ -1731,7 +1731,13 @@ local function get_suggestions_rect(av)
   local rect_x, partial_y = av:get_line_screen_position(partial_line, partial_col)
   local caret_x, caret_y = av:get_caret_screen_position(caret_line, caret_col)
   if partial_y ~= caret_y then rect_x = caret_x end
-  local row_y, row_height = av:get_caret_highlight_geometry(caret_line, caret_col)
+  -- The highlight can include an image below the text. Use the drawn caret.
+  local _, row_y, _, row_height = av:get_caret_rect(caret_x, caret_y, caret_line, caret_col)
+  row_y = row_y or caret_y
+  row_height = row_height or av:get_position_caret_height(
+    caret_line, caret_col,
+    linewrapping.has_wrapped_line_end_affinity(av, caret_line, caret_col)
+  )
   local font = av:get_font()
   local th = font:get_height()
   local lh = th + style.padding.y
