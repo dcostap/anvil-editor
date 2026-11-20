@@ -131,6 +131,11 @@ test.describe("Fuzzy Searcher preview interaction", function()
     local preview = test.not_nil(load_preview(picker))
     wait_for_markdown(preview)
 
+    -- A worker can finish while this frame still shows its previous presentation.
+    local deadline = system.get_time() + 15
+    while not preview:get_line_render(1) and system.get_time() < deadline do
+      coroutine.yield(0.01)
+    end
     local rendered = test.not_nil(preview:get_line_render(1))
     local checkbox
     for _, fragment in ipairs(preview:iter_line_render_fragments(rendered)) do

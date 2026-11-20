@@ -170,7 +170,7 @@ test.describe("Fuzzy Searcher Navigation History Search", function()
     test.ok(current, "a continuation row must keep the current-place marker")
   end)
 
-  test.it("keeps repeated filenames hidden when scrolling inside a history group", function(context)
+  test.it("shows the filename once when scrolling inside a history group", function(context)
     local pane, editor = editor_pane(context)
     for line = 2, 60 do
       editor:set_selection_state { selections = { line, 1, line, 1 }, last_selection = 1 }
@@ -181,10 +181,11 @@ test.describe("Fuzzy Searcher Navigation History Search", function()
     picker.viewport_offset = 20
     local drawn = drawn_result_text(picker)
     test.ok(#drawn > 0, "expected visible history rows")
+    local filenames = 0
     for _, text in ipairs(drawn) do
-      test.ok(not text:find("navigation-search.txt", 1, true),
-        "a continuation row must not repeat the filename at the viewport top")
+      if text == "navigation-search.txt" then filenames = filenames + 1 end
     end
+    test.equal(filenames, 1, "the visible group must show its filename once")
   end)
 
   test.it("opens the selected checkpoint in a new Pane Group and keeps the picker focused", function(context)
