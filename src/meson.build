@@ -289,7 +289,8 @@ if host_machine.system() == 'windows'
     # characters in PATH while preserving tools used by runtime tests.
     anvil_test_env.set('PATH', [
         'C:/msys64/mingw64/bin',
-        'C:/Program Files/Git/mingw64/bin',
+        # Git's public launcher works with both its MinGW and UCRT layouts.
+        'C:/Program Files/Git/cmd',
         'C:/Program Files/Git/usr/bin',
         'C:/msys64/usr/bin',
         'C:/Python312',
