@@ -1300,6 +1300,7 @@ end
 
 -- The text of a link's target: its URI, or its path and line.
 local function link_target_text(point)
+  if point and point.heading then return point.path .. "#" .. point.heading end
   return point and not point.image and (point.uri or (point.target_line
     and string.format("%s:%d", point.path, point.target_line) or point.path))
 end
@@ -2103,18 +2104,23 @@ end
 -- folder for a link without a URI scheme. Only such a link reads it.
 local function hyperlink_point(view, uri, cwd)
   local scheme = supported_uri_scheme(uri)
-  if scheme == "file" then
-    local path = local_path_from_uri(uri)
-    if path then return { kind = "terminal-location", path = path } end
-  elseif scheme then
+  if scheme and scheme ~= "file" then
     return { kind = "uri", uri = uri }
-  elseif type(uri) == "string" and uri ~= "" and #uri <= 32768 and not uri:find("[%z%c]") then
-    -- Markdown links can name a local file without a URI scheme. Resolve the hidden target,
-    -- not its visible label, from the Terminal Session's directory.
-    local target = unescape_link_path(uri)
-    local path = target and text_poi_locations.resolve_path(target, cwd(view), { dirs = true })
-    if path then return { kind = "terminal-location", path = path } end
   end
+  if type(uri) ~= "string" or uri == "" or #uri > 32768 or uri:find("[%z%c]") then return end
+  -- Split before decoding: %23 belongs to the file name, not the heading.
+  local base, fragment = uri:match("^([^#]+)#(.*)$")
+  if not base or not require("core.markdown.vault_index").is_markdown(base) then base, fragment = uri, nil end
+  local heading = fragment and unescape_link_path(fragment)
+  if fragment and not heading then return end
+  local path
+  if scheme == "file" then
+    path = local_path_from_uri(base)
+  else
+    local target = unescape_link_path(base)
+    path = target and text_poi_locations.resolve_path(target, cwd(view), { dirs = true })
+  end
+  if path then return { kind = "terminal-location", path = path, heading = heading ~= "" and heading or nil } end
 end
 
 local PLAIN_URI_PATTERNS = {
@@ -2249,7 +2255,7 @@ local function same_point(a, b)
       and a.x == b.x and a.y == b.y and a.width == b.width and a.height == b.height
   end
   return a and b and a.kind == b.kind and a.uri == b.uri and a.path == b.path
-    and a.target_line == b.target_line and a.target_col == b.target_col
+    and a.target_line == b.target_line and a.target_col == b.target_col and a.heading == b.heading
     and a.generation == b.generation and a.col == b.col and a.row == b.row
 end
 
@@ -2330,13 +2336,40 @@ local function open_location(view, point, opts)
     core.log_quiet("Terminal image link: opening Image Overlay for %s", point.path)
     return require("core.image_overlay").open(point.path)
   end
-  return core.open_file(point.path, {
+  local editor = core.open_file(point.path, {
     pane = pane,
     placement = opts.placement or "current",
     focus = opts.preserve_focus ~= true,
     line = point.target_line or 1,
     col = point.target_col or 1,
-  }) ~= nil
+  })
+  if editor and point.heading then
+    -- Opening the Buffer starts its Markdown index worker. Do not scan on hover or jump after the user leaves.
+    local index = require("core.markdown.vault_index").index_for_path(point.path)
+    local revision = editor.buffer.text_revision
+    core.add_thread(function()
+      local deadline = system.get_time() + 5
+      repeat
+        local owner = panes.pane_for_view(editor)
+        if not owner or owner.current_view ~= editor or editor.buffer.text_revision ~= revision then return end
+        local selection = editor:get_selection_state().selections
+        if selection[1] ~= 1 or selection[2] ~= 1 then return end
+        local entry = index:note(point.path)
+        if entry then
+          local target = index:resolve_subtarget(entry, {type = "heading", text = point.heading})
+          if not target then break end
+          editor:with_selection_state(function()
+            editor.buffer:set_selection(target.line, 1)
+            editor:scroll_to_line(target.line, false, false)
+          end)
+          return
+        end
+        coroutine.yield(0.02)
+      until system.get_time() >= deadline
+      core.warn("Markdown heading not found: %s#%s", point.path, point.heading)
+    end)
+  end
+  return editor ~= nil
 end
 
 function TerminalView:activate_point_of_interest(point, opts)

@@ -1932,6 +1932,46 @@ test.describe("Terminal View", function()
     test.equal(view:point_of_interest_at(10, 0, true), nil, "decoded controls are not file paths")
   end)
 
+  test.it("opens a Markdown heading from a Terminal link and its Text Capture", function(context)
+    context.link_cwd = system.getcwd()
+    context.link_folder = USERDIR .. PATHSEP .. "terminal-heading-link"
+    test.ok(common.mkdirp(context.link_folder))
+    local path = context.link_folder .. PATHSEP .. "README.md"
+    local file = assert(io.open(path, "wb"))
+    file:write("# Tests\n\n## Known failures\n")
+    file:close()
+    local view = terminal.open { cwd = context.link_folder, focus = true }
+    local pane = panes.active()
+    local uri = "README.md#known-failures"
+    view.session.hyperlink = function(_, col, row) if row == 0 and col < 5 then return uri end end
+    local function check_destination()
+      local deadline = system.get_time() + 5
+      repeat
+        local editor = pane.current_view
+        if editor.buffer and common.path_equals(editor.buffer.abs_filename, path)
+            and editor:get_selection_state().selections[1] == 3 then
+          context.link_buffer = editor.buffer
+          return
+        end
+        coroutine.yield(0.01)
+      until system.get_time() >= deadline
+      error("Link did not open the Known failures heading")
+    end
+    view:on_mouse_moved(7, 7, 0, 0)
+    test.equal(view.cursor, "hand")
+    view:on_mouse_pressed("left", 7, 7)
+    view:on_mouse_released("left", 7, 7)
+    check_destination()
+    view = terminal.open { cwd = context.link_folder, focus = true }
+    pane = panes.active()
+    local file_uri = "file:///" .. path:gsub("\\", "/"):gsub(" ", "%%20") .. "#Known%20failures"
+    view.session.capture = {text = "label", links = {{{col1 = 1, col2 = 6, uri = file_uri}}},
+      cursor_line = 1, cursor_col = 1, viewport_line = 1}
+    test.ok(view:open_text_capture())
+    test.ok(command.perform("core:activate_point_of_interest"))
+    check_destination()
+  end)
+
   test.it("opens a folder hyperlink in a File Tree with a normal click", function(context)
     context.link_cwd = system.getcwd()
     context.link_folder = USERDIR .. PATHSEP .. "terminal-folder-link"
