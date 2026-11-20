@@ -398,7 +398,7 @@ asset is unsigned, so Windows SmartScreen can show a warning.
 
 ### Release updates
 
-Windows standalone builds check `dcostap/anvil-editor` for a newer stable GitHub release. `updater:check` opens the Updates Dialog. Background checks share a cache across Projects. It lasts 10 hours, and each Anvil start checks again. `config.plugins.updater.check_automatically` controls them.
+Windows standalone builds check `dcostap/anvil-editor` for a newer stable GitHub release. `updater:check` opens the Updates Dialog. Background checks share a cache across Projects. It lasts 10 hours, and each Anvil start checks again. A start within 1 hour of a check, such as the restart after an update, reuses that check. A failed check retries after 1 hour. The Dialog opens by itself once for each release; after that, Check for Updates shows it. `config.plugins.updater.check_automatically` controls them.
 The Dialog offers Update and Restart. Development builds and direct mode do not install release updates.
 The release needs an uploaded `anvil.exe` and its GitHub SHA-256 digest. The updater checks its size and digest before asking Anvil to close. HTTPS and the GitHub repository are the trust boundary; the digest is not a publisher signature.
 The bundled `data/tools/updater.ps1` starts through Windows Explorer, outside the caller's process group. It uses `--prepare-update` to save Workspaces and detach Terminal Sessions. It never force-closes the editor. A refused or timed-out close leaves the executable unchanged.

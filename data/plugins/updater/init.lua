@@ -19,6 +19,8 @@ local busy = { checking = true, starting = true, downloading = true, closing = t
 local directory = USERDIR .. PATHSEP .. "updates"
 local check_lock = directory .. PATHSEP .. "check-lock"
 local CHECK_INTERVAL = 10 * 60 * 60
+-- A new start, such as the restart after an update, reuses an answer this recent. A failed check retries after it.
+local RECENT_CHECK = 60 * 60
 local active_attempt
 
 -- One shell process is one Anvil start. Its creation time names it, because Windows reuses process IDs.
@@ -78,7 +80,7 @@ local function accept(body, err)
 end
 
 -- Manual checks always reach GitHub. Background checks share a cache across Projects and Windows.
--- It lasts 10 hours and ends when Anvil starts again.
+-- GitHub allows 60 unauthenticated requests per hour from one IP address, which an office can share.
 function M.check(automatic)
   if M.busy() then return false end
   local supported, reason = M.supported()
@@ -86,10 +88,13 @@ function M.check(automatic)
   if not ensure_directory() then set_state("error", "Cannot create the update folder."); return false end
   if automatic then
     local cached = storage.load("updater", "check")
-    if cached and cached.start == anvil_start()
-      and os.time() - cached.time >= 0 and os.time() - cached.time < CHECK_INTERVAL then
-      accept(cached.body, cached.error)
-      return true
+    if cached then
+      local age = os.time() - cached.time
+      local limit = (cached.start == anvil_start() and not cached.failed) and CHECK_INTERVAL or RECENT_CHECK
+      if age >= 0 and age < limit then
+        accept(cached.body, cached.error)
+        return true
+      end
     end
   end
   local info = system.get_file_info(check_lock)
@@ -104,9 +109,10 @@ function M.check(automatic)
     "--connect-timeout", "10", "--max-time", "30", "--max-filesize", "1048576",
     "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28",
     "-A", "Anvil/" .. VERSION, release.endpoint }, function(body, err)
-    storage.save("updater", "check", { time = os.time(), start = anvil_start(), body = body, error = err })
-    system.rmdir(check_lock)
     accept(body, err)
+    storage.save("updater", "check",
+      { time = os.time(), start = anvil_start(), body = body, error = err, failed = M.state == "error" })
+    system.rmdir(check_lock)
   end)
   return true
 end

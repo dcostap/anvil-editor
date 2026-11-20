@@ -55,25 +55,35 @@ test.describe("Release update Dialog", function()
     test.equal(updater.state, "available")
   end)
 
-  test.it("checks automatically once for each Anvil start and again after 10 hours", function()
+  test.it("checks automatically at each Anvil start, every 10 hours, and an hour after a failure", function()
     local old_pid, old_time = system.get_window_process_id, os.time
-    local now = os.time()
+    local now, hour = os.time(), 60 * 60
     os.time = function() return now end
+    local function check(reply)
+      local count = #jobs
+      test.ok(updater.check(true))
+      if reply then jobs[#jobs].on_result({ payload = reply }) end
+      return #jobs > count
+    end
+    local found = { code = 0, stdout = response }
     local ok, err = pcall(function()
-      test.ok(updater.check(true))
-      test.equal(#jobs, 1)
-      jobs[1].on_result({ payload = { code = 0, stdout = response } })
-      test.ok(updater.check(true))
-      test.equal(#jobs, 1)
+      test.ok(check(found))
+      now = now + 9 * hour
+      test.ok(not check())
       test.equal(updater.state, "available")
-      now = now + 10 * 60 * 60
-      test.ok(updater.check(true))
-      test.equal(#jobs, 2)
-      jobs[2].on_result({ payload = { code = 0, stdout = response } })
-      -- A new shell process is a new Anvil start.
+      now = now + hour
+      test.ok(check(found))
+      -- A new shell process is a new Anvil start. A restart soon after a check, such as after an update, reuses it.
       system.get_window_process_id = function() return 0 end
-      test.ok(updater.check(true))
-      test.equal(#jobs, 3)
+      now = now + hour - 1
+      test.ok(not check())
+      now = now + 1
+      test.ok(check({ code = 22, stderr = "HTTP 403" }))
+      now = now + hour - 1
+      test.ok(not check())
+      test.equal(updater.state, "error")
+      now = now + 1
+      test.ok(check(found))
     end)
     system.get_window_process_id, os.time = old_pid, old_time
     if jobs[#jobs] and updater.state == "checking" then jobs[#jobs].on_result({ payload = { code = 1, stderr = "" } }) end
