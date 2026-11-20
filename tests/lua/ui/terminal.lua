@@ -293,6 +293,27 @@ test.describe("Terminal View", function()
     test.ok(panes.active().current_view:is(terminal.TerminalView))
   end)
 
+  test.it("opens a Terminal from a split copy without closing either Untitled View", function(context)
+    local editor = Editor(Buffer())
+    editor.buffer:insert(1, 1, "shared note")
+    local source = panes.present(editor)
+    test.ok(command.perform("pane:copy_view_to_split_right"))
+    local copy_pane = panes.active()
+    local copy = copy_pane.current_view
+    test.not_equal(copy, editor)
+    test.equal(copy.buffer, editor.buffer)
+    context.previous_nag_show = core.nag_view.show
+    core.nag_view.show = function() error("opening a Terminal must not ask to close either shared View") end
+
+    test.ok(command.perform("terminal:open_at_project_root"))
+
+    test.equal(source.current_view, editor)
+    test.equal(copy_pane.current_view, copy)
+    test.equal(table.concat(editor.buffer.lines), "shared note\n")
+    test.not_equal(panes.active().group, copy_pane.group)
+    test.ok(panes.active().current_view:is(terminal.TerminalView))
+  end)
+
   test.it("replaces an unused terminal without keeping it in Pane history", function(context)
     local view = terminal.open()
     local pane = panes.pane_for_view(view)
