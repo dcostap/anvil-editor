@@ -55,6 +55,31 @@ test.describe("Release update Dialog", function()
     test.equal(updater.state, "available")
   end)
 
+  test.it("checks automatically once for each Anvil start and again after 10 hours", function()
+    local old_pid, old_time = system.get_window_process_id, os.time
+    local now = os.time()
+    os.time = function() return now end
+    local ok, err = pcall(function()
+      test.ok(updater.check(true))
+      test.equal(#jobs, 1)
+      jobs[1].on_result({ payload = { code = 0, stdout = response } })
+      test.ok(updater.check(true))
+      test.equal(#jobs, 1)
+      test.equal(updater.state, "available")
+      now = now + 10 * 60 * 60
+      test.ok(updater.check(true))
+      test.equal(#jobs, 2)
+      jobs[2].on_result({ payload = { code = 0, stdout = response } })
+      -- A new shell process is a new Anvil start.
+      system.get_window_process_id = function() return 0 end
+      test.ok(updater.check(true))
+      test.equal(#jobs, 3)
+    end)
+    system.get_window_process_id, os.time = old_pid, old_time
+    if jobs[#jobs] and updater.state == "checking" then jobs[#jobs].on_result({ payload = { code = 1, stderr = "" } }) end
+    assert(ok, err)
+  end)
+
   test.it("does not replace an external-data development build", function()
     rawset(_G, "EMBEDDED_DATADIR", nil)
     test.ok(command.perform("updater:check"))
