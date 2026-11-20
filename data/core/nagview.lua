@@ -504,7 +504,8 @@ function NagView:next()
   else
     self.force_focus = false
     core.root_panel:pop_modal_input(self)
-    core.set_active_view(core.next_active_view or core.last_active_view)
+    local previous = core.next_active_view or core.last_active_view
+    if previous then core.set_active_view(previous) else core.clear_active_view(self) end
     self.visible = false
   end
 end

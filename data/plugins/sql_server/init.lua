@@ -884,4 +884,6 @@ do
   }
 end
 require("plugins.sql_server.intelligence").install(M)
+-- Register Result commands before the defaults install their key bindings.
+require "plugins.sql_server.results"
 return M
