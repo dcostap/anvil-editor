@@ -195,6 +195,7 @@ function machine_guard.enable(project_roots)
     wrap(system, "system", name, first_path)
   end
   wrap(system, "system", "replace_file", two_paths)
+  wrap(require "machine", "machine", "final_path", first_path)
   wrap(system, "system", "atomic_replace_file", two_paths)
   wrap(system, "system", "exec", check_text)
   wrap(system, "system", "open_in_system", system_target)

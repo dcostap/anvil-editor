@@ -485,6 +485,22 @@ test.describe("Machine server", function()
     local client = owner(context)
     local discovery = machine_server.discovery_path(user)
     test.equal(call(client, "files.read", {path = discovery}).error.code, "private")
+    if PLATFORM == "Windows" then
+      -- Ask this volume for the actual short name. Some volumes do not assign one.
+      local process = require "core.process"
+      local proc = assert(process.start({"cmd.exe", "/d", "/c", "for", "%I", "in", "(user[1]{a})", "do",
+        "@echo", "%~snxI"}, {cwd = context.root}))
+      while proc:running() do coroutine.yield(0.01) end
+      test.equal(proc:wait(process.WAIT_DEADLINE), 0)
+      local name = assert(proc:read_stdout(1024)):match("^([^\r\n]+)")
+      local alias = context.root .. PATHSEP .. name
+      test.ok(system.get_file_info(alias))
+      local folder = alias .. PATHSEP .. "machine"
+      test.equal(call(client, "files.list_dir", {path = folder}).error.code, "private")
+      test.equal(call(client, "files.read", {path = folder .. PATHSEP .. "missing.txt"}).error.code, "private")
+      test.equal(call(client, "search.start", {args = {"rg", "-e", "example", folder}, cwd = context.root}).error.code,
+        "private")
+    end
     test.equal(call(client, "files.copy", {from = discovery, to = context.root .. PATHSEP .. "copy.json"}).error.code,
       "private")
     local reply = call(client, "search.start", {args = {"rg", "-F", "-e", context.discovery.token, "."}, cwd = context.root})
@@ -507,6 +523,19 @@ test.describe("Machine server", function()
     end
     test.equal(table.concat(output), "")
     client.socket:close()
+  end)
+
+  test.it("checks the destination of a Project folder junction, including for new files", function(context)
+    test.skip_if(PLATFORM ~= "Windows", "This fixture uses a Windows junction")
+    local process = require "core.process"
+    local link = context.project .. PATHSEP .. "linked"
+    local proc = assert(process.start({"cmd.exe", "/d", "/c", "mklink", "/J", link, context.user}))
+    while proc:running() do coroutine.yield(0.01) end
+    test.equal(proc:wait(process.WAIT_DEADLINE), 0)
+    local client = owner(context)
+    local reply = call(client, "files.stat", {paths = {link .. PATHSEP .. "new.txt"}})
+    test.ok(system.rmdir(link))
+    test.equal(reply.error and reply.error.code, "outside_project")
   end)
 
   local function write_sidebar(context, ...)

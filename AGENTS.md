@@ -724,7 +724,7 @@ Tests replace `machine_access.run`, so they never change the tailnet. Run `ui/ma
 Otherwise it sends a `conflict` error with the current `version` and bytes. Request bodies can hold bytes only after `hello`. Both limits are 16 MiB.
 A write can carry a `save` ID. `files.save_result {save}` gives the version that the save wrote. The server keeps the last 1024 results in memory, so a restarted server answers `unknown_save`.
 An error reply is `{"error": {"code": ..., "message": ...}}`. The server ignores unknown fields.
-The server polls its sockets. A link inside a Project can point outside it, as in a local Project.
+The server polls its sockets. Path checks use the resolved disk names of Project roots, files and credential folders. A link cannot grant access outside its Project. For a new file, the server checks the nearest existing parent.
 `--test-root <folder>` before the Projects maps each Machine path into that folder: `C:\a\b` is `<folder>\C\a\b`. Only tests use it, so one PC can hold a Client copy and a different Machine copy at the same path.
 `--test-lose-reply <method>` does the first request of that method, then closes the connection without its reply. Only tests use it.
 `core.machine_client` is the Client. A scheduler thread connects through a Machine file and sends `hello`. `request` holds other requests until `hello` succeeds, and it never blocks the UI thread.

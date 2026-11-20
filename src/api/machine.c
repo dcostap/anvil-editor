@@ -1,5 +1,7 @@
 #include "api.h"
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 #include <psa/crypto.h>
 #include "../machine_frame.h"
 #ifdef _WIN32
@@ -8,8 +10,10 @@
 #include <SDL3/SDL.h>
 #include "../utfconv.h"
 #else
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/file.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -144,6 +148,65 @@ static int protect_data(lua_State *L, int unprotect) {
 static int f_protect(lua_State *L) { return protect_data(L, 0); }
 static int f_unprotect(lua_State *L) { return protect_data(L, 1); }
 
+/* Return the filesystem's name, not the caller's spelling. Only a missing
+   entry permits the server to resolve its parent for a new file. */
+static int f_final_path(lua_State *L) {
+  size_t length;
+  const char *path = luaL_checklstring(L, 1, &length);
+  if (!length || strlen(path) != length) return 0;
+#ifdef _WIN32
+  LPWSTR wide = utfconv_utf8towc(path);
+  if (!wide) return 0;
+  HANDLE file = CreateFileW(wide, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                            NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  if (file == INVALID_HANDLE_VALUE) {
+    DWORD error = GetLastError();
+    int missing = 0;
+    if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
+      /* A dangling reparse point exists even when its target does not. */
+      if (GetFileAttributesW(wide) == INVALID_FILE_ATTRIBUTES) {
+        error = GetLastError();
+        missing = error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+      }
+    }
+    SDL_free(wide);
+    lua_pushnil(L);
+    lua_pushboolean(L, missing);
+    return 2;
+  }
+  SDL_free(wide);
+  DWORD size = GetFinalPathNameByHandleW(file, NULL, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  wchar_t *name = size ? SDL_malloc(sizeof(*name) * size) : NULL;
+  DWORD used = name ? GetFinalPathNameByHandleW(file, name, size, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS) : 0;
+  CloseHandle(file);
+  char *resolved = NULL;
+  if (used && used < size) {
+    if (!wcsncmp(name, L"\\\\?\\UNC\\", 8)) {
+      name[6] = L'\\';
+      resolved = utfconv_wctoutf8(name + 6);
+    } else if (used >= 7 && !wcsncmp(name, L"\\\\?\\", 4) && name[5] == L':' && name[6] == L'\\') {
+      resolved = utfconv_wctoutf8(name + 4);
+    }
+  }
+  SDL_free(name);
+  if (!resolved) return 0;
+  lua_pushstring(L, resolved);
+  SDL_free(resolved);
+#else
+  char *resolved = realpath(path, NULL);
+  if (!resolved) {
+    struct stat entry;
+    int missing = errno == ENOENT && lstat(path, &entry) < 0 && errno == ENOENT;
+    lua_pushnil(L);
+    lua_pushboolean(L, missing);
+    return 2;
+  }
+  lua_pushstring(L, resolved);
+  free(resolved);
+#endif
+  return 1;
+}
+
 /* machine.claim(path) keeps the lock file open without sharing until the process ends, also after a crash.
    Returns true when this process holds it, false when another process holds it. */
 static int f_claim(lua_State *L) {
@@ -164,6 +227,7 @@ static int f_claim(lua_State *L) {
 }
 
 static const luaL_Reg machine_lib[] = {
+  { "final_path",      f_final_path      },
   { "frame",           f_frame           },
   { "decoder",         f_decoder         },
   { "content_version", f_content_version },

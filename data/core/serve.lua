@@ -271,11 +271,31 @@ local function projects()
   return server.projects or sidebar_projects()
 end
 
--- True when the disk path is in a folder with the server's credentials (`server.private`). A Project can hold
--- the user folder, and the owner token in its discovery file gives Full control.
+local function contains(folder, path)
+  return common.path_equals(path, folder) or common.path_belongs_to(path, folder)
+end
+
+-- For a create, resolve the nearest existing parent. Do not treat access
+-- errors or dangling links as missing entries.
+local function resolved_disk(path)
+  local suffix = {}
+  while path do
+    local resolved, missing = machine.final_path(path)
+    if resolved then
+      if #suffix == 0 then return resolved end
+      return resolved .. (resolved:sub(-1) == PATHSEP and "" or PATHSEP) .. table.concat(suffix, PATHSEP)
+    end
+    if not missing or #suffix >= 256 then return end
+    local parent = common.dirname(path)
+    if not parent or parent == path then return end
+    table.insert(suffix, 1, common.basename(path))
+    path = parent:match("^%a:$") and parent .. PATHSEP or parent
+  end
+end
+
 local function is_private(disk)
   for _, folder in ipairs(server.private) do
-    if common.path_equals(disk, folder) or common.path_belongs_to(disk, folder) then return true end
+    if contains(folder, disk) then return true end
   end
   return false
 end
@@ -285,14 +305,23 @@ local function check_path(path)
   if type(path) ~= "string" or not common.is_absolute_path(path) then
     return nil, "invalid_path", "The path must be absolute"
   end
-  path = system.absolute_path(path) or path
+  if path:find("%z") or #path > 32767 then return nil, "invalid_path", "Invalid path" end
+  local ok, normalized = pcall(common.normalize_path, path)
+  if not ok then return nil, "invalid_path", "Invalid path" end
+  path = normalized
+  if PLATFORM == "Windows" and (path:match("^\\\\[?.]\\") or path:gsub("^%a:", ""):find('[:*?"<>|]')
+      or path:match("[ .]\\") or path:match("[ .]$") or common.path_has_windows_reserved_filename(path)) then
+    return nil, "invalid_path", "Invalid Windows path"
+  end
   for _, project in ipairs(projects()) do
     local root = project.path
-    if common.path_equals(path, root) or common.path_belongs_to(path, root) then
-      if is_private(common.normalize_path(disk_path(path))) then
+    if contains(root, path) then
+      local disk = resolved_disk(disk_path(path))
+      if not disk then return nil, "invalid_path", "Cannot resolve the path" end
+      if is_private(disk) then
         return nil, "private", "The path holds the credentials of this Machine"
       end
-      return path
+      if contains(machine.final_path(disk_path(root)), disk) then return path, nil, nil, disk end
     end
   end
   return nil, "outside_project", "The path is not in a Project of this Machine"
@@ -300,8 +329,9 @@ end
 
 -- True when a Project root is inside the path, so a change of the path changes that Project too.
 local function holds_project(path)
+  local disk = resolved_disk(disk_path(path))
   for _, project in ipairs(projects()) do
-    if common.path_belongs_to(project.path, path) then return true end
+    if contains(disk, machine.final_path(disk_path(project.path))) or contains(path, project.path) then return true end
   end
   return false
 end
@@ -549,7 +579,7 @@ local function start(listed)
     private = {}}
   local user = system.absolute_path(USERDIR) or USERDIR
   for _, name in ipairs({"machine", "machines"}) do
-    server.private[#server.private + 1] = common.normalize_path(user .. PATHSEP .. name)
+    server.private[#server.private + 1] = assert(resolved_disk(user .. PATHSEP .. name), "Cannot resolve credential folder")
   end
   server.devices = load_devices(server.devices_path)
   local service_context = {reply = reply, fail = fail, check_path = check_path, disk_path = disk_path,

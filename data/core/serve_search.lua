@@ -122,7 +122,7 @@ function search.new(server)
   -- `search.start {args, cwd}` starts ripgrep and gives its `id`. `args[1]` names the program and is ignored.
   local function start(client, id, params)
     if type(params.args) ~= "table" then return server.fail(client, id, "invalid_request", "args must be a list") end
-    local cwd, code, message = server.check_path(params.cwd)
+    local cwd, code, message, disk_cwd = server.check_path(params.cwd)
     if not cwd then return server.fail(client, id, code, message) end
     local indexes, err = path_indexes(params.args)
     if not indexes then return server.fail(client, id, "invalid_request", err) end
@@ -137,18 +137,18 @@ function search.new(server)
       local absolute = common.is_absolute_path(path) and path or (cwd .. PATHSEP .. path)
       local normalized_ok, normalized = pcall(common.normalize_path, absolute)
       if not normalized_ok then return server.fail(client, id, "invalid_path", "The path is not valid") end
-      local checked, path_code, path_message = server.check_path(normalized)
+      local checked, path_code, path_message, disk = server.check_path(normalized)
       if not checked then return server.fail(client, id, path_code, path_message) end
       -- The credential exclusions below hold only for paths in `cwd`.
-      if not common.path_equals(normalized, cwd) and not common.path_belongs_to(normalized, cwd) then
+      if not common.path_equals(disk, disk_cwd) and not common.path_belongs_to(disk, disk_cwd) then
         return server.fail(client, id, "invalid_path", "A search path must be in cwd")
       end
-      -- In test mode, the Machine's files are under a private folder.
-      if common.is_absolute_path(path) then command[i] = server.disk_path(path) end
+      -- Pass the checked spelling to ripgrep, so its exclusions see the same names.
+      command[i] = common.is_absolute_path(path) and disk or common.relative_path(disk_cwd, disk)
+      if command[i]:sub(1, 1) == "-" then command[i] = "." .. PATHSEP .. command[i] end
     end
     -- ripgrep skips the credential folders in the folders that it searches. A glob that starts with `/` names a
     -- path from ripgrep's working folder.
-    local disk_cwd = common.normalize_path(server.disk_path(cwd))
     local excluded = {}
     for _, folder in ipairs(server.private) do
       if common.path_belongs_to(folder, disk_cwd) then
@@ -160,6 +160,7 @@ function search.new(server)
     -- A Client that gives no --max-columns gets MAX_COLUMNS.
     table.insert(excluded, 1, tostring(MAX_COLUMNS))
     table.insert(excluded, 1, "--max-columns")
+    table.insert(excluded, 1, "--no-config")
     for j = #excluded, 1, -1 do table.insert(command, 2, excluded[j]) end
     local stream, start_error = process_stream.start(command, {cwd = disk_cwd})
     if not stream then return server.fail(client, id, "search_failed", tostring(start_error)) end
