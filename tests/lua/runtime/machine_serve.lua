@@ -98,6 +98,7 @@ test.describe("Machine server", function()
     stop_server(context)
     machine_server.stop(context.restore_anvil)
     machine_server.stop(context.waiting)
+    if context.project_link then test.ok(system.rmdir(context.project_link)) end
     test.ok(test.remove_tree(context.root))
   end)
 
@@ -522,6 +523,49 @@ test.describe("Machine server", function()
       if read.result.done then break end
     end
     test.equal(table.concat(output), "")
+    client.socket:close()
+  end)
+
+  test.it("returns search paths in the Project's junction spelling without changing matched text", function(context)
+    test.skip_if(PLATFORM ~= "Windows", "This fixture uses a Windows junction")
+    stop_server(context)
+    local disk_file = context.project .. PATHSEP .. "notes.md"
+    local text = disk_file .. " needle\n"
+    write_file(disk_file, text)
+    context.project_link = context.root .. PATHSEP .. "alias"
+    local process = require "core.process"
+    local proc = assert(process.start({"cmd.exe", "/d", "/c", "mklink", "/J", context.project_link, context.project}))
+    while proc:running() do coroutine.yield(0.01) end
+    test.equal(proc:wait(process.WAIT_DEADLINE), 0)
+    context.project = context.project_link
+    context.discovery = start_server(context)
+    local client = owner(context)
+    local file = context.project .. PATHSEP .. "notes.md"
+    local function search(path, filenames)
+      local args = {"rg", "-F", "-e", "needle"}
+      if filenames then args[#args + 1], args[#args + 2] = "--null", "--with-filename" end
+      args[#args + 1], args[#args + 2] = "--", path
+      local started = call(client, "search.start", {args = args, cwd = context.project})
+      test.not_nil(started.result, started.error and started.error.message)
+      local output = {}
+      repeat
+        local reply, bytes = call(client, "search.read", {id = started.result.id})
+        output[#output + 1] = bytes
+        if reply.result.done then test.equal(reply.result.code, 0) break end
+      until false
+      return table.concat(output):gsub("\r\n", "\n")
+    end
+    for _, path in ipairs {context.project, file, ".", "notes.md"} do
+      local found, matched = search(path, true):match("^(.-)%z(.*)$")
+      test.not_nil(found)
+      if not common.is_absolute_path(found) then found = context.project .. PATHSEP .. found end
+      test.equal(common.normalize_path(found), common.normalize_path(file))
+      test.equal(matched, text)
+    end
+    local found = search(context.project, false)
+    test.equal(found:sub(-#text), text)
+    test.equal(common.normalize_path(found:sub(1, #found - #text - 1)), common.normalize_path(file))
+    test.equal(search(file, false), text)
     client.socket:close()
   end)
 

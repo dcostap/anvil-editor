@@ -228,17 +228,6 @@ local function disk_path(path)
   return test_root .. PATHSEP .. path:gsub("^(%a):", "%1"):gsub("^[/\\]+", "")
 end
 
--- The reverse of `disk_path` for text that starts with a disk path, such as a ripgrep record.
-local function machine_path(text)
-  if not test_root then return text end
-  local prefix = test_root .. PATHSEP
-  if text:sub(1, #prefix) ~= prefix then return text end
-  local rest = text:sub(#prefix + 1)
-  if PLATFORM ~= "Windows" then return "/" .. rest end
-  local drive, tail = rest:match("^(%a)([/\\].*)$")
-  return drive and drive .. ":" .. tail or text
-end
-
 -- The Sidebar lists the recent Projects of the user folder's app state, and Scratch first.
 -- The server reads the list again when the app state file changes.
 local function sidebar_projects()
@@ -583,7 +572,7 @@ local function start(listed)
   end
   server.devices = load_devices(server.devices_path)
   local service_context = {reply = reply, fail = fail, check_path = check_path, disk_path = disk_path,
-    machine_path = machine_path, project_root = project_root, holds_project = holds_project, log = log,
+    project_root = project_root, holds_project = holds_project, log = log,
     private = server.private, on_close = function(fn) server.on_close[#server.on_close + 1] = fn end}
   for _, module in ipairs(SERVICES) do
     for name, method in pairs(require(module).new(service_context)) do services[name] = method end

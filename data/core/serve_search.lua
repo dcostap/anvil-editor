@@ -21,7 +21,7 @@ local MAX_COLUMNS = 64 * 1024
 -- Returns the indexes of the path arguments, or nil and an error. `args[1]` is the program. It sets each
 -- `--max-columns` value to at most MAX_COLUMNS.
 local function path_indexes(args)
-  local paths, i = {}, 2
+  local paths, i, filenames = {}, 2, false
   while i <= #args do
     local arg = args[i]
     if type(arg) ~= "string" then return nil, "Each argument must be text" end
@@ -34,6 +34,7 @@ local function path_indexes(args)
     end
     local count = OPTIONS[arg]
     if count then
+      if arg == "--with-filename" then filenames = true end
       local value = args[i + 1]
       if count == 1 and type(value) ~= "string" then return nil, arg .. " needs a value" end
       if arg == "--color" and value ~= "never" then return nil, "--color must be never" end
@@ -49,7 +50,7 @@ local function path_indexes(args)
     end
     i = i + 1
   end
-  return paths
+  return paths, nil, filenames
 end
 -- A reply carries at most CHUNK bytes. A search stops reading ripgrep while it holds that much unread output.
 local CHUNK, MAX_SEARCHES, IDLE_SECONDS = 1024 * 1024, 16, 30
@@ -67,7 +68,7 @@ local function ripgrep_path()
   return "rg"
 end
 
--- `server` gives: reply, fail, check_path, disk_path, machine_path (disk path -> Machine path), private and log.
+-- `server` gives: reply, fail, check_path, private and log.
 function search.new(server)
   local searches, order, sequence = {}, {}, 0
 
@@ -98,7 +99,7 @@ function search.new(server)
     server.reply(state.client, waiter, {result = result}, bytes)
   end
 
-  -- Moves ripgrep's records into the output. In test mode, paths in records name the Machine's paths again.
+  -- Keep result paths in the requested cwd, while ripgrep uses its checked disk path.
   local function pump(state)
     while searches[state.id] == state do
       if state.client.dead or system.get_time() - state.last_read > IDLE_SECONDS then
@@ -107,7 +108,13 @@ function search.new(server)
       end
       local line = state.bytes < CHUNK and state.stream:read_line()
       if line then
-        if state.mapped then line = server.machine_path(line) end
+        if state.disk_prefix then
+          local prefix = line:sub(1, #state.disk_prefix):gsub("\\", "/")
+          if PLATFORM == "Windows" then prefix = prefix:lower() end
+          if prefix == state.disk_prefix then
+            line = state.result_prefix .. line:sub(#state.disk_prefix + 1)
+          end
+        end
         state.output[#state.output + 1] = line .. "\n"
         state.bytes = state.bytes + #line + 1
       else
@@ -124,8 +131,9 @@ function search.new(server)
     if type(params.args) ~= "table" then return server.fail(client, id, "invalid_request", "args must be a list") end
     local cwd, code, message, disk_cwd = server.check_path(params.cwd)
     if not cwd then return server.fail(client, id, code, message) end
-    local indexes, err = path_indexes(params.args)
+    local indexes, err, filenames = path_indexes(params.args)
     if not indexes then return server.fail(client, id, "invalid_request", err) end
+    filenames = filenames or #indexes ~= 1
     local command = {ripgrep_path()}
     for i = 2, #params.args do command[i] = params.args[i] end
     for _, i in ipairs(indexes) do
@@ -146,6 +154,10 @@ function search.new(server)
       -- Pass the checked spelling to ripgrep, so its exclusions see the same names.
       command[i] = common.is_absolute_path(path) and disk or common.relative_path(disk_cwd, disk)
       if command[i]:sub(1, 1) == "-" then command[i] = "." .. PATHSEP .. command[i] end
+      if not filenames then
+        local info = system.get_file_info(disk)
+        filenames = info and info.type == "dir"
+      end
     end
     -- ripgrep skips the credential folders in the folders that it searches. A glob that starts with `/` names a
     -- path from ripgrep's working folder.
@@ -167,7 +179,12 @@ function search.new(server)
     if #order >= MAX_SEARCHES then remove(searches[order[1]]) end
     sequence = sequence + 1
     local state = {id = tostring(sequence), client = client, stream = stream, output = {}, bytes = 0,
-      last_read = system.get_time(), mapped = server.disk_path(cwd) ~= cwd}
+      last_read = system.get_time()}
+    if filenames and not common.path_equals(cwd, disk_cwd) then
+      state.disk_prefix = disk_cwd:gsub("\\", "/"):gsub("/+$", "") .. "/"
+      if PLATFORM == "Windows" then state.disk_prefix = state.disk_prefix:lower() end
+      state.result_prefix = cwd:gsub("[/\\]+$", "") .. PATHSEP
+    end
     searches[state.id], order[#order + 1] = state, state.id
     core.add_thread(function() pump(state) end)
     server.reply(client, id, {result = {id = state.id}})
