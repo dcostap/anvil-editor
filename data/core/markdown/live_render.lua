@@ -8247,7 +8247,7 @@ end
 local function open_link_resolution(resolution, target)
   if resolution.status == "external" then
     record_navigation_origin()
-    return common.open_in_system(resolution.path)
+    return require("core.system_link").open(resolution.path)
   end
   if resolution.status ~= "resolved" then return false end
   if resolution.subtarget_missing then
@@ -8261,7 +8261,7 @@ local function open_link_resolution(resolution, target)
   end
   record_navigation_origin()
   if resolution.kind == "attachment" then
-    return common.open_in_system(resolution.path)
+    return require("core.system_link").open(resolution.path)
   end
   local target_view = core.open_file(resolution.path, { line = resolution.line, col = 1 })
   return target_view ~= nil

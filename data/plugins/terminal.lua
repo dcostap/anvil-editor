@@ -13,6 +13,7 @@ local panes = require "core.panes"
 local blocks = require "plugins.terminal.blocks"
 local TerminalFind = require "plugins.terminal.find"
 local style = require "core.style"
+local system_link = require "core.system_link"
 local location_list = require "core.file_location_list"
 local text_capture = require "core.text_capture"
 local text_poi_locations = require "core.text_poi_locations"
@@ -2109,19 +2110,12 @@ local function local_path_from_uri(uri)
   return info and (info.type == "file" or info.type == "dir") and path or nil
 end
 
-local function supported_uri_scheme(uri)
-  if type(uri) ~= "string" or #uri > 32768 or uri:find("[%z%c]") then return nil end
-  local scheme = uri:match("^([%a][%w+.-]*):")
-  scheme = scheme and scheme:lower()
-  if scheme == "http" or scheme == "https" or scheme == "mailto" or scheme == "file" then
-    return scheme
-  end
-end
+local supported_uri_scheme = system_link.scheme
 
 function TerminalView:activate_uri(uri)
   local scheme = supported_uri_scheme(uri)
   if scheme == "http" or scheme == "https" or scheme == "mailto" then
-    return common.open_in_system(uri)
+    return system_link.open(uri)
   elseif scheme == "file" then
     local path = local_path_from_uri(uri)
     if not path then return false end
@@ -2534,7 +2528,7 @@ function TerminalTextCaptureView:activate_point_of_interest(point, opts)
       core.warn("Could not open the link: %s", point.uri)
       return false
     end
-    if target.uri then return common.open_in_system(target.uri) end
+    if target.uri then return system_link.open(target.uri) end
     point = target
   end
   return open_location(self, point, opts)

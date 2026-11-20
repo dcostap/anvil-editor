@@ -2634,6 +2634,100 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("refuses unsafe URI schemes in Markdown links", function()
+    local previous_open = common.open_in_system
+    local opened = {}
+    common.open_in_system = function(path) opened[#opened + 1] = path return true end
+    local ok, err = pcall(function()
+      for _, target in ipairs({ "search-ms:query=tool", "ms-settings:appsfeatures", "javascript:alert(1)", "shell:AppsFolder",
+        "file:///C:/tool.exe%00.pdf", "file:///C:/tool.exe::$DATA", "file://./C:/tool.exe" }) do
+        local view, buffer = make_view("[link](" .. target .. ")\n", "unsafe-link.md")
+        buffer:set_selection(1, 3)
+        refresh(view)
+        test.not_ok(markdown.live_render.open_link(view), target)
+      end
+      test.equal(#opened, 0)
+      for _, target in ipairs({ "https://example.test/?a=1#part", "HTTP://example.test/", "mailto:test@example.test" }) do
+        local view, buffer = make_view("[link](" .. target .. ")\n", "safe-link.md")
+        buffer:set_selection(1, 3)
+        refresh(view)
+        test.ok(markdown.live_render.open_link(view), target)
+        test.equal(opened[#opened], target)
+      end
+    end)
+    common.open_in_system = previous_open
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("asks before system opening executable Markdown targets", function()
+    local folder = USERDIR .. PATHSEP .. "markdown-link-programs-" .. system.get_process_id()
+    local root = folder .. PATHSEP .. "vault"
+    test.ok(common.mkdirp(root .. PATHSEP .. ".obsidian"))
+    local app = assert(io.open(root .. PATHSEP .. ".obsidian" .. PATHSEP .. "app.json", "wb"))
+    app:write([[{"showUnsupportedFiles":true}]])
+    app:close()
+    for _, name in ipairs({ "tool.bat", "tool.EXE", "tool.lnk", "tool.url", "tool.ps1" }) do
+      local file = assert(io.open(root .. PATHSEP .. name, "wb"))
+      file:write("not a real program")
+      file:close()
+    end
+    local outside = folder .. PATHSEP .. "outside.cmd"
+    local file = assert(io.open(outside, "wb"))
+    file:write("not a real program")
+    file:close()
+    local old_projects, old_open = core.projects, common.open_in_system
+    local old_nag, old_active = core.nag_view, core.active_view
+    local old_next, old_last = core.next_active_view, core.last_active_view
+    local old_cwd = system.getcwd()
+    core.nag_view = require("core.nagview")()
+    core.projects = { Project(root) }
+    markdown.vault_index.get_index(root):rebuild("link-programs")
+    local opened = {}
+    common.open_in_system = function(path) opened[#opened + 1] = path return true end
+    local ok, err = pcall(function()
+      local targets = { "tool.bat", "tool.EXE", "tool.lnk", "tool.url", "tool.ps1" }
+      targets[#targets + 1] = root .. PATHSEP .. "tool.bat"
+      targets[#targets + 1] = outside
+      targets[#targets + 1] = require("core.lsp.uri").path_to_uri(root .. PATHSEP .. "tool.EXE"):gsub("EXE$", "%%45XE")
+      targets[#targets + 1] = require("core.lsp.uri").path_to_uri(root .. PATHSEP .. "tool.EXE") .. "%2e%20"
+      for _, target in ipairs(targets) do
+        local view, buffer = make_view("[[" .. target .. "]]\n", root .. PATHSEP .. "Source.md")
+        buffer:set_selection(1, 4)
+        refresh(view)
+        core.active_view, core.next_active_view = view, nil
+        test.ok(markdown.live_render.open_link(view), target)
+        test.equal(#opened, 0, target)
+        test.ok(core.nag_view.visible, target)
+        test.ok(command.perform("core:select_dialog_no"))
+        test.equal(#opened, 0)
+        test.not_ok(core.nag_view.visible, target)
+      end
+      local view, buffer = make_view("[[tool.bat]]\n", root .. PATHSEP .. "Source.md")
+      buffer:set_selection(1, 4)
+      refresh(view)
+      core.active_view, core.next_active_view = view, nil
+      test.ok(markdown.live_render.open_link(view))
+      for i, option in ipairs(core.nag_view.options) do
+        if option.action == "open" then core.nag_view:change_hovered(i) end
+      end
+      test.ok(command.perform("core:select_dialog_entry"))
+      test.equal(#opened, 1)
+      test.ok(common.path_equals(opened[1], root .. PATHSEP .. "tool.bat"))
+      test.ok(markdown.live_render.open_link(view))
+      test.ok(core.nag_view.visible)
+      test.ok(command.perform("core:select_dialog_no"))
+      test.equal(#opened, 1)
+    end)
+    core.nag_view.queue = {}
+    if core.nag_view.visible then core.nag_view:next() end
+    core.nag_view, core.active_view = old_nag, old_active
+    core.next_active_view, core.last_active_view = old_next, old_last
+    core.projects, common.open_in_system = old_projects, old_open
+    system.chdir(old_cwd)
+    test.ok(test.remove_tree(folder))
+    if not ok then error(err, 0) end
+  end)
+
   test.it("publishes semantic link POIs for generic navigation and activation", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-link-poi-" .. system.get_process_id()
     test.ok(common.mkdirp(root))
