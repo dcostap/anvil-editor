@@ -1959,24 +1959,26 @@ test.describe("Terminal View", function()
     local pane = panes.active()
     local uri = "README.md#known-failures"
     view.session.hyperlink = function(_, col, row) if row == 0 and col < 5 then return uri end end
-    local function check_destination()
+    local function check_destination(line)
       local deadline = system.get_time() + 5
       repeat
         local editor = pane.current_view
         if editor.buffer and common.path_equals(editor.buffer.abs_filename, path)
-            and editor:get_selection_state().selections[1] == 3 then
+            and editor:get_selection_state().selections[1] == line then
           context.link_buffer = editor.buffer
           return
         end
         coroutine.yield(0.01)
       until system.get_time() >= deadline
-      error("Link did not open the Known failures heading")
+      error("Link did not open the current heading at line " .. line)
     end
     view:on_mouse_moved(7, 7, 0, 0)
     test.equal(view.cursor, "hand")
     view:on_mouse_pressed("left", 7, 7)
     view:on_mouse_released("left", 7, 7)
-    check_destination()
+    check_destination(3)
+    -- Activate before the index publishes these unsaved edits.
+    context.link_buffer:insert(1, 1, "\n\n")
     view = terminal.open { cwd = context.link_folder, focus = true }
     pane = panes.active()
     local file_uri = "file:///" .. path:gsub("\\", "/"):gsub(" ", "%%20") .. "#Known%20failures"
@@ -1984,7 +1986,15 @@ test.describe("Terminal View", function()
       cursor_line = 1, cursor_col = 1, viewport_line = 1}
     test.ok(view:open_text_capture())
     test.ok(command.perform("core:activate_point_of_interest"))
-    check_destination()
+    check_destination(5)
+    context.link_buffer:remove(5, 4, 5, #"## Known failures" + 1)
+    context.link_buffer:insert(5, 4, "Renamed heading")
+    view = terminal.open { cwd = context.link_folder, focus = true }
+    pane = panes.active()
+    view.session.hyperlink = function() return "README.md#renamed-heading" end
+    view:on_mouse_pressed("left", 7, 7)
+    view:on_mouse_released("left", 7, 7)
+    check_destination(5)
   end)
 
   test.it("opens a folder hyperlink in a File Tree with a normal click", function(context)

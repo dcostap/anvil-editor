@@ -1151,6 +1151,7 @@ function Index:update_buffer(buffer, opts)
   if not common.path_belongs_to(common.normalize_path(buffer.abs_filename), self.root) then return false end
   local pool = worker_pool.current_system()
   if not pool then return false end
+  local revision = buffer.text_revision
   local text = buffer:get_text(1, 1, math.huge, math.huge)
   self.buffer_overlay_serial = self.buffer_overlay_serial + 1
   local serial = self.buffer_overlay_serial
@@ -1201,6 +1202,7 @@ function Index:update_buffer(buffer, opts)
       local entry = snapshot:note(path)
       if not entry then release_vault_snapshot(snapshot); return end
       entry.buffer = buffer
+      entry.buffer_revision = revision
       local previous_entry = self.notes_by_abs[path_key(path)]
       local facts_changed = not previous_entry or previous_entry.fact_signature ~= entry.fact_signature
       -- Other notes reach this note by its name or an alias. Only an alias

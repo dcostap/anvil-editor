@@ -2385,7 +2385,7 @@ local function open_location(view, point, opts)
         local selection = editor:get_selection_state().selections
         if selection[1] ~= 1 or selection[2] ~= 1 then return end
         local entry = index:note(point.path)
-        if entry then
+        if entry and entry.buffer == editor.buffer and entry.buffer_revision == revision then
           local target = index:resolve_subtarget(entry, {type = "heading", text = point.heading})
           if not target then break end
           editor:with_selection_state(function()
