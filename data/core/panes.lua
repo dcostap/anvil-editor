@@ -344,6 +344,7 @@ end
 function M.focus(target, feedback)
   local pane = M.find(target)
   if not pane then return nil, "invalid Pane" end
+  if pane.current_view.resume_deferred_session then pane.current_view:resume_deferred_session() end
   M.active_pane = pane
   M.visible_group_value = pane.group
   focus_view(pane, feedback)
@@ -1725,6 +1726,9 @@ function M.wake(list)
   for _, target in ipairs(list) do
     local pane = M.find(target)
     if pane and pane.group.snoozed then
+      for _, view in ipairs(M.views(pane)) do
+        if view.resume_deferred_session then view:resume_deferred_session() end
+      end
       woken[#woken + 1] = pane.id
       if pane.group == M.visible_group_value then pane.group.snoozed = nil
       else hidden[#hidden + 1] = pane end

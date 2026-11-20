@@ -35,12 +35,20 @@ end
 
 return { run = function(payload, ctx)
   local directory = payload.userdir .. "/terminal-sessions/"
+  -- A long Snooze can outlast the age limit. Keep its screen until revival, also on the first start after expiry.
+  local snoozes = {}
+  if not payload.id then
+    USERDIR = payload.userdir
+    local saved, err = require("core.storage").load("sidebar", "snoozes")
+    if err or (saved ~= nil and type(saved) ~= "table") then error("Cannot read saved Snoozes") end
+    snoozes = saved or {}
+  end
   local entries = payload.id and { payload.id .. ".lua" } or system.list_dir(directory) or {}
   local removed = 0
   for _, name in ipairs(entries) do
     if ctx.cancelled() then break end
     local id = name:match("^([0-9a-f]+)%.lua$")
-    if id and #id == 32 then
+    if id and #id == 32 and not snoozes[id] then
       local mutex = kernel.CreateMutexA(nil, 0, "Local\\AnvilTerminalRecord-" .. id)
       local waited = mutex ~= nil and kernel.WaitForSingleObject(mutex, 5000) or -1
       if waited == 0 or waited == 0x80 then

@@ -7,6 +7,11 @@ local layout = require "core.pane_layout"
 local storage = require "core.storage"
 
 local snoozed_panes = {}
+local deferred = setmetatable({}, {__mode = "k"})
+
+function snoozed_panes.wait_for_wake(view)
+  deferred[view] = true
+end
 
 -- How often, in seconds, this Project compares the Snooze times with the clock.
 local INTERVAL = 5
@@ -41,22 +46,35 @@ function snoozed_panes.wake(target)
   return true
 end
 
--- Wakes the Snoozed Panes whose time has come, oldest Snooze first, so the ones that come due together share
--- Pane Groups. An unreadable times file wakes nothing.
-function snoozed_panes.check()
+function snoozed_panes.read_times()
   local ok, times, err = pcall(storage.load, "sidebar", "snoozes")
   if not ok or err or times ~= nil and type(times) ~= "table" then
     core.log_quiet("Snoozed Panes: times not read: %s", tostring(err or times))
-    return 0
+    return nil
   end
   times = type(times) == "table" and times or {}
   for session, time in pairs(times) do
     if type(session) ~= "string" or type(time) ~= "number" then
       core.log_quiet("Snoozed Panes: invalid saved time")
-      return 0
+      return nil
     end
   end
+  return times
+end
+
+-- Wakes the Snoozed Panes whose time has come, oldest Snooze first. An unreadable file wakes nothing.
+function snoozed_panes.check()
+  local times = snoozed_panes.read_times()
+  if not times then return 0 end
   local now, due = os.time(), {}
+  -- The View can wait in history, or its saved Pane flag can be missing.
+  for view in pairs(deferred) do
+    if view.state ~= "deferred" then deferred[view] = nil
+    elseif (times[view.session_id] or 0) <= now then
+      deferred[view] = nil
+      view:resume_deferred_session()
+    end
+  end
   -- Snapshot the list: snoozing a Pane changes its group and the group order.
   local recovered = 0
   for _, pane in ipairs(panes.ordered()) do

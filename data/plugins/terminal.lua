@@ -368,6 +368,10 @@ function TerminalView:new(options)
   self.color_vividness = style.terminal_color_vividness
   next_log_id = next_log_id + 1
   self.log_id = next_log_id
+  self:start_session(options)
+end
+
+function TerminalView:start_session(options)
   self.state = "new"
   core.log_quiet("Terminal session %d start requested: shell=%s cwd=%s",
     self.log_id, self.launch_options.shell ~= "" and "custom" or "default",
@@ -396,6 +400,9 @@ function TerminalView:new(options)
       return
     end
     if record then
+      if options.snooze_until and options.snooze_until > os.time() then
+        self.restore_snooze = options.snooze_until
+      end
       local closed_path = closed_session_path(record.session_id)
       if system.get_file_info(closed_path) then
         -- End runs on a worker. Reopen must not attach to the shell that it is still stopping.
@@ -428,6 +435,7 @@ function TerminalView:new(options)
   end
   -- Only a proven exit or invalid record permits replacement. Other failures prove nothing about the host.
   if record and not session and (transport_error == 1067 or transport_error == 13) then
+    if transport_error == 1067 and self.restore_snooze then self:defer_session(record); return end
     core.log_quiet("Terminal Session %s attach rejected: %s", record.session_id, tostring(start_error))
     native_options.session_id, native_options.host_pid = nil, nil
     native_options.host_creation_time, native_options.pipe_name = nil, nil
@@ -475,7 +483,7 @@ function TerminalView:new(options)
 end
 
 function TerminalView:get_name()
-  local title = sanitize_title(self.snapshot and self.snapshot.title)
+  local title = self.deferred_title or sanitize_title(self.snapshot and self.snapshot.title)
   if self.state == "failed" then
     return title and title ~= "" and string.format("%s (failed)", title)
       or "Terminal (failed)"
@@ -793,16 +801,32 @@ function TerminalTextCaptureView:get_state()
   return { kind = "text_capture", capture = capture }
 end
 
-function TerminalView.from_state(state)
+function TerminalView.from_state(state, snooze_until)
   if type(state) ~= "table" then return nil end
   if state.kind == "text_capture" then return TerminalTextCaptureView(nil, state.capture) end
-  local view = TerminalView { cwd = state.cwd, shell = state.shell, session_id = state.session_id, restore = true }
+  local view = TerminalView { cwd = state.cwd, shell = state.shell, session_id = state.session_id, restore = true,
+    snooze_until = type(snooze_until) == "number" and snooze_until or nil }
   view.input_used = true
   return view
 end
 
+function TerminalView:defer_session(record)
+  self.state, self.running = "deferred", false
+  self.activity = tonumber(record.activity)
+  self.deferred_title = sanitize_title(record.title)
+  require("core.snoozed_panes").wait_for_wake(self)
+  core.log_quiet("Terminal Session %s waits for its Snooze before revival", self.session_id)
+end
+
+function TerminalView:resume_deferred_session()
+  self.restore_snooze = nil
+  if self.state ~= "deferred" then return end
+  self.deferred_title = nil
+  self:start_session {session_id = self.session_id, restore = true}
+end
+
 function TerminalView:can_discard_from_history()
-  return self.session == nil or self.state == "exited" or self.state == "failed"
+  return (self.session == nil and self.state ~= "deferred") or self.state == "exited" or self.state == "failed"
 end
 
 function TerminalView:create_session()
@@ -954,6 +978,12 @@ function TerminalView:revive_lost_host()
   local generation = system.session_end_generation()
   if self.revival_attempted == generation then return false end
   local record = session_record(self.session_id)
+  if record and self.restore_snooze and self.restore_snooze > os.time() and self.session:stats().attach_count == 0 then
+    self.session:detach()
+    self.session, self.snapshot = nil, nil
+    self:defer_session(record)
+    return true
+  end
   if not record or not system.get_file_info(record.snapshot_path) then return false end
   self.revival_attempted = generation
   local native = terminal_native()
@@ -2883,7 +2913,7 @@ function TerminalView:on_close(reopen)
   -- The Machine keeps no closed sessions. Reopen starts a new shell there in the same folder.
   -- A session that another device shows keeps running. Reopen attaches it again without a closed record.
   local shared = self.session and (select(2, self.session:update()).clients or 0) > 1
-  if reopen and self.session and self.session_id and not self.machine and not shared then
+  if reopen and (self.session or self.state == "deferred") and self.session_id and not self.machine and not shared then
     local file, err = io.open(closed_session_path(self.session_id), "wb")
     if file then retained, err = file:close() end
     if retained then
