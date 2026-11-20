@@ -1,6 +1,6 @@
 [wrap-git]
 url = https://github.com/pragtical/lua-linenoise
-revision = master
+revision = e78e236c8d85c078fdd9fc4e1f08716058aa1a42
 depth = 1
 
 [provide]
