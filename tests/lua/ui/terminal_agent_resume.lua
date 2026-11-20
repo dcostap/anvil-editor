@@ -82,6 +82,57 @@ local function session_file_name(dir)
 end
 
 test.describe("Terminal agent resume", function()
+  test.it("runs Bun scripts and subcommands with the Terminal preload and inherited preloads", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local exe = find_runtime("bun")
+    test.skip_if(not exe, "bun is not installed")
+    terminal._set_native_for_tests(nil)
+    local dir = USERDIR .. "/bun subcommands"
+    system.mkdir(dir)
+    local function write(name, text)
+      local file = assert(io.open(dir .. "/" .. name, "wb"))
+      file:write(text); file:close()
+    end
+    write("probe.cjs", [[
+      console.log("BUN_" + process.argv[2] + "_OK");
+    ]])
+    write("probe.test.ts", [[
+      import { test } from "bun:test";
+      test("runs with the Terminal preload", () => {
+        console.log("BUN_TEST_OK");
+      });
+    ]])
+    write("package.json", [[{"scripts":{"hi":"bun probe.cjs RUN"}}]])
+    write("inherited.cjs", [[console.log("INHERITED_PRELOAD_OK");]])
+    local inherited = os.getenv("BUN_OPTIONS") or ""
+    local view
+    local ok, err = pcall(function()
+      for _, options in ipairs { "", "--preload ./inherited.cjs", "--preload=./inherited.cjs" } do
+        system.setenv("BUN_OPTIONS", options)
+        view = ready(terminal.open { cwd = dir, shell = "cmd.exe /D /Q" })
+        system.setenv("BUN_OPTIONS", inherited)
+        for _, launch in ipairs {
+          { "probe.cjs SCRIPT", "BUN_SCRIPT_OK" },
+          { "test ./probe.test.ts", "BUN_TEST_OK" },
+          { "run hi", "BUN_RUN_OK" },
+        } do
+          test.ok(view.session:write(string.format('"%s" %s\r', exe, launch[1])))
+          test.ok(wait_for(view, function()
+            return screen_text(view):find(launch[2], 1, true)
+          end, 30), "Bun failed with " .. options .. ": " .. screen_text(view))
+        end
+        if options ~= "" then
+          test.ok(screen_text(view):find("INHERITED_PRELOAD_OK", 1, true), "Bun lost the inherited preload")
+        end
+        view:on_close(); view = nil
+      end
+    end)
+    system.setenv("BUN_OPTIONS", inherited)
+    if view then view:on_close() end
+    test.ok(test.remove_tree(dir))
+    test.ok(ok, err)
+  end)
+
   for _, runtime in ipairs { "node", "bun" } do
     test.it("resumes the Pi session that a Pi on " .. runtime .. " had open when its host ended", function()
       test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")

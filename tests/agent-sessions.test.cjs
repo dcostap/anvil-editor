@@ -38,7 +38,7 @@ test("the Pi preload leaves other compiled programs unchanged below a Pi package
   for (const name of ["pi.cjs", "pi-status.cjs"]) {
     fs.copyFileSync(path.join(path.dirname(preload), name), path.join(root, name));
   }
-  env.BUN_OPTIONS = "--preload ./pi.cjs";
+  env.BUN_OPTIONS = "--preload=./pi.cjs";
   const run = (exe) => {
     const result = spawnSync(exe, [], { env, cwd: root, encoding: "utf8", timeout: 30000 });
     assert.equal(result.status, 0, result.stderr);

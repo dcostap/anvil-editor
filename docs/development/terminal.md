@@ -178,7 +178,9 @@ A revived Terminal Session resumes the Pi session that its Pi had open. Pi needs
 
 In Pi, the script writes `terminal-sessions/<id>.agent` with Pi's executable and the session file it writes. The record's `interrupted_pid` must match the report, so an old report cannot resume a different command. Both option parsers treat backslashes as escapes, and Bun has no quoting, so the host passes forward slashes and a short path to Bun.
 
-Run `ui/terminal_agent_resume.lua` after changes. It runs a fake Pi on Node and on Bun when they are installed. Compiled programs must also have the executable name `pi` or `pi.exe` before the preload checks their package.
+Bun gets `--preload=<path>` so its `test` and `run` subcommands work. The host converts inherited space-form preload options to the same form. Existing Terminal hosts need new Terminal Sessions to get this change.
+
+Run `ui/terminal_agent_resume.lua` after changes. It checks Bun scripts and subcommands, including inherited preloads. It also runs a fake Pi on Node and on Bun when they are installed. Compiled programs must also have the executable name `pi` or `pi.exe` before the preload checks their package.
 
 Run `node --test tests/agent-sessions.test.cjs` to check compiled Pi and unrelated programs. It requires Bun.
 

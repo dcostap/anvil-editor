@@ -1202,7 +1202,17 @@ static void prepend_environment_option(const wchar_t *name, const wchar_t *optio
   DWORD length = GetEnvironmentVariableW(name, current, 32768);
   if (length >= 32768) return;
   if (!length) current[0] = 0;
-  if (wcsstr(current, option)) return;
+  /* Older hosts used the space form. Leaving it in BUN_OPTIONS breaks Bun subcommands,
+     even when this host puts an equals-form preload first. Keep all inherited preloads. */
+  bool bun = !wcscmp(name, L"BUN_OPTIONS");
+  if (bun) {
+    for (wchar_t *p = current; (p = wcsstr(p, L"--preload ")) != NULL; p += 10)
+      if (p == current || p[-1] == L' ') p[9] = L'=';
+  }
+  if (wcsstr(current, option)) {
+    if (bun) SetEnvironmentVariableW(name, current);
+    return;
+  }
   int count = _snwprintf(value, 32768, current[0] ? L"%ls %ls" : L"%ls%ls", option, current);
   if (count > 0 && count < 32768) SetEnvironmentVariableW(name, value);
 }
@@ -1236,9 +1246,9 @@ static void set_agent_environment(TerminalHost *host, const char *datadir) {
     for (wchar_t *p = path; *p; p++) if (*p == L'\\') *p = L'/';
     for (wchar_t *p = short_path; length && length < 32768 && *p; p++) if (*p == L'\\') *p = L'/';
     if (_snwprintf(option, 32800, L"--require \"%ls\"", path) > 0) prepend_environment_option(L"NODE_OPTIONS", option);
-    /* Bun splits BUN_OPTIONS at spaces and has no quoting, so it gets the short path. */
+    /* Bun needs '=' for subcommands. It splits BUN_OPTIONS at spaces without quoting, so keep the short path. */
     if (length && length < 32768 && !wcschr(short_path, L' ') &&
-        _snwprintf(option, 32800, L"--preload %ls", short_path) > 0) prepend_environment_option(L"BUN_OPTIONS", option);
+        _snwprintf(option, 32800, L"--preload=%ls", short_path) > 0) prepend_environment_option(L"BUN_OPTIONS", option);
     else host_log(host, "agent preload: no path without spaces; Bun agents are not tracked");
   }
   free(report); free(path);
