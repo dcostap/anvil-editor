@@ -120,9 +120,11 @@ Other absolute paths are local state, because a Machine serves only paths inside
 
 The guard does not refuse paths in those folders, so the Client keeps its state and credentials there. `fs.on_machine` still names them Machine files. `fs.machine_file(path)` tells if a Buffer of the path reads and saves through the Machine.
 
-A file in this PC's own folders and outside the guarded Project paths, such as the User Module, stays on this PC. Other paths go to the Machine, which refuses paths outside its Projects. Worker jobs whose payload names a Project path are refused at submit.
+A file in this PC's own folders and outside the guarded Project paths, such as the User Module, stays on this PC. Other paths go to the Machine, which refuses paths outside its Projects. The guard checks worker jobs before submission.
 
-The `bytes` and `text` fields hold file text, so the guard does not check them. Do not send a path that the worker does not read. A new raw function that takes a path needs a wrapper in the guard.
+For `storage_save` and `storage_load`, the guard checks `userdir`, the only disk location those workers use. Storage encodes `module` and `key` as filename components. The saved `value` is data, not a file operation. These fields can contain Machine paths, so background Workspace saves can remember remote files. Relative and guarded Project paths remain invalid storage destinations.
+
+For other jobs, the guard refuses payloads that name a Project path. The `bytes` and `text` fields hold file text, so the guard does not check them. Do not send a path that the worker does not read. A new raw function that takes a path needs a wrapper in the guard.
 
 A Project at a drive root, such as `D:\`, owns all paths on that drive.
 
@@ -198,7 +200,7 @@ A Project on a Machine adds only its own folders as Project Paths, so they are V
 
 A Project on a Machine skips its Project module, Git, Git file changes and the symbol index until their services exist. The guard would show an error for each. Run the `launch-machine-project` shell probe after changes.
 
-It opens this PC's own Scratch through its server, opens a file, and checks that no guard refusal shows. The test server's owner is the test process, so a crashed test does not leave a server. [The file seam](../machines.md#the-file-seam-corefs) lists the Project content sites by feature. Run `runtime/machine_guard.lua` and `runtime/machine_buffer.lua` after changes.
+It opens this PC's own Scratch through its server and opens a file. It checks that the background Workspace save records that file before shutdown, without a guard refusal. The test server's owner is the test process, so a crashed test does not leave a server. [The file seam](../machines.md#the-file-seam-corefs) lists the Project content sites by feature. Run `runtime/machine_guard.lua` and `runtime/machine_buffer.lua` after changes.
 
 The Buffer tests run with the guard on. Test helpers that stand for the Machine keep the raw functions from load time.
 

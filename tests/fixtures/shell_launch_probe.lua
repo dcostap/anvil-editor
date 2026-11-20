@@ -603,10 +603,25 @@ elseif names[path] then
     core.open_file(note)
     local buffer = wait(function() return core.buffer_registry:find(note) end, 10, "the Machine's file did not open")
     wait(function() return buffer.lines[1] == "note\n" end, 20, "the Machine's file did not load")
-    coroutine.yield(3)
-    for _, item in ipairs(core.log_items) do
-     assert(item.level ~= "ERROR" or not item.text:find("refused", 1, true), item.text)
+    local storage = require "core.storage"
+    local project_key = require("core.machine_project").root_key(core.root_project().path)
+    local function contains_note(value)
+     if type(value) ~= "table" then
+      return type(value) == "string" and (value == "machine-note.md" or common.path_equals(value, note))
+     end
+     for _, child in pairs(value) do if contains_note(child) then return true end end
+     return false
     end
+    core.request_workspace_save("Machine Project probe", 0)
+    wait(function()
+     for _, item in ipairs(core.log_items) do
+      assert(item.level ~= "ERROR" or not item.text:find("refused", 1, true), item.text)
+     end
+     for _, key in ipairs(storage.keys("ws")) do
+      local saved = storage.load("ws", key)
+      if saved and saved.path == project_key and contains_note(saved.pane_state) then return true end
+     end
+    end, 20, "the Machine Workspace did not save its open file during use")
    end)
    save("m-files", {ok=ok, error=ok and nil or tostring(err)})
   end

@@ -230,9 +230,16 @@ function machine_guard.owns(path)
   return normalized ~= nil and in_project(normalized)
 end
 
--- Worker jobs read the paths in their payload. A job that names a Project path is refused.
+-- Storage workers access only userdir. They encode module/key as filename components and
+-- serialize value as data; paths in those fields do not cause file access.
 function machine_guard.check_job(kind, payload)
-  if roots then check_values("worker job " .. tostring(kind), payload, 0) end
+  if not roots then return end
+  local name = "worker job " .. tostring(kind)
+  if kind == "storage_save" or kind == "storage_load" then
+    check_path(name, payload.userdir)
+  else
+    check_values(name, payload, 0)
+  end
 end
 
 return machine_guard

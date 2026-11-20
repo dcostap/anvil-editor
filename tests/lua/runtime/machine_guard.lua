@@ -32,6 +32,7 @@ test.describe("Machine guard", function()
 
   test.after_each(function(context)
     fs.use_local()
+    if context.pool then context.pool:shutdown() end
     test.ok(test.remove_tree(context.root))
   end)
 
@@ -73,5 +74,48 @@ test.describe("Machine guard", function()
   test.it("refuses a worker job that names a Project path", function(context)
     local pool = worker_pool.system()
     refused(pool.submit, pool, { kind = "worker_pool_test", payload = { files = { context.notes } } })
+  end)
+
+  test.it("saves and loads local state containing Machine paths", function(context)
+    -- These names belong to the Machine. Only context.root is accessed on this PC.
+    local project = PLATFORM == "Windows" and "Z:\\mg" or "/mg"
+    local notes = project .. PATHSEP .. "notes.md"
+    fs.use_machine(context.root .. PATHSEP .. "machine.json", { project })
+    context.pool = worker_pool.new { worker_count = 1 }
+    local function run(kind, value)
+      local result, failure
+      context.pool:submit {
+        kind = kind,
+        -- Storage encodes module and key as filenames. Neither names a disk location.
+        payload = { userdir = context.root, module = project, key = notes, value = value },
+        on_result = function(message) if message.type == "final" then result = message.payload end end,
+        on_error = function(message) failure = message.error end,
+      }
+      local deadline = system.get_time() + 30
+      while not result and not failure do
+        context.pool:drain { max_ms = 5, max_messages = 10 }
+        test.ok(system.get_time() < deadline, kind .. " timed out")
+        coroutine.yield(0)
+      end
+      test.is_nil(failure)
+      return result
+    end
+    local saved = run("storage_save", { filename = notes, nested = { path = project } })
+    test.ok(saved.success, saved.error)
+    local loaded = run("storage_load").value
+    test.equal(loaded.filename, notes)
+    test.equal(loaded.nested.path, project)
+  end)
+
+  test.it("refuses Machine and relative storage destinations", function(context)
+    local pool = worker_pool.system()
+    for _, kind in ipairs { "storage_save", "storage_load" } do
+      for _, userdir in ipairs { context.project, "relative-state" } do
+        refused(pool.submit, pool, {
+          kind = kind,
+          payload = { userdir = userdir, module = "workspace", key = "state", value = {} },
+        })
+      end
+    end
   end)
 end)
