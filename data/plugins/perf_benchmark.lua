@@ -1166,6 +1166,15 @@ local function scenario_is_ready()
     require("plugins.project_paths").open({ select = DATADIR .. PATHSEP .. "colors" })
     return false
   end
+  if benchmark.scenario == "mcp-server-dialog" then
+    if require("core.ui.dialog").current() then return true end
+    local state, _, _, reason = require("core.control_runtime").status()
+    if state == "starting" then return false end
+    assert(state == "ready", reason or state)
+    config.transitions = false
+    assert(command.perform("anvil:mcp_server"))
+    return false
+  end
   if benchmark.scenario:find("^ui%-gallery%-") then
     if require("core.ui.dialog").current() then return true end
     config.transitions = false

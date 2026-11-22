@@ -1,0 +1,73 @@
+local core = require "core"
+local runtime = require "core.control_runtime"
+local Dialog = require("core.ui.dialog").Dialog
+local layout = require "core.ui.layout"
+local Button = require "core.ui.button"
+local StatusDot = require "core.ui.status_dot"
+
+local Column, Row, Text = layout.Column, layout.Row, layout.Text
+local ControlDialog = Dialog:extend()
+local states = {
+  starting = { "Starting", "info" },
+  ready = { "Ready", "success" },
+  disabled = { "Disabled", "neutral" },
+  unavailable = { "Unavailable", "danger" },
+}
+
+local function field(label, value)
+  return Column { gap = 4, Text { text = label, role = "label" }, value }
+end
+
+local function copy_setup()
+  local state, _, path = runtime.status()
+  if state ~= "ready" then return end
+  system.set_clipboard(table.concat({
+    "Connect this MCP client to Anvil on this computer.",
+    "Discovery file: `" .. path .. "`",
+    "Use a local script to read the discovery file and update this client's active MCP config.",
+    "Add or update the `anvil` entry. Keep all other entries.",
+    "Use Streamable HTTP (`serverUrl` in Antigravity). Append `/mcp` to the `url` from the discovery file.",
+    "Set the `Authorization` header to `Bearer ` followed by the `token` from that file.",
+    "Do not print the token or the discovery file contents. Do not put the token in a shared config.",
+    "Reload the MCP config if needed. Verify the connection by calling Anvil's `workspace_state` tool.",
+  }, "\n"))
+  core.log_quiet("Copied MCP agent setup")
+end
+
+function ControlDialog:new()
+  ControlDialog.super.new(self, { title = "MCP Server" })
+  self.status = StatusDot {}
+  self.reason = Text { role = "description" }
+  self.project = Text { text = core.root_project().path, wrap = false, cut = "start" }
+  self.url = Text { wrap = false }
+  self.discovery = Text { wrap = false, cut = "start" }
+  self.endpoint_fields = Column {
+    field("MCP URL", self.url),
+    field("Discovery File", self.discovery),
+  }
+  self.copy = Button { label = "Copy Agent Setup", kind = "primary", on_click = copy_setup }
+  self:set_body(Column {
+    Column { gap = 4, self.status, self.reason },
+    field("Project", self.project),
+    self.endpoint_fields,
+  })
+  self.footer = Row { justify = "end", self.copy }
+  self:on_update()
+end
+
+function ControlDialog:on_update()
+  local state, url, path, reason = runtime.status()
+  if state == self.state and path == self.path and reason == self.failure then return end
+  self.state, self.path, self.failure = state, path, reason
+  local appearance = states[state]
+  self.status:set(appearance[2], appearance[1])
+  self.reason:set_text(reason or "")
+  self.reason.visible = reason ~= nil
+  self.url:set_text(url and url .. "/mcp" or "")
+  self.discovery:set_text(path or "")
+  self.endpoint_fields.visible = state == "ready"
+  self.copy.enabled = state == "ready"
+  core.redraw = true
+end
+
+return ControlDialog

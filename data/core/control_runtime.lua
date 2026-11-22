@@ -2,9 +2,17 @@
 local core = require "core"
 local json = require "core.json"
 local M = {}
-local server, starting, stopped, discovery
+local server, starting, stopped, discovery, failure
 local generation = 0
 local sessions = {}
+
+-- Only publish the information a local client needs to find discovery. Never return the token.
+function M.status()
+  if starting then return "starting" end
+  if server and not failure then return "ready", server.url, discovery end
+  if os.getenv("ANVIL_CONTROL") == "0" then return "disabled" end
+  return "unavailable", nil, nil, failure
+end
 
 local function write_json(path, value)
   local temporary = path .. ".tmp-" .. system.get_process_id()
@@ -54,26 +62,34 @@ function M.stop()
   for _, view in ipairs(views) do M.release(view) end
   if discovery then os.remove(discovery); discovery = nil end
   if server then server:close(); server = nil end
-  starting = false
+  starting, failure = false, nil
 end
 
 function M.start()
   if server or starting or os.getenv("ANVIL_CONTROL") == "0" then return end
   generation = generation + 1
   local current = generation
-  starting, stopped = true, false
+  starting, stopped, failure = true, false, nil
   core.add_background_thread(function()
     local ok, result = pcall(require("core.control_server").open)
-    if not ok then core.log_quiet("Control: listener failed: %s", tostring(result)); starting = false; return end
-    if stopped or generation ~= current then result:close(); return end
+    if stopped or generation ~= current then
+      if ok then result:close() end
+      return
+    end
+    if not ok then
+      starting, failure = false, tostring(result)
+      core.log_quiet("Control: listener failed: %s", failure)
+      return
+    end
     local directory = USERDIR .. "/control"
-    local secured, failure = pcall(function()
+    local secured, err = pcall(function()
       require("net").private_directory(directory)
       require("net").private_directory(directory .. "/terminals")
     end)
     if not secured then
-      result:close(); starting = false
-      core.log_quiet("Control: private discovery unavailable: %s", tostring(failure))
+      result:close()
+      starting, failure = false, "Cannot secure the discovery folder: " .. tostring(err)
+      core.log_quiet("Control: %s", failure)
       return
     end
     server, starting = result, false
@@ -82,7 +98,10 @@ function M.start()
     local written, err = write_json(discovery, {version = 1, url = server.url, token = server.token,
       project = project and project.path, executable = EXEFILE, pid = system.get_process_id(),
       created = system.get_process_creation_time()})
-    if not written then core.log_quiet("Control: Project discovery failed: %s", tostring(err)) end
+    if not written then
+      failure = "Cannot write the discovery file: " .. tostring(err)
+      core.log_quiet("Control: %s", failure)
+    end
     for _, view in ipairs(require("plugins.terminal").open_views()) do M.observe(view) end
     core.log_quiet("Control: listening at %s", server.url)
     while not stopped and server and generation == current do

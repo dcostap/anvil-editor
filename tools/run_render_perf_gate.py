@@ -141,6 +141,8 @@ SCENARIOS["image-overlay"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["image-zoom"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["context-menu"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["project-paths-dialog"] = dict(SCENARIOS["image-viewer"])
+# The port and discovery file name change per process. Use with --report-only.
+SCENARIOS["mcp-server-dialog"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["databases-dialog"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["tabular-data-preview"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["sql-results"] = dict(SCENARIOS["image-viewer"])

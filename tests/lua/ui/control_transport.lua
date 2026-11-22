@@ -1,7 +1,90 @@
 local core = require "core"
+local command = require "core.command"
+local dialog = require "core.ui.dialog"
 local http = require "core.http"
 local json = require "core.json"
 local test = require "core.test"
+
+test.describe("Anvil MCP Server Dialog", function()
+  local runtime = require "core.control_runtime"
+
+  test.before_each(function(context)
+    context.clipboard = system.get_clipboard()
+    context.enabled = os.getenv("ANVIL_CONTROL")
+    context.create_server = require("net").create_server
+    system.setenv("ANVIL_CONTROL", "1")
+  end)
+
+  test.after_each(function(context)
+    local open = dialog.current()
+    if open then open:close() end
+    runtime.stop()
+    require("net").create_server = context.create_server
+    system.setenv("ANVIL_CONTROL", context.enabled or "")
+    system.set_clipboard(context.clipboard or "")
+  end)
+
+  local function open_dialog()
+    test.ok(command.perform("anvil:mcp_server"))
+    local open = dialog.current()
+    test.not_nil(open)
+    dialog.update()
+    return open
+  end
+
+  local function wait_for(open, label)
+    local deadline = system.get_time() + 15
+    repeat
+      coroutine.yield()
+      dialog.update()
+    until open.status.label == label or system.get_time() > deadline
+    test.equal(open.status.label, label)
+  end
+
+  test.it("shows the live endpoint and copies setup instructions without the token", function()
+    runtime.start()
+    local open = open_dialog()
+    test.equal(open.status.label, "Starting")
+    test.not_ok(open.copy.enabled)
+    wait_for(open, "Ready")
+
+    local file = assert(io.open(open.discovery.text, "rb"))
+    local record = file:read("*a")
+    file:close()
+    local endpoint = json.decode(record)
+    test.equal(open.project.text, endpoint.project)
+    test.equal(open.url.text, endpoint.url .. "/mcp")
+    test.ok(open.copy:activate())
+    local text = system.get_clipboard()
+    test.contains(text, open.discovery.text)
+    test.contains(text, "serverUrl")
+    test.contains(text, "Authorization")
+    test.not_ok(text:find(endpoint.token, 1, true), "The clipboard must not contain the token")
+
+    runtime.stop()
+    dialog.update()
+    test.equal(open.status.label, "Unavailable")
+    test.not_ok(open.copy:activate())
+    test.equal(system.get_clipboard(), text)
+  end)
+
+  test.it("shows why setup is unavailable when the listener cannot open", function()
+    require("net").create_server = function() return nil, "Bind denied by test policy" end
+    runtime.start()
+    local open = open_dialog()
+    wait_for(open, "Unavailable")
+    test.contains(open.reason.text, "Bind denied by test policy")
+    test.not_ok(open.copy.enabled)
+  end)
+
+  test.it("shows when the server is disabled", function()
+    system.setenv("ANVIL_CONTROL", "0")
+    runtime.start()
+    local open = open_dialog()
+    test.equal(open.status.label, "Disabled")
+    test.not_ok(open.copy.enabled)
+  end)
+end)
 
 -- Seam: listener startup when the OS rejects a range of ports or every bind.
 test.describe("Anvil control listener", function()

@@ -181,6 +181,10 @@ Only loaded Projects accept operations. Use `project` to load one. Cross-Project
 
 ## Other MCP clients
 
+Run `anvil:mcp_server` in the Command Palette to see the local server status, Project, MCP URL, and discovery file. **Ready** means Anvil is listening and published discovery. It does not mean a client is connected.
+
+Click **Copy Agent Setup** and paste the instructions into an external agent on this computer. The instructions name the discovery file but do not contain the token. Use only a trusted client.
+
 Read `USERDIR/control/<pid>.json` for a loaded Project. It contains `url`, `token`, `project`, `executable`, `pid` and `created`, the process creation time. Connect to `<url>/mcp` through Streamable HTTP. Send `Authorization: Bearer <token>`.
 
 The server supports initialization, tool discovery, tool calls, and ping. It returns JSON responses and supports notifications. It does not provide SSE streams or an arbitrary Lua evaluation tool.

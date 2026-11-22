@@ -316,6 +316,9 @@ end
 command.add(nil, history_commands)
 
 command.add(nil, {
+  ["anvil:mcp_server"] = command.palette(function()
+    return require("core.control_dialog")():open()
+  end, { keywords = { "agent", "control", "setup" } }),
   ["editor:open"] = command.palette(function()
     local context = command.get_invocation_context() or {}
     return panes.place(new_untitled_editor, {
