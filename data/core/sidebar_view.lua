@@ -277,7 +277,7 @@ end, {
   ["sidebar:unload_project"] = function(view, project) view.action("unload", project.row_id) end,
   ["sidebar:copy_project_path"] = function(view, project) view.action("copy_path", project.row_id) end,
   ["sidebar:copy_agent_address"] = function(_, path, pane, session)
-    system.set_clipboard(require("core.json").encode({project = path, pane = pane, terminal = session}))
+    require("core.agent_address")(path, pane, session)
   end,
   ["sidebar:show_project_in_folder"] = function(view, project) view.action("show_in_folder", project.row_id) end,
 })

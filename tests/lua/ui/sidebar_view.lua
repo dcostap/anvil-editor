@@ -206,7 +206,7 @@ test.describe("Sidebar list actions", function()
       view:on_mouse_pressed("right", 100, row_y(view, "tab", 1))
       choose(actions[1][2], "Copy Agent Address")
       test.same(require("core.json").decode(copied),
-        {project="C:/Other Project",pane="pi-pane",terminal="pi-terminal"})
+        {type="anvil-agent-address",project="C:/Other Project",pane="pi-pane",terminal="pi-terminal"})
       test.equal(#actions, 1, "Copy selected a Project or Pane")
       for _, id in ipairs({"shell-pane", "ended-pane", "file-pane"}) do
         local _, row = row_index(view, function(row) return row.kind == "tab" and row.tab.id == id end)

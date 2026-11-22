@@ -327,7 +327,7 @@ test.describe("Global title bar Pane entries", function()
       title:on_mouse_pressed("right", entry.x + 2, entry.y + 2, 1)
       test.ok(context_menu.choose("Copy Agent Address"), "Pi Tab has no copy action")
       test.same(require("core.json").decode(copied),
-        {project=core.root_project().path,pane=one.id,terminal="pi-terminal"})
+        {type="anvil-agent-address",project=core.root_project().path,pane=one.id,terminal="pi-terminal"})
       view.agent_app = nil
       test.not_ok(command.is_valid("pane:copy_agent_address"), "A shell offers an agent address")
       view.agent_app, view.state = "pi", "ended"
