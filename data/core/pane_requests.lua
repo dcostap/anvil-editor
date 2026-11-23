@@ -104,7 +104,7 @@ local schemas = {
   project_search = {from = true, id = true, mode = true, query = true, case_sensitive = true, limit = true},
   project_results = {source = true, id = true, rows = true, more = true},
   search = {text = true},
-  open_file = {file = true, line = true, col = true, filetree = true},
+  open_file = {file = true, line = true, col = true, filetree = true, placement = true},
 }
 for _, schema in pairs(schemas) do schema.action = true end
 
@@ -163,8 +163,9 @@ local function validate(request)
     or request.more ~= nil and type(request.more) ~= "boolean") then return nil, "invalid search rows" end
   if request.action == "search" and type(request.text) ~= "string" then return nil, "invalid search text" end
   if request.action == "open_file" and (not identifier(request.file) or not common.is_absolute_path(request.file)
+    or request.placement ~= nil and request.placement ~= "current" and request.placement ~= "new"
     or request.filetree ~= nil and request.filetree ~= true) then
-    return nil, "invalid file path"
+    return nil, "invalid file open"
   end
   if request.action == "drag" and request.phase ~= "move" and request.phase ~= "drop"
     and request.phase ~= "leave" then return nil, "invalid drag phase" end
@@ -213,14 +214,14 @@ local function execute(request, x, y)
     require("plugins.fuzzy_searcher").open(request.text)
     return true
   end
-  -- A file that another Project's File Search chose. It opens as a result of this Project's own search does.
+  -- Open a file in the Project that the shell selected for it.
   if action == "open_file" then
     if request.filetree then
       return require("core.command").perform_with_context("filetree:open_at_current_path",
         {placement = "current", source_pane = panes.active()}, request.file)
     end
     local view, err = core.open_file(request.file,
-      {placement = "current", line = request.line, col = request.col, focus = true})
+      {placement = request.placement or "current", line = request.line, col = request.col, focus = true})
     return view and true, err
   end
   -- A Text Search match in a Terminal Session of this Project.

@@ -170,6 +170,21 @@ if path:match("/driver$") then
     return close_shell(shell, "File Search")
    end
 
+   if action == "launch-path-search" then
+    local shell = launch(root .. "/Project")
+    local a = wait(function() return ready("a")[1] end, 30)
+    local opened = wait(function() return load("path-search-opened") end, 30,
+     "Path Search did not select the Dormant Project and open its file")
+    assert(opened.window_id == a.window_id, "Path Search started the Dormant Project in another Window")
+    assert(opened.line == 2 and opened.col == 3, "Path Search lost the requested line or column")
+    local moved = wait(function() return load("path-search-moved") end, 20, "Replacement did not move")
+    local second = wait(function() return load("path-search-second") end, 20,
+     "Path Search did not open the file in the other Window")
+    assert(moved ~= a.window_id and second.window_id == moved, "Path Search changed the Project's Window")
+    assert(#ready("b") == 1, "Path Search started a duplicate Project runtime")
+    return close_shell(shell, "Path Search")
+   end
+
    if action == "launch-forward" then
     local shell = launch(root .. "/Project")
     local a = wait(function() return ready("a")[1] end, 20)
@@ -488,6 +503,53 @@ elseif names[path] then
     return buffer and buffer.abs_filename and buffer.abs_filename:gsub("\\", "/") == root .. "/Project/second.txt"
    end, 90, "Project did not open the chosen file")
    save("file-search-opened", {project = core.root_project().path})
+  end
+  if action == "launch-path-search" then
+   local target = root .. "/Replacement"
+   local filename = common.normalize_path(target .. "/path search.txt")
+   local second = common.normalize_path(target .. "/edited.txt")
+   if names[path] == "a" then
+    local file = assert(io.open(filename, "wb")); file:write("first\nsecond\n"); file:close()
+    wait(function()
+     for _, item in ipairs(core.project_sidebar or {}) do
+      if item.state == "dormant" and item.exists and common.path_equals(item.path, target) then return true end
+     end
+    end, 20, "Replacement is not a Dormant Project in the Sidebar")
+    require("plugins.fuzzy_searcher").open("@" .. filename .. ":2:3")
+    assert(core.fuzzy_searcher_active_view):confirm(false)
+    assert(not core.buffer_registry:find(filename), "Path Search also opened the file in the source Project")
+    local moved = wait(function() return load("path-search-moved") end, 20)
+    wait(function()
+     for _, item in ipairs(core.project_sidebar or {}) do
+      if item.window_id == moved and common.path_equals(item.path, target) then return true end
+     end
+    end, 20, "the source Project did not see the move")
+    require("plugins.fuzzy_searcher").open("@" .. second)
+    assert(core.fuzzy_searcher_active_view):confirm(false)
+    assert(not core.buffer_registry:find(second), "Path Search opened the second file in the source Project")
+   elseif names[path] == "b" then
+    local function active_file(file)
+     local view = core.active_view
+     if view and view.buffer and common.path_equals(view.buffer.abs_filename, file) then return view end
+    end
+    local editor = wait(function() return active_file(filename) end, 20, "Path Search did not focus the file")
+    local line, col = editor.buffer:get_selection()
+    local owner = system.get_anvil_window_id()
+    save("path-search-opened", {window_id = owner, line = line, col = col})
+    local project = wait(function()
+     for _, item in ipairs(core.project_sidebar or {}) do
+      if item.state == "ready" and common.path_equals(item.path, target) then return item end
+     end
+    end, 20, "Replacement did not become Ready")
+    assert(system.move_project(project.id, 0))
+    local moved = wait(function()
+     local window = system.get_anvil_window_id()
+     if window ~= owner then return window end
+    end, 20, "Replacement did not move to a new Window")
+    save("path-search-moved", moved)
+    wait(function() return active_file(second) end, 20, "Path Search did not focus the second file")
+    save("path-search-second", {window_id = system.get_anvil_window_id()})
+   end
   end
   if action == "launch-file-search" and names[path] == "b" then
    local ok, latency = pcall(function()

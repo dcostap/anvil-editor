@@ -2255,6 +2255,30 @@ function core.open_file(filename, opts)
 end
 
 
+-- An Open with no explicit destination can select another Project. Use the live Sidebar model, including Dormant
+-- Projects, and let the shell open the file when that Project is ready. False means the caller should open locally.
+function core.try_open_file_in_project(filename, opts)
+  if not core.project_sidebar then return false end
+  local root = core.root_project()
+  local file = root:absolute_path(filename)
+  if require("core.fs").machine_file(file) then return false end
+
+  local best, depth = nil, common.path_belongs_to(file, root.path) and #common.path_compare_key(root.path) or 0
+  for _, project in ipairs(core.project_sidebar) do
+    if project.exists and project.state ~= "closing" and project.state ~= "failed"
+      and common.is_absolute_path(project.path) and common.path_belongs_to(file, project.path) then
+      local length = #common.path_compare_key(project.path)
+      if length > depth then best, depth = project.path, length end
+    end
+  end
+  if not best then return false end
+  return system.pane_request("select", best, common.serialize({
+    action = "open_file", file = file, line = opts and opts.line, col = opts and opts.col,
+    placement = opts and opts.placement,
+  }, {escape = true}))
+end
+
+
 function core.custom_log(level, show, backtrace, fmt, ...)
   local ok, text = pcall(string.format, fmt, ...)
   if not ok then

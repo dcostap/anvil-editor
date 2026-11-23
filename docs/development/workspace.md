@@ -200,6 +200,8 @@ An external launch selects its Project in the Window that the user activated las
 
 Known Projects are the Sidebar list, loaded or Dormant. Other files open in the Scratch Project. A launch with files waits up to 5 seconds for the first Sidebar list.
 
+Inside Anvil, confirming one file in Open File, Path Search, or Project File Search also checks the known local Projects. With no match it keeps the current Project, not Scratch. Multiple file selections keep their existing destination.
+
 A Terminal launch keeps its Terminal's Project. A cold start without saved Windows still opens a file's own folder. Run the `launch-files`, `launch-forward` and `restore-argument` shell probes after changes.
 
 The Scratch Project's folder is `USERDIR/scratch`. The shell makes it at startup and again before a launch uses it. The shell marks its Sidebar row with `scratch`.

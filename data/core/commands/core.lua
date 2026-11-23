@@ -80,7 +80,7 @@ local function open_file(label, selection_callback, allow_directories)
     text = default_text,
     submit = function(text)
       if not selection_callback then
-        core.open_file(filename)
+        if not core.try_open_file_in_project(filename) then core.open_file(filename) end
       else
         selection_callback(filename)
       end
@@ -148,6 +148,7 @@ local function open_file_with_system_file_picker(label, selection_callback)
   local default_text = file_prompt_defaults()
   core.open_file_dialog(core.window, function(status, result)
     if status == "accept" then
+      if not selection_callback and #result == 1 and core.try_open_file_in_project(result[1]) then return end
       for _, filename in ipairs(result --[[ @as string[] ]]) do
         if not selection_callback then
           core.open_file(filename)

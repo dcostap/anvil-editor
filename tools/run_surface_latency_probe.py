@@ -143,7 +143,7 @@ def main() -> int:
         "windows-sidebar-layout",
         "windows-sidebar-folding",
         "windows-close-terminals-keep", "windows-close-terminals-end",
-        "launch-terminal-editor", "launch-terminal-move", "launch-file-search",
+        "launch-terminal-editor", "launch-terminal-move", "launch-file-search", "launch-path-search",
         "restore-placement", "restore-loaded", "restore-order", "restore-select-late", "navigate-sidebar", "windows-close-cleanup", "windows-close-cleanup-cancel", "windows-close-cleanup-unload", "windows-close-update-disconnect",
         "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "windows-close-dirty", "windows-close-launch", "windows-close-hang", "windows-close-crash", "windows-close-gpu", "windows-close-quit", "windows-close-all-terminals", "windows-close-all-cancel", "windows-close-reopen", "launch-forward", "launch-files", "launch-machine-server", "launch-machine-project", "launch-link", "launch-handoff", "launch-concurrent", "launch-stale", "launch-hung", "launch-userdir", "restore-crash", "restore-sequential", "restore-argument", "restore-invalid", "restore-missing", "restore-offscreen", "restore-stagger", "adopt-return", "adopt-timeout", "adopt-stale", "adopt-hung", "adopt-userdir", "resize-live", "resize-stall", "layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "maximize-button", "zoom-global", "select-hold", "peek", "terminal-focus", "agent-projects", "toggle-sidebar", "alt-navigation", "project-menu", "project-menu-background", "project-reorder", "popup-sidebar", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
         "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window", "recovery", "shell-empty", "shell-sidebar",
@@ -256,7 +256,7 @@ def main() -> int:
                         (case_dir / "user/appstate.lua").write_text(
                             'return {recents={' + ','.join(json.dumps(str(case_dir / name).replace("\\", "/"))
                                 for name in ("Project", "Recent", "Replacement")) + '}}', encoding="utf-8")
-                    if action == "launch-files":
+                    if action in ("launch-files", "launch-path-search"):
                         (case_dir / "user/appstate.lua").write_text(
                             'return {recents={' + ','.join(json.dumps(str(case_dir / name).replace("\\", "/"))
                                 for name in ("Project", "Replacement")) + '}}', encoding="utf-8")

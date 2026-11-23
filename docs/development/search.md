@@ -6,7 +6,9 @@ Path Search lists Projects from the Project Sidebar model: Scratch, loaded Proje
 
 The Fuzzy Searcher shows this Project's badge and name at the left of the query, with the same `core.project_look`. Path Search searches beyond this Project, so it does not show it. Pickers with their own list, such as the file picker, do not show it either.
 
-Run `ui/fuzzy_searcher_project_chip.lua` after changes.
+Confirming one file in Path Search or Project File Search opens it in the deepest known local Project folder that contains it. This includes Dormant Projects. The shell selects the Project in its own Window if loaded. If no Project matches, the file opens where the search started. Previews and opens with a specific destination do not switch Projects.
+
+Run `ui/fuzzy_searcher_project_chip.lua` and the `launch-path-search` shell probe after changes.
 
 ## Other Projects and language providers
 

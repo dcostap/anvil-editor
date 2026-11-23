@@ -8721,6 +8721,13 @@ function FSView:activate_selected_result(new_group)
     return self:open_buffer_result(r, new_group)
   end
   if r.file then
+    if not r.revision and (r.kind == "path" or r.kind == "file")
+      and core.try_open_file_in_project(fullpath(r), {
+        line = r.line, col = r.col, placement = new_group and "new" or "current",
+      }) then
+      self:close()
+      return true
+    end
     return self:open_file_result(r, new_group)
   end
 end

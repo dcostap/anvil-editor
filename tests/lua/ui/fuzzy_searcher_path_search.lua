@@ -66,6 +66,7 @@ test.describe("Fuzzy Searcher Path Search", function()
     context.original_recent_projects = core.recent_projects
     context.original_project_sidebar = core.project_sidebar
     context.original_open_file = core.open_file
+    context.original_pane_request = system.pane_request
     context.original_cwd = system.getcwd()
     context.temp_root = common.normalize_path(USERDIR
       .. PATHSEP .. "fuzzy-path-search-tests-"
@@ -91,6 +92,7 @@ test.describe("Fuzzy Searcher Path Search", function()
     core.recent_projects = context.original_recent_projects
     core.project_sidebar = context.original_project_sidebar
     core.open_file = context.original_open_file
+    system.pane_request = context.original_pane_request
     if context.original_cwd then pcall(system.chdir, context.original_cwd) end
     if context.temp_root then test.ok(test.remove_tree(context.temp_root)) end
     if context.home_root then test.ok(test.remove_tree(context.home_root)) end
@@ -632,6 +634,51 @@ test.describe("Fuzzy Searcher Path Search", function()
     picker:confirm()
 
     test.ok(opened and common.path_equals(opened, path), "Enter must open the typed path, not " .. tostring(opened))
+  end)
+
+  test.it("opens a confirmed path in its deepest known Project, even when Dormant", function(context)
+    local nested = join_path(context.external_root, "notes")
+    mkdirp(nested)
+    local file = join_path(nested, "task.txt")
+    write_file(file, "first\nsecond\nthird\n")
+    core.project_sidebar = {
+      {path = context.external_root, state = "ready", exists = true, window_id = 2},
+      {path = nested, state = "dormant", exists = true},
+    }
+    local selected, request, local_open
+    function system.pane_request(route, path, text)
+      if route ~= "select" then return false end
+      selected, request = path, assert(load("return " .. text, "=Pane request", "t", {}))()
+      return true
+    end
+    core.open_file = function(path) local_open = path end
+    helpers.set_everything_state("unavailable")
+
+    fuzzy_searcher.open("@" .. file .. ":2:3")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return result_for_path(picker.results, file) end), "expected a file result")
+    test.is_nil(selected, "browsing the result must not select its Project")
+    picker:confirm(false)
+
+    test.equal(selected, nested)
+    test.same(request, {action = "open_file", file = file, line = 2, col = 3, placement = "current"})
+    test.is_nil(local_open, "the source Project must not open another copy")
+  end)
+
+  test.it("keeps a confirmed path in the source Project when no Project contains it", function(context)
+    local file = join_path(context.external_root, "loose.txt")
+    write_file(file)
+    core.project_sidebar = {{path = context.external_root .. "-other", state = "ready", exists = true}}
+    local selected, opened
+    system.pane_request = function(route, path) if route == "select" then selected = path end end
+    core.open_file = function(path) opened = path end
+    helpers.set_everything_state("unavailable")
+
+    fuzzy_searcher.open("@" .. file)
+    assert(core.fuzzy_searcher_active_view):confirm(false)
+
+    test.is_nil(selected)
+    test.equal(opened, file)
   end)
 
   test.it("keeps a bare Path Search query as a search term", function()
