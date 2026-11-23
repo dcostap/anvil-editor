@@ -96,11 +96,21 @@ function MachineDialog:new()
   -- This PC
   self.access_button = Button({ label = "Share on Tailnet", size = "small",
     on_click = function() self:toggle_access() end })
+  self.copy_address_button = Button({ label = "Copy Address", size = "small", visible = false,
+    on_click = function()
+      local address = self:shared_address()
+      if address then system.set_clipboard(address) end
+    end })
   self.level_control = Segmented({
     options = { { value = "full", label = LEVELS.full }, { value = "view", label = LEVELS.view } },
     value = "full",
   })
   self.code_button = Button({ label = "Make Code", on_click = function() self:make_code() end })
+  self.copy_code_button = Button({ label = "Copy Code", size = "small", visible = false,
+    on_click = function()
+      local code = self:active_code()
+      if code and code.code then system.set_clipboard(code.code) end
+    end })
   self.device_list = List({
     row_height = row_h,
     max_rows = VISIBLE_ROWS,
@@ -137,15 +147,18 @@ function MachineDialog:new()
 
   self.done_button = Button({ label = "Done", kind = "primary", min_width = 88, on_click = function() self:close() end })
 
-  self.access_row = layout.Field { title = "Access", description = "", control = self.access_button }
+  self.access_row = layout.Field { title = "Address", description = "",
+    control = layout.Row { self.access_button, self.copy_address_button } }
   self.code_text = layout.Text { role = "title", wrap = false }
   self.code_timer = layout.Text { role = "meta", wrap = false }
-  self.code_row = layout.Row { self.code_text, layout.Spacer { grow = 1 }, self.code_timer }
+  self.code_row = layout.Row { visible = false, self.code_text, layout.Spacer { grow = 1 }, self.code_timer,
+    self.copy_code_button }
   self.pair_status = layout.Text {}
   self.this_page = layout.Column {
     layout.Group {
+      title = "Pair Another Device",
       self.access_row,
-      layout.Field { title = "Pairing", control = layout.Row { gap = 8, self.level_control, self.code_button } },
+      layout.Field { title = "Code", control = layout.Row { gap = 8, self.level_control, self.code_button } },
       self.code_row,
     },
     layout.Group {
@@ -212,9 +225,10 @@ function MachineDialog:update_buttons()
   self.level_control.enabled = ready
   self.revoke_button.enabled = ready and self.device_list:selected_row() ~= nil
   local state = self.access and self.access.state
-  self.access_button.visible = state == "off" or state == "on" or state == "error"
+  self.access_row.control.visible = state == "off" or state == "on" or state == "error"
   self.access_button.enabled = not self.changing_access
   self.access_button.label = state == "on" and "Stop Sharing" or "Share on Tailnet"
+  self.copy_address_button.visible = self:shared_address() ~= nil
   local machine = self.machine_list:selected_row()
   self.open_button.enabled = machine ~= nil
   self.forget_button.enabled = machine ~= nil
@@ -225,6 +239,13 @@ end
 
 ------------------------------------------------------------------------------------------------------------------
 -- This PC
+
+function MachineDialog:shared_address()
+  if self.owner and self.owner.state == "ready" and not self.changing_access then
+    local status = self.access
+    if status and status.state == "on" then return status.address end
+  end
+end
 
 function MachineDialog:check_access()
   local port = server_port()
@@ -442,7 +463,7 @@ function MachineDialog:draw_machine(record, x, y, w, h)
   draw_name(machine_label(record), dot_w, x, y, w, h)
 end
 
--- The text of the Access row and its color.
+-- The text of the Address row and its color.
 function MachineDialog:access_text()
   local owner = self.owner
   if not (owner and owner.state == "ready") then
@@ -452,7 +473,7 @@ function MachineDialog:access_text()
   if self.changing_access then return "Changing Tailscale", style.dialog_text_muted end
   local status = self.access
   if not status then return "Checking Tailscale", style.dialog_text_muted end
-  if status.state == "on" then return status.address or "Shared on the tailnet", style.dialog_text end
+  if status.state == "on" then return self:shared_address() or "Shared on the tailnet", style.dialog_text end
   if status.state == "off" then return "Only this PC", style.dialog_text end
   if status.state == "missing" then
     return "Only this PC. Install Tailscale to reach it from other devices.", style.dialog_text_muted
@@ -461,7 +482,7 @@ function MachineDialog:access_text()
   return status.message or "Tailscale failed", style.dialog_danger
 end
 
--- The texts that change without an event: the Access row, the pairing code and its time, and the pairing state.
+-- Update the address, the pairing code and its time, and the pairing state.
 function MachineDialog:on_update()
   local text, color = self:access_text()
   local access = self.access_row.description
@@ -469,6 +490,7 @@ function MachineDialog:on_update()
   access.color = color
   local code = self:active_code()
   self.code_row.visible = code ~= nil
+  self.copy_code_button.visible = code ~= nil and code.code ~= nil
   if code and code.error then
     self.code_text.role = "body"
     self.code_text:set_text(code.error)

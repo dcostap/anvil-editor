@@ -41,6 +41,8 @@ test.describe("Machines Dialog", function()
 
   test.before_each(function(context)
     context.run = access.run
+    context.set_clipboard = system.set_clipboard
+    system.set_clipboard = function(text) context.clipboard = text end
     context.project = USERDIR .. PATHSEP .. "machine-dialog-" .. math.floor(system.get_time() * 1000000)
     test.ok(common.mkdirp(context.project))
     context.server, context.discovery = machine_server.start(USERDIR, { context.project })
@@ -49,6 +51,7 @@ test.describe("Machines Dialog", function()
 
   test.after_each(function(context)
     access.run = context.run
+    system.set_clipboard = context.set_clipboard
     local open = dialog.current()
     if open then open:close() end
     context.owner:close()
@@ -61,13 +64,17 @@ test.describe("Machines Dialog", function()
   test.it("makes a pairing code that pairs a device, then revokes the device", function(context)
     access.run = function(_, on_done) on_done(nil, "missing") end
     local open = open_dialog("machine:manage")
+    test.ok(not test.not_nil(open.copy_code_button).visible)
     open.level_control:set_value("view")
     open.code_button:activate()
     wait_until(function() return open:active_code() ~= nil end, "No pairing code")
     local code = open:active_code().code
+    test.ok(open.copy_code_button.visible)
+    test.ok(open.copy_code_button:activate())
+    test.equal(context.clipboard, code)
 
     local paired
-    MachineClient.pair("127.0.0.1", context.discovery.port, code, "Phone", function(err) paired = err or true end)
+    MachineClient.pair("127.0.0.1", context.discovery.port, context.clipboard, "Phone", function(err) paired = err or true end)
     wait_until(function() return paired ~= nil end, "The pairing did not end")
     test.equal(paired, true)
     wait_until(function() return #open.device_list.rows == 1 end, "The paired device does not show")
@@ -75,6 +82,7 @@ test.describe("Machines Dialog", function()
     test.equal(open.device_list.rows[1].level, "view")
     -- The code works one time, so it no longer shows.
     test.is_nil(open:active_code())
+    test.ok(not open.copy_code_button.visible)
 
     open.device_list:select(1)
     open.revoke_button:activate()
@@ -105,14 +113,20 @@ test.describe("Machines Dialog", function()
     end
     local open = open_dialog("machine:manage")
     wait_until(function() return open:access_text() == "Only this PC" end, "The Dialog does not show the access")
+    test.ok(not test.not_nil(open.copy_address_button).visible)
 
     open.access_button:activate()
     -- Other devices use this address to pair.
-    wait_until(function() return open:access_text() == "desk.tail1234.ts.net:" .. port end, "Sharing did not turn on")
+    local address = "desk.tail1234.ts.net:" .. port
+    wait_until(function() return open:access_text() == address end, "Sharing did not turn on")
     test.ok(forwarded)
+    test.ok(open.copy_address_button.visible)
+    test.ok(open.copy_address_button:activate())
+    test.equal(context.clipboard, address)
     open.access_button:activate()
     wait_until(function() return open:access_text() == "Only this PC" end, "Sharing did not stop")
     test.ok(not forwarded)
+    test.ok(not open.copy_address_button.visible)
     for _, line in ipairs(commands) do test.is_nil(line:find("unexpected", 1, true), line) end
   end)
 

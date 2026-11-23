@@ -68,11 +68,11 @@ A `pair` without an active code gets `pairing_ended`, so the user knows to make 
 
 Tailscale Serve and other forwarders need a port that stays the same. The server still listens on loopback only. `anvil machine code full|view`, `anvil machine devices` and `anvil machine revoke <device>` manage the server that runs with the same user folder.
 
-`core.machine_cli` runs them without a window, like `anvil serve`, and exits. The Machines Dialog (`core.machine_dialog`, `machine:manage`) manages both sides. `machine:pair` opens it at its pairing fields. "This PC" shows the Access row, makes pairing codes with Full control or View, and lists the paired devices with Revoke.
+`core.machine_cli` runs them without a window, like `anvil serve`, and exits. The Machines Dialog (`core.machine_dialog`, `machine:manage`) manages both sides. `machine:pair` opens it at its pairing fields. On "This PC", "Pair Another Device" shows the Address and Code rows. Make Code creates a pairing code with Full control or View. Copy Code copies the active code without spaces. Revoke removes a paired device.
 
-It connects as the local owner through `server.json`. A code hides when a device pairs after it. The Access row runs the Tailscale CLI through `core.machine_access`, in a worker.
+The Dialog connects as the local owner through `server.json`. A code hides when it expires or a device uses it. The Address row runs the Tailscale CLI through `core.machine_access`, in a worker.
 
-Share on Tailnet runs `tailscale serve --bg --tcp <port> tcp://localhost:<port>`, and Stop Sharing turns that port off. The row shows the PC's tailnet address, which other devices use to pair. "Other Machines" lists the paired Machines with their connection state. Pair takes `host` or `host:port` (default 7690) and the code.
+Share on Tailnet runs `tailscale serve --bg --tcp <port> tcp://localhost:<port>`, and Stop Sharing turns that port off. Copy Address copies the displayed `host:port` while sharing is on. Sharing lets the other device reach this PC. The code grants access to Anvil. "Other Machines" lists the paired Machines with their connection state. Pair takes `host` or `host:port` (default 7690) and the code.
 
 Open Project runs `machine:open_project` for the Machine. Forget deletes the record (`MachineClient.forget`). With Full control, Forget also revokes this PC on the Machine.
 
