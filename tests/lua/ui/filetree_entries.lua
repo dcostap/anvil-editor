@@ -34,8 +34,38 @@ local function find_entry(name)
   end
 end
 
+local function row_point(name)
+  local entry = test.not_nil(find_entry(name))
+  filetree.position.x, filetree.position.y = 0, 0
+  filetree.size.x, filetree.size.y = 800, 600
+  filetree.scroll.x, filetree.scroll.y = 0, 0
+  filetree.scroll.to.x, filetree.scroll.to.y = 0, 0
+  local x, y = filetree:get_line_screen_position(entry.line, 1)
+  return x + filetree:get_font():get_width("r") / 2, y + filetree:get_line_height() / 2, entry
+end
+
+local function drag_row(context, name)
+  local x, y = row_point(name)
+  local before = #context.drags
+  test.ok(filetree:on_mouse_pressed("left", x, y, 1))
+  filetree:on_mouse_moved(x + 40 * SCALE, y + 40 * SCALE, 40 * SCALE, 40 * SCALE)
+  filetree:on_mouse_released("left", x + 40 * SCALE, y + 40 * SCALE)
+  return #context.drags > before and context.drags[#context.drags] or nil
+end
+
+local function record_drags(context)
+  context.drags = {}
+  context.drag_files = system.drag_files
+  system.drag_files = function(window, paths)
+    test.equal(window, core.window)
+    context.drags[#context.drags + 1] = paths
+    return true
+  end
+end
+
 test.describe("File Tree entry snapshots", function()
   test.after_each(function(context)
+    if context.drag_files then system.drag_files = context.drag_files end
     if context.original_open_file then core.open_file = context.original_open_file end
     if context.scroll_context_lines then
       config.scroll_context_lines = context.scroll_context_lines
@@ -188,6 +218,60 @@ test.describe("File Tree entry snapshots", function()
     if not ok then error(err, 0) end
 
     test.ok(common.path_equals(opened.path, root .. PATHSEP .. "root.txt"))
+  end)
+
+  test.it("drags the pressed row out of the editor after the pointer moves", function(context)
+    local root = setup_tree(context)
+    record_drags(context)
+    context.original_open_file = core.open_file
+    local opened
+    core.open_file = function(path) opened = path return {} end
+
+    local x, y = row_point("root.txt")
+    test.ok(filetree:on_mouse_pressed("left", x, y, 1))
+    filetree:on_mouse_moved(x + 1, y, 1, 0)
+    filetree:on_mouse_released("left", x + 1, y)
+    test.same(context.drags, {}, "a click with a small move does not drag")
+
+    local paths = test.not_nil(drag_row(context, "folder"))
+    test.equal(#paths, 1)
+    test.ok(common.path_equals(paths[1], root .. PATHSEP .. "folder"))
+    test.equal(filetree.buffer:get_selection(true), find_entry("folder").line)
+    test.is_nil(opened)
+  end)
+
+  test.it("drags all selected rows when the drag starts on one of them", function(context)
+    local root = setup_tree(context)
+    record_drags(context)
+    local file, folder = find_entry("root.txt"), find_entry("folder")
+    local first, last = math.min(file.line, folder.line), math.max(file.line, folder.line)
+    filetree.buffer:set_selection(first, 1, last, #filetree.buffer.lines[last])
+
+    local paths = test.not_nil(drag_row(context, "folder"))
+    test.equal(#paths, 2)
+    local line1, _, line2 = filetree.buffer:get_selection(true)
+    test.same({ line1, line2 }, { first, last }, "a drag keeps the selection")
+
+    local x, y = row_point("folder")
+    test.ok(filetree:on_mouse_pressed("left", x, y, 1))
+    filetree:on_mouse_released("left", x, y)
+    line1, _, line2 = filetree.buffer:get_selection(true)
+    test.same({ line1, line2 }, { folder.line, folder.line }, "a click on a selected row selects only it")
+
+    local dropped = drag_row(context, "root.txt")
+    test.equal(#dropped, 1, "a drag from another row takes only that row")
+    test.ok(common.path_equals(dropped[1], root .. PATHSEP .. "root.txt"))
+  end)
+
+  test.it("ignores a drop of its own drag", function(context)
+    local root = setup_tree(context)
+    record_drags(context)
+    local paths = test.not_nil(drag_row(context, "folder"))
+    local before = #project_paths.entries()
+
+    test.ok(filetree:on_drop({ files = paths, text = "" }))
+    test.equal(#project_paths.entries(), before)
+    test.ok(common.path_equals(paths[1], root .. PATHSEP .. "folder"))
   end)
 
   test.it("toggles a folder from a double click", function(context)

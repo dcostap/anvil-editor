@@ -1851,7 +1851,49 @@ function FileTreeView:entry_row_at_point(x, y)
   return line, entry
 end
 
+-- A drag takes the selected rows when it starts on one of them, or else only its own row. Rows that
+-- are not on disk yet and files on another Machine stay out.
+function FileTreeView:drag_line_slots(line)
+  local slots = merge_line_ranges(self:selected_covered_line_slots())
+  for _, slot in ipairs(slots) do
+    if line >= slot.first and line <= slot.last then return slots end
+  end
+  return { { first = line, last = line } }
+end
+
+function FileTreeView:drag_file_paths(line)
+  local paths, seen = {}, {}
+  for _, slot in ipairs(self:drag_line_slots(line)) do
+    for row = slot.first, slot.last do
+      local entry = self:entry_for_line(row)
+      local info = entry and not entry.parent_directory and not fs.on_machine(entry.abs)
+        and project_files.info(entry.abs)
+      local key = info and common.path_compare_key(entry.abs)
+      if key and (info.type == "file" or info.type == "dir") and not seen[key] then
+        seen[key] = true
+        paths[#paths + 1] = entry.abs
+      end
+    end
+  end
+  return paths
+end
+
+function FileTreeView:start_file_drag()
+  local paths = self:drag_file_paths(self.pressed_entry_line)
+  self.drag_press = nil
+  if #paths == 0 then return end
+  self.file_dragging = system.drag_files(core.window, paths)
+  self.dragged_paths = self.file_dragging and paths or nil
+  core.log_quiet("File Tree: file drag files=%d started=%s", #paths, tostring(self.file_dragging))
+end
+
 function FileTreeView:on_mouse_moved(x, y, dx, dy)
+  local press = self.drag_press
+  -- The pointer moves 6 px from a press on a row before the row drags out, as Fuzzy Searcher rows do.
+  if press and math.max(math.abs(x - press.x), math.abs(y - press.y)) >= 6 * SCALE then
+    self:start_file_drag()
+  end
+  if self.file_dragging then return true end
   local handled = FileTreeView.super.on_mouse_moved(self, x, y, dx, dy)
   local over_find = self.on_local_find_mouse_moved and self:on_local_find_mouse_moved(x, y)
   if over_find or self.mouse_selecting or self.hovering_gutter
@@ -1884,23 +1926,36 @@ end
 function FileTreeView:on_mouse_pressed(button, x, y, clicks)
   self.pressed_entry_line = nil
   self.pressed_entry_clicks = 0
+  self.drag_press, self.file_dragging, self.dragged_paths, self.pressed_keeps_selection = nil, nil, nil, nil
   if self.on_local_find_mouse_pressed and self:on_local_find_mouse_pressed(button, x, y, clicks) then return true end
   local modified = keymap.modkeys.ctrl or keymap.modkeys.cmd or keymap.modkeys.shift
   local line = button == "left" and not modified and self:entry_row_at_point(x, y) or nil
   if not line then return FileTreeView.super.on_mouse_pressed(self, button, x, y, clicks) end
 
+  -- A press on a row of a multi-row selection keeps the selection, so a drag can take all its rows.
+  -- The release selects only the row.
+  local slots = self:drag_line_slots(line)
+  if #slots > 1 or slots[1].last > slots[1].first then
+    self.pressed_keeps_selection = true
+  else
+    self:select_entry_row(line)
+  end
+  self.mouse_selecting = nil
+  self.pressed_entry_line = line
+  self.pressed_entry_clicks = clicks or 1
+  self.drag_press = { x = x, y = y }
+  core.blink_reset()
+  core.redraw = true
+  return true
+end
+
+function FileTreeView:select_entry_row(line)
   local text = self.buffer.lines[line] or ""
   self.buffer:clear_search_selections()
   self.buffer:set_selection(line, 1, line, #text)
   -- The clicked row is already visible. Do not add caret scroll context.
   self.last_line1, self.last_col1, self.last_line2, self.last_col2 =
     self.buffer:get_selection()
-  self.mouse_selecting = nil
-  self.pressed_entry_line = line
-  self.pressed_entry_clicks = clicks or 1
-  core.blink_reset()
-  core.redraw = true
-  return true
 end
 
 function FileTreeView:on_mouse_released(button, x, y)
@@ -1911,10 +1966,14 @@ function FileTreeView:on_mouse_released(button, x, y)
 
   local released_line = self:entry_row_at_point(x, y)
   local clicks = self.pressed_entry_clicks or 1
+  local dragged, keeps_selection = self.file_dragging, self.pressed_keeps_selection
   self.pressed_entry_line = nil
   self.pressed_entry_clicks = 0
+  self.drag_press, self.file_dragging, self.pressed_keeps_selection = nil, nil, nil
   FileTreeView.super.on_mouse_released(self, button, x, y)
   core.redraw = true
+  if dragged then return true end
+  if keeps_selection and released_line == pressed_line then self:select_entry_row(pressed_line) end
   if button == "left" and released_line == pressed_line and clicks >= 2 then
     return self:open_item()
   end
@@ -2998,6 +3057,18 @@ function FileTreeView:get_point_of_interest_at(line)
 end
 
 function FileTreeView:on_drop(drop)
+  -- A drag from this File Tree back onto it does nothing, as in Explorer.
+  local dragged = self.dragged_paths
+  self.dragged_paths = nil
+  if dragged and #drop.files > 0 then
+    local own = {}
+    for _, path in ipairs(dragged) do own[common.path_compare_key(path)] = true end
+    local all_own = true
+    for _, filename in ipairs(drop.files) do
+      all_own = all_own and own[common.path_compare_key(common.normalize_path(filename))] or false
+    end
+    if all_own then return true end
+  end
   if #drop.files == 0 then return false end
   local folders = {}
   for _, filename in ipairs(drop.files) do
