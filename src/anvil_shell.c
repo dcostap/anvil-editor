@@ -7345,15 +7345,9 @@ static bool make_scratch(void) {
   return made;
 }
 
-/* New Window shows its Sidebar and selects Scratch, as a click on the Scratch row does. */
+/* New Window opens without a Project and shows its Sidebar. */
 static void open_new_window(ShellWindow *requester) {
-  ShellWindow *window = create_window(NULL, true);
-  if (!window) {
-    window_notice(requester, "Cannot create a Window");
-    return;
-  }
-  if (!shell.scratch_path || !make_scratch() || !select_project_path(window, shell.scratch_path))
-    SDL_Log("Shell New Window could not select Scratch: Window=%u", window->id);
+  if (!create_window(NULL, true)) window_notice(requester, "Cannot create a Window");
 }
 
 /* The Window that the user activated last, or NULL. */

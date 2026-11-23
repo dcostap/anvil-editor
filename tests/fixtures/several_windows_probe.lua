@@ -298,6 +298,10 @@ if path:find("/driver$", 1) then
       end, 8, "New Window did not belong to the existing shell")
       local projects = project_starts("Project")
       assert(projects == 1, "New Window loaded another Project")
+      -- New Window does not take Scratch. Scratch would start soon after the Window opens.
+      coroutine.yield(1)
+      assert(not trace():find("Shell started Project pid=%d+ path=[^\n]-[/\\]user[/\\]scratch Project="),
+        "New Window loaded Scratch")
       local empty = owned[1] == original and owned[2] or owned[1]
       if action:match("^windows%-picker") then
         local id = assert(window_id(empty))
@@ -370,12 +374,6 @@ if path:find("/driver$", 1) then
     file:write("return ", common.serialize {ok = ok, action = action, error = ok and nil or tostring(err)})
     file:close()
     if subject and subject:running() then subject:terminate(); subject:wait(1) end
-    quit()
-  end)
-elseif path:match("/user/scratch$") then
-  -- New Window loads Scratch. It takes no part in these checks.
-  core.add_background_thread(function()
-    wait_for(function() return load("finish") end, 60)
     quit()
   end)
 else

@@ -197,26 +197,23 @@ if path:match("/driver$") then
      return (not hwnd or user32.IsWindowVisible(hwnd)==0) and selected(model(),id)==nil
     end,5,message)
    end
-   -- New Window loads Scratch with its Sidebar shown. The Window then holds Scratch, so Moves do not close it.
+   -- New Window opens without a Project. It does not take Scratch.
    local scratch_id = new_window("1")
-   local scratch = wait(function() return load("scratch-ready") end,20,"New Window did not load Scratch")
-   assert(scratch.window_id==scratch_id and scratch.content_x>0,"New Window did not show Scratch beside its Sidebar")
-   local sr = row(model(),scratch.pid)
-   assert(selected(model(),scratch_id)==sr.id,"New Window did not select Scratch")
+   coroutine.yield(1)
+   assert(selected(model(),scratch_id)==nil and not load("scratch-ready"),"New Window selected a Project")
    move(scratch_id,"empty")
-   wait(function() return row(model(),a.pid).window_id==scratch_id end,5,"Move to the Scratch Window failed")
+   wait(function() return row(model(),a.pid).window_id==scratch_id end,5,"Move to the empty Window failed")
    page=model(); assert(selected(page,b.window_id)==br.id and selected(page,scratch_id)==ar.id)
+   -- A selects Scratch there. The Window then holds Scratch, so Moves do not close it.
+   save("a-select-scratch",true)
+   local scratch = wait(function() return load("scratch-ready") end,20,"Selecting Scratch did not load it")
+   assert(scratch.window_id==scratch_id,"Scratch loaded in the wrong Window")
+   local sr = row(model(),scratch.pid)
+   assert(selected(model(),scratch_id)==sr.id,"Selecting Scratch did not select it")
    move(b.window_id,"occupied-again")
    wait(function() return row(model(),a.pid).window_id==b.window_id end,5)
    assert(selected(model(),scratch_id)==sr.id,"A Move out of the Scratch Window lost Scratch")
-   -- A second New Window takes Scratch. The first keeps its Window open without a Project.
    local minimized_id = new_window("2")
-   wait(function() return row(model(),scratch.pid).window_id==minimized_id end,5,"New Window did not take Scratch")
-   page=model()
-   assert(selected(page,minimized_id)==sr.id and row(page,scratch.pid).pid==scratch.pid,"Scratch did not move live")
-   local kept=windows(a.shell_pid)[scratch_id]
-   assert(kept and user32.IsWindowVisible(kept)~=0 and selected(page,scratch_id)~=sr.id,
-    "The Window that lost Scratch closed or still shows it")
    local minimized=windows(a.shell_pid)[minimized_id]
    user32.PostMessageW(minimized,0x112,0xf020,0); wait(function() return user32.IsIconic(minimized)~=0 end,3)
    move(minimized_id,"minimized")
@@ -227,10 +224,15 @@ if path:match("/driver$") then
    user32.PostMessageW(minimized,0x112,0xf120,0); wait(function() return user32.IsIconic(minimized)==0 end,3)
    save("inspect-2",{target=minimized_id}); local final=wait(function() return load("a-state-2") end)
    assert(final.window_id==minimized_id and final.session_id==before.session_id and final.attach_count==before.attach_count)
-   -- Selecting Scratch in B moves it there, as a click on its Sidebar row does.
+   assert(row(model(),scratch.pid).window_id==scratch_id,"New Window took Scratch")
+   -- Selecting Scratch in B moves it there, as a click on its Sidebar row does. Its old Window stays open.
    save("select-scratch",true)
    wait(function() return row(model(),scratch.pid).window_id==b.window_id end,5,"Selecting Scratch did not move it")
-   assert(selected(model(),b.window_id)==sr.id,"Selecting Scratch did not select it in B")
+   page=model()
+   assert(selected(page,b.window_id)==sr.id and row(page,scratch.pid).pid==scratch.pid,"Scratch did not move live")
+   local kept=windows(a.shell_pid)[scratch_id]
+   assert(kept and user32.IsWindowVisible(kept)~=0 and selected(page,scratch_id)~=sr.id,
+    "The Window that lost Scratch closed or still shows it")
    move(a.window_id,"return")
    wait(function() return row(model(),a.pid).window_id==a.window_id end,5)
    assert(selected(model(),a.window_id)==ar.id)
@@ -275,7 +277,11 @@ elseif path == root .. "/Project" then
   local inspected={}
   local blocking=false
   local focused={}
+  local scratch_selected=false
   while not load("finish") do
+   if load("a-select-scratch") and not scratch_selected then
+    assert(system.select_project(USERDIR.."/scratch")); scratch_selected=true
+   end
    for _,stage in ipairs{"0","1"} do
     if load("focus-sidebar-"..stage) and not focused[stage] then
      assert(system.focus_project_sidebar(true)); focused[stage]=true

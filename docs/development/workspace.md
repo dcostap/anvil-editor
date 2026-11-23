@@ -212,7 +212,7 @@ The list bound never removes that row. The status scan reads its Terminal Sessio
 
 It draws it as a section header named "Scratch", like the age groups, with no badge. Its Tabs show below the header. Its new Terminals start in `HOME`.
 
-Scratch follows the selection. Selecting it in a Window that does not hold it moves it there, through the normal Project Move. New Window selects Scratch the same way.
+Scratch follows the selection. Selecting it in a Window that does not hold it moves it there, through the normal Project Move. New Window opens without a Project and does not take Scratch.
 
 The Window that loses Scratch stays open, and shows its Sidebar if it has no other Project. An external launch into Scratch also moves it, to the Window that the user activated last. Lua finds it with `core.is_scratch_project`, which compares paths and does not resolve links.
 
