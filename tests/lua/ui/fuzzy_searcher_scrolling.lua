@@ -92,7 +92,7 @@ test.describe("Fuzzy Searcher scrolling and selection", function()
   test.it("keeps the selected file selected when File Search results refresh", function(context)
     local picker = open_files()
     test.ok(wait_until(function() return index_of_path(picker, context.files[5]) end))
-    picker.selected = index_of_path(picker, context.files[5])
+    test.ok(picker:select_result(index_of_path(picker, context.files[5])))
     -- A recent file goes to the top, so every other row moves down.
     core.visited_files = { { path = context.files[40], last_viewed = 100 } }
     picker.force_refresh, picker.dirty = true, true

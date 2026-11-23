@@ -4439,7 +4439,7 @@ function FSView:restore_position()
   for index, result in ipairs(self.results) do
     if not result.header and self:result_selection_key(result) == restore.key then
       self.restore = nil
-      self.selected = index
+      self.selected, self.selection_moved = index, true
       self.viewport_offset = common.clamp(index - restore.screen_row, 1,
         math.max(1, #self.results - metrics.result_rows + 1))
       self:ensure_selection_visible(true)
@@ -4458,6 +4458,7 @@ function FSView:select_result(index, extend, toggle)
   if not self.results[index] or self.results[index].header then return false end
   self:end_restore_for_move()
   local previous = self.selected
+  self.selection_moved = true
   if toggle and self:can_mark_result(index) then
     local previous_key = self:can_mark_result(previous) and self:result_selection_key(self.results[previous])
     local key = self:result_selection_key(self.results[index])
@@ -5569,12 +5570,13 @@ function FSView:start_file_search(query, line, reset_selection)
     or string.format("Searching %d files…", file_index_count())
   self:defer_loading_feedback(loading_status)
 
-  -- A new query starts at the top. A refresh of the same query keeps the selected row, wherever it moves.
+  -- A new query starts at the top. A refresh of the same query keeps the row that the user selected, wherever it moves.
   local keep_selection = not reset_selection
   local function apply_results(out, has_more, final)
     if not final and self:holds_saved_screen() then return end
     self:cancel_deferred_loading_feedback()
-    local selected = keep_selection and self:result_selection_key(self.results[self.selected])
+    local selected = keep_selection and self.selection_moved
+      and self:result_selection_key(self.results[self.selected])
     keep_selection = true
     out = fuzzy_searcher.with_item_rows(self, path_search.prepend_direct(out, direct), query)
     self.own_results = out
@@ -5584,7 +5586,7 @@ function FSView:start_file_search(query, line, reset_selection)
       self.selected = common.clamp(self.pending_select_index, 1, math.max(1, #out))
       self.pending_select_index = nil
     else
-      self.selected = common.clamp(self.selected, 1, math.max(1, #out))
+      self.selected = self.selection_moved and common.clamp(self.selected, 1, math.max(1, #out)) or 1
       for index, result in ipairs(selected and self.results or {}) do
         if self:result_selection_key(result) == selected then self.selected = index break end
       end
@@ -6679,7 +6681,8 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
       end
       if first_publish_done then commit_visible_prefix() end
 
-      local selected_key = fuzzy_searcher.grep_order.result_key(self.results and self.results[self.selected])
+      local selected_key = self.selection_moved
+        and fuzzy_searcher.grep_order.result_key(self.results and self.results[self.selected])
 
       local running, truncated, scanned, failed = job_stats()
       local tail = {}
@@ -6761,7 +6764,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         end
         self.selected = selected_index or common.clamp(self.selected, 1, count)
       else
-        self.selected = common.clamp(self.selected, 1, count)
+        self.selected = self.selection_moved and common.clamp(self.selected, 1, count) or 1
       end
       if self.results[self.selected] and self.results[self.selected].header then self:select_delta(1) end
       self.viewport_offset = common.clamp(self.viewport_offset, 1, count)
@@ -7613,7 +7616,7 @@ function FSView:start_modifier_search(base, line, col, grep, reset_selection)
       self:schedule_update(true)
       return
     end
-    local selected = self:selected_result()
+    local selected = self.selection_moved and self:selected_result()
     for _, result in ipairs(results) do
       if result.kind == "path" then
         result.size_label = not result.is_folder and format_size(result.file_size) or ""
@@ -7621,6 +7624,7 @@ function FSView:start_modifier_search(base, line, col, grep, reset_selection)
       end
     end
     self.results, self.status, self.has_more = results, status, has_more
+    if not selected then self.selected = 1 end
     if selected then
       for i, result in ipairs(results) do
         if result.file == selected.file and result.line == selected.line then self.selected = i; break end
@@ -7866,6 +7870,8 @@ function FSView:refresh(text)
     if self.open_revision_job then self.open_revision_job:cancel(); self.open_revision_job = nil end
     self.revision_open_token = nil
     self.current_query_key = query_key
+    -- Until the user moves the selection, the first row stays selected while rows arrive above it.
+    self.selection_moved = nil
     self:reset_pagination()
     -- A Saved Screen belongs to its query.
     if self.restore and self.restore.text ~= text then self.restore = nil end
@@ -9324,20 +9330,16 @@ local function picker_reveal_selected_in_explorer()
   if view then view:reveal_selected_in_explorer() end
 end
 
-local function picker_next()
-  local view = current_picker()
-  if view then view:select_delta(1); view:schedule_update(true) end
-end
-
-local function picker_previous()
-  local view = current_picker()
-  if view then view:select_delta(-1); view:schedule_update(true) end
-end
-
 function fuzzy_searcher.select_in_picker(method, ...)
   local view = current_picker()
-  if view then view[method](view, ...); view:schedule_update(true) end
+  if not view then return end
+  view.selection_moved = true
+  view[method](view, ...)
+  view:schedule_update(true)
 end
+
+local function picker_next() fuzzy_searcher.select_in_picker("select_delta", 1) end
+local function picker_previous() fuzzy_searcher.select_in_picker("select_delta", -1) end
 
 local function selected_text_for_search()
   local view = core.active_view
@@ -9610,14 +9612,8 @@ end, {
   ["fuzzy:page_previous"] = function() fuzzy_searcher.select_in_picker("select_page", -1) end,
   ["fuzzy:first"] = function() fuzzy_searcher.select_in_picker("select_delta", -math.huge) end,
   ["fuzzy:last"] = function() fuzzy_searcher.select_in_picker("select_last") end,
-  ["fuzzy:select_next"] = function()
-    local view = current_picker()
-    if view then view:select_delta(1, true); view:schedule_update(true) end
-  end,
-  ["fuzzy:select_previous"] = function()
-    local view = current_picker()
-    if view then view:select_delta(-1, true); view:schedule_update(true) end
-  end,
+  ["fuzzy:select_next"] = function() fuzzy_searcher.select_in_picker("select_delta", 1, true) end,
+  ["fuzzy:select_previous"] = function() fuzzy_searcher.select_in_picker("select_delta", -1, true) end,
   ["fuzzy:toggle_result_marks"] = function()
     local view = current_picker()
     if view then return view:toggle_result_marks() end

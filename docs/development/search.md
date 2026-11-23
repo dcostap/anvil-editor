@@ -36,7 +36,7 @@ These groups go after this Project's rows and before Other Project Results. Run 
 
 ## Saved Screens and path creation
 
-File Search shows all its rows at once. Paged lists load the next page one screen before their end. A refresh keeps the selected row.
+File Search shows all its rows at once. Paged lists load the next page one screen before their end. Until the user moves the selection, the first row stays selected while rows arrive or a refresh reorders them. After a move, a refresh keeps the selected row, wherever it moves.
 
 Each non-empty query keeps a Saved Screen: its rows down to the bottom of the screen and its selected row. The picker saves it at close and when the prompt history moves away from the query, but not while a search runs, because its rows can belong to the previous query. It keeps the newest 50 in memory.
 

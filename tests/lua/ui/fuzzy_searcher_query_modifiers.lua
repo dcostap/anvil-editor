@@ -131,6 +131,43 @@ test.describe("Fuzzy Searcher query modifiers", function()
     test.same({ picker.results[1].file, picker.results[2].file }, { "z-newer.txt", "a-older.txt" })
   end)
 
+  test.it("keeps the first row selected until the user moves the selection", function(context)
+    local modified = {}
+    for name, time in pairs { ["a.txt"] = 1000, ["b.txt"] = 2000, ["c.txt"] = 1500 } do
+      modified[common.path_compare_key(write_file(context.root, name, name))] = time
+    end
+    local function set_modified(name, time)
+      modified[common.path_compare_key(context.root .. PATHSEP .. name)] = time
+    end
+    system.get_file_info = function(path)
+      local info = context.file_info(path)
+      local time = modified[common.path_compare_key(path)]
+      if info and time then info.modified = time end
+      return info
+    end
+    local function files(picker)
+      local names = {}
+      for i, result in ipairs(picker.results) do names[i] = result.file end
+      return table.concat(names, " ")
+    end
+    fuzzy.open(".txt sort:date")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return files(picker) == "b.txt c.txt a.txt" end), files(picker))
+
+    -- A newer row arrives above the selected row. The first row stays selected.
+    set_modified("a.txt", 3000)
+    test.ok(wait_until(function() return files(picker) == "a.txt b.txt c.txt" end), files(picker))
+    test.equal(picker:selected_result().file, "a.txt")
+    test.equal(picker.viewport_offset, 1)
+
+    -- After the user moves the selection, the selected row stays selected wherever it moves.
+    test.ok(command.perform("fuzzy:next"))
+    test.equal(picker:selected_result().file, "b.txt")
+    set_modified("c.txt", 4000)
+    test.ok(wait_until(function() return files(picker) == "c.txt a.txt b.txt" end), files(picker))
+    test.equal(picker:selected_result().file, "b.txt")
+  end)
+
   test.it("refreshes cached sizes after a file changes", function(context)
     write_file(context.root, "a-growing.txt", string.rep("a", 1024))
     write_file(context.root, "b-fixed.txt", string.rep("b", 2048))
