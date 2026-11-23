@@ -54,6 +54,8 @@ A marked row that the scroll hides shows in an Attention Pill at that edge of it
 
 The list scrolls by itself only for a new selected row or a keyboard cursor move. Model updates keep the user's scroll. The hover highlight stays under the pointer while the list scrolls.
 
+A wheel notch scrolls three Project rows. The drawn list follows on a critically damped spring and keeps its speed between notches, so fast notches blend into one motion. A notch against the remaining motion starts from the drawn position, and the list slows down before it turns.
+
 Run `ui/sidebar_view.lua` after changes. Check the `project-sidebar-pills` render scenario after visual changes.
 
 A right-click on a Sidebar row opens its Context Menu. The Context Menu key opens the cursor row's menu. The Sidebar draws it with `core.context_menu`, the same menu as in the editor.

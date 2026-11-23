@@ -173,7 +173,7 @@ function Scene:draw()
     -- The list scrolls to the first Project's Unread Result. The collapsed docs-site's question stays below it.
     self.pills = false
     self.sidebar:set_size(width, height)
-    self.sidebar:on_mouse_wheel(-9, height, 100 * SCALE)
+    self.sidebar:on_mouse_wheel(-3, height, 100 * SCALE)
     for _ = 1, 90 do self.sidebar:step(1 / 30) end
   end
   if self.hover_arrow then

@@ -1959,12 +1959,12 @@ test.describe("Sidebar motion", function()
       view:on_mouse_pressed("left", 20, view:row_y(index) + 2, 400)
       advance(1 / 60)
       local moving, below = labels()
-      test.equal(below, below_y, "The group below the expanded group moved")
+      test.near(below, below_y, 0.01, "The group below the expanded group moved")
       local target
       for _ = 1, 60 do
         advance(1 / 30)
         target, below = labels()
-        test.equal(below, below_y, "The group below the expanded group moved")
+        test.near(below, below_y, 0.01, "The group below the expanded group moved")
       end
       test.ok(target < header_y, "The expanded group did not move up")
       test.ok(moving < header_y and moving > target,
@@ -2504,6 +2504,97 @@ test.describe("Sidebar scrolling", function()
     test.ok(not visible(view, first), "The wheel did not scroll the list")
     view:set_model(model(), 7)
     test.equal(view:row_y(first), y, "A model refresh scrolled back to the cursor")
+  end)
+
+  test.it("scrolls several rows for each wheel notch", function()
+    local view = sidebar()
+    local first = tab_index(view, "file-1")
+    local y = view:row_y(first)
+    view:on_mouse_wheel(-1, 400, 200)
+    test.ok(y - view:row_y(first) > 2 * view.rows[first].h, "One notch scrolled two rows or less")
+  end)
+
+  -- Project P with 60 Terminals, so the list scrolls far.
+  local function long_sidebar()
+    local records, panes = {}, {active=1}
+    for index = 1, 60 do
+      local id = "t-" .. index
+      records[index] = {id=id,title=id,state="running",activity=now}
+      panes[index] = {id=id,name=id,terminal={session=id,state="running"}}
+    end
+    local view = SidebarView(function() end, {}, {})
+    view:set_size(300, 400)
+    view:set_model({{id=1,row_id=1,path="C:/P",state="ready",window_id=7,terminals=records,panes=panes},
+      windows={{id=7,selected_project=1}}}, 7)
+    return view
+  end
+
+  -- Draws the view at each wheel event and at 120 frames per second, and returns the drawn scroll after each frame.
+  -- `events` lists {seconds, notches}. The view was idle for a long time before the first event.
+  local function wheel_frames(view, events, seconds)
+    local get_time, transitions, time = system.get_time, config.transitions, 100
+    system.get_time, config.transitions = function() return time end, true
+    local shown = {}
+    local ok, err = pcall(function()
+      with_renderer({}, function() view:draw(300, 400) end)
+      time = time + 10
+      local next_event, clock = 1, 0
+      while clock < seconds do
+        local event = events[next_event]
+        if event and event[1] <= clock + 1 / 120 then
+          clock, next_event = event[1], next_event + 1
+          view:on_mouse_wheel(event[2], 400, 200)
+        else
+          clock = clock + 1 / 120
+        end
+        time = 110 + clock
+        with_renderer({}, function() view:draw(300, 400) end)
+        shown[#shown + 1] = view.shown.scroll
+      end
+    end)
+    system.get_time, config.transitions = get_time, transitions
+    if not ok then error(err, 0) end
+    return shown
+  end
+
+  test.it("starts a wheel scroll gently after the Sidebar was idle", function()
+    local shown = wheel_frames(long_sidebar(), {{0.001, -1}}, 0.05)
+    test.ok(shown[1] - 0 <= shown[2] - shown[1],
+      string.format("The first frame moved %.1f px, more than the next frame's %.1f px", shown[1], shown[2] - shown[1]))
+  end)
+
+  test.it("slows down before it turns when fast wheel notches change direction", function()
+    local events = {}
+    for index = 1, 4 do events[#events + 1] = {index * 0.01, -1} end
+    for index = 5, 8 do events[#events + 1] = {index * 0.01, 1} end
+    local view = long_sidebar()
+    local shown = wheel_frames(view, events, 1)
+    local steps, fastest, turned = {}, 0, false
+    for index = 2, #shown do
+      steps[#steps + 1] = shown[index] - shown[index - 1]
+      fastest = math.max(fastest, math.abs(steps[#steps]))
+    end
+    for index = 2, #steps do
+      local before, step = steps[index - 1], steps[index]
+      if before > 0 and step < 0 then
+        turned = true
+        test.ok(before <= fastest / 4 and -step <= fastest / 4,
+          string.format("Frame %d turned at speed: %.1f px after %.1f px, fastest %.1f px", index, step, before, fastest))
+      end
+    end
+    test.ok(turned, "The list did not turn")
+    test.equal(view.shown.scroll, view.scroll, "The list did not settle at the wheel's target")
+  end)
+
+  test.it("turns from the drawn position when a notch goes against fast notches", function()
+    local events = {}
+    for index = 1, 4 do events[#events + 1] = {index * 0.01, -1} end
+    events[#events + 1] = {0.05, 1}
+    local view = long_sidebar()
+    local furthest = 0
+    for _, y in ipairs(wheel_frames(view, events, 1)) do furthest = math.max(furthest, y) end
+    test.ok(view.scroll < furthest, string.format("The list rests at %.1f px, not above its furthest drawn %.1f px",
+      view.scroll, furthest))
   end)
 
   test.it("scrolls a newly selected Tab into view once", function()

@@ -53,7 +53,14 @@ local PEEK_DELAY = 0.09
 -- A Project id that names no loaded Project: the shell shows a row without content.
 local PEEK_NO_CONTENT = 0xffffffff
 -- Animated values approach their targets at these rates per second. A change is 95% done after 3 / rate seconds.
-local MOVE_RATE, FADE_RATE, SCROLL_RATE = 20, 14, 22
+local MOVE_RATE, FADE_RATE = 20, 14
+-- The drawn scroll follows its target on a critically damped spring of this stiffness. It keeps its speed when a new
+-- wheel notch arrives, so fast notches blend into one motion and a reversal slows down before it turns.
+local SCROLL_SPRING = 30
+-- Each scrolling area's field and the field of its drawn speed.
+local SCROLL_SPEEDS = {scroll = "scroll_speed", bottom_scroll = "bottom_scroll_speed"}
+-- A wheel notch scrolls this many Project rows.
+local WHEEL_ROWS = 3
 -- Highlights glide and fade at these base rates, times their speed. The hover highlight follows the pointer fastest.
 local MARK_MOVE_RATE, MARK_FADE_RATE = 28, 21
 local SELECTION_SPEED, HOVER_SPEED = 1.75, 3
@@ -1233,8 +1240,13 @@ function SidebarView:drag_scrollbar(y)
   self[area.field] = range > 0 and (y - drag.offset - area.top) / range * (area.content - area.height) or 0
   self:clamp_scroll()
   -- The thumb follows the pointer without easing.
+  self:show_scroll(area.field)
+end
+
+-- Shows an area's scroll at once, without easing.
+function SidebarView:show_scroll(field)
   self.shown = self.shown or {}
-  self.shown[area.field] = self[area.field]
+  self.shown[field], self.shown[SCROLL_SPEEDS[field]] = self[field], 0
 end
 
 -- The search field's text area: its left edge, top, width and height.
@@ -1902,12 +1914,13 @@ end
 -- Scrolls the area under the pointer.
 function SidebarView:on_mouse_wheel(amount, height, y)
   if height then self.view_h = height end
-  local step = self:metrics().project
-  if y and y >= self:bottom_area() then
-    self.bottom_scroll = self.bottom_scroll - amount * step
-  else
-    self.scroll = self.scroll - amount * step
-  end
+  local field = y and y >= self:bottom_area() and "bottom_scroll" or "scroll"
+  local delta = -amount * WHEEL_ROWS * self:metrics().project
+  -- A notch against the remaining motion starts from the drawn position, so the list turns now instead of first
+  -- finishing the earlier notches.
+  local shown = self.shown and self.shown[field]
+  if shown and (self[field] - shown) * delta < 0 then self[field] = shown end
+  self[field] = self[field] + delta
   self:clamp_scroll()
   if self.drag then self:update_drag() end
   if self.reorder then self:update_reorder() end
@@ -1971,7 +1984,7 @@ function SidebarView:step(dt)
       self:clamp_scroll()
     end
     if field and self[field] ~= before then
-      shown[field] = self[field]
+      self:show_scroll(field)
       self:update_drag()
       moving = true
     end
@@ -1986,7 +1999,7 @@ function SidebarView:step(dt)
       self:clamp_scroll()
     end
     if before and self.scroll ~= before then
-      shown.scroll = self.scroll
+      self:show_scroll("scroll")
       self:update_reorder()
       moving = true
     end
@@ -2020,8 +2033,25 @@ function SidebarView:step(dt)
       end
     end
   end
-  shown.scroll = ease(shown.scroll, self.scroll, SCROLL_RATE)
-  shown.bottom_scroll = ease(shown.bottom_scroll, self.bottom_scroll, SCROLL_RATE)
+  for field, speed_field in pairs(SCROLL_SPEEDS) do
+    local value, speed, target = shown[field], shown[speed_field] or 0, self[field]
+    if animate and value ~= nil then
+      -- The exact solution of the spring for this step, so a long step stays stable.
+      local offset, decay = value - target, math.exp(-SCROLL_SPRING * dt)
+      local push = speed + SCROLL_SPRING * offset
+      value, speed = target + (offset + push * dt) * decay, (speed - SCROLL_SPRING * push * dt) * decay
+      -- The list stops at its target instead of passing it, so it never shows space beyond an end.
+      local crossed = (value - target) * offset < 0
+      if not crossed and (math.abs(value - target) > 0.25 or math.abs(speed) > 10) then
+        moving = true
+      else
+        value, speed = target, 0
+      end
+    else
+      value, speed = target, 0
+    end
+    shown[field], shown[speed_field] = value, speed
+  end
   shown.main_h = ease(shown.main_h, self.main_h, MOVE_RATE * ROW_SPEED)
   -- The groups' area grows and shrinks with its rows, so the rows below an expanding group stay in place.
   shown.bottom_h = ease(shown.bottom_h, self.bottom_h, MOVE_RATE * ROW_SPEED)
@@ -2898,6 +2928,8 @@ function SidebarView:draw(width, height)
   local now = os.time()
   local clock = system.get_time()
   local dt = self.last_clock and math.max(0, math.min(MAX_STEP, clock - self.last_clock)) or 0
+  -- After an idle time, a new animation starts with one frame, not with the longest step.
+  if not self.animating then dt = math.min(dt, FRAME) end
   self.clock, self.last_clock, self.spinning, self.ticking, self.shimmer_delay = clock, clock, false, false, nil
   self.animating = self:step(dt)
   self.drawn = true
