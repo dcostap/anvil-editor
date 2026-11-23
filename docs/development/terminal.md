@@ -196,6 +196,8 @@ Each process probe checks for a changed conversation in the same Pi process. A f
 
 `RESUME_AGENT` marks automatic resume input. The host keeps the copy until the new Pi reports its identity, a new command starts, or the resume ends normally. Another restart during startup can then resume the same conversation.
 
+A revived shell that ends before a command of its own also keeps the copy. For example, a PowerShell Store update ends running `pwsh` processes when new shells start. The next revival, such as a Sidebar click, resumes Pi.
+
 A Project permits one automatic host revival per Windows shutdown attempt, not an unlimited crash loop. A shell that ends during sign-out sends no ordinary EXITED record. Its Pane and Snooze stay.
 
 After cancellation, its host ends without EXITED so the same View can revive. An editor also treats EXITED from an older host as an interruption while Windows ends the session. It starts no revival or prepared shell until cancellation.

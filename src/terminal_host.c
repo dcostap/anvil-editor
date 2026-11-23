@@ -1481,9 +1481,13 @@ int anvil_terminal_host_main(int argc, char **argv) {
       break;
     }
     if (!ending && !exited_at && shell_exited) {
-      /* An intentional shell exit must not leave an older Pi waiting for revival. */
+      /* An intentional shell exit must not leave an older Pi waiting for revival. A revived shell that ends
+         before any command of its own, such as one that a PowerShell Store update ends, keeps the copy for
+         the next revival. Only the resume command itself may have started. */
       EnterCriticalSection(&host.lock);
-      host.recovery.held = host.recovery.starting = host.recovery.resuming = false;
+      bool keep = host.recovery.held && host.recovery.starting && host.command_generation <=
+        (host.recovery.resuming ? host.recovery.resume_generation : host.recovery.command_generation);
+      if (!keep) host.recovery.held = host.recovery.starting = host.recovery.resuming = false;
       host.interrupted_pid = 0;
       host.interrupted_command[0] = host.interrupted_input[0] = 0;
       LeaveCriticalSection(&host.lock);
@@ -1491,6 +1495,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
       exited_at = now; GetExitCodeProcess(host.pty.process, &exit_code); drain_started = now;
       host.console_close = CreateThread(NULL, 0, close_console, &host, 0, NULL);
       host_log(&host, "shell exit code=%lu; drain", (unsigned long)exit_code);
+      if (keep) host_log(&host, "revived shell ended before its first command; keep the recovery copy");
     }
     if (!ending && !exited_at && host.reader_done) {
       host_log(&host, "failure: ConPTY output ended while shell was running"); break;

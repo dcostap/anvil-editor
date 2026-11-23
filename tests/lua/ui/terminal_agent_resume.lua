@@ -356,6 +356,69 @@ test.describe("Terminal agent resume", function()
     test.ok(ok, err)
   end)
 
+  test.it("keeps the Pi session when its revived shell ends before the resume runs", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local exe = find_runtime("node")
+    test.skip_if(not exe, "node is not installed")
+    terminal._set_native_for_tests(nil)
+    local dir = USERDIR .. "/pi shell lost"
+    system.mkdir(dir)
+    -- Removing the exited View focuses an editor, which changes the working directory to its Project.
+    local cwd = system.getcwd()
+    local cli = cwd .. "/tests/fixtures/fake-pi/dist/cli.js"
+    -- Model Windows ending the new shell, as a PowerShell Store update does, while the flag exists.
+    local flag = dir .. "/end shell"
+    local shell = string.format('cmd.exe /D /Q /K if exist "%s" exit 7', (flag:gsub("/", "\\")))
+    local view = ready(terminal.open { cwd = cwd, shell = shell })
+    local state = view:get_state()
+    local ffi = require "ffi"
+    pcall(ffi.cdef, [[
+      void * __stdcall OpenProcess(unsigned long access, int inherit, unsigned long pid);
+      int __stdcall TerminateProcess(void *process, unsigned int code);
+      unsigned long __stdcall WaitForSingleObject(void *handle, unsigned long milliseconds);
+      int __stdcall CloseHandle(void *handle);
+    ]])
+    local kernel = ffi.load("kernel32")
+    local handle = kernel.OpenProcess(0x100001, 0, view.session:stats().host_pid)
+    local lost, restored
+    local ok, err = pcall(function()
+      test.ok(view.session:write(string.format('"%s" "%s" --session-dir "%s"\r', exe, cli, dir)))
+      test.ok(wait_for(view, function()
+        local saved = record(state.session_id)
+        return screen_text(view):find("FAKE_PI_READY", 1, true) and (saved.recovery_agent or "") ~= ""
+      end, 30), "Pi did not start: " .. screen_text(view))
+      checkpoint_on_detach(view, state)
+      kernel.TerminateProcess(handle, 99); kernel.WaitForSingleObject(handle, 5000)
+      local file = assert(io.open(flag, "wb")); file:close()
+      lost = panes.place(function() return terminal.from_state(state) end, { placement = "current" })
+      -- An exited View leaves its Pane and closes.
+      test.ok(wait_for(lost, function() return lost.state == "exited" or lost.state == "closed" end, 15),
+        "the revived shell did not end: " .. tostring(lost.state))
+      test.equal(#launches(dir), 1, "Pi ran in the shell that ended")
+      local saved = record(state.session_id)
+      test.equal(saved.status, "exited")
+      test.ok((saved.recovery_agent or ""):find(session_file_name(dir), 1, true),
+        "the ended shell erased the Pi session from its record")
+      os.remove(flag)
+      restored = panes.place(function() return terminal.from_state(state) end, { placement = "current" })
+      test.ok(wait_for(restored, function() return #launches(dir) == 2 end, 15),
+        "the next revival did not resume Pi: " .. screen_text(restored))
+      local resumed = without_extension(launches(dir)[2])
+      test.equal(resumed[1], "--session")
+      test.equal(resumed[2]:match("[^/\\]+$"), session_file_name(dir))
+    end)
+    os.remove(flag)
+    if restored then restored:on_close() end
+    if lost then lost:on_close() end
+    view:on_close()
+    if kernel.WaitForSingleObject(handle, 0) == 258 then kernel.TerminateProcess(handle, 99) end
+    kernel.CloseHandle(handle)
+    require("terminal_native").finish_close_commands()
+    system.chdir(cwd)
+    test.ok(test.remove_tree(dir))
+    test.ok(ok, err)
+  end)
+
   test.it("reports Pi's step in an Anvil that a Terminal Session started", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local exe = find_runtime("node")
