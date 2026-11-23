@@ -706,7 +706,7 @@ test.describe("Fuzzy Searcher Path Search", function()
     test.equal(result.path_search, true)
   end)
 
-  -- The shell's Project Sidebar model, with this test's Project loaded in Window 1.
+  -- The shell's Project Sidebar model, with this test's Project loaded in Window 1. The Window IDs are not the numbers.
   local function sidebar_model(context)
     local now, day = os.time(), 24 * 60 * 60
     local function project(id, path, state, window_id, age, fields)
@@ -717,18 +717,18 @@ test.describe("Fuzzy Searcher Path Search", function()
     end
     return {
       project(1, "C:/Work/old-tool", "dormant", 0, 30 * day),
-      project(2, "C:/Work/api-server", "starting", 1, 60),
+      project(2, "C:/Work/api-server", "starting", 4, 60),
       project(3, join_path(USERDIR, "scratch"), "dormant", 0, 5 * day, {scratch = true}),
       project(4, "C:/Work/notes", "dormant", 0, 2 * day, {terminals = {
         {id = "build", title = "npm run dev", state = "running", busy = 1, activity = now - 60},
         {id = "shell", title = "pwsh", state = "running", busy = 0, activity = now - 60},
       }}),
-      project(5, "C:/Work/website", "ready", 2, 3 * day),
-      project(6, context.project_root, "ready", 1, 0, {panes = {active = 1,
+      project(5, "C:/Work/website", "ready", 9, 3 * day),
+      project(6, context.project_root, "ready", 4, 0, {panes = {active = 1,
         {id = "a", name = "main.lua", icon = {kind = "file", path = "main.lua"}},
         {id = "b", name = "Build server", terminal = {session = "server", state = "running", busy = 0}},
       }}),
-      windows = {{id = 1, selected_project = 6}, {id = 2, selected_project = 5}},
+      windows = {{id = 9, selected_project = 5}, {id = 4, selected_project = 6}},
     }
   end
 

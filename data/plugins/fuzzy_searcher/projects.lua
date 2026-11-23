@@ -71,7 +71,7 @@ function projects.details(project, now)
     local count = #project.panes
     hint = count .. (count == 1 and " tab" or " tabs")
   end
-  return hint, look.note(project, projects.own_window(), now)
+  return hint, look.note(project, projects.own_window(), (core.project_sidebar or {}).windows, now)
 end
 
 function projects.bold(font)

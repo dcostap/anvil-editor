@@ -347,9 +347,10 @@ function SidebarView:context_menu(row)
     items[#items + 1] = "-"
   end
   if loaded then
-    for _, window in ipairs((self.projects or {}).windows or {}) do
+    local windows = (self.projects or {}).windows or {}
+    for _, window in ipairs(windows) do
       if window.id ~= owner then
-        items[#items + 1] = {label = "Move to Window " .. window.id, command = "sidebar:move_project",
+        items[#items + 1] = {label = "Move to " .. look.window_name(windows, window.id), command = "sidebar:move_project",
           args = {self, project, window.id}}
       end
     end
@@ -2574,7 +2575,7 @@ function SidebarView:draw_project(row, y, width, now)
     local tx, tw = self:tab_bounds(row, width)
     right = self:draw_pending(row.pending, nil, cy, tx + tw - ATTENTION_DOT * SCALE)
   end
-  local note = look.note(project, self.window_id, now)
+  local note = look.note(project, self.window_id, (self.projects or {}).windows, now)
   local hints
   if dormant then
     hints = {look.terminal_hint(project)}

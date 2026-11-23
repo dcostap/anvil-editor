@@ -276,7 +276,7 @@ A search still lists its Tabs. Other Windows' Projects use 50% opacity and sit a
 
 The Scratch Project is not one of them: it stays first in the main list at full opacity. Selecting a Project expands it and saves that state. It stays expanded after it loses the selection.
 
-The first selection in a restored Window keeps its saved fold. Window IDs persist across restart. The saved allocation sequence prevents reuse of a closed Window's folding state.
+The first selection in a restored Window keeps its saved fold. Window IDs persist across restart. The saved allocation sequence prevents reuse of a closed Window's folding state. Labels such as "Move to Window 2" and a Project row's "Window 2" do not show the ID. They number the open Windows from 1 in ID order.
 
 Run `anvil:shell-state`, `ui/sidebar_view.lua`, and the `windows-sidebar-layout`, `windows-sidebar-folding`, and `toggle-sidebar` shell probes after changes.
 

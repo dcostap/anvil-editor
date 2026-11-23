@@ -33,12 +33,22 @@ function look.status(project)
   return nil
 end
 
+-- A Window's name, such as "Window 2". Window IDs persist and only grow, so the name numbers the open `windows`
+-- from 1 in the order of their IDs.
+function look.window_name(windows, id)
+  local number = 1
+  for _, window in ipairs(windows or {}) do
+    if window.id < id then number = number + 1 end
+  end
+  return "Window " .. number
+end
+
 -- The note at the right of a Project row: its state, else the other Window that holds it, else a Dormant Project's
--- age. `window_id` is the viewer's Window.
-function look.note(project, window_id, now)
+-- age. `window_id` is the viewer's Window; `windows` are the open Windows.
+function look.note(project, window_id, windows, now)
   local _, note = look.status(project)
   if not note and project.window_id and project.window_id ~= 0 and window_id and project.window_id ~= window_id then
-    note = "Window " .. project.window_id
+    note = look.window_name(windows, project.window_id)
   end
   if not note and project.state == "dormant" then note = tab.age_text(look.activity(project), now) end
   return note
