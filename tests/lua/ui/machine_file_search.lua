@@ -82,6 +82,25 @@ test.describe("File Search on a Machine", function()
     test.ok(test.remove_tree(context.root))
   end)
 
+  test.it("opens a Machine document and finds its file reference without a local path lookup", function(context)
+    local path = context.project .. PATHSEP .. "diagnostic.md"
+    local text = string.rep("a", 94) .. "\n"
+    text = "notes.md:1\n" .. string.rep(text, 104) .. string.rep("b", 77) .. "\n"
+    write_file(machine_copy(context, path), text)
+    local view = assert(core.open_file(path, { placement = "new" }))
+    test.ok(wait_until(function() return table.concat(view.buffer.lines) == text end), "Machine file did not load")
+    view:update()
+    test.ok(wait_until(function()
+      for _, item in ipairs(core.log_items) do
+        if item.text:find("core.workers.file_locations refused a Project path", 1, true)
+            and item.text:find(context.project, 1, true) then test.fail(item.text) end
+      end
+      for _, point in ipairs(require("core.editor_file_pois").points_of_interest(nil, view)) do
+        if common.path_equals(point.path, context.project .. PATHSEP .. "notes.md") then return true end
+      end
+    end), "The editor did not find the Machine file reference")
+  end)
+
   test.it("finds the Machine's files and opens the chosen file", function(context)
     fuzzy_searcher.open("md")
     local picker = test.not_nil(core.fuzzy_searcher_active_view)

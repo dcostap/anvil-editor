@@ -131,6 +131,61 @@ test.describe("Terminal on a Machine", function()
     test.equal(second.state, "running")
   end)
 
+  test.it("traces the hostname shell through selection of an unattached session", function(context)
+    local other = open(context, {})
+    wait_text(other, "ANVIL_ECHO_READY:project")
+    local id = other.session_id
+    other:detach_session()
+    config.plugins.terminal.shell = "cmd.exe /d /q"
+    local shell = assert(terminal.open { placement = "new", focus = true })
+    context.views[#context.views + 1] = shell
+    wait_until(shell, function() return shell.state == "running" end, "cmd did not attach")
+    test.ok(shell:write_input("hostname\r"))
+    wait_text(shell, assert(os.getenv("COMPUTERNAME")))
+    local hostname = shell.session_id
+    local sidebar = require("core.sidebar_view")(function(action, _, target)
+      test.equal(action, "select_terminal")
+      test.equal(target, id)
+      test.ok(require("core.pane_requests").perform(common.serialize({action="terminal_focus", session=target})))
+    end)
+    local function refresh()
+      local report = require("core.pane_report").build()
+      sidebar:set_model({{row_id=1,id=1,path=context.project,state="ready",window_id=1,
+        terminals=report.terminals or {},panes=report},windows={{id=1,selected_project=1}}}, 1)
+      return report
+    end
+    local function row(target)
+      for _, item in ipairs(sidebar.rows) do
+        if item.terminal and item.terminal.id == target or item.tab and item.tab.terminal
+            and item.tab.terminal.session == target then return item end
+      end
+    end
+    wait_until(shell, function()
+      refresh()
+      return require("core.machine_terminal").listed(hostname) and row(id) and row(hostname)
+    end, "Missing rows before selection")
+    sidebar:activate_row(row(id), false)
+    local selected = panes.active().current_view
+    context.views[#context.views + 1] = selected
+    wait_text(selected, "ANVIL_ECHO_READY:project")
+    test.equal(selected.session_id, id)
+    local report = refresh()
+    test.ok(require("core.machine_terminal").listed(hostname), "Session missing from Machine list")
+    test.contains(report.held or {}, hostname)
+    test.is_nil(row(hostname), "Hostname row still visible")
+    local reply
+    fs.machine:request("terminal.list", { project = context.project }, nil, function(err, result)
+      reply = err and {} or result.sessions
+    end)
+    wait_until(selected, function() return reply end, "Machine did not reply")
+    local ids = {}
+    for _, session in ipairs(reply) do ids[#ids + 1] = session.id end
+    test.contains(ids, hostname)
+    test.ok(panes.back())
+    test.equal(panes.active().current_view.session_id, hostname)
+    wait_text(panes.active().current_view, assert(os.getenv("COMPUTERNAME")))
+  end)
+
   test.it("lists the Machine's sessions that no Pane shows, and opens them", function(context)
     local view = open(context, {})
     wait_text(view, "ANVIL_ECHO_READY:project")
