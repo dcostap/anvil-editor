@@ -194,6 +194,8 @@ A Project on another Machine has a key: `anvil-machine://<Machine ID>/<path on t
 
 The shell uses the key as the Project's identity and passes it to the Project process with `--project`. That process connects with `fs.use_machine`: to this PC's own server when the ID is its own, or else to the paired Machine's record in `USERDIR/machines`. Inside the process, paths are native paths.
 
+Project labels use `folder @ host` for a Machine Project and `folder` for a local Project. A Machine badge shows `@` even when the name does not fit. Until the paired address is available, the label uses a short Machine ID. Path Search matches the displayed address but opens the original key. Pairing grants access; it does not add all the Machine's Projects to Path Search. Use Machines → Open Project for the first open. After that, the Sidebar and Path Search list the Project on this PC.
+
 Code that names this Project to the Sidebar or to other Projects uses `machine_project.root_key(path)`: Workspaces, Untitled recovery, recent Projects, Numbered Panes, Sidebar Tab drags, Pane transfers and Other Project search. Pane requests accept a key in their Project fields. Path normalization would change a key's separators, so Path Search and other code do not normalize a key.
 
 `core.open_project_in_same_window` and `core.open_project_in_new_window` give a folder of this process's Machine its key (`machine_project.folder_key`). A Pane moves only between Projects of the same Machine, or between Projects of this PC. On a Machine, the target Project must hold each file of the Pane: each Buffer's file, each Image View's image and each File Tree's folder.

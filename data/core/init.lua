@@ -2843,9 +2843,9 @@ function core.get_view_title(view)
     title = view:get_name()
   end
   if title and title ~= "---" then
-    return title .. (
-      project.path ~= "" and " - " .. common.basename(project.path) or ""
-    )
+    if project.path == "" then return title end
+    local machine = require "core.machine_project"
+    return title .. " - " .. (machine.label(machine.folder_key(project.path)) or common.basename(project.path))
   end
   return ""
 end
@@ -2855,7 +2855,8 @@ end
 function core.get_window_title()
   local project = core.root_project and core.root_project()
   if project and project.path and project.path ~= "" then
-    return common.basename(project.path)
+    local machine = require "core.machine_project"
+    return machine.label(machine.current) or common.basename(project.path)
   end
   return "Anvil"
 end

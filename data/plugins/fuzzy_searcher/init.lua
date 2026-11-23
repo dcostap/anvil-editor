@@ -363,7 +363,7 @@ local function project_dir()
 end
 
 local function display_root(root)
-  return common.home_encode and common.home_encode(root) or root
+  return require("core.machine_project").label(root, true) or (common.home_encode and common.home_encode(root) or root)
 end
 
 ---The size of the file index, such as "42 files · 3 folders".

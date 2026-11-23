@@ -31,6 +31,7 @@ end
 
 -- Asks the Machine for its Projects, then lets the user choose one.
 local function choose_project(machine)
+  machine_project.tag(machine) -- Start the local address lookup while the Machine lists its Projects.
   local client = MachineClient.new(machine_project.machine_file(machine))
   client:request("projects.list", {}, nil, function(err, result)
     client:close()
@@ -39,7 +40,7 @@ local function choose_project(machine)
     for _, project in ipairs(result.projects or {}) do
       if type(project.path) == "string" then projects[project.path] = project.path end
     end
-    choose("Project on the Machine", projects, function(path)
+    choose("Project @ " .. machine_project.tag(machine), projects, function(path)
       local key = machine_project.key(machine, path)
       core.log_quiet("Open a Project on a Machine: %s", key)
       if not core.open_project_in_same_window(key) then core.error("Cannot open %s", path) end

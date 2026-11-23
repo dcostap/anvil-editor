@@ -3,12 +3,13 @@
 -- `project` is a record of the Project Sidebar model.
 local style = require "core.style"
 local tab = require "core.tab"
+local machine_project = require "core.machine_project"
 
 local look = {}
 
 function look.name(project)
   if project.scratch then return "Scratch" end
-  return project.path:match("([^/\\]+)[/\\]*$") or project.path
+  return machine_project.label(project.path) or project.path:match("([^/\\]+)[/\\]*$") or project.path
 end
 
 -- The latest activity of the Project or of one of its Terminal Sessions.
@@ -106,7 +107,8 @@ function look.draw_badge(project, x, y, size, bold, background)
   renderer.draw_rounded_rect(x, y, size, size, math.floor(size * 0.3), tint(color, 64 * strength))
   -- The letter's ink centres in the badge. Its line box has room for descenders, so centring the line would put a
   -- capital too high.
-  local letter = initial(name)
+  -- Keep the Machine mark visible even when the row has no room for the host name.
+  local letter = machine_project.is_key(project.path) and "@" or initial(name)
   local ink_top, ink_bottom = bold:get_ink_extent(letter)
   local ly = ink_top and y + (size - ink_top - ink_bottom) / 2 or y + (size - bold:get_height()) / 2
   renderer.draw_text(bold, letter, x + math.floor((size - bold:get_width(letter)) / 2), math.floor(ly + 0.5),

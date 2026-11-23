@@ -783,4 +783,33 @@ test.describe("Fuzzy Searcher Path Search", function()
       test.ok(shown:find(expected, 1, true), expected .. " is missing from: " .. shown)
     end
   end)
+
+  test.it("separates same-path Projects and finds a Machine by its host", function(context)
+    local path = "C:/Work/notes"
+    local id = "fedcba9876543210"
+    local key = "anvil-machine://" .. id .. "/" .. path
+    local other = "anvil-machine://0000000000000001/" .. path
+    mkdirp(join_path(USERDIR, "machines"))
+    local record = join_path(USERDIR, "machines", id .. ".json")
+    write_file(record, '{"machine":"' .. id .. '","host":"workstation"}')
+    core.project_sidebar = {{path=path}, {path=key}, {path=other}}
+    fuzzy_searcher.open("@notes")
+    local picker = core.fuzzy_searcher_active_view
+    for _, p in ipairs({path, key, other}) do test.not_nil(result_for_path(picker.results, p)) end
+    local look = require "core.project_look"
+    local loaded = wait_until(function() return look.name(core.project_sidebar[2]):find("workstation", 1, true) end, 5)
+    test.ok(os.remove(record))
+    test.ok(loaded, "Project name does not identify the paired host")
+    test.not_equal(look.name(core.project_sidebar[1]), look.name(core.project_sidebar[3]))
+    picker.input:set_text("@workstation")
+    test.ok(wait_until(function() return result_for_path(picker.results, key) end), "No Project matched its Machine")
+    test.is_nil(result_for_path(picker.results, path))
+    picker:set_size(1400, 600)
+    picker.open_transition_complete = true
+    picker:update()
+    local texts = {}
+    local drawn, err = draw_without_window(function() picker:draw() end, texts)
+    test.ok(drawn, err)
+    test.ok(table.concat(texts):find("notes @ workstation", 1, true), "The Project row did not show its Machine")
+  end)
 end)

@@ -2313,6 +2313,17 @@ static wchar_t *project_name(const ShellProject *project) {
   if (is_scratch(project)) return ui_wide("Scratch");
   for (const char *p = name; *p; p++)
     if ((*p == '/' || *p == '\\') && p[1]) name = p + 1;
+  if (anvil_is_machine_project(project->project_path)) {
+    /* A ready Project publishes its tagged Window title. Before startup, only its Machine ID is known. */
+    const char *id = project->project_path + sizeof(ANVIL_MACHINE_PROJECT_PREFIX) - 1;
+    if (project->title && strstr(project->title, " @ ")) return ui_wide(project->title);
+    char *tagged = NULL;
+    SDL_asprintf(&tagged, "%.*s @ Machine %.*s", (int)strcspn(name, "/\\"), name,
+                 (int)SDL_min(strcspn(id, "/"), 8), id);
+    wchar_t *result = ui_wide(tagged);
+    SDL_free(tagged);
+    return result;
+  }
   wchar_t *wide = ui_wide(name);
   size_t length = wide ? wcslen(wide) : 0;
   while (length && (wide[length - 1] == L'\\' || wide[length - 1] == L'/')) wide[--length] = 0;

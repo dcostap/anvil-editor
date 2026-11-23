@@ -180,7 +180,8 @@ function projects.draw_preview(project, x, y, w, h)
   renderer.draw_text(bold, tab.fit(bold, look.name(project), x + w - note_w - name_x), name_x, name_y, name_color)
   if note then renderer.draw_text(font, note, x + w - font:get_width(note), name_y, style.dim) end
   y = y + size + 6 * SCALE
-  local path = common.home_encode and common.home_encode(project.path) or project.path
+  local _, machine_path = require("core.machine_project").parse(project.path)
+  local path = machine_path or (common.home_encode and common.home_encode(project.path) or project.path)
   renderer.draw_text(font, tab.fit(font, path, w), x, y, style.dim)
   y = y + line + pad
   local row, agent_row = line + 9 * SCALE, 2 * line + 11 * SCALE

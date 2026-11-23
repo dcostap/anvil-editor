@@ -23,6 +23,39 @@ function machine_project.is_key(value)
   return machine_project.parse(value) ~= nil
 end
 
+-- Names are presentation only. Keep the full key for routing and storage.
+local tags = {}
+function machine_project.tag(id)
+  if type(id) ~= "string" or not id:match("^%x+$") then return "Machine" end
+  if not tags[id] then
+    tags[id] = "Machine " .. id:sub(1, 8)
+    require("core.worker_pool").named("file_io", {worker_count = 1}):submit {
+      kind = "file_read", payload = {path = USERDIR .. PATHSEP .. "machines" .. PATHSEP .. id .. ".json"},
+      on_result = function(message)
+        local bytes = message.payload.bytes
+        if not bytes then return end
+        local ok, record = pcall(require("core.json").decode, bytes)
+        if ok and type(record) == "table" and record.machine == id and type(record.host) == "string"
+            and record.host ~= "" and not record.host:find("%c") then
+          tags[id] = record.host .. (record.port and record.port ~= 7690 and ":" .. tostring(record.port) or "")
+          local core = require "core"
+          core.redraw = true
+          local picker = core.fuzzy_searcher_active_view
+          if picker and picker.input then picker:refresh(picker.input:get_text()) end
+        end
+      end,
+    }
+  end
+  return tags[id]
+end
+
+function machine_project.label(key, full_path)
+  local id, path = machine_project.parse(key)
+  if not id then return end
+  local name = full_path and path or path:match("([^/\\]+)[/\\]*$") or path
+  return name .. " @ " .. machine_project.tag(id)
+end
+
 -- The Machine file for `fs.use_machine`: this PC's own server, or the record of a paired Machine.
 function machine_project.machine_file(machine)
   local directory = USERDIR .. PATHSEP .. "machine"

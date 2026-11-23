@@ -79,7 +79,7 @@ end
 -- The Project as the Project Sidebar shows it, for its badge and name.
 local function project_record()
   local path = core.root_project().path
-  return { path = path, scratch = core.is_scratch_project(path), state = "ready", exists = true }
+  return { path = require("core.machine_project").root_key(path), scratch = core.is_scratch_project(path), state = "ready", exists = true }
 end
 
 -- Places the heading and the buttons in the middle of the content area, a little above its center. The buttons wrap

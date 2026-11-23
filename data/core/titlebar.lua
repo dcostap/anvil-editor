@@ -53,9 +53,7 @@ local function caption_width()
 end
 
 local function project_name()
-  local project = core.root_project and core.root_project()
-  if project and project.path and project.path ~= "" then return common.basename(project.path) end
-  return "Anvil"
+  return core.get_window_title()
 end
 
 local function project_title_font()
