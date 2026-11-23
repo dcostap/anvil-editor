@@ -28,7 +28,11 @@ Markdown and Terminal links share the URI scheme rule in `core.system_link`: onl
 
 System opening asks before known program, script, installer and shortcut file types. Cancel is the default, and approval applies only to that activation. This check is not a sandbox for external apps or custom file associations. Terminal file links still open through the editor, including its binary-file dialog.
 
-Live Preview resolves links again on activation. If the index has no current Buffer entry for a tracked heading or block target, activation waits. The wait stops if the user edits the source, changes its selection, leaves the View, or activates another link.
+Live Preview resolves the destination file again on activation. Heading and block positions come from the loaded Buffer, not the disk index. Activation waits for loading to finish and retains the Buffer during resolution. It reuses complete current Buffer facts or parses that note on a native worker. Vault indexing size limits do not limit explicit navigation.
+
+The wait stops if the user edits the source, changes its selection, scrolls, leaves the View, or activates another link. Live Preview keeps the source open until it finds the target. A missing heading or block does not open the destination View. Terminal links and Terminal Text Captures use the same Buffer resolver after opening their destination View. A later caret move, scroll, or focus change cancels that jump.
+
+The existing Text View line anchor keeps the destination visible through layout changes. User scrolling, selection changes, and edits end that anchor.
 
 Run `ui/markdown_open_at_line.lua`, `ui/markdown_live_editor.lua`, `ui/terminal.lua` and `ui/binary_file_open.lua` after changes.
 

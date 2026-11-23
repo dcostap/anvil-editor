@@ -470,15 +470,6 @@ function Index:can_resolve()
   return self.status == "ready" or self.disk_snapshot ~= nil
 end
 
----Whether a tracked note is still loading or its Buffer facts are out of date.
-function Index:note_buffer_pending(path)
-  local buffer = core.buffer_registry:find(path)
-  if not buffer or not self.buffer_listeners[buffer] then return false end
-  local entry = self:note(path)
-  return buffer:is_loading() or not entry or entry.buffer ~= buffer
-    or entry.buffer_revision ~= buffer.text_revision
-end
-
 function Index:rebuild_async(reason, opts)
   opts = opts or {}
   local started_at = system.get_time()
@@ -1351,6 +1342,87 @@ function Index:resolve_subtarget(entry, subtarget)
   return {}
 end
 
+---Resolve from the loaded Buffer, not a disk entry or a loading placeholder.
+---Reuse complete current facts; otherwise parse this note on the native worker without the vault size limit.
+function Index:resolve_buffer_subtarget(buffer, subtarget, current, complete)
+  local path = buffer.abs_filename
+  if not path then
+    if current() then complete(nil, "note could not be opened") end
+    return
+  end
+  local function cached()
+    if buffer:is_loading() or buffer.load_error then return nil end
+    local entry = self:note(buffer.abs_filename)
+    if entry and entry.buffer == buffer and entry.buffer_revision == buffer.text_revision
+      and not entry.shallow then return entry end
+  end
+  local entry = cached()
+  if entry then
+    if current() then complete(self:resolve_subtarget(entry, subtarget)) end
+    return
+  end
+  local owner = {}
+  core.buffer_registry:retain(buffer, owner)
+  local function finish(target, reason, cancelled)
+    core.buffer_registry:release(buffer, owner)
+    if not cancelled and current() then complete(target, reason) end
+  end
+  core.add_thread(function()
+    local deadline = system.get_time() + 30
+    while buffer:is_loading() and current() and system.get_time() < deadline do
+      coroutine.yield(0.02)
+    end
+    if not current() or buffer.abs_filename ~= path then finish(nil, nil, true); return end
+    if buffer:is_loading() or buffer.load_error then
+      finish(nil, buffer.load_error or "note is still loading")
+      return
+    end
+    local entry = cached()
+    if entry then finish(self:resolve_subtarget(entry, subtarget)); return end
+    local revision = buffer.text_revision
+    local function unchanged()
+      return current() and buffer.text_revision == revision and buffer.abs_filename == path
+        and not buffer:is_loading() and not buffer.load_error
+    end
+    local pool = worker_pool.system()
+    local done, target, reason
+    local function release_message(message)
+      local snapshot = message.vault_snapshot or (message.payload and message.payload.vault_snapshot)
+      if snapshot then release_vault_snapshot(snapshot) end
+    end
+    local job, err = pool:submit {
+      kind = "markdown-link-target",
+      priority = "interactive",
+      native = true,
+      native_kind = "markdown_vault_overlay",
+      native_payload = {
+        path = path, relpath = self:relative_path(path),
+        text = buffer:get_text(1, 1, math.huge, math.huge),
+        shallow_note_bytes = 0,
+      },
+      is_stale = function() return not unchanged() end,
+      on_stale = function(message) release_message(message); done = true end,
+      on_cancelled = function() done = true end,
+      on_error = function(message) reason = tostring(message.error); done = true end,
+      on_result = function(message)
+        local snapshot = message.vault_snapshot or (message.payload and message.payload.vault_snapshot)
+        if not snapshot then return end
+        local facts = snapshot:note(path)
+        if facts then target, reason = self:resolve_subtarget(facts, subtarget) end
+        release_vault_snapshot(snapshot)
+        done = true
+      end,
+    }
+    if not job then finish(nil, tostring(err)); return end
+    while not done and unchanged() and system.get_time() < deadline do coroutine.yield(0.02) end
+    if not done then pool:cancel(job) end
+    if not unchanged() then finish(nil, nil, true); return end
+    core.log_quiet("Markdown link resolved from Buffer: %s revision=%s line=%s",
+      path, tostring(revision), tostring(target and target.line))
+    finish(target, reason or (not done and "target resolution timed out") or "target not found")
+  end)
+end
+
 function Index:resolve_entry_result(entry, link, target)
   if entry.kind == "note" then
     local extra, err = self:resolve_subtarget(entry, link.subtarget)
@@ -1401,6 +1473,13 @@ function Index:resolve(link_or_target, source_path)
     core.log_quiet("Markdown link %s matched %d files; chose %s", target, #destinations, entry.rel_path)
   end
   return self:resolve_entry_result(entry, link, target)
+end
+
+---Find the destination file without trusting indexed heading or block positions.
+function Index:resolve_file(link, source_path)
+  local path = link.path or link.raw_target or ""
+  if path == "" and link.subtarget then path = source_path or "" end
+  return self:resolve_preview({ path = path }, source_path)
 end
 
 function Index:resolve_preview(link, source_path)

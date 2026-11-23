@@ -2572,6 +2572,7 @@ test.describe("Markdown Live Preview", function()
     end
     local ok, err = pcall(function()
       test.equal(command.perform("markdown:open_link"), true)
+      test.ok(wait_until(function() return opened ~= nil end, 10))
       test.equal(opened, common.normalize_path(target_path))
       test.same(location, { line = 1, col = 1 })
 
@@ -2579,8 +2580,11 @@ test.describe("Markdown Live Preview", function()
       buffer:set_selection(2, 1)
       local x, y = view:get_line_screen_position(1)
       view:on_mouse_pressed("left", x + 2, y + 2, 1)
+      test.ok(wait_until(function() return opened ~= nil end, 10))
       test.equal(opened, common.normalize_path(target_path))
 
+      local target_buffer = core.buffer_registry:find(target_path)
+      if target_buffer then core.buffer_registry:remove(target_buffer, true) end
       os.remove(target_path)
       opened = nil
       buffer:set_selection(1, 5)
@@ -2756,6 +2760,7 @@ test.describe("Markdown Live Preview", function()
     local ok, err = pcall(function()
       test.equal(command.perform("core:next_point_of_interest"), true)
       test.equal(command.perform("core:activate_point_of_interest"), true)
+      test.ok(wait_until(function() return opened ~= nil end, 10))
       test.equal(opened, common.normalize_path(target_path))
       test.equal(markdown.live_render.detach(view), true)
       test.equal(#view:get_points_of_interest(), 0)

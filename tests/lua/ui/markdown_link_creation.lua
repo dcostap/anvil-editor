@@ -140,6 +140,8 @@ test.describe("Markdown missing link activation", function()
     test.ok(live.open_link(c.view, {
       link = links.from_target("wiki", "Functions#CreaMovimientoStock(datos de ConsumosIncidencia)"),
     }))
+    local deadline = system.get_time() + 10
+    while not c.opened and system.get_time() < deadline do coroutine.yield(0.01) end
     test.equal(c.opened, common.normalize_path(path))
     test.equal(c.open_options.line, 4)
     test.is_nil(c.warning)

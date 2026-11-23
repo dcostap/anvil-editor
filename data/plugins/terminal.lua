@@ -2367,31 +2367,33 @@ local function open_location(view, point, opts)
     line = point.target_line or 1,
     col = point.target_col or 1,
   })
+  if editor then editor.__markdown_link_waiting = nil end
   if editor and point.heading then
-    -- Opening the Buffer starts its Markdown index worker. Do not scan on hover or jump after the user leaves.
     local index = require("core.markdown.vault_index").index_for_path(point.path)
-    local revision = editor.buffer.text_revision
-    core.add_thread(function()
-      local deadline = system.get_time() + 5
-      repeat
-        local owner = panes.pane_for_view(editor)
-        if not owner or owner.current_view ~= editor or editor.buffer.text_revision ~= revision then return end
-        local selection = editor:get_selection_state().selections
-        if selection[1] ~= 1 or selection[2] ~= 1 then return end
-        local entry = index:note(point.path)
-        if entry and entry.buffer == editor.buffer and entry.buffer_revision == revision then
-          local target = index:resolve_subtarget(entry, {type = "heading", text = point.heading})
-          if not target then break end
-          editor:with_selection_state(function()
-            editor.buffer:set_selection(target.line, 1)
-            editor:scroll_to_line(target.line, false, false)
-          end)
+    local buffer, active = editor.buffer, core.active_view
+    local revision = not buffer:is_loading() and buffer.text_revision
+    local selection = table.concat(editor:get_selection_state().selections, ":")
+    local scroll, request = editor.scroll.to.y, {}
+    editor.__markdown_link_waiting = request
+    local function current()
+      local owner = panes.pane_for_view(editor)
+      return owner and owner.current_view == editor and editor.buffer == buffer and core.active_view == active
+        and editor.__markdown_link_waiting == request and editor.scroll.to.y == scroll
+        and (not revision or buffer.text_revision == revision)
+        and table.concat(editor:get_selection_state().selections, ":") == selection
+    end
+    index:resolve_buffer_subtarget(buffer, { type = "heading", text = point.heading }, current,
+      function(target, reason)
+        editor.__markdown_link_waiting = nil
+        if not target then
+          core.warn("Markdown heading not found: %s#%s (%s)", point.path, point.heading, reason)
           return
         end
-        coroutine.yield(0.02)
-      until system.get_time() >= deadline
-      core.warn("Markdown heading not found: %s#%s", point.path, point.heading)
-    end)
+        editor:with_selection_state(function()
+          buffer:set_selection(target.line, 1)
+          editor:scroll_to_line(target.line, false, false)
+        end)
+      end)
   end
   return editor ~= nil
 end

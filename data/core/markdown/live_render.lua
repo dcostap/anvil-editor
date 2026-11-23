@@ -8258,34 +8258,65 @@ local function open_link_resolution(resolution, target)
   return target_view ~= nil
 end
 
--- Wait for the Project file list or for the destination Buffer's current headings or blocks.
-local function open_when_indexed(view, link, index, path)
-  core.log_quiet("Markdown link waits for the note index: %s (note=%s)",
-    tostring(link.raw_target), tostring(path))
+function live.link_request(view)
   local request = {}
   view.__markdown_link_waiting = request
   local buffer, revision = view.buffer, view.buffer.text_revision
-  local selection = table.concat(view:get_selection_state().selections, ":")
+  local selections = view:get_selection_state().selections
+  local selection = table.concat(selections, ":")
+  -- Apply the click's caret reveal before recording the scroll that cancels this request.
+  if view.size.y > 0 then view:scroll_to_make_visible(selections[1], selections[2]) end
+  local scroll = view.scroll.to.y
+  return function()
+    if view.__markdown_link_waiting ~= request or core.active_view ~= view
+      or view.buffer ~= buffer or buffer.text_revision ~= revision
+      or view.scroll.to.y ~= scroll
+      or table.concat(view:get_selection_state().selections, ":") ~= selection then
+      core.log_quiet("Markdown link wait cancelled after source navigation: %s", buffer:get_name())
+      return false
+    end
+    return true
+  end
+end
+
+-- Wait only for file discovery. Destination facts come from the loaded Buffer.
+local function open_when_indexed(view, link, index)
+  core.log_quiet("Markdown link waits for the note index: %s", tostring(link.raw_target))
+  local current = live.link_request(view)
   core.add_thread(function()
-    local deadline = system.get_time() + (path and 5 or 30)
+    local deadline = system.get_time() + 30
     while true do
-      if view.__markdown_link_waiting ~= request then return end
-      if core.active_view ~= view or view.buffer ~= buffer or buffer.text_revision ~= revision
-        or table.concat(view:get_selection_state().selections, ":") ~= selection then
-        view.__markdown_link_waiting = nil
-        return
-      end
-      if index:can_resolve() and (not path or not index:note_buffer_pending(path)) then
+      if not current() then return end
+      if index:can_resolve() then
         live.open_link(view, { link = link })
         return
       end
-      if system.get_time() >= deadline or (not path and index.status == "error") then break end
+      if system.get_time() >= deadline or index.status == "error" then break end
       coroutine.yield(0.05)
     end
     view.__markdown_link_waiting = nil
     core.warn("Markdown link not opened because the note index is not ready: %s", tostring(link.raw_target))
   end)
   return true
+end
+
+function live.open_buffer_subtarget(view, link, index, resolution)
+  local info = system.get_file_info(resolution.path)
+  if not (info and info.type == "file") and not core.buffer_registry:find(resolution.path) then return false end
+  local current = live.link_request(view)
+  local buffer = core.open_buffer(resolution.path, { background = true })
+  local opened, status = true, "pending"
+  index:resolve_buffer_subtarget(buffer, link.subtarget, current, function(target, reason)
+    view.__markdown_link_waiting = nil
+    if not target then
+      opened, status = false, "missing"
+      core.warn("Markdown link target not found: %s (%s)", link.raw_target, reason)
+      return
+    end
+    resolution.line = target.line
+    opened, status = open_link_resolution(resolution, link.raw_target), "resolved"
+  end)
+  return opened, status
 end
 
 -- The note index has only notes and attachments. A standard link can name another file, such as `todo.txt`.
@@ -8313,21 +8344,15 @@ function live.open_link(view, opts)
   if not opts then return false, "no link at caret" end
   view.__markdown_link_waiting = nil
   local link = opts.link
-  -- A rendered link can still show the index state from the previous frame.
-  local resolution = resolve_live_link(view, link)
   local owner = view.__markdown_live_owner
   local index = owner and owner.link_index
-  if resolution.status == "pending" then
-    -- Link paths need only file names, so the Project file list resolves them before notes are parsed.
-    if index then
-      resolution = index:resolve_preview(link, view.buffer.abs_filename)
-      if resolution.status == "pending" then return open_when_indexed(view, link, index), "pending" end
-      core.log_quiet("Markdown link resolved from the Project file list: status=%s target=%s",
-        resolution.status, tostring(link.raw_target))
-    end
-  elseif index and resolution.kind == "note" and link.subtarget
-    and index:note_buffer_pending(resolution.path) then
-    return open_when_indexed(view, link, index, resolution.path), "pending"
+  -- The index chooses the file. Only the loaded Buffer determines its destination line.
+  local resolution = resolve_live_link(view, link)
+  if index and resolution.status ~= "external" then
+    resolution = index:resolve_file(link, view.buffer.abs_filename)
+  end
+  if resolution.status == "pending" and index then
+    return open_when_indexed(view, link, index), "pending"
   end
   if resolution.status == "missing" then
     local file = existing_link_file(view, link)
@@ -8345,6 +8370,9 @@ function live.open_link(view, opts)
   if resolution.status ~= "resolved" and resolution.status ~= "external" then
     core.log_quiet("Markdown link not opened: status=%s target=%s", resolution.status, tostring(resolution.target))
     return false, resolution.status
+  end
+  if index and resolution.kind == "note" and link.subtarget then
+    return live.open_buffer_subtarget(view, link, index, resolution)
   end
   return open_link_resolution(resolution, link.raw_target),
     resolution.subtarget_missing and "missing" or resolution.status

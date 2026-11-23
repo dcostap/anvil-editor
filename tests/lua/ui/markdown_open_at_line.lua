@@ -118,6 +118,7 @@ test.describe("Opening a Markdown file at a line", function()
     test.is_nil(core.buffer_registry:find(path), "the target note should not be open yet")
 
     click_first_line(source_view)
+    test.ok(wait_until(function() return core.active_view ~= source_view end), "the link did not open its note")
     local view = core.active_view
     test.not_nil(view.buffer)
     test.ok(common.path_equals(view.buffer.abs_filename, path))
@@ -127,14 +128,14 @@ test.describe("Opening a Markdown file at a line", function()
       "the linked heading did not scroll into view on the first click")
   end)
 
-  local function click_moved_heading(context)
+  local function click_moved_heading(context, at_caret)
     local path = context.dir .. PATHSEP .. "Target.md"
     local source = context.dir .. PATHSEP .. "Source.md"
     write_file(path, "# Target\n\n## Destination\n\nBody\n")
-    write_file(source, "[[Target#Destination|Go to section]]\n\nSource text\n")
+    write_file(source, "[[Target#Destination|Go to section]]\n\nSource text\n" .. string.rep("\nSource filler\n", 100))
     local index = markdown.vault_index.get_index(context.dir):rebuild("moved-heading-click-test")
     local buffer = core.root_panel:open_file(path).buffer
-    local source_view = core.root_panel:open_file(source, { line = 3 })
+    local source_view = core.root_panel:open_file(source, { line = at_caret and 1 or 3 })
     test.ok(wait_until(function()
       local entry = index:note(path)
       return layout_ready(source_view) and entry and entry.buffer == buffer
@@ -145,7 +146,11 @@ test.describe("Opening a Markdown file at a line", function()
     buffer:insert(1, 1, string.rep("Filler text.\n", 150))
     local link = markdown.links.from_target("wiki", "Target#Destination")
     test.equal(index:resolve(link, source).line, 3)
-    click_first_line(source_view)
+    if at_caret then
+      test.ok(require("core.markdown.live_render").open_link(source_view))
+    else
+      click_first_line(source_view)
+    end
     return buffer, source_view, index, link
   end
 
@@ -172,5 +177,186 @@ test.describe("Opening a Markdown file at a line", function()
     coroutine.yield(0.1)
     test.equal(core.active_view, source_view)
     test.equal(source_view.buffer:get_selection(), 3)
+  end)
+
+  test.it("does not follow a waiting link after the source scrolls", function(context)
+    local _, source_view, index, link = click_moved_heading(context, true)
+    core.root_panel:on_mouse_left()
+    test.ok(require("core.command").perform("core:scroll", -4))
+    test.ok(source_view.scroll.to.y > 0, "the source did not scroll")
+    test.ok(wait_until(function()
+      return index:resolve(link, source_view.buffer.abs_filename).line == 153
+    end))
+    coroutine.yield(0.1)
+    test.equal(core.active_view, source_view)
+  end)
+
+  test.it("replaces a waiting link with the next activation", function(context)
+    local buffer, source_view = click_moved_heading(context)
+    require("core.markdown.live_render").open_link(source_view, {
+      link = markdown.links.from_target("wiki", "Target#Target"),
+    })
+    test.ok(wait_until(function()
+      return core.active_view.buffer == buffer and buffer:get_selection() == 151
+    end))
+    coroutine.yield(0.1)
+    test.equal(buffer:get_selection(), 151)
+  end)
+
+  for _, fragment in ipairs({ "Destination", "^destination" }) do
+    test.it("follows an unopened note's current " .. fragment .. " after a disk edit", function(context)
+      local path = context.dir .. PATHSEP .. "Target.md"
+      local source = context.dir .. PATHSEP .. "Source.md"
+      local text = "# Target\n\n## Destination\nBody ^destination\n"
+      write_file(path, text)
+      write_file(source, "[[Target#" .. fragment .. "|Go]]\n\nSource\n")
+      markdown.vault_index.get_index(context.dir):rebuild("disk-edit-link")
+      local source_view = core.root_panel:open_file(source, { line = 3 })
+      test.ok(wait_until(function() return layout_ready(source_view) end))
+      write_file(path, string.rep("Filler\n", 150) .. text)
+      click_first_line(source_view)
+      local target = fragment == "Destination" and 153 or 154
+      test.ok(wait_until(function()
+        local view = core.active_view
+        return view.buffer and common.path_equals(view.buffer.abs_filename or "", path)
+          and view.buffer:get_selection() == target and line_is_visible(view, target)
+      end), "the first click did not reach the current target")
+    end)
+  end
+
+  for _, cold in ipairs({ true, false }) do
+    test.it("follows a large note heading with a " .. (cold and "cold" or "ready") .. " index", function(context)
+      local path = context.dir .. PATHSEP .. "Target.md"
+      local source = context.dir .. PATHSEP .. "Source.md"
+      -- Exceed both indexing limits without making a very long visual document.
+      write_file(path, "<!-- " .. string.rep("padding ", 140000) .. " -->\n\n## Destination\n")
+      write_file(source, "[[Target#Destination|Go]]\n\nSource\n")
+      local source_view = core.root_panel:open_file(source, { line = 3 })
+      local index = markdown.vault_index.get_index(context.dir)
+      if cold then
+        require("core.project_files").list(context.dir)
+        test.equal(index:can_resolve(), false)
+        require("core.markdown.live_render").open_link(source_view, {
+          link = markdown.links.from_target("wiki", "Target#Destination"),
+        })
+      else
+        index:rebuild("large-link-test")
+        test.ok(wait_until(function() return layout_ready(source_view) end))
+        click_first_line(source_view)
+      end
+      test.ok(wait_until(function()
+        local view = core.active_view
+        return view.buffer and common.path_equals(view.buffer.abs_filename or "", path)
+          and view.buffer:get_selection() == 3
+      end), "the first click did not reach the large note's heading")
+    end)
+  end
+
+  test.it("follows a Markdown heading added after the disk index was built", function(context)
+    local path = context.dir .. PATHSEP .. "Target.md"
+    local source = context.dir .. PATHSEP .. "Source.md"
+    write_file(path, "# Target\n")
+    write_file(source, "[Go](Target.md#Destination)\n\nSource\n")
+    markdown.vault_index.get_index(context.dir):rebuild("new-heading-link")
+    local source_view = core.root_panel:open_file(source, { line = 3 })
+    test.ok(wait_until(function() return layout_ready(source_view) end))
+    write_file(path, string.rep("Filler\n", 150) .. "## Destination\n")
+    click_first_line(source_view)
+    test.ok(wait_until(function()
+      local view = core.active_view
+      return view ~= source_view and view.buffer:get_selection() == 151 and line_is_visible(view, 151)
+    end), "the stale missing-heading entry blocked activation")
+  end)
+
+  test.it("follows a heading in the current note", function(context)
+    local path = context.dir .. PATHSEP .. "Source.md"
+    write_file(path, "[Go](#Destination)\n\n" .. string.rep("Filler\n", 150) .. "## Destination\n")
+    markdown.vault_index.get_index(context.dir):rebuild("same-note-heading")
+    local view = core.root_panel:open_file(path, { line = 3 })
+    test.ok(wait_until(function() return layout_ready(view) end))
+    click_first_line(view)
+    test.ok(wait_until(function()
+      return view.buffer:get_selection() == 153 and line_is_visible(view, 153)
+    end), "the current note's heading did not become visible")
+  end)
+
+  test.it("follows a link from a scrolled source note", function(context)
+    local path = context.dir .. PATHSEP .. "Target.md"
+    local source = context.dir .. PATHSEP .. "Source.md"
+    write_file(path, string.rep("Filler\n", 150) .. "## Destination\n")
+    write_file(source, string.rep("Source filler\n\n", 75)
+      .. "# Around the link\n[[Target#Destination|Go]]\n\n" .. string.rep("Tail\n\n", 75))
+    markdown.vault_index.get_index(context.dir):rebuild("scrolled-source-link")
+    local source_view = core.root_panel:open_file(source, { line = 151 })
+    test.ok(wait_until(function() return layout_ready(source_view) and line_is_visible(source_view, 152) end))
+    test.ok(source_view.scroll.to.y > 0)
+    local x, y = source_view:get_line_screen_position(152)
+    core.root_panel:on_mouse_pressed("left", x + 2, y + 2, 1)
+    core.root_panel:on_mouse_released("left", x + 2, y + 2)
+    test.ok(wait_until(function()
+      local view = core.active_view
+      return view ~= source_view and view.buffer:get_selection() == 151 and line_is_visible(view, 151)
+    end), "source layout cancelled the link")
+  end)
+
+  test.it("keeps a linked heading visible when a row grows after layout", function(context)
+    local path = context.dir .. PATHSEP .. "Target.md"
+    local source = context.dir .. PATHSEP .. "Source.md"
+    write_file(path, string.rep("Filler\n", 150) .. "## Destination\n" .. string.rep("Tail\n", 150))
+    write_file(source, "[[Target#Destination|Go]]\n\nSource\n")
+    markdown.vault_index.get_index(context.dir):rebuild("late-layout-link")
+    local source_view = core.root_panel:open_file(source, { line = 3 })
+    test.ok(wait_until(function() return layout_ready(source_view) end))
+    click_first_line(source_view)
+    test.ok(wait_until(function()
+      local view = core.active_view
+      return view ~= source_view and layout_ready(view) and line_is_visible(view, 151)
+    end))
+    local view = core.active_view
+    local old_height = view:get_scrollable_size()
+    local row_height = view.size.y * 3
+    view:add_visual_metric_provider("late-row", {
+      line_height = function(_, _, line)
+        if line == 140 then return row_height end
+      end,
+    }, { priority = 1000 })
+    view:invalidate_visual_metrics("late-row")
+    coroutine.yield(0.1)
+    test.ok(view:get_scrollable_size() > old_height + view.size.y * 2,
+      "the test row did not grow")
+    test.equal(view.buffer:get_selection(), 151)
+    test.ok(wait_until(function() return line_is_visible(view, 151) end),
+      "late layout moved the linked heading offscreen")
+    core.root_panel:on_mouse_left()
+    test.ok(require("core.command").perform("core:scroll", 10000))
+    test.ok(wait_until(function() return view.scroll.y == 0 end))
+    row_height = row_height * 2
+    view:invalidate_visual_metrics("late-row")
+    coroutine.yield(0.1)
+    test.equal(view.scroll.to.y, 0, "layout restored a jump after the user scrolled away")
+  end)
+
+  test.it("waits for a loading note before resolving a cold-index heading", function(context)
+    local path = context.dir .. PATHSEP .. "Target.md"
+    local source = context.dir .. PATHSEP .. "Source.md"
+    write_file(path, string.rep("Filler\n", 150) .. "## Destination\n")
+    write_file(source, "[[Target#Destination|Go]]\n\nSource\n")
+    require("core.project_files").list(context.dir)
+    local source_view = core.root_panel:open_file(source, { line = 3 })
+    local buffer = require("core.buffer")(path, path, true)
+    core.buffer_registry:register(buffer, path)
+    buffer:load_async(path)
+    test.ok(buffer:is_loading())
+    test.equal(markdown.vault_index.get_index(context.dir):can_resolve(), false)
+    require("core.markdown.live_render").open_link(source_view, {
+      link = markdown.links.from_target("wiki", "Target#Destination"),
+    })
+    local reached = wait_until(function()
+      local view = core.active_view
+      return view.buffer == buffer and buffer:get_selection() == 151 and line_is_visible(view, 151)
+    end)
+    test.ok(reached, string.format("activation did not wait for the loaded heading: active=%s line=%s loading=%s error=%s",
+      tostring(core.active_view.buffer and core.active_view.buffer.abs_filename), tostring(buffer:get_selection()),
+      tostring(buffer:is_loading()), tostring(buffer.load_error)))
   end)
 end)

@@ -2016,6 +2016,25 @@ test.describe("Terminal View", function()
     view:on_mouse_pressed("left", 7, 7)
     view:on_mouse_released("left", 7, 7)
     check_destination(5)
+    -- A vault's shallow entry must not prevent navigation within an open note.
+    context.link_buffer:insert(1, 1, "<!-- " .. string.rep("padding ", 140000) .. " -->\n\n")
+    view = terminal.open { cwd = context.link_folder, focus = true }
+    pane = panes.active()
+    view.session.hyperlink = function() return "README.md#renamed-heading" end
+    view:on_mouse_pressed("left", 7, 7)
+    view:on_mouse_released("left", 7, 7)
+    check_destination(7)
+    file = assert(io.open(path, "wb"))
+    file:write("# Tests\n\n## Loaded heading\n")
+    file:close()
+    context.link_buffer:load_async(path)
+    test.ok(context.link_buffer:is_loading())
+    view = terminal.open { cwd = context.link_folder, focus = true }
+    pane = panes.active()
+    view.session.hyperlink = function() return "README.md#loaded-heading" end
+    view:on_mouse_pressed("left", 7, 7)
+    view:on_mouse_released("left", 7, 7)
+    check_destination(3)
   end)
 
   test.it("opens a folder hyperlink in a File Tree with a normal click", function(context)
