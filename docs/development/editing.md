@@ -28,7 +28,9 @@ Markdown and Terminal links share the URI scheme rule in `core.system_link`: onl
 
 System opening asks before known program, script, installer and shortcut file types. Cancel is the default, and approval applies only to that activation. This check is not a sandbox for external apps or custom file associations. Terminal file links still open through the editor, including its binary-file dialog.
 
-Run `ui/markdown_live_editor.lua`, `ui/terminal.lua` and `ui/binary_file_open.lua` after changes.
+Live Preview resolves links again on activation. If the index has no current Buffer entry for a tracked heading or block target, activation waits. The wait stops if the user edits the source, changes its selection, leaves the View, or activates another link.
+
+Run `ui/markdown_open_at_line.lua`, `ui/markdown_live_editor.lua`, `ui/terminal.lua` and `ui/binary_file_open.lua` after changes.
 
 ## Recycle Bin
 

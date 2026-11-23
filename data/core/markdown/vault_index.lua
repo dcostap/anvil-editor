@@ -470,6 +470,15 @@ function Index:can_resolve()
   return self.status == "ready" or self.disk_snapshot ~= nil
 end
 
+---Whether a tracked note is still loading or its Buffer facts are out of date.
+function Index:note_buffer_pending(path)
+  local buffer = core.buffer_registry:find(path)
+  if not buffer or not self.buffer_listeners[buffer] then return false end
+  local entry = self:note(path)
+  return buffer:is_loading() or not entry or entry.buffer ~= buffer
+    or entry.buffer_revision ~= buffer.text_revision
+end
+
 function Index:rebuild_async(reason, opts)
   opts = opts or {}
   local started_at = system.get_time()

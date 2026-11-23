@@ -110,6 +110,14 @@ test.describe("Markdown missing link activation", function()
   end)
 
   test.it("warns about a missing heading without opening the note or moving the caret", function(c)
+    local deadline = system.get_time() + 5
+    local entry
+    repeat
+      entry = c.index:note(c.source)
+      if entry and entry.buffer == c.buffer and entry.buffer_revision == c.buffer.text_revision then break end
+      coroutine.yield(0.01)
+    until system.get_time() >= deadline
+    test.equal(test.not_nil(entry).buffer_revision, c.buffer.text_revision)
     c.view:set_selection_state({ selections = { 1, 3, 1, 3 }, last_selection = 1 })
     local selection, focus = c.view:get_selection_state(), core.active_view
     test.equal(live.open_link(c.view, { link = links.from_target("wiki", "Source#Missing") }), false)
