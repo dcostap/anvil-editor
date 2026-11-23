@@ -2106,7 +2106,7 @@ local function local_path_from_uri(uri)
   elseif path:match("^/[A-Za-z]:") then
     path = path:sub(2)
   end
-  local info = system.get_file_info(path)
+  local info = text_poi_locations.file_info(path)
   return info and (info.type == "file" or info.type == "dir") and path or nil
 end
 
@@ -2262,7 +2262,7 @@ function TerminalView:point_of_interest_at(col, row, explicit_only)
     value = value:gsub("[%.,;%)]+$", "")
     local hit, first_col, last_col = covers(first, first + #value)
     if hit then
-      local info = system.get_file_info(value)
+      local info = text_poi_locations.file_info(value)
       if not info or (info.type ~= "file" and info.type ~= "dir") then return nil end
       return {
         kind = "terminal-location", path = common.normalize_path(value),
@@ -2347,7 +2347,7 @@ local function open_location(view, point, opts)
   if not point.path then return false end
   opts = opts or {}
   local pane = opts.pane or panes.pane_for_view(view)
-  local info = system.get_file_info(point.path)
+  local info = text_poi_locations.file_info(point.path)
   if info and info.type == "dir" then
     core.log_quiet("Terminal folder link: opening a File Tree at %s", point.path)
     return require("plugins.filetree").open_path(point.path, {
@@ -2356,7 +2356,8 @@ local function open_location(view, point, opts)
       reason = "terminal-folder-link",
     }) ~= nil
   end
-  if image_formats.is_supported(point.path) then
+  -- Machine images open in an Image View, which reads through the Machine instead of the local canvas loader.
+  if image_formats.is_supported(point.path) and not fs.on_machine(point.path) then
     core.log_quiet("Terminal image link: opening Image Overlay for %s", point.path)
     return require("core.image_overlay").open(point.path)
   end
@@ -2368,7 +2369,7 @@ local function open_location(view, point, opts)
     col = point.target_col or 1,
   })
   if editor then editor.__markdown_link_waiting = nil end
-  if editor and point.heading then
+  if editor and point.heading and not fs.on_machine(point.path) then
     local index = require("core.markdown.vault_index").index_for_path(point.path)
     local buffer, active = editor.buffer, core.active_view
     local revision = not buffer:is_loading() and buffer.text_revision

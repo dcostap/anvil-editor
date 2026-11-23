@@ -924,7 +924,7 @@ function SidebarView:rebuild_rows()
     end
     -- Terminal Sessions that no Pane shows. Recent ones and those that need the user show directly, and so do
     -- those from hosts that do not report activity. Older ones fold into groups. A Session in a Pane's history
-    -- shows only when it needs the user.
+    -- shows only when it needs the user, except for sessions on a Machine.
     local older, held = {}, {}
     for _, id in ipairs(panes.held or {}) do held[id] = true end
     for _, terminal in ipairs(project.terminals or {}) do
@@ -933,7 +933,8 @@ function SidebarView:rebuild_rows()
       if not shown[terminal.id] and terminal.state == "running" then
         project_row.pending = add_pending(project_row.pending, needs_user(attention, tab.agent(terminal)))
       end
-      if shown[terminal.id] or held[terminal.id] and not attention then
+      -- A Machine session stays discoverable from this Client even when its View is in Pane history.
+      if shown[terminal.id] or held[terminal.id] and not panes.terminals and not attention then
         -- Its Tab shows it, or its Pane's history keeps it.
       elseif bucket and bucket ~= "week" and not attention then
         older[bucket] = older[bucket] or {}

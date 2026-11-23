@@ -67,8 +67,9 @@ end
 function machine_folders.list(path)
   local root = root_of(path)
   if root then subscribe(root) end
-  local listing = listings[key(path)]
-  if listing == nil then fetch(path) end
+  local folder = key(path)
+  local listing = listings[folder]
+  if listing == nil and not loading[folder] then fetch(path) end
   return listing
 end
 

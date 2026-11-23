@@ -154,6 +154,8 @@ Its `watch()` has the methods of `core.dirwatch` and reports a folder when its l
 
 The server uses the same functions on its own disk. These methods need Full control. Their paths must be in a Project.
 
+Editor file references use a local worker to parse text, but the Client resolves their paths against the Machine's file and folder lists. A same-named file on this PC is not a match. Live Terminal file links use the same lookup.
+
 A Project root, or a folder that holds a Project root, cannot move or be deleted. A move or copy fails when its target exists. A Client waits on `files.changes` once for each Project.
 
 A new wait ends the earlier wait with `replaced`. On a Machine the File Tree applies its changes in a thread. It then lists the changed folders again (`machine_folders.reload`), without a wait for the change notices.
@@ -272,7 +274,7 @@ A failed start shows its error in the View. These Terminals cannot move to anoth
 
 The shell's scan reads only this PC's records. So the Project process lists its Machine's sessions every 2 seconds (`machine_terminal.sessions`), and its Pane report sends them as `terminals`. The Sidebar model adds them to the Project's Terminal Sessions, so they show agent status, age groups and attention as local sessions do.
 
-A Dormant Project on a Machine lists none. A Sidebar click opens a listed session through the Machine. It does not start a new shell, as a local click does not.
+A Dormant Project on a Machine lists none. A visible Terminal Tab takes the place of its session row. A session in Pane history keeps its session row, so selecting another session does not hide it. A Sidebar click restores the existing View or attaches to the listed session.
 
 Run `runtime/machine_terminal.lua`, `ui/machine_terminal.lua` and `ui/project_sidebar.lua` after changes. The runtime test uses a real host and a real server that shares the test's user folder. The UI test gives the server its own user folder.
 

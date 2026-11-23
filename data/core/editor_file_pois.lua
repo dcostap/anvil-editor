@@ -1,6 +1,7 @@
 local core = require "core"
 local Buffer = require "core.buffer"
 local common = require "core.common"
+local fs = require "core.fs"
 local style = require "core.style"
 local text_poi_locations = require "core.text_poi_locations"
 local TextView = require "core.textview"
@@ -86,7 +87,7 @@ local function file_too_large(buffer)
 end
 
 local function existing_file(path)
-  local info = path and system.get_file_info(path)
+  local info = text_poi_locations.file_info(path)
   return info and info.type ~= "dir"
 end
 
@@ -228,11 +229,11 @@ local function scan_async(view, cache, first, revalidate)
       end
       if not current() then return end
       local chunks, chunk_index, done, failure = {}, 1, false, nil
-      local handle, err = pool:submit {
+      local spec = {
         kind = "core.workers.file_locations",
         priority = "background",
         payload = revalidate and { candidates = candidates, roots = cache.roots }
-          or { lines = lines, first = chunk_first, limit = MAX_CANDIDATES - #candidates, roots = cache.roots },
+          or { text = lines, first = chunk_first, limit = MAX_CANDIDATES - #candidates, roots = cache.roots },
         is_stale = function() return not current() end,
         on_result = function(message)
           chunks[#chunks + 1] = message.payload
@@ -242,15 +243,27 @@ local function scan_async(view, cache, first, revalidate)
         on_error = function(message) failure, done = message.error, true; core.wake_thread(cache) end,
         on_cancelled = function() done = true; core.wake_thread(cache) end,
       }
-      if not handle then failure, done = err, true end
-      cache.worker_handle = handle
+      if fs.machine and revalidate then
+        chunks[1] = { candidates = candidates }
+        done = true
+      else
+        if fs.machine then spec.payload.roots = nil end
+        local handle, err = pool:submit(spec)
+        if not handle then failure, done = err, true end
+        cache.worker_handle = handle
+      end
       while not done or chunk_index <= #chunks do
         if not current() then cancel_scan(cache) return end
         local found = chunks[chunk_index]
         if found then
           chunks[chunk_index] = false
           chunk_index = chunk_index + 1
-          if found.candidates then
+          if not found.points then
+            found.points = text_poi_locations.resolve_candidates(found.candidates, cache.roots,
+              "editor-file-location", function() yield_if_needed(); return not current() end, { wait = true })
+            if not current() then return end
+          end
+          if found.candidates and not revalidate then
             for _, candidate in ipairs(found.candidates) do
               candidates[#candidates + 1] = candidate
               yield_if_needed()
@@ -319,7 +332,7 @@ local function new_cache(view, revision, source, project, previous, append)
     validated_at = 0,
   }
   view.editor_file_poi_cache = cache
-  if can_scan_inline(buffer, first) then
+  if not fs.machine and can_scan_inline(buffer, first) then
     if append then
       for line = first, #buffer.lines do
         if #cache.candidates >= MAX_CANDIDATES then break end

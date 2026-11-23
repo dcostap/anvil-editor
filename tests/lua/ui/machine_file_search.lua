@@ -51,6 +51,7 @@ test.describe("File Search on a Machine", function()
     context.project = context.root .. PATHSEP .. "project"
     test.ok(common.mkdirp(context.user))
     write_file(context.project .. PATHSEP .. "client-only.md", "Client\n")
+    write_file(context.project .. PATHSEP .. "notes.md", "Wrong PC\n")
     write_file(machine_copy(context, context.project .. PATHSEP .. "notes.md"), "Notes\n")
     write_file(machine_copy(context, context.project .. PATHSEP .. "sub" .. PATHSEP .. "plan.md"), "Plan\n")
     write_file(machine_copy(context, context.project .. PATHSEP .. "sub" .. PATHSEP .. "steps.md"),
@@ -85,20 +86,25 @@ test.describe("File Search on a Machine", function()
   test.it("opens a Machine document and finds its file reference without a local path lookup", function(context)
     local path = context.project .. PATHSEP .. "diagnostic.md"
     local text = string.rep("a", 94) .. "\n"
-    text = "notes.md:1\n" .. string.rep(text, 104) .. string.rep("b", 77) .. "\n"
+    text = "notes.md:1\nclient-only.md:1\n" .. string.rep(text, 104)
     write_file(machine_copy(context, path), text)
     local view = assert(core.open_file(path, { placement = "new" }))
     test.ok(wait_until(function() return table.concat(view.buffer.lines) == text end), "Machine file did not load")
     view:update()
+    local target
     test.ok(wait_until(function()
       for _, item in ipairs(core.log_items) do
         if item.text:find("core.workers.file_locations refused a Project path", 1, true)
             and item.text:find(context.project, 1, true) then test.fail(item.text) end
       end
       for _, point in ipairs(require("core.editor_file_pois").points_of_interest(nil, view)) do
-        if common.path_equals(point.path, context.project .. PATHSEP .. "notes.md") then return true end
+        test.not_ok(common.path_equals(point.path, context.project .. PATHSEP .. "client-only.md"))
+        if common.path_equals(point.path, context.project .. PATHSEP .. "notes.md") then target = point end
       end
+      return target
     end), "The editor did not find the Machine file reference")
+    local opened = assert(target.activate(view, target, { placement = "new" }))
+    test.ok(wait_until(function() return table.concat(opened.buffer.lines) == "Notes\n" end))
   end)
 
   test.it("finds the Machine's files and opens the chosen file", function(context)

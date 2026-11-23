@@ -30,9 +30,25 @@ local function path_from_file_uri(path)
   return ok and converted or nil
 end
 
-local function existing_target(path, dirs)
-  local info = path and system.get_file_info(path)
-  return info and (dirs or info.type ~= "dir")
+-- Resolve links printed by a Machine only against that Machine. Never probe a same-named local file.
+function locations.file_info(path, wait)
+  if not path then return end
+  local fs = package.loaded["core.fs"]
+  if not fs or not fs.machine then return system.get_file_info(path) end
+  if not fs.on_machine(path) then return end
+  local info = require("core.project_files").info(path)
+  if info then return info end
+  local parent = common.dirname(path)
+  if parent and fs.on_machine(parent) then
+    local folders = require "core.machine_folders"
+    if wait then folders.wait(parent); return folders.entry(path) end
+    folders.list(parent)
+  end
+end
+
+local function existing_target(path, opts)
+  local info = locations.file_info(path, opts and opts.wait)
+  return info and (opts and opts.dirs or info.type ~= "dir")
 end
 
 -- `opts.dirs` also accepts a folder.
@@ -51,7 +67,7 @@ function locations.resolve_path(path, root, opts)
       or common.normalize_path((root or system.getcwd()) .. PATHSEP .. path)
   end)
   if not ok then return nil end
-  return existing_target(candidate, opts and opts.dirs) and candidate or nil
+  return existing_target(candidate, opts) and candidate or nil
 end
 
 local function resolved_candidate(candidate, path, kind)
@@ -359,7 +375,7 @@ function locations.extract_candidates(text, limit, opts)
   return sort(candidates)
 end
 
-function locations.resolve_candidates(candidates, roots, kind, cancelled)
+function locations.resolve_candidates(candidates, roots, kind, cancelled, opts)
   -- A diagnostic can name one file many times. Resolve each path once for
   -- this snapshot, but do not retain filesystem results across calls.
   local points, paths = {}, {}
@@ -371,7 +387,7 @@ function locations.resolve_candidates(candidates, roots, kind, cancelled)
       if path == nil then
         path = false
         for _, root in ipairs(roots) do
-          path = locations.resolve_path(source, root) or false
+          path = locations.resolve_path(source, root, opts) or false
           if path then break end
         end
         paths[source] = path

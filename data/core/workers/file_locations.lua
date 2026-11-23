@@ -3,10 +3,14 @@ local locations = require "core.text_poi_locations"
 local worker = {}
 
 local function publish(candidates, payload, context)
+  -- Without roots the worker only parses text. The Client resolves these candidates on its Machine.
+  if not payload.roots then
+    return context.send { type = "chunk", payload = { candidates = candidates } }
+  end
   local points = locations.resolve_candidates(candidates, payload.roots, "editor-file-location", context.cancelled)
   if not points then return false end
   return context.send { type = "chunk", payload = {
-    candidates = payload.lines and candidates or nil,
+    candidates = payload.text and candidates or nil,
     points = points,
   } }
 end
@@ -25,7 +29,7 @@ function worker.run(payload, context)
     return
   end
   local candidates, count = {}, 0
-  for index, text in ipairs(payload.lines) do
+  for index, text in ipairs(payload.text) do
     if context.cancelled() or count >= payload.limit then return end
     local found = locations.extract_line_candidates(
       text, payload.first + index - 1, payload.limit - count

@@ -145,7 +145,6 @@ test.describe("Terminal on a Machine", function()
     local hostname = shell.session_id
     local sidebar = require("core.sidebar_view")(function(action, _, target)
       test.equal(action, "select_terminal")
-      test.equal(target, id)
       test.ok(require("core.pane_requests").perform(common.serialize({action="terminal_focus", session=target})))
     end)
     local function refresh()
@@ -172,7 +171,7 @@ test.describe("Terminal on a Machine", function()
     local report = refresh()
     test.ok(require("core.machine_terminal").listed(hostname), "Session missing from Machine list")
     test.contains(report.held or {}, hostname)
-    test.is_nil(row(hostname), "Hostname row still visible")
+    local previous = test.not_nil(row(hostname), "The Sidebar hid the Machine session in Pane history")
     local reply
     fs.machine:request("terminal.list", { project = context.project }, nil, function(err, result)
       reply = err and {} or result.sessions
@@ -181,7 +180,7 @@ test.describe("Terminal on a Machine", function()
     local ids = {}
     for _, session in ipairs(reply) do ids[#ids + 1] = session.id end
     test.contains(ids, hostname)
-    test.ok(panes.back())
+    sidebar:activate_row(previous, false)
     test.equal(panes.active().current_view.session_id, hostname)
     wait_text(panes.active().current_view, assert(os.getenv("COMPUTERNAME")))
   end)
