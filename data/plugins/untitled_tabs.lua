@@ -257,8 +257,15 @@ if not core.__untitled_tabs_patched then
     end
 
     local view = editor_from_state(state)
-    if view and view.buffer and state and state.intellij_untitled then
+    if view and view.buffer and not state.filename then
       tag_buffer(view.buffer, state.intellij_untitled_name, state.intellij_untitled_id)
+      if not state.intellij_untitled then
+        -- Older saved Editors can have text but no Untitled metadata.
+        if untitled_buffer_has_promptable_content(view.buffer) then
+          untitled_recovery.mark_dirty(view.buffer)
+        end
+        return view
+      end
       local loaded_backing
       if transfer then
         -- The sender's live text is authoritative. A local recovery copy can belong to an earlier move.

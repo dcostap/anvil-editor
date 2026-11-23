@@ -72,15 +72,15 @@ local function next_id(kind)
   return "group-" .. M.next_group_id
 end
 
+function M.new_untitled_editor()
+  local Editor = require "core.editor"
+  local untitled = require "plugins.untitled_tabs"
+  return Editor(untitled.tag_buffer(core.open_buffer()))
+end
+
 local function make_view(opts)
   opts = opts or {}
-  local factory = opts.factory or opts.view_factory
-  if not factory then
-    factory = function()
-      local Editor = require "core.editor"
-      return Editor(core.open_buffer())
-    end
-  end
+  local factory = opts.factory or opts.view_factory or M.new_untitled_editor
   local ok, view = pcall(factory)
   if not ok then return nil, view end
   if not view then return nil, "Pane View factory returned nil" end

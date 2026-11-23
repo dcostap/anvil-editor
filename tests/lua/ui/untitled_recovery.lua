@@ -114,6 +114,38 @@ test.describe("untitled recovery integration", function()
     if context.temp_root then test.ok(test.remove_tree(context.temp_root)) end
   end)
 
+  test.it("keeps the names of blank Editors from the default Pane factory when reopened", function(context)
+    local panes = require "core.panes"
+    context.panes = panes
+    context.original_set_active_view = core.set_active_view
+    core.set_active_view = function(view) core.active_view = view end
+    panes.reset_for_tests()
+
+    local first = assert(panes.create())
+    local second = assert(panes.split(first, "right"))
+    test.equal(first.current_view:get_name(), "Untitled-1")
+    test.equal(second.current_view:get_name(), "Untitled-2")
+    test.ok(panes.close(second))
+    local reopened = assert(panes.reopen_last_closed())
+    test.equal(reopened.current_view:get_name(), "Untitled-2")
+    test.equal(reopened.current_view.buffer:get_text(1, 1, math.huge, math.huge), "")
+  end)
+
+  test.it("assigns and keeps a name for an older blank Editor without one", function(context)
+    local editor = assert(Editor.from_state { text = "" })
+    context.views[#context.views + 1] = editor
+    test.equal(editor:get_name(), "Untitled-1")
+    local state = editor:get_state()
+    editor:on_close()
+    context.views = {}
+    core.buffers = {}
+    core.buffer_registry = BufferRegistry(core.buffers)
+    local restored = assert(Editor.from_state(state))
+    context.views[#context.views + 1] = restored
+    test.equal(restored:get_name(), "Untitled-1")
+    test.equal(restored.buffer:get_text(1, 1, math.huge, math.huge), "")
+  end)
+
   test.test("editing an untitled buffer writes a backing file without cleaning user dirtiness", function()
     local buffer = tag_untitled(core.open_buffer(), "Untitled-1", "buffer-one")
     buffer:insert(1, 1, "hello")

@@ -9,13 +9,6 @@ local function active_pane()
   return pane ~= nil, pane
 end
 
-local function new_untitled_editor()
-  local Editor = require "core.editor"
-  local buffer = core.open_buffer()
-  local untitled = require "plugins.untitled_tabs"
-  return Editor(untitled.tag_buffer(buffer))
-end
-
 local function duplicate_view(view)
   if not (view and view.duplicate) then return nil, "Current View does not support copying" end
   local ok, duplicate = pcall(view.duplicate, view)
@@ -272,7 +265,7 @@ local commands = {
 
 for _, direction in ipairs { "left", "right", "up", "down" } do
   commands["pane:split_" .. direction] = command.palette(function(pane)
-    return panes.split(pane, direction, { factory = new_untitled_editor })
+    return panes.split(pane, direction)
   end)
   commands["pane:copy_view_to_split_" .. direction] = command.palette(function(pane)
     local result, err = copy_view_to_split(pane, direction)
@@ -280,9 +273,7 @@ for _, direction in ipairs { "left", "right", "up", "down" } do
     return result
   end, { keywords = { "duplicate", "current" } })
   commands["pane:move_view_to_split_" .. direction] = command.palette(function(pane)
-    local result, err = panes.move_current_view_to_split(pane, direction, {
-      replacement_factory = new_untitled_editor,
-    })
+    local result, err = panes.move_current_view_to_split(pane, direction)
     report_failure("move Current View", result, err)
     return result
   end, { keywords = { "current" } })
@@ -320,7 +311,7 @@ command.add(nil, {
   end, { keywords = { "agent", "control", "setup" } }),
   ["editor:open"] = command.palette(function()
     local context = command.get_invocation_context() or {}
-    return panes.place(new_untitled_editor, {
+    return panes.place(panes.new_untitled_editor, {
       pane = context.source_pane,
       placement = context.placement or "current",
       direction = context.direction,
@@ -333,7 +324,7 @@ command.add(nil, {
     opens_view = true,
   }),
   ["pane:new_group"] = command.palette(function()
-    return panes.create { factory = new_untitled_editor }
+    return panes.create()
   end),
   ["core:close_pane_or_window"] = function()
     local pane = panes.active()
