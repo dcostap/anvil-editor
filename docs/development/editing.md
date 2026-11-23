@@ -38,6 +38,10 @@ Windows Recycle Bin operations run through the `file_trash` worker. `src/file_tr
 
 Run `runtime/system.lua`, `runtime/machine_guard.lua`, `runtime/machine_serve.lua` and `ui/filetree_context_menu.lua` after changes.
 
+## Markdown images
+
+In Live Preview, an image starts at the text indent of its link's line, after any list marker. If the image does not fit at that indent, it starts at the left margin without changing size. Run `ui/markdown_image_resize.lua` after changes.
+
 ## Table images
 
 A table cell that holds only an image link shows the attachment link above the image, scaled to its column. A cell with text and an image keeps the link label. Table images use the same Image Controls as prose: hover buttons, Image Overlay, link editing, corner resize and Context Menu.

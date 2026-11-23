@@ -1449,11 +1449,8 @@ local revealed_link_fragments
 
 local function image_only_render_line(view, text, line, span, active)
   local body_font = live_fonts.body(view)
-  local leading_width = span.col1 > 1
-    and body_font:get_width(text:sub(1, span.col1 - 1)) or 0
   local image = image_fragment(view, span, {
     block = true,
-    available_width = image_available_width(view) - leading_width,
     width = active and 0 or nil,
   })
   if not image then return nil end
@@ -1466,8 +1463,6 @@ local function image_only_render_line(view, text, line, span, active)
     if image.widget then
       image.source_col1 = #text + 1
       image.source_col2 = #text + 1
-      image.draw_x_offset = leading_width - body_font:get_width(text)
-      image.draw_y_offset = live_fonts.body_line_height(view) + image_vertical_padding()
       image.widget.height = image.widget.height + live_fonts.body_line_height(view)
       -- The revealed source and the image are separate visual rows.  Keep the
       -- widget attached to the image block rather than letting the zero-width
@@ -1476,7 +1471,6 @@ local function image_only_render_line(view, text, line, span, active)
       image.image_block_col1 = span.col1
       image.image_block_col2 = #text + 1
       image.image_block_active = true
-      image.image_block_layout_x = leading_width
       fragments[#fragments + 1] = image
     end
     return {
@@ -1484,9 +1478,6 @@ local function image_only_render_line(view, text, line, span, active)
       caret_height = live_fonts.body_line_height(view),
       fragments = fragments,
     }
-  end
-  if image.widget and span.col1 > 1 then
-    image.draw_x_offset = live_fonts.body(view):get_width(text:sub(1, span.col1 - 1))
   end
   if image.widget then
     local link = live._image_attachment_link(view, line, span, { base_font = body_font })
@@ -1500,7 +1491,6 @@ local function image_only_render_line(view, text, line, span, active)
     return {
       source_text = text,
       fragments = {
-        { source_col1 = 1, source_col2 = span.col1, hidden = true },
         link,
         image,
         { source_col1 = span.col2, source_col2 = #text + 1, hidden = true },
@@ -3473,6 +3463,10 @@ local function layout_inline_image_rows(view, line_text, render_line)
   local body_height = live_fonts.body_line_height(view)
   local wrap_width = image_available_width(view)
   local wrap_mode = config.plugins.linewrapping.mode
+  -- Use the rendered text indent, including the space for a list marker.
+  local indent_col = render_line.continuation_indent_col
+  local indent = indent_col and indent_col > 1
+    and view:get_line_render_col_x_offset(render_line, indent_col) or render_line.x_offset or 0
   local rows, y, segment_start = {}, 0, 1
   local function append_text_rows(col1, col2, highlight_full_layout)
     -- Retained image ranges can outlive their source during an edit.
@@ -3547,7 +3541,7 @@ local function layout_inline_image_rows(view, line_text, render_line)
       rows[#rows].end_inclusive = true
     end
 
-    block.layout_x = block.image_block_layout_x or 0
+    block.layout_x = indent + block.widget.width <= wrap_width and indent or 0
     block.draw_x_offset = 0
     block.draw_y_offset = y + (block.widget.padding or 0)
     y = y + block.widget.height

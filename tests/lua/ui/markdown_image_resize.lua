@@ -140,6 +140,45 @@ test.describe("Markdown Live Preview image resize", function()
     test.equal(draw().image.w, 300)
   end)
 
+  test.it("aligns an image with the text of its nested list item", function()
+    local buffer = open_note("- Parent\n  - ![[photo.png]]\nnext")
+    view:set_wrapping_enabled(true)
+    local col = buffer.lines[2]:find("!", 1, true)
+    local function check_alignment()
+      local image = draw(2).image
+      local margin = view:get_line_screen_position(2)
+      local link_x = view:get_line_screen_position(2, col)
+      test.ok(link_x > margin, "the link is indented")
+      test.near(image.x, link_x, 1, "the image starts under the link")
+      test.equal(image.w, 400, "the indent does not shrink the image")
+      test.not_nil(markdown.live_render.image_at_position(
+        view, image.x + image.w - 2, image.y + image.h / 2
+      ), "the right edge of the indented image is clickable")
+    end
+    buffer:set_selection(3, 1)
+    check_alignment()
+    buffer:set_selection(2, col + 3)
+    check_alignment()
+  end)
+
+  test.it("keeps a wide image at the margin when its indent does not fit", function()
+    local buffer = open_note("- Parent\n  - ![[photo.png|2000]]\n\n![[photo.png|2000]]\nlast")
+    buffer:set_selection(5, 1)
+    local image = draw(2).image
+    local flat_image = draw(4).image
+    test.near(image.x, view:get_line_screen_position(2), 1)
+    test.equal(image.w, flat_image.w, "the indent does not shrink the image")
+  end)
+
+  test.it("keeps leading spaces on a line with only an attachment", function()
+    local buffer = open_note("Paragraph\n  ![[photo.png]]\nnext")
+    buffer:set_selection(3, 1)
+    local image = draw(2).image
+    local link_x = view:get_line_screen_position(2, 3)
+    test.ok(link_x > view:get_line_screen_position(2), "the link is indented")
+    test.near(image.x, link_x, 1, "the image starts under the link")
+  end)
+
   test.it("double-clicks the corner to remove the width", function()
     local buffer = open_note("![Alt|120](photo.png)\nnext")
     local x, y = corner_point(draw())
