@@ -370,7 +370,7 @@ Programs ask the terminal questions: the cursor position, the colours, light or 
 - Each Terminal Session has at most one **Controller**. It sets the size, sends input and answers queries.
 - **Viewers** show the Controller's screen at its size. They scale it to fit, with zoom and panning on the phone. A small bar shows the Controller's device and a Take Control button.
 - Viewers do not answer queries and have no other side effects, such as clipboard writes.
-- **Input takes control.** On the desktop, typing in the Terminal takes control. On the phone, a tap that opens the keyboard takes control. Take Control does the same.
+- **Keyboard focus takes control on the desktop.** Focusing the Terminal or typing in it takes control. View access remains read-only. On the phone, a tap that opens the keyboard takes control. Take Control does the same.
 - When no Client is connected, the session keeps its last size. Queries then get no answer, as they do today when no editor is attached (`host_reader` in `src/terminal_host.c`). ConPTY itself answers cursor-position requests.
 - Viewers are not blurred. A Viewer is most useful to check whether Pi still works or asks a question.
 
@@ -390,7 +390,7 @@ A query that comes before the handoff goes to the old Controller. If the old Con
 
 If the Controller disconnects, the session has no Controller until a Client asks. A Controller that reconnects with an old generation is a Viewer.
 
-A Client on the host's own PC takes control when it attaches, if the Controller is also on that PC. One PC has one user, and a Pane move attaches before the old View's detach arrives. A remote Controller keeps control until someone types.
+A Client on the host's own PC takes control when it attaches, if the Controller is also on that PC. One PC has one user, and a Pane move attaches before the old View's detach arrives. A background Pane does not take control from a remote Controller on attach.
 
 The host orders an attach snapshot and the output after it with its model lock. Role records use the same lock.
 

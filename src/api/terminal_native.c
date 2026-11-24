@@ -146,7 +146,7 @@ typedef struct {
      send no ROLE, and their one Client controls. */
   AnvilTerminalRole role_next;
   bool role_ready;
-  bool viewer, take_pending;
+  bool viewer, take_pending, focus_can_take;
   uint32_t control_generation;
   char controller_name[ANVIL_TERMINAL_NAME_LENGTH];
   uint32_t clients;
@@ -674,14 +674,17 @@ static AnvilTerminalSize wanted_size(const TerminalSession *session) {
   return (AnvilTerminalSize){ session->cols, session->rows, session->cell_width, session->cell_height };
 }
 
+static bool request_control(TerminalSession *session) {
+  if (!terminal_is_live(session) || !session->viewer || session->take_pending) return false;
+  AnvilTerminalTake take = { session->control_generation, wanted_size(session) };
+  session->take_pending = enqueue_record(session, ANVIL_TERMINAL_TAKE, (const uint8_t *)&take, sizeof(take));
+  return session->take_pending;
+}
+
 /* Typed input. A Viewer first asks for control with the generation that it saw last. The input follows on the
    same pipe, so the host gives it to the program only when the request wins. */
 static bool write_typed(TerminalSession *session, const uint8_t *data, size_t length) {
-  if (session->viewer && !session->take_pending && length) {
-    AnvilTerminalTake take = { session->control_generation, wanted_size(session) };
-    if (!enqueue_record(session, ANVIL_TERMINAL_TAKE, (const uint8_t *)&take, sizeof(take))) return false;
-    session->take_pending = true;
-  }
+  if (session->viewer && !session->take_pending && length && !request_control(session)) return false;
   return write_all(session, data, length);
 }
 
@@ -1937,7 +1940,11 @@ static bool service_replay(TerminalSession *session, bool *changed) {
     AnvilTerminalRole next = session->role_next;
     if (role) { session->role_ready = false; WakeConditionVariable(&session->read_ready); }
     LeaveCriticalSection(&session->read_lock);
-    if (role) apply_role(session, &next);
+    if (role) {
+      apply_role(session, &next);
+      /* Focus can arrive before the attach ROLE. Later role changes are not focus events. */
+      if (session->focus_can_take) request_control(session);
+    }
     return false;
   }
   uint64_t deadline = GetTickCount64() + 2;
@@ -2404,13 +2411,7 @@ static int f_terminal_wanted_size(lua_State *L) {
 /* Takes control without input. Returns false for a Controller or a closed session. */
 static int f_terminal_take_control(lua_State *L) {
   TerminalSession *session = check_session(L, 1);
-  bool ok = terminal_is_live(session) && session->viewer && !session->take_pending;
-  if (ok) {
-    AnvilTerminalTake take = { session->control_generation, wanted_size(session) };
-    ok = enqueue_record(session, ANVIL_TERMINAL_TAKE, (const uint8_t *)&take, sizeof(take));
-    session->take_pending = ok;
-  }
-  lua_pushboolean(L, ok);
+  lua_pushboolean(L, request_control(session));
   return 1;
 }
 
@@ -3747,6 +3748,8 @@ static int f_terminal_hyperlink(lua_State *L) {
 static int f_terminal_focus(lua_State *L) {
   TerminalSession *session = check_session(L, 1);
   bool focused = lua_toboolean(L, 2) != 0;
+  session->focus_can_take = focused && lua_toboolean(L, 3);
+  if (session->focus_can_take) request_control(session);
   if (!terminal_model_available(session)) {
     lua_pushboolean(L, false);
     return 1;
@@ -3759,7 +3762,7 @@ static int f_terminal_focus(lua_State *L) {
     session->terminal, GHOSTTY_TERMINAL_DATA_MODE, &mode
   );
   bool ok = result == GHOSTTY_SUCCESS;
-  if (ok && mode.value && !session->viewer) {
+  if (ok && mode.value && (!session->viewer || (session->focus_can_take && session->take_pending))) {
     static const uint8_t focus_in[] = "\x1b[I";
     static const uint8_t focus_out[] = "\x1b[O";
     ok = focused

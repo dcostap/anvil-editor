@@ -1284,7 +1284,7 @@ function TerminalView:sync_focus()
     self.text_owner = nil
   end
   if not focus_changed then return false end
-  self.session:focus(focused)
+  self.session:focus(focused, not self.remote or self.remote.client.level == "full")
   return true
 end
 

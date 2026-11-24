@@ -95,6 +95,7 @@ test.describe("Terminal Session restoration", function()
   end)
 
   test.after_each(function(context)
+    if context.window_has_focus then system.window_has_focus = context.window_has_focus end
     for _, saved in ipairs(context.protections or {}) do
       if saved.original then saved.advapi.SetKernelObjectSecurity(saved.handle, 4, saved.original) end
       context.kernel.CloseHandle(saved.handle)
@@ -174,7 +175,10 @@ test.describe("Terminal Session restoration", function()
     test.equal(#terminal.open_views(), before)
   end)
 
-  test.it("shares the shell with a second client, and typing takes control", function(context)
+  test.it("shares the shell and takes control on typing or focus", function(context)
+    context.window_has_focus = system.window_has_focus
+    local focused = false
+    system.window_has_focus = function() return focused end
     local view = open(context)
     mark(view, "before_share_marker")
     local native = require "terminal_native"
@@ -217,6 +221,14 @@ test.describe("Terminal Session restoration", function()
     test.not_equal(own_status().viewer, true)
     test.ok(wait_for(view, function() return view.session:snapshot(nil, false).cols ~= 50 end),
       "the new Controller did not set its own size")
+    test.ok(other:take_control())
+    test.ok(wait_for(view, function() return own_status().viewer end))
+    focused = true
+    view:update()
+    test.ok(wait_for(view, function()
+      other_printed("")
+      return status.viewer and not own_status().viewer and view.session:snapshot(nil, false).cols ~= 50
+    end), "focus did not take control and restore the Pane size")
     -- Both Clients belong to this process. Closing one must not close the other's shell.
     other:close()
     test.ok(wait_for(view, function() return own_status().clients == 1 end))

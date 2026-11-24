@@ -90,7 +90,7 @@ It does not send a full terminal reset. Existing shells need a new Terminal Sess
 
 A Terminal host accepts up to 8 Clients. One Client is the Controller: it sets the size, sends input and answers terminal queries. The others are Viewers.
 
-Viewers show the Controller's screen at its size. They send no query answers, focus reports or mouse reports, and get no clipboard writes. Typed input in a Viewer takes control.
+Viewers show the Controller's screen at its size. They send no query answers or mouse reports and get no clipboard writes. A desktop Terminal takes control when it gains keyboard focus. A Machine device with View access stays a Viewer. Typed input can also take control.
 
 The client sends `TAKE` with the control generation that it saw last, then the input on the same pipe. The host refuses an old generation and drops a Viewer's input. After a grant or a resize, the host sends a `ROLE` record to each Client at that place in the output.
 
@@ -108,7 +108,7 @@ An identity that cannot be verified stays blocked. A failed Terminal without a n
 
 When the Controller leaves, no other Client gets control until it asks. A Client on the host's own PC takes control when it attaches, if the Controller is also on this PC. A Pane move attaches before the old View's detach arrives, so the target still controls.
 
-A remote Controller keeps control. A Viewer whose 8 MiB queue is full is dropped. It attaches again with a snapshot, so it never stalls the Controller.
+A background Pane does not take control from a remote Controller on attach. A Viewer whose 8 MiB queue is full is dropped. It attaches again with a snapshot, so it never stalls the Controller.
 
 Hosts that write `shared = true` in their record accept more than one Client. Older hosts refuse a second Client and send no `ROLE`, so their one Client controls. The session status reports `viewer` and the Controller's device name.
 
