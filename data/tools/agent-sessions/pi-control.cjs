@@ -32,11 +32,11 @@ module.exports = function (pi) {
     }
   }
 
-  function receive(command) {
+  function receive(command, endpoint) {
     if (!command || typeof command.id !== "string" || command.id.length > 128) return;
     if (receipts.has(command.id)) return;
     if (receipts.size >= LIMIT) return; // Admission uses the capacity reported in the same exchange.
-    const receipt = { id: command.id, status: "accepted" };
+    const receipt = { id: command.id, status: "accepted", endpoint };
     receipts.set(command.id, receipt);
     try {
       if (command.action === "interrupt") {
@@ -53,10 +53,22 @@ module.exports = function (pi) {
           lastMessage = null;
         }
         receipt.task = active?.id;
-        save(); // A reload after dispatch must not send this message again.
         const kind = startsTurn ? "task" : "steering";
-        pi.sendMessage({ customType: "anvil-" + kind, content: `Anvil agent ${kind} from ${command.from || "local client"}\n\n${command.text}`, display: true,
-          details: { requestId: command.id, from: command.from } }, { triggerTurn: true, deliverAs: "steer" });
+        receipt.canReply = true;
+        if (!startsTurn) receipt.status = "awaiting_reply";
+        save(); // A reload after dispatch must not send this message again.
+        const sender = command.sender;
+        const clean = s => typeof s === "string" ? s.replace(/[\x00-\x1f\x7f]/g, " ").trim() : "";
+        let label = clean(command.from) || "local client";
+        if (sender) {
+          const short = clean(sender.terminal).slice(0, 8);
+          label = clean(sender.title) || `Terminal ${short}`;
+          if (sender.title && sender.ambiguous) label += ` (${short})`;
+          if (sender.other_project) label += ` in ${path.win32.basename(clean(sender.project))}`;
+          if (sender.machine) label += ` @ ${clean(sender.machine)}`;
+        }
+        pi.sendMessage({ customType: "anvil-" + kind, content: `Anvil agent ${kind} from ${label}\nReply to this request with anvil_reply (request: ${command.id}).\n\n${command.text}`, display: true,
+          details: { requestId: command.id, from: command.from, sender } }, { triggerTurn: true, deliverAs: "steer" });
       } else throw new Error("Unknown Pi control operation");
     } catch (error) {
       receipt.status = "failed";
@@ -70,6 +82,18 @@ module.exports = function (pi) {
     }
     save();
   }
+
+  pi.registerTool({name: "anvil_reply", label: "Reply to Anvil request",
+    description: "Answer a specific incoming Anvil task or steering message. Use its request ID; do not address a Terminal.",
+    parameters: {type: "object", required: ["request", "text"], properties: {request: {type: "string"}, text: {type: "string"}}},
+    async execute(_id, {request, text}) {
+      const receipt = receipts.get(request);
+      if (!receipt?.canReply || stopped) throw new Error("No such Anvil request in this conversation");
+      if (typeof text !== "string" || !text.trim() || Buffer.byteLength(text) > 8192) throw new Error("Reply needs 1 to 8192 bytes");
+      if (receipt.result !== undefined && receipt.result !== text) throw new Error("This request already has a reply");
+      receipt.result = text; receipt.status = "completed"; save();
+      return {content: [{type: "text", text: "Reply recorded for the sender."}], details: {request}};
+    }});
 
   async function exchangeAt(file, primary) {
     const next = JSON.parse(await fs.readFile(file, "utf8"));
@@ -92,9 +116,10 @@ module.exports = function (pi) {
     deadline.unref?.();
     try {
       const changes = [];
-      const changed = (kind, values) => values.filter(value => {
+      const changed = (kind, values, limit = Infinity) => values.filter(value => {
         const key = kind + ":" + value.id, text = JSON.stringify(value);
         if (reported.get(key) === text) return false;
+        if (limit-- <= 0) return false;
         changes.push([key, text]);
         return true;
       });
@@ -104,12 +129,13 @@ module.exports = function (pi) {
       }).slice(0, 32).map(({ text, ...task }) => task);
       const response = await fetch(next.url + "/agent", { method: "POST", redirect: "error",
         headers: { Authorization: "Bearer " + next.token, "Content-Type": "application/json" },
-        body: JSON.stringify({ instance, session: ctx.sessionManager.getSessionFile(),
+        body: JSON.stringify({ instance, title: ctx.sessionManager.getSessionName?.(), session: ctx.sessionManager.getSessionFile(),
           model: ctx.model && { provider: ctx.model.provider, id: ctx.model.id },
           thinking: pi.getThinkingLevel(), busy: !ctx.isIdle(),
           capabilities: {transcript: true, activity: true}, activity: inspect.activity(ctx),
           transcripts: [...transcripts.values()].slice(0, 1).map(({created, ...reply}) => reply),
-          capacity: LIMIT - receipts.size, receipts: changed("receipt", [...receipts.values()]),
+          capacity: LIMIT - receipts.size, receipts: changed("receipt", [...receipts.values()].filter(r => !r.endpoint || r.endpoint === file)
+            .map(({endpoint, canReply, ...receipt}) => receipt), 8),
           tasks: changed("task", currentTasks) }), signal: controller.signal });
       if (!response.ok) throw new Error("Anvil connection unavailable");
       const data = await response.json();
@@ -131,7 +157,7 @@ module.exports = function (pi) {
           }
           transcripts.set(request.id, {id: request.id, result, error, created: Date.now()});
         }
-        if (Array.isArray(data.commands)) for (const command of data.commands) receive(command);
+        if (Array.isArray(data.commands)) for (const command of data.commands) receive(command, file);
       }
     } finally { clearTimeout(deadline); controller = null; }
   }
@@ -166,6 +192,7 @@ module.exports = function (pi) {
       // Runtime replacement interrupts runs and queued work saved by older extensions.
       if (task.status === "running" || task.status === "queued") task.status = "interrupted";
     }
+    for (const r of receipts.values()) if (r.status === "awaiting_reply") r.status = "accepted";
     stopped = false;
     tick();
   });
@@ -179,6 +206,7 @@ module.exports = function (pi) {
     if (active && event.message.role === "assistant") lastMessage = event.message;
   });
   pi.on("agent_settled", event => {
+    for (const r of receipts.values()) if (r.status === "awaiting_reply") r.status = "accepted";
     if (active) {
       active.status = event.aborted ? "interrupted" : lastMessage?.stopReason === "error" ? "failed" : "completed";
       const text = (lastMessage?.content || []).filter(p => p.type === "text").map(p => p.text).join("\n");
@@ -188,8 +216,8 @@ module.exports = function (pi) {
       if (lastMessage?.errorMessage) active.error = lastMessage.errorMessage.slice(0, 512);
       active.finished = Date.now();
       active = null;
-      save();
     }
+    save();
   });
   pi.on("session_shutdown", async () => {
     stopped = true;

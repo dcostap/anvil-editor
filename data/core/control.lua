@@ -424,11 +424,13 @@ function M:exchange(terminal, report)
   end
   peer.seen, peer.busy = system.get_time(), report.busy == true
   peer.session, peer.model, peer.thinking = report.session, report.model, report.thinking
+  peer.title = type(report.title) == "string" and report.title:sub(1, 256) or nil
   peer.activity, peer.capabilities = report.activity, report.capabilities
   peer.capacity = type(report.capacity) == "number" and math.max(0, math.min(256, report.capacity)) or 256
   for _, receipt in ipairs(report.receipts) do
     check(id, receipt.id, "receipt ID")
     if peer.commands[receipt.id] or peer.receipts[receipt.id] then
+      assert(receipt.result == nil or type(receipt.result) == "string" and #receipt.result <= 8192, "Invalid reply")
       peer.receipts[receipt.id] = receipt
       peer.commands[receipt.id] = nil
     end
@@ -475,7 +477,19 @@ function M:peer(args, live)
   return peer
 end
 
-function M:send(args, caller, action)
+function M:sender(caller)
+  local peer = self.peers[caller]
+  local title = peer and peer.title
+  local sender = {terminal = caller, project = self.project_key, instance = peer and peer.instance, title = title}
+  if title then
+    for other, p in pairs(self.peers) do
+      if other ~= caller and p.title == title then sender.ambiguous = true; break end
+    end
+  end
+  return sender
+end
+
+function M:send(args, caller, action, sender)
   local peer = self:peer(args, true)
   local count = 0
   for _ in pairs(peer.commands) do count = count + 1 end
@@ -484,11 +498,11 @@ function M:send(args, caller, action)
   local task = net.random_token()
   peer.order = (peer.order or 0) + 1
   peer.commands[task] = {id = task, action = action, text = args.text,
-    from = caller or "local", order = peer.order}
+    from = caller or "local", sender = sender or self:sender(caller), order = peer.order}
   return {terminal = args.terminal, instance = peer.instance, task = task, status = "pending"}
 end
 
-function M:agent_send(args, caller) return self:send(args, caller, "send") end
+function M:agent_send(args, caller, sender) return self:send(args, caller, "send", sender) end
 function M:agent_interrupt(args, caller) return self:send(args, caller, "interrupt") end
 
 function M:agent_read(args)
@@ -519,6 +533,7 @@ function M:agent_read(args)
       result.status, result.related_task = "delivered", receipt.task
     end
     result.result, result.truncated = task and task.result, task and task.truncated
+    if receipt and receipt.result then result.status, result.result, result.truncated = "completed", receipt.result, false end
     result.error = task and task.error or receipt and receipt.error
   end
   return result
@@ -654,7 +669,7 @@ function M:pane(args, caller)
   return { pane = result.id, status = "completed" }
 end
 
-function M:call(name, args, caller)
+function M:call(name, args, caller, sender)
   local definition
   for _, tool in ipairs(M.tools) do if tool.name == name then definition = tool; break end end
   assert(definition, "Unknown control tool")
@@ -675,7 +690,7 @@ function M:call(name, args, caller)
     self.receipts[key] = { fingerprint = fingerprint, error = "Operation did not finish" }
   end
   -- Tool methods live on the class. The `project` field would hide the `project` tool.
-  local ok, result = pcall(M[name], self, args, caller)
+  local ok, result = pcall(M[name], self, args, caller, sender)
   if key then
     self.receipts[key].result, self.receipts[key].error = ok and result or nil, not ok and tostring(result) or nil
     core.log_quiet("Control: %s caller=%s request=%s ok=%s", name, caller or "local", args.request_id, tostring(ok))

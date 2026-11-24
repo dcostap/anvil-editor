@@ -116,7 +116,9 @@ Each transcript reply has a 256 KiB limit, including metadata and JSON escaping.
 
 A wait timeout does not cancel work. A disconnect does not mean completion. A reported question ends the wait with `waiting_for_user`. Use `agent_interrupt` to stop active work without closing the Terminal.
 
-Steering and interruption return `delivered` after Pi accepts them. A steering receipt can include `related_task`, the active Anvil task. Wait for that task to retrieve its final answer.
+Tasks and steering messages show the sending conversation's title. A missing or duplicate title adds a short Terminal ID. Messages from another Project add the Project name. Messages from a paired device also show its name.
+
+Use `anvil_reply` with the incoming request ID to answer its sender. The sender reads the answer with `agent_wait` or `agent_read` on the original task ID. A reply needs no reverse pairing. An active turn can answer a steering request without ending its other work. If the turn settles without an explicit reply, steering reports `delivered`, not the unrelated turn's answer. Interruption also reports `delivered` after acceptance.
 
 ## Tools
 

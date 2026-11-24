@@ -122,7 +122,8 @@ function M:dispatch(client, body)
       end
       if machine then
         client.forwarding, client.deadline = true, system.get_time() + 48
-        return agents.route(machine, path, params.name, args, client.caller, tool_result, function() return client.dead end)
+        return agents.route(machine, path, params.name, args, client.caller, tool_result, function() return client.dead end,
+          params.name == "agent_send" and self.control:sender(client.caller) or nil)
       end
     end
     if args.project and (type(args.project) ~= "string" or not common.path_equals(args.project, self.control.project_key)) then
@@ -136,7 +137,7 @@ function M:dispatch(client, body)
         end
         if not target then return tool_result(false, "Project is not loaded or has no control endpoint") end
         args.project = nil -- The destination already identifies the Project. Never forward twice.
-        params._meta = {anvil_caller = client.caller}
+        params._meta = {anvil_caller = client.caller, sender = params.name == "agent_send" and self.control:sender(client.caller) or nil}
         require("core.http").post(target.url .. "/mcp", "application/json", nil, {
           body = json.encode(request), decode_json = false,
           headers = {Authorization = "Bearer " .. target.token, ["Content-Type"] = "application/json"}, timeout = 35,
@@ -151,12 +152,14 @@ function M:dispatch(client, body)
           end})
       end)
     end
-    local caller = client.caller
+    local caller, sender = client.caller, nil
     if caller == "local" and type(params._meta) == "table" and type(params._meta.anvil_caller) == "string" then
       caller = params._meta.anvil_caller
+      sender = params._meta.sender
+      if sender then sender.other_project = true end
     end
     local function run()
-      local ok, value = pcall(self.control.call, self.control, params.name, args, caller)
+      local ok, value = pcall(self.control.call, self.control, params.name, args, caller, sender)
       if ok and params.name == "agent_transcript" then
         client.transcript = {query = value, result = tool_result}
         client.deadline = value.deadline + 5

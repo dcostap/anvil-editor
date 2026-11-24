@@ -4,7 +4,7 @@ local json = require "core.lsp.json"
 local M = { methods = { agent_read = true, agent_send = true, agent_wait = true, agent_transcript = true, agent_interrupt = true } }
 
 -- One connection per call bounds its lifetime and never replays a send after a disconnect.
-function M.route(id, path, method, args, caller, done, cancelled)
+function M.route(id, path, method, args, caller, done, cancelled, sender)
   if #id ~= 32 or not id:match("^%x+$") then return done(false, "Invalid Machine ID") end
   local project = require "core.machine_project"
   local client = require("core.machine_client").new(project.machine_file(id))
@@ -22,6 +22,7 @@ function M.route(id, path, method, args, caller, done, cancelled)
     local params = {}
     for k, v in pairs(args) do params[k] = v end
     params.project, params.sender = path, caller
+    params.sender_info = sender
     local finished
     client:request(method, params, nil, function(err, result, bytes)
       if finished then return end

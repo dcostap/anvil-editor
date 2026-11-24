@@ -82,8 +82,14 @@ function M.new(server, live_record)
         if client.dead then return finish(false) end
         local control = item.server.control
         local sender = "machine:" .. (client.device or "owner") .. "/" .. tostring(args.sender or "local"):sub(1, 128)
-        args.sender = nil
-        local value = control:call(method, args, sender)
+        local info = args.sender_info
+        if type(info) == "table" then
+          info.terminal = args.sender
+          info.machine = client.device and (client.name or client.device) or nil
+          info.other_project = info.machine ~= nil or info.project ~= control.project_key
+        end
+        args.sender, args.sender_info = nil, nil
+        local value = control:call(method, args, sender, info)
         if method == "agent_transcript" then
           local query = value
           repeat

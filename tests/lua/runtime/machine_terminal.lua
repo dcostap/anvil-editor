@@ -148,6 +148,7 @@ test.describe("Remote Terminal Session", function()
     projects.own_id = function() return string.rep("0", 32) end
     context.source = require("core.control_server").open(require("core.control").new(context.project))
     local source = context.source:add_client("source-terminal")
+    context.source.control:exchange("source-terminal", {instance = "source-pi", title = "Build watcher", receipts = {}, tasks = {}})
     context.source.control:exchange(context.id, {instance = "wrong-local-agent", receipts = {}, tasks = {}})
     require("core").add_thread(function()
       while context.source.listener do context.source:poll(); coroutine.yield(.01) end
@@ -165,10 +166,18 @@ test.describe("Remote Terminal Session", function()
     local received = post("/agent", report).commands[1]
     test.equal(received.id, task)
     test.equal(received.text, "ping")
+    test.equal(received.sender.title, "Build watcher")
+    test.equal(received.sender.instance, "source-pi")
+    test.equal(received.sender.machine, "Client")
+    test.equal(received.sender.project, context.project)
     report.receipts = {{id = task, status = "accepted", task = task}}
     report.tasks = {{id = task, status = "completed", result = "pong"}}
     post("/agent", report)
     test.equal(tool("agent_wait", {instance = state.instance, task = task}).result, "pong")
+    local steer = tool("agent_send", {instance = state.instance, request_id = "ask", text = "Check log"}).task
+    report.receipts = {{id = steer, status = "completed", result = "One client remains"}}
+    post("/agent", report)
+    test.equal(tool("agent_wait", {instance = state.instance, task = steer}).result, "One client remains")
     local interrupt = tool("agent_interrupt", {instance = state.instance, request_id = "interrupt"})
     test.equal(post("/agent", report).commands[1].id, interrupt.task)
     local transcript

@@ -19,7 +19,7 @@ test("interactive Pi connects, receives each task once, and reports completion o
   const report = path.join(dir, "terminal-sessions", "terminal.agent");
   const old = process.env.ANVIL_TERMINAL_AGENT_REPORT;
   process.env.ANVIL_TERMINAL_AGENT_REPORT = report;
-  const handlers = new Map(), sent = [], deliveries = [], entries = [], servers = [];
+  const handlers = new Map(), sent = [], deliveries = [], entries = [], servers = [], tools = new Map();
   let commands = [], latest, idle = true, aborted = false;
   const ctx = {
     mode: "tui", isIdle: () => idle, abort: () => { aborted = true; },
@@ -28,6 +28,7 @@ test("interactive Pi connects, receives each task once, and reports completion o
     ui: { notify() {} },
   };
   const pi = {
+    registerTool(tool) { tools.set(tool.name, tool); },
     on(name, fn) {
       const previous = handlers.get(name);
       handlers.set(name, async (...args) => { await previous?.(...args); return fn(...args); });
@@ -63,18 +64,24 @@ test("interactive Pi connects, receives each task once, and reports completion o
     // Removing the View leaves the host endpoint available to this running Pi.
     await fs.mkdir(path.join(dir, "machine", "agents"), {recursive: true});
     await fs.rename(path.join(dir, "control", "terminals", "terminal.json"), path.join(dir, "machine", "agents", "terminal.json"));
-    commands = [{ id: "task-a", action: "send", text: "Review this change", from: "other-terminal" }];
+    commands = [{ id: "task-a", action: "send", text: "Review this change", from: "other-terminal",
+      sender: {terminal: "other-terminal", title: "Watcher", project: "C:\\Projects\\Alpha"} }];
     await until(() => latest.receipts?.some(r => r.id === "task-a"));
     assert.equal(latest.receipts.find(r => r.id === "task-a").status, "accepted");
     assert.equal(sent.length, 1);
-    assert.ok(sent[0].content.includes("Anvil agent task from other-terminal"));
+    assert.match(sent[0].content, /^Anvil agent task from Watcher\n/);
     assert.ok(sent[0].content.endsWith("Review this change"));
     assert.equal(sent[0].details.from, "other-terminal");
-    commands = [{id: "steer-task", action: "send", text: "Check the tests too", from: "other-terminal"}];
+    commands = [{id: "steer-task", action: "send", text: "Check the tests too", from: "other-terminal",
+      sender: {terminal: "other-terminal", title: "Watcher", project: "C:\\Projects\\Alpha", other_project: true, machine: "Workstation"}}];
     await until(() => latest.receipts?.some(r => r.id === "steer-task"));
     assert.equal(latest.receipts.find(r => r.id === "steer-task").task, "task-a");
     assert.equal(sent[1].customType, "anvil-steering");
     assert.equal(deliveries[1].deliverAs, "steer");
+    assert.match(sent[1].content, /from Watcher in Alpha @ Workstation/);
+    assert.ok(sent[1].content.includes("steer-task"));
+    await tools.get("anvil_reply").execute("call", {request: "steer-task", text: "Tests passed"});
+    await until(() => latest.receipts?.some(r => r.id === "steer-task" && r.result === "Tests passed"));
     await handlers.get("message_end")({ message: { role: "assistant", content: [{ type: "text", text: "Looks good" }], stopReason: "stop" } }, ctx);
     if (handlers.has("agent_end")) await handlers.get("agent_end")({}, ctx);
     assert.ok(!latest.tasks?.some(t => t.status === "completed"));
@@ -84,11 +91,13 @@ test("interactive Pi connects, receives each task once, and reports completion o
     assert.equal(latest.tasks.find(t => t.id === "task-a").result, "Looks good");
     assert.equal(sent.length, 2, "A repeated command must not send the message twice");
     idle = false; // The user has started a separate turn.
-    commands = [{id: "steer-a", action: "send", text: "Use this constraint", from: "other-terminal"}];
+    commands = [{id: "steer-a", action: "send", text: "Use this constraint", from: "other-terminal",
+      sender: {terminal: "123456789abc", title: "Watcher", ambiguous: true, other_project: true, project: "C:\\Projects\\Alpha"}}];
     await until(() => latest.receipts?.some(r => r.id === "steer-a"));
-    assert.equal(latest.receipts.find(r => r.id === "steer-a").status, "accepted");
+    assert.equal(latest.receipts.find(r => r.id === "steer-a").status, "awaiting_reply");
     assert.equal(latest.receipts.find(r => r.id === "steer-a").task, undefined);
     assert.equal(sent[2].customType, "anvil-steering");
+    assert.match(sent[2].content, /^Anvil agent steering from Watcher \(12345678\) in Alpha\n/);
     assert.equal(sent[2].details.from, "other-terminal");
     assert.equal(deliveries[2].deliverAs, "steer");
     idle = true;
@@ -152,7 +161,7 @@ test("Pi exposes paged conversation text and live parallel tools without startin
   const pi = {on(name, fn) {
       const previous = handlers.get(name);
       handlers.set(name, async (...args) => { await previous?.(...args); return fn(...args); });
-    }, registerMcpServer() {}, unregisterMcpServer() {},
+    }, registerTool() {}, registerMcpServer() {}, unregisterMcpServer() {},
     getThinkingLevel: () => "off", appendEntry() {throw new Error("Inspection must not write session entries");},
     sendMessage() {sent++;}};
   const replies = new Map();
