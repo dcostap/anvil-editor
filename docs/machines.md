@@ -64,7 +64,9 @@ The Machine is not only a file server. Terminal Sessions and Pi live there. Each
 - **A Client owns editor operations.** Operations such as "open a Pane" or "show this file" need a UI. Each such request names its target Client. With no Client connected, the request fails with a clear error.
 - **Anvil on the Machine itself is also a Client.** If you sit at PC A, your local Anvil uses the same Terminal hosts and the same Machine operations as a Client on PC B. PC A has no second owner.
 
-Two desktops can open the same Project on a Machine. Each one has its own Buffers and Views. They meet only through the Machine's files and Terminal Sessions.
+Two desktops can open the same Project on a Machine. The host Project publishes its layout after Workspace restore. Desktop clients share open named file and Terminal Panes, order, splits and the active Pane. Each PC keeps its own Buffers, cursor, scroll position and window. Untitled, Snoozed and tool Panes stay local. A remote close waits if it would discard unsaved edits.
+
+The Machine holds one layout revision per Project while the server runs. A Full control client can change it. A View client can follow it. After reconnect, a client takes the current revision instead of publishing its offline layout. After a server restart the host Project must open to publish its Workspace again. Older servers use independent layouts.
 
 ### State
 

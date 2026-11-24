@@ -127,6 +127,29 @@ test.describe("Machine server", function()
     client.socket:close()
   end)
 
+  test.it("shares the host layout without accepting stale writes", function(context)
+    local host, laptop = connect(context.discovery), connect(context.discovery)
+    for _, client in ipairs {host, laptop} do
+      test.ok(call(client, "hello", {protocol = 1, token = context.discovery.token}).result)
+    end
+    local request = {project = context.project, base = 0, layout = {groups = {{file = "notes.md"}}, active = 1}}
+    test.ok(call(host, "layout.set", request).result, "Host could not publish layout")
+    local reply = call(laptop, "layout.get", {project = context.project}).result
+    test.equal(reply.layout.groups[1].file, "notes.md")
+    test.equal(call(laptop,"layout.set",{base=reply.revision,project=context.project,
+      layout={groups={{file=".." .. PATHSEP .. "secret.txt"}},active=1}}).error.code,"invalid_layout")
+    test.equal(call(laptop, "layout.set", request).error.code, "conflict")
+    request.base, request.layout = reply.revision, {groups = {}, active = 0}
+    test.ok(call(laptop, "layout.set", request).result)
+    test.equal(#call(host, "layout.get", {project = context.project}).result.layout.groups, 0)
+    laptop.socket:close()
+    laptop = connect(context.discovery)
+    test.ok(call(laptop, "hello", {protocol = 1, token = context.discovery.token}).result)
+    test.equal(call(laptop,"layout.get",{project=context.project}).result.revision, 2)
+    test.equal(call(laptop,"layout.set",request).error.code,"conflict")
+    host.socket:close(); laptop.socket:close()
+  end)
+
   test.it("refuses a client without the server's token", function(context)
     local client = connect(context.discovery)
     local reply = call(client, "files.read", {path = context.project .. PATHSEP .. "notes.md"})
@@ -240,6 +263,7 @@ test.describe("Machine server", function()
     local reply = call(client, "files.read", {path = path})
     test.equal(call(client, "files.write", {path = path, base = reply.result.version}).error.code, "forbidden")
     test.equal(call(client, "files.delete", {paths = {path}}).error.code, "forbidden")
+    test.equal(call(client,"layout.set",{project=context.project,base=0,layout={groups={},active=0}}).error.code,"forbidden")
     test.equal(call(client, "pairing.start", {level = "view"}).error.code, "forbidden")
     client.socket:close()
     local file = io.open(path, "rb")

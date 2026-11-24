@@ -13,7 +13,9 @@ package.loaded.core = core
 local PROTOCOL = 1
 local FEATURES = {"projects.list", "files.list", "files.changes", "files.stat", "files.list_dir", "files.mkdir", "files.move", "files.copy", "files.delete", "search.start", "search.read", "search.cancel", "files.read", "files.write", "files.save_result", "pairing.start", "devices.list", "devices.revoke"}
 -- Terminal hosts use ConPTY, so only a Windows Machine has Terminal Sessions.
-local SERVICES = {"core.serve_files", "core.serve_search"}
+local SERVICES = {"core.serve_files", "core.serve_search", "core.serve_layout"}
+FEATURES[#FEATURES + 1] = "layout.get"
+FEATURES[#FEATURES + 1] = "layout.set"
 if PLATFORM == "Windows" then
   SERVICES[#SERVICES + 1] = "core.serve_terminal"
   for _, name in ipairs({"terminal.list", "terminal.attach", "terminal.read", "terminal.write", "terminal.detach",
@@ -24,7 +26,7 @@ end
 local MAX_CLIENTS, MAX_REQUEST_JSON, MAX_FILE, HELLO_TIMEOUT = 32, 64 * 1024, 16 * 1024 * 1024, 10
 local MAX_SAVES, PAIRING_TIME, PAIRING_ATTEMPTS, MAX_NAME = 1024, 300, 5, 100
 -- A View device only reads. These methods need Full control.
-local FULL_CONTROL = {["files.write"] = true, ["files.mkdir"] = true, ["files.move"] = true,
+local FULL_CONTROL = {["layout.set"] = true, ["files.write"] = true, ["files.mkdir"] = true, ["files.move"] = true,
   ["files.copy"] = true, ["files.delete"] = true, ["pairing.start"] = true, ["devices.list"] = true, ["devices.revoke"] = true,
   ["terminal.start"] = true}
 -- Tailscale Serve and other forwarders need a port that stays the same across restarts.

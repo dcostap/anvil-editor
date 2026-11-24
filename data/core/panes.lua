@@ -2155,6 +2155,27 @@ function M.restore_workspace_state(state, load_view)
   return true
 end
 
+-- Adopt shared split trees without replacing the Views, their history, or their cursor positions.
+function M.arrange_shared(trees, focused, members)
+  local groups = {}
+  for _, group in ipairs(M.groups) do
+    local keep = {}
+    for _, pane in ipairs(layout.leaves(group.root)) do if not members[pane] then keep[pane] = true end end
+    local saved = serialize_pruned_layout(group.root, keep)
+    if saved then group.root = layout.deserialize(saved, M.panes_by_id); groups[#groups+1] = group
+    else M.groups_by_id[group.id] = nil end
+  end
+  for _, tree in ipairs(trees) do
+    local group = {id=next_id("group"), root=layout.deserialize(tree, M.panes_by_id)}
+    groups[#groups+1], M.groups_by_id[group.id] = group, group
+    for _, pane in ipairs(layout.leaves(group.root)) do pane.group = group end
+  end
+  M.groups = groups
+  focused = focused or M.active_pane
+  if focused then M.focus(focused) end
+  after_mutation("applied shared layout")
+end
+
 function M.reset_for_tests()
   closed_panes = {}
   -- Close Views like a real close does, so File Trees, Terminals and other

@@ -231,7 +231,7 @@ local function load_view(t, times)
       return nil
     end
     local deadline = times and t.module == "plugins.terminal" and t.state and times[t.state.session_id] or nil
-    local view = View and View.from_state(t.state, deadline)
+    local view = View and View.from_state(t.state, deadline, t.module == "plugins.terminal" and "workspace" or nil)
     if view_has_invalid_named_file(view) then
       if core.log_quiet then core.log_quiet("Workspace: dropped invalid named file restored from saved state %q", view.buffer.filename or view.buffer.abs_filename) end
       close_unattached_view_buffer(view)
@@ -422,6 +422,13 @@ function core.save_workspace()
   return save_workspace()
 end
 
+local function workspace_ready()
+  core.workspace_restored = true
+  if system.is_hosted_surface() and not empty_window_requested() and core.root_project() then
+    require("core.shared_layout").start(core.root_project().path)
+  end
+end
+
 local function load_workspace()
   core.add_thread(function()
     local function restore_workspace_state()
@@ -462,7 +469,7 @@ local function load_workspace()
     end
 
     restore_workspace_state()
-    core.workspace_restored = true
+    workspace_ready()
   end)
 end
 
@@ -563,7 +570,7 @@ function core.run(...)
     -- already treats this session as the current state.
     local workspace = not empty_window_requested() and consume_workspace(machine_project.root_key(core.root_project().path))
     diffview.load_workspace_state(workspace and workspace.diff_layout)
-    core.workspace_restored = true
+    workspace_ready()
   end
   require("core.snoozed_panes").start()
   core.run = run

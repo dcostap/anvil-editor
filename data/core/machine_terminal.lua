@@ -89,7 +89,7 @@ local TRANSPORT = {offline = true, disconnected = true}
 -- With `start` ({project, cwd, shell, scrollback_lines}), a nil `id`, or an `id` that the Machine no longer has
 -- at the first attach, starts a new shell. Returns an object whose `id` names the session once the Machine
 -- answers, and whose `error` names why the session ended or did not start.
-function machine_terminal.connect(client, session, id, start)
+function machine_terminal.connect(client, session, id, start, workspace_restore)
   local remote = {client = client, session = session, id = id}
   core.add_thread(function()
     local attached = false
@@ -104,6 +104,10 @@ function machine_terminal.connect(client, session, id, start)
           for key, value in pairs(start) do params[key] = value end
         end
         local err, result = call(client, starting and "terminal.start" or "terminal.attach", params)
+        if workspace_restore and err and err.code == "not_found" then
+          -- A closed shared Pane in this PC's old Workspace must not start a replacement shell.
+          for _, method in ipairs(client.features or {}) do if method == "layout.get" then start = nil; break end end
+        end
         if err and err.code == "not_found" and not starting and not attached and start then
           core.log_quiet("Remote Terminal Session %s is gone; start a new shell", remote.id)
           remote.id = nil

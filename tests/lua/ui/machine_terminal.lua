@@ -92,6 +92,65 @@ test.describe("Terminal on a Machine", function()
     return view
   end
 
+  test.it("follows the host layout, publishes a split and keeps edits across a remote close", function(context)
+    local sync = require "core.shared_layout"
+    local function request(method, params)
+      params.project = context.project
+      local done, reply
+      fs.machine:request(method, params, nil, function(err, r) done, reply = true, r or err end)
+      wait_until({}, function() return done end, "Layout request timed out")
+      return reply
+    end
+    wait_until({},function() return fs.machine.state == "ready" end,"Machine not ready")
+    test.is_nil(fs.wait(fs.write, context.project .. PATHSEP .. "layout.txt", "on the host\n", nil, nil))
+    test.equal(request("layout.set", {base=0, layout={groups={{file="layout.txt"}}, active=1}}).revision,1)
+    local restored = core.workspace_restored
+    core.workspace_restored = true
+    local ok, err = pcall(function()
+      sync.start(context.project)
+      wait_until({},function() return sync.capture(context.project).active == 1 end,"Missing host file")
+      local original = panes.active().current_view
+      local buffer = original.buffer
+      wait_until({},function() return buffer.lines[1] == "on the host\n" end,"File did not load")
+      panes.split(panes.active(), "right", {factory=function() return require("core.editor")(buffer) end})
+      local published
+      wait_until({},function()
+        published = request("layout.get", {})
+        return published.revision == 2
+      end,"Client did not publish the split")
+      test.equal(published.layout.groups[1].axis,"x")
+      test.equal(published.layout.active,2)
+      buffer:insert(1,1,"unsaved")
+      test.equal(request("layout.set",{base=2,layout={groups={},active=0}}).revision,3)
+      test.not_ok(sync.apply(context.project,{groups={},active=0}))
+      test.ok(panes.pane_for_view(original))
+      test.ok(buffer.lines[1]:find("unsaved",1,true))
+      buffer:undo()
+      wait_until({},function() return #sync.capture(context.project).groups == 0 end,"Close did not reach this PC")
+      -- Open a live Terminal from the host layout, then close its Pane without replacing the shell.
+      local host = open(context,{})
+      wait_text(host,"ANVIL_ECHO_READY:project")
+      local session = host.session_id
+      local sessions = require "core.machine_terminal"
+      wait_until(host,function()
+        sessions.sessions(fs.machine,context.project)
+        return sessions.listed(session)
+      end,"The host did not list its Terminal")
+      test.equal(request("layout.set",{base=3, layout={groups={{terminal=session}},active=1}}).revision,4)
+      wait_until(host,function() return panes.active() and panes.active().current_view.session_id == session end,
+        "Shared Terminal was not opened")
+      local mirror = panes.active().current_view
+      context.views[#context.views+1] = mirror
+      wait_text(mirror,"ANVIL_ECHO_READY:project")
+      test.equal(request("layout.set",{base=4,layout={groups={},active=0}}).revision,5)
+      wait_until(host,function() return not panes.pane_for_view(mirror) end,"Remote Terminal close did not remove its Pane")
+      test.ok(host:write_input("still-running\r"))
+      wait_text(host,"ECHO:still-running")
+    end)
+    core.workspace_restored = restored
+    assert(ok,err)
+  end)
+
   test.it("runs its shell on the Machine, and closing the View ends that shell", function(context)
     local view = open(context, {})
     wait_text(view, "ANVIL_ECHO_READY:project")
@@ -228,6 +287,9 @@ test.describe("Terminal on a Machine", function()
 
   test.it("starts a new shell on the Machine when the restored session is gone", function(context)
     local gone = string.rep("0", 32)
+    local stale = terminal.from_state({cwd=context.project, shell=ECHO_SHELL, session_id=gone}, nil, "workspace")
+    context.views[#context.views+1] = stale
+    wait_until(stale,function() return stale.state == "failed" end,"A cached Workspace revived a closed shared Terminal")
     local view = terminal.from_state { cwd = context.project, shell = ECHO_SHELL, session_id = gone }
     context.views[#context.views + 1] = view
     wait_text(view, "ANVIL_ECHO_READY:project")

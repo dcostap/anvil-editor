@@ -802,10 +802,10 @@ function TerminalTextCaptureView:get_state()
   return { kind = "text_capture", capture = capture }
 end
 
-function TerminalView.from_state(state, snooze_until)
+function TerminalView.from_state(state, snooze_until, source)
   if type(state) ~= "table" then return nil end
   if state.kind == "text_capture" then return TerminalTextCaptureView(nil, state.capture) end
-  local view = TerminalView { cwd = state.cwd, shell = state.shell, session_id = state.session_id, restore = true,
+  local view = TerminalView { cwd = state.cwd, shell = state.shell, session_id = state.session_id, restore = source or true,
     snooze_until = type(snooze_until) == "number" and snooze_until or nil }
   view.input_used = true
   return view
@@ -860,7 +860,7 @@ function TerminalView:new_remote_session(options, id, restore)
   local session, err = terminal_native().new(options)
   if not session then return nil, err end
   self.machine = true
-  self.remote = require("core.machine_terminal").connect(fs.machine, session, id, start)
+  self.remote = require("core.machine_terminal").connect(fs.machine, session, id, start, restore == "workspace")
   core.log_quiet("Terminal session %d connects through its Machine: id=%s", self.log_id, tostring(id))
   return session
 end
@@ -3502,9 +3502,11 @@ function core.quit(force, exit_code)
 end
 
 -- Closed Panes restore only through Reopen, not session discovery.
-function M.session_available(id)
+function M.session_available(id, project)
   if fs.machine then return require("core.machine_terminal").listed(id) end
-  return session_record(id) ~= nil and not system.get_file_info(closed_session_path(id))
+  local record = session_record(id)
+  return record ~= nil and (not project or record.status == "running" and common.path_equals(project, record.project_path)
+    and require("terminal_link").host_alive(record.host_pid, record.host_creation_time)) and not system.get_file_info(closed_session_path(id))
 end
 
 -- Opens a Terminal Session that the Project Sidebar lists. A session that cannot reattach or

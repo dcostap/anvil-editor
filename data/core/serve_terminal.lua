@@ -27,6 +27,11 @@ local function closed_marker(id)
   return USERDIR .. PATHSEP .. "terminal-sessions" .. PATHSEP .. id .. ".closed"
 end
 
+function terminal.belongs_to(id, project)
+  local record = read_record(id)
+  return record and common.path_equals(record.project_path, project)
+end
+
 -- The host keeps 63 bytes of a device name. The cut must not split a character.
 local function device_name(name)
   if type(name) ~= "string" then return nil end
