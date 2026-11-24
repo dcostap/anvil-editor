@@ -5927,6 +5927,8 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
       window->activated = ++shell.activation;
       visit_prepared_project(project);
       windows_changed();
+      /* A selection from another Window happens before this Window has focus, so it cannot start text input. */
+      set_text_input(window, window->sidebar_focused || project->text_active, "focus-gained");
     }
     if (project->connected && !anvil_latency_probe_enabled()) {
       shell_send_int(project, ANVIL_SURFACE_MSG_FOCUS,
