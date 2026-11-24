@@ -219,7 +219,7 @@ test.describe("IntelliJ actions batch behavior", function()
     test.equal(view.selection_state.last_selection, 3)
   end)
 
-  test.it("smart selection starts with the Odin identifier before a closing parenthesis", function(context)
+  test.it("smart selection starts with the Odin identifier or call at its right edge", function(context)
     local call = "make(map[string][]string, context.temp_allocator)"
     local view, buffer = open_syntax_editor(context, "package main\nmain :: proc() {\n  known := " .. call .. "\n}", "smart_selection.odin")
     local col = assert(buffer.lines[3]:find(")", 1, true))
@@ -237,6 +237,27 @@ test.describe("IntelliJ actions batch behavior", function()
     end
     test.ok(command.perform("editor:shrink_selection_smart"))
     test.same(view_selections(view), caret)
+
+    local after_call = { 3, col + 1, 3, col + 1 }
+    set_view_selections(view, after_call)
+    test.ok(command.perform("editor:extend_selection_smart"))
+    test.equal(selected_text(view), call)
+    test.ok(command.perform("editor:extend_selection_smart"))
+    test.equal(selected_text(view), "known := " .. call)
+    test.ok(command.perform("editor:shrink_selection_smart"))
+    test.equal(selected_text(view), call)
+    test.ok(command.perform("editor:shrink_selection_smart"))
+    test.same(view_selections(view), after_call)
+  end)
+
+  test.it("smart selection starts with the syntax that ends at a closing delimiter", function(context)
+    local view, buffer = open_syntax_editor(context, "void f(void) { sink(values[i]); if (i) { sink(i); } }", "smart_selection_delimiters.c")
+    for _, expected in ipairs({ "values[i]", "sink(values[i])", "{ sink(i); }" }) do
+      local col = assert(buffer.lines[1]:find(expected, 1, true)) + #expected
+      set_view_selections(view, { 1, col, 1, col })
+      test.ok(command.perform("editor:extend_selection_smart"))
+      test.equal(selected_text(view), expected)
+    end
   end)
 
   test.it("smart selection handles both edges of a UTF-8 identifier", function(context)

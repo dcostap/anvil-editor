@@ -66,7 +66,7 @@ Run `ui/selection_background.lua` and `ui/markdown_selection_background.lua` aft
 
 ## Smart Selection
 
-With a ready Tree-sitter parse, Smart Selection grows to the next syntax range. At the end of a word, it first tries the smallest syntax range that ends at the caret. This lets `run(value|)` select `value` before growing to the call. The rule applies only to carets without a selection. Shrink restores the original caret.
+With a ready Tree-sitter parse, Smart Selection grows to the next syntax range. After a word or closing delimiter, it first tries the smallest syntax range that ends at the caret. After a call's closing parenthesis, it prefers the full call to its argument list. If the caret is also at the start of a word, it looks to the right instead. `run(value|)` selects `value`, while `run(value)|` selects the full call. The rule applies only to carets without a selection. Shrink restores the original caret.
 
 Run `ui/intellij_actions.lua` and `ui/markdown_semantic_selection.lua` after changes.
 
