@@ -92,7 +92,13 @@ function M:dispatch(client, body)
       capabilities = {tools = {listChanged = false}}, serverInfo = {name = "anvil", version = "1"},
       instructions = "Control Anvil through stable Pane and Terminal Session IDs. Preserve focus unless asked. Use request_id for safe retries. A timeout does not cancel work. Close approves only the calling agent's own running Terminal; other Views keep normal confirmation. Self-close can stop the agent before the reply arrives." }
   elseif request.method == "ping" then return result({})
-  elseif request.method == "tools/list" then return result {tools = Control.tools}
+  elseif request.method == "tools/list" then
+    if not self.control.headless then return result {tools = Control.tools} end
+    local tools = {}
+    for _, tool in ipairs(Control.tools) do
+      if require("core.machine_agents").methods[tool.name] then tools[#tools + 1] = tool end
+    end
+    return result {tools = tools}
   elseif request.method == "tools/call" then
     local function tool_result(success, data)
       -- A text result is for the model. JSON would escape it again, so it has no structured copy.
@@ -104,7 +110,22 @@ function M:dispatch(client, body)
     end
     local args = params.arguments or {}
     if type(args) ~= "table" then return tool_result(false, "Invalid arguments") end
-    if args.project and (type(args.project) ~= "string" or not common.path_equals(args.project, self.control.project)) then
+    local agents = require "core.machine_agents"
+    if self.control.headless and not agents.methods[params.name] then
+      return tool_result(false, "This operation needs a loaded editor Project")
+    end
+    if agents.methods[params.name] then
+      local projects = require "core.machine_project"
+      local machine, path = projects.parse(args.project or self.control.project_key)
+      if self.control.headless and not machine and (not args.project or common.path_equals(args.project, self.control.project)) then
+        machine, path = projects.own_id(), self.control.project
+      end
+      if machine then
+        client.forwarding, client.deadline = true, system.get_time() + 48
+        return agents.route(machine, path, params.name, args, client.caller, tool_result, function() return client.dead end)
+      end
+    end
+    if args.project and (type(args.project) ~= "string" or not common.path_equals(args.project, self.control.project_key)) then
       return self:discover(client, function(endpoints)
         local target
         for _, endpoint in ipairs(endpoints) do
@@ -144,7 +165,7 @@ function M:dispatch(client, body)
       if ok and params.name == "workspace_state" then
         return self:discover(client, function(endpoints)
           value.projects = {}
-          value.projects[self.control.project] = {project = self.control.project}
+          value.projects[self.control.project_key] = {project = self.control.project_key}
           for _, endpoint in ipairs(endpoints) do value.projects[endpoint.project] = {project = endpoint.project} end
           tool_result(true, value)
         end)
@@ -247,11 +268,8 @@ function M:poll()
       local wait = client.waiting
       if not wait.next_read or system.get_time() >= wait.next_read then
         wait.next_read = system.get_time() + 0.1
-        local ok, value = pcall(self.control.agent_read, self.control, wait.args)
-        local timeout = system.get_time() >= wait.until_time
-        if not ok or timeout or not value.connected or value.status == "completed"
-            or value.status == "failed" or value.status == "interrupted" or value.status == "delivered" or value.waiting_for_user then
-          if ok then value.wait_timed_out = timeout end
+        local ok, value = pcall(self.control.wait_result, self.control, wait.args, wait.until_time)
+        if not ok or value then
           wait.result(ok, value)
           client.waiting = nil
         end

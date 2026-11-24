@@ -60,6 +60,9 @@ test("interactive Pi connects, receives each task once, and reports completion o
     const prompt = {systemPromptOptions: {sections: {}}};
     await handlers.get("before_agent_start")(prompt, ctx);
     assert.ok(prompt.systemPromptOptions.sections.anvil.includes("An Anvil Agent is an agent running inside Anvil."));
+    // Removing the View leaves the host endpoint available to this running Pi.
+    await fs.mkdir(path.join(dir, "machine", "agents"), {recursive: true});
+    await fs.rename(path.join(dir, "control", "terminals", "terminal.json"), path.join(dir, "machine", "agents", "terminal.json"));
     commands = [{ id: "task-a", action: "send", text: "Review this change", from: "other-terminal" }];
     await until(() => latest.receipts?.some(r => r.id === "task-a"));
     assert.equal(latest.receipts.find(r => r.id === "task-a").status, "accepted");

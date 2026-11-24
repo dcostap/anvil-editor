@@ -134,7 +134,8 @@ local function canonical(value)
 end
 
 function M.new(project)
-  return setmetatable({ project = project or core.root_project().path,
+  local path = project or core.root_project().path
+  return setmetatable({ project = path, project_key = project or require("core.machine_project").root_key(path),
     receipts = {}, receipt_count = 0, peers = {}, jobs = {}, starting = {} }, M)
 end
 
@@ -145,7 +146,7 @@ local function activity_summary(peer)
 end
 
 function M:workspace_state(_, caller)
-  local state = { project = self.project, panes = {}, terminals = {},
+  local state = { project = self.project_key, panes = {}, terminals = {},
     active_pane = panes.active() and panes.active().id, caller_terminal = caller }
   for _, pane in ipairs(panes.ordered()) do
     local view = pane.current_view
@@ -501,7 +502,7 @@ function M:agent_read(args)
     observation_age_ms = age < math.huge and math.max(0, math.floor(age * 1000)) or nil}
   if args.include_activity ~= false then result.activity = peer.activity end
   if peer.activity then result.waiting_for_user = connected and peer.activity.phase == "waiting_user" end
-  if connected then
+  if connected and not self.headless then
     for _, view in ipairs(require("plugins.terminal").open_views()) do
       if view.session_id == args.terminal then
         result.waiting_for_user = result.waiting_for_user or view:close_status().agent_state == "blocked"
@@ -569,6 +570,15 @@ function M:transcript_read(query)
 end
 
 function M:agent_wait(args) return self:agent_read(args) end
+
+function M:wait_result(args, until_time)
+  local value = self:agent_read(args)
+  local timeout = system.get_time() >= until_time
+  if timeout or not value.connected or terminal_status[value.status] or value.status == "delivered" or value.waiting_for_user then
+    value.wait_timed_out = timeout
+    return value
+  end
+end
 
 function M:memory_report(args)
   local memory = require "core.memory_report"
@@ -649,7 +659,7 @@ function M:call(name, args, caller)
   for _, tool in ipairs(M.tools) do if tool.name == name then definition = tool; break end end
   assert(definition, "Unknown control tool")
   check(definition.inputSchema, args)
-  assert(not args.project or common.path_equals(args.project, self.project), "Project needs routing through the control server")
+  assert(not args.project or common.path_equals(args.project, self.project_key), "Project needs routing through the control server")
   local key = args.request_id and ((caller or "local") .. ":" .. args.request_id)
   local fingerprint = name .. canonical(args)
   if key and self.receipts[key] then

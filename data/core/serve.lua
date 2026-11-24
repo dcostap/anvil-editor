@@ -29,6 +29,11 @@ local FULL_CONTROL = {["files.write"] = true, ["files.mkdir"] = true, ["files.mo
   ["terminal.start"] = true}
 -- Tailscale Serve and other forwarders need a port that stays the same across restarts.
 local DEFAULT_PORT, OWNER_CHECK_SECONDS = 7690, 1
+if PLATFORM == "Windows" then
+  for method in pairs(require("core.machine_agents").methods) do
+    FEATURES[#FEATURES + 1], FULL_CONTROL[method] = method, true
+  end
+end
 -- A Client that does not read its replies holds them in memory. Above MAX_PENDING unsent bytes the server reads
 -- no more requests from it, and after STALL_SECONDS without progress it closes the connection.
 local MAX_PENDING, STALL_SECONDS = 64 * 1024 * 1024, 30
@@ -69,6 +74,7 @@ end
 
 function core.add_thread(f, key, ...) return add_thread(f, key, false, ...) end
 function core.add_background_thread(f, key, ...) return add_thread(f, key, true, ...) end
+function core.wake_thread(key) if core.threads[key] then core.threads[key].wake = 0 end end
 
 -- Runs the due threads and returns the time until the next one is due.
 local function run_threads()
@@ -568,7 +574,7 @@ local function start(listed)
     discovery = directory .. PATHSEP .. "server.json", owner_check = system.get_time(), on_close = {},
     private = {}}
   local user = system.absolute_path(USERDIR) or USERDIR
-  for _, name in ipairs({"machine", "machines"}) do
+  for _, name in ipairs({"machine", "machines", "control"}) do
     server.private[#server.private + 1] = assert(resolved_disk(user .. PATHSEP .. name), "Cannot resolve credential folder")
   end
   server.devices = load_devices(server.devices_path)

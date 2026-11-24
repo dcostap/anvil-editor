@@ -204,7 +204,8 @@ command.add(function()
     and view.session_id ~= nil, pane
 end, {
   ["pane:copy_agent_address"] = command.palette(function(pane)
-    require("core.agent_address")(core.root_project().path, pane.id, pane.current_view.session_id)
+    local project = require("core.machine_project").root_key(core.root_project().path)
+    require("core.agent_address")(project, pane.id, pane.current_view.session_id)
     core.log_quiet("Copied agent address: Pane=%s Terminal=%s", pane.id, pane.current_view.session_id)
   end),
 })

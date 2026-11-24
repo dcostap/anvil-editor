@@ -67,6 +67,9 @@ test.describe("Remote Terminal Session", function()
   end)
 
   test.after_each(function(context)
+    if context.restore then context.restore() end
+    if context.source then context.source:close() end
+    if context.pair_path then os.remove(context.pair_path) end
     for _, name in ipairs {"remote", "viewer"} do
       if context[name] then context[name]:close() end
     end
@@ -102,6 +105,83 @@ test.describe("Remote Terminal Session", function()
       "The local View did not become a Viewer")
     wait_until(function() return not select(2, context.remote:update()).viewer end,
       "The remote session did not take control")
+  end)
+
+  test.it("resolves an agent only in its own Machine Project", function(context)
+    local args = {project = context.project, terminal = context.id}
+    local err = call(context.owner, "agent_read", args)
+    test.equal(err.code, "not_connected") -- The running shell is not Pi.
+    args.project = context.project .. "-other"
+    err = call(context.owner, "agent_read", args)
+    test.equal(err.code, "not_found")
+  end)
+
+  test.it("sends to a host Pi without a Pane and reads the task reply through its Machine address", function(context)
+    local json = require "core.lsp.json"
+    local ep
+    wait_until(function()
+      local f = io.open(USERDIR .. "/machine/agents/" .. context.id .. ".json", "rb")
+      if f then ep = json.decode(f:read("*a")); f:close(); return true end
+    end, "No host agent endpoint")
+    local function post(path, message, endpoint)
+      endpoint = endpoint or ep
+      local done, value, failure
+      require("core.http").post(endpoint.url .. path, "application/json", nil, {body = json.encode(message), decode_json = false,
+        headers = {Authorization = "Bearer " .. endpoint.token, ["Content-Type"] = "application/json"}, on_done = function(ok, err, body)
+          done, value, failure = true, ok and json.decode(body), err
+        end})
+      wait_until(function() return done end, "Host agent request timed out")
+      test.ok(value, failure)
+      return value
+    end
+    local report = {instance = "test-conversation", receipts = json.array(), tasks = json.array(), capabilities = {transcript = true}}
+    post("/agent", report)
+    local projects = require "core.machine_project"
+    local key = projects.key(context.owner.machine, context.project)
+    local _, pairing = call(context.owner, "pairing.start", {level = "full"})
+    local discovery = machine_server.wait_discovery(USERDIR, context.server)
+    MachineClient.pair("127.0.0.1", discovery.port, pairing.code, "Client", function(_, path) context.pair_path = path end)
+    wait_until(function() return context.pair_path end, "The test Client did not pair")
+    -- These processes share a test user folder. Only the simulated Client has a different Machine ID.
+    local own = projects.own_id
+    context.restore = function() projects.own_id = own end
+    projects.own_id = function() return string.rep("0", 32) end
+    context.source = require("core.control_server").open(require("core.control").new(context.project))
+    local source = context.source:add_client("source-terminal")
+    context.source.control:exchange(context.id, {instance = "wrong-local-agent", receipts = {}, tasks = {}})
+    require("core").add_thread(function()
+      while context.source.listener do context.source:poll(); coroutine.yield(.01) end
+    end)
+    local function tool(name, args)
+      args.project, args.terminal = key, context.id
+      local reply = post("/mcp", {jsonrpc = "2.0", id = 1, method = "tools/call", params = {name = name, arguments = args}}, source)
+      test.not_ok(reply.result.isError, reply.result.content[1].text)
+      return reply.result.structuredContent or reply.result.content[1].text
+    end
+    local state = tool("agent_read", {})
+    test.equal(state.instance, report.instance)
+    local task = tool("agent_send", {instance = state.instance, request_id = "ping", text = "ping"}).task
+    test.equal(tool("agent_send", {instance = state.instance, request_id = "ping", text = "ping"}).task, task)
+    local received = post("/agent", report).commands[1]
+    test.equal(received.id, task)
+    test.equal(received.text, "ping")
+    report.receipts = {{id = task, status = "accepted", task = task}}
+    report.tasks = {{id = task, status = "completed", result = "pong"}}
+    post("/agent", report)
+    test.equal(tool("agent_wait", {instance = state.instance, task = task}).result, "pong")
+    local interrupt = tool("agent_interrupt", {instance = state.instance, request_id = "interrupt"})
+    test.equal(post("/agent", report).commands[1].id, interrupt.task)
+    local transcript
+    require("core").add_thread(function() transcript = tool("agent_transcript", {instance = state.instance}) end)
+    local query
+    wait_until(function()
+      query = post("/agent", report).transcript_requests[1]
+      return query
+    end, "Pi did not receive the transcript request")
+    report.transcripts = {{id = query.id, result = {text = "conversation on the host"}}}
+    post("/agent", report)
+    wait_until(function() return transcript end, "Missing conversation reply")
+    test.equal(transcript, "conversation on the host")
   end)
 
   test.it("keeps the shell when a device closes it while another device shows it", function(context)
@@ -169,6 +249,10 @@ test.describe("Remote Terminal Session", function()
     wait_until(function() return paired end, "The device did not pair")
     test.ok(path, paired)
     context.device = connect(path)
+
+    local denied = call(context.device, "agent_send", {project = context.project, terminal = context.id,
+      instance = "old", text = "must not arrive", request_id = "view-only"})
+    test.equal(denied.code, "forbidden")
 
     context.viewer = remote_session()
     machine_terminal.connect(context.device, context.viewer, context.id)

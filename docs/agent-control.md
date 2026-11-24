@@ -15,7 +15,9 @@ Start a new Pi in an Anvil Terminal. Its extension registers the `anvil` MCP ser
 
 Right-click a running Pi's Tab and choose **Copy Agent Address**. This works in the Project Sidebar and Title Bar. It copies JSON with `"type":"anvil-agent-address"` and the `project`, `pane`, and `terminal` fields. The `type` field identifies the address as Anvil data. It is not a tool argument. The address contains no navigation number or credentials. Paste it into another agent's conversation to identify the target.
 
-The receiving agent can read that agent at once: `agent_read` and `agent_transcript` take the copied `project` and `terminal` and read the Terminal's current conversation. To send, it calls `workspace_state` for that `project`, finds the copied `terminal`, and uses its current `agent_instance` as `instance` for `agent_send`. The address identifies the Terminal, not a fixed Pi conversation. Inspect state again after a Project move.
+Use `agent_read` with the copied `project` and `terminal`. Use the returned `instance` for `agent_send`. The address identifies the Terminal, not a fixed Pi conversation. Inspect state again after a Project move.
+
+A Machine address names the host by ID. Anvil routes reads, transcripts, sends, waits and interrupts through that Machine's authenticated connection. The destination must grant Full control. Pairing in one direction does not grant control in the reverse direction. No editor Pane needs to remain open on the host. The Terminal Session and Pi must still be running. Machine addresses never fall back to a same-named local Project.
 
 The default target is the caller's Project. Operations preserve focus unless `focus: true` requests a change. A focus request, also `pane` with `action: "focus"`, selects the Project in its Window, as a Sidebar row click does. Otherwise a background Project changes focus that no Window shows. A confirmation can take focus. Snooze hides its Pane through the normal Snooze behavior.
 

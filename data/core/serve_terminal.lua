@@ -52,6 +52,19 @@ end
 -- `server` gives: reply, fail, project_root, check_path, disk_path, log and on_close.
 function terminal.new(server)
   local links, sequence = {}, 0
+  local function live_record(id)
+    local record = read_record(id)
+    if record and record.status == "running" and server.project_root(record.project_path)
+        and terminal_link.host_alive(record.host_pid, record.host_creation_time)
+        and not system.get_file_info(closed_marker(id)) then return record end
+  end
+  local agents, observe = require("core.serve_agents").new(server, live_record)
+  core.add_thread(function()
+    for _, name in ipairs(system.list_dir(USERDIR .. "/terminal-sessions") or {}) do
+      local record = live_record(name:match("^(%x+)%.lua$"))
+      if record then observe(record) end
+    end
+  end)
 
   local function find_record(client, id, params)
     local record = read_record(params.id)
@@ -88,6 +101,8 @@ function terminal.new(server)
           return remove(state)
         end
         info.link = state.id
+        local record = live_record(info.session_id)
+        if record then observe(record) end
         server.reply(state.client, waiter, {result = info})
       end
       if state.waiter then
@@ -227,8 +242,9 @@ function terminal.new(server)
     end
   end)
 
-  return {["terminal.list"] = list, ["terminal.attach"] = attach, ["terminal.read"] = read,
-    ["terminal.write"] = write, ["terminal.detach"] = detach, ["terminal.start"] = start}
+  agents["terminal.list"], agents["terminal.attach"], agents["terminal.read"] = list, attach, read
+  agents["terminal.write"], agents["terminal.detach"], agents["terminal.start"] = write, detach, start
+  return agents
 end
 
 return terminal

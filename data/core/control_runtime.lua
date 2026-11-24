@@ -27,7 +27,7 @@ local function write_json(path, value)
 end
 
 function M.observe(view)
-  if not server or not view.session_id or sessions[view.session_id] then return end
+  if not server or view.machine or not view.session_id or sessions[view.session_id] then return end
   local id = view.session_id
   local endpoint = server:add_client(id)
   local path = USERDIR .. "/control/terminals/" .. id .. ".json"
@@ -96,7 +96,7 @@ function M.start()
     discovery = directory .. "/" .. system.get_process_id() .. ".json"
     local project = core.root_project()
     local written, err = write_json(discovery, {version = 1, url = server.url, token = server.token,
-      project = project and project.path, executable = EXEFILE, pid = system.get_process_id(),
+      project = project and require("core.machine_project").root_key(project.path), executable = EXEFILE, pid = system.get_process_id(),
       created = system.get_process_creation_time()})
     if not written then
       failure = "Cannot write the discovery file: " .. tostring(err)

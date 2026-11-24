@@ -56,13 +56,17 @@ function machine_project.label(key, full_path)
   return name .. " @ " .. machine_project.tag(id)
 end
 
--- The Machine file for `fs.use_machine`: this PC's own server, or the record of a paired Machine.
-function machine_project.machine_file(machine)
+function machine_project.own_id()
   local directory = USERDIR .. PATHSEP .. "machine"
   local file = io.open(directory .. PATHSEP .. "id", "rb")
   local own = file and file:read("*a")
   if file then file:close() end
-  if own == machine then return directory .. PATHSEP .. "server.json" end
+  return own and own:match("^%x+$")
+end
+
+-- The Machine file for `fs.use_machine`: this PC's own server, or the record of a paired Machine.
+function machine_project.machine_file(machine)
+  if machine_project.own_id() == machine then return USERDIR .. PATHSEP .. "machine" .. PATHSEP .. "server.json" end
   return USERDIR .. PATHSEP .. "machines" .. PATHSEP .. machine .. ".json"
 end
 
