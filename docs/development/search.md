@@ -14,7 +14,9 @@ Run `ui/fuzzy_searcher_project_chip.lua` and the `launch-path-search` shell prob
 
 Project File Search and Text Search also show Other Project Results. Each query goes to the other ready Projects as a `project_search` Pane request. Its `mode` is `files` or `text`.
 
-A path or line number in a Text Search query keeps the search in this Project. Each Project searches itself and answers with up to 20 rows in a `project_results` request. `more = true` tells that more rows match.
+A path or line number in Text Search skips Other Project Results. An exact absolute path outside the Project searches that file or folder on this PC. A folder search includes its subfolders and uses the usual ignore rules. File size filters and result order work in this scope. Machine Projects do not support external Text Search.
+
+For an unscoped query, each Project searches itself and answers with up to 20 rows in a `project_results` request. `more = true` tells that more rows match.
 
 A Project that cannot search, or has no match, does not answer. This Project's rows come first and are never cut. Each other group shows all its rows.
 

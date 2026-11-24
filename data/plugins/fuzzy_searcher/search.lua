@@ -6,6 +6,7 @@ local project_files = require "core.project_files"
 local project_paths = require "core.project_paths"
 local native = require "fuzzy"
 local process = require "core.process"
+local worker_pool = require "core.worker_pool"
 local text_search = require "core.text_search"
 local http = require "core.http"
 local git = require "plugins.git.backend"
@@ -37,6 +38,14 @@ function search.path_query(query, repository)
     end
   end
   return query, false
+end
+
+function search.external_text_path(base)
+  if base == "~" or base:match("^~[/\\]") then base = common.home_expand(base) end
+  if not common.is_absolute_path(base) then return end
+  local ok, path = pcall(common.normalize_path, base)
+  if not ok or not common.is_absolute_path(path) then return base end
+  if not project_paths.resolve(path) then return path end
 end
 
 -- Preview draws reuse the last prepared query. Search jobs keep their own query.
@@ -325,9 +334,10 @@ local function path_candidates(job, spec, visit)
 end
 
 -- In a Project on a Machine, the Machine runs ripgrep (`core.text_search`).
-local function run_on_machine(job, args, cwd, consume)
+local function run_text_stream(job, args, cwd, consume)
   checkpoint(job)
-  local stream = text_search.start(args, { cwd = cwd })
+  local stream, failure = text_search.start(args, { cwd = cwd })
+  if not stream then error(failure or "Cannot start Text Search", 0) end
   job.proc = { terminate = function() stream:cancel() end }
   local ok, err = pcall(function()
     while true do
@@ -352,10 +362,26 @@ local function run_on_machine(job, args, cwd, consume)
   end
 end
 
+local function external_file_info(job, path, line)
+  local done, info, failure
+  local handle, err = worker_pool.system():submit {
+    kind = "file_info", priority = "interactive", payload = { paths = { path }, line = line },
+    on_result = function(message) done, info = true, message.payload.infos[1] end,
+    on_error = function(message) done, failure = true, message.error end,
+    on_cancelled = function() done, failure = true, "File check cancelled" end,
+  }
+  if not handle then error(err, 0) end
+  job.info_job = handle
+  while not done do checkpoint(job); coroutine.yield(0.001) end
+  job.info_job = nil
+  if failure then error(failure, 0) end
+  return info
+end
+
 local function grep_files(job, spec, candidates, visit)
   local batch, bytes = {}, 0
   local function flush()
-    if #batch == 0 then return end
+    if #batch == 0 and not spec.external_path then return end
     local historical = spec.options.commit ~= nil
     local by_path, args = {}, {
       spec.rg, "--no-config", "--null", "--line-number", "--column", "--no-heading",
@@ -371,6 +397,7 @@ local function grep_files(job, spec, candidates, visit)
     if not spec.matcher.case_sensitive then args[#args + 1] = "-i" end
     if historical then args[#args + 1] = "-I" end
     if historical then args[#args + 1] = "-P" end
+    if spec.external_path then project_files.add_filter_arguments(args, spec.include_ignored) end
     args[#args + 1] = "-e"
     -- Git does not infer UTF mode from an ASCII pattern of Unicode escapes.
     -- The comment's space also forces Windows argument quoting. MSYS Git can
@@ -378,6 +405,7 @@ local function grep_files(job, spec, candidates, visit)
     args[#args + 1] = historical and "(*UTF)(?# Anvil literal)" .. spec.matcher.pattern or spec.matcher.pattern
     if historical then args[#args + 1] = spec.history.revision end
     args[#args + 1] = "--"
+    if spec.external_path then args[#args + 1] = spec.external_path end
     for _, file in ipairs(batch) do
       local path = historical and file.revision_path or file.abs_path
       by_path[historical and path or common.path_compare_key(path)] = file
@@ -385,7 +413,8 @@ local function grep_files(job, spec, candidates, visit)
     end
     local pending = ""
     local machine = not historical and fs.on_machine(spec.project)
-    local runner = machine and run_on_machine or run
+    local runner = (machine or spec.external_path) and run_text_stream or run
+    local previous_path, previous_source
     runner(job, args, machine and spec.project or nil, function(chunk)
       pending = pending .. chunk
       local first = 1
@@ -398,6 +427,20 @@ local function grep_files(job, spec, candidates, visit)
         local line, col, text = pending:sub(path_end + 1, last - 1):match(pattern)
         if historical then path = path:sub(#spec.history.revision + 2) end
         local source = by_path[historical and path or common.path_compare_key(path)]
+        if spec.external_path and line then
+          if previous_path ~= path then
+            local info = { type = "file" }
+            if spec.line or spec.options.min_size or spec.options.sort == "date" or spec.options.sort == "size" then
+              info = external_file_info(job, path, spec.line)
+            end
+            previous_path, previous_source = path, nil
+            if modifiers.accepts(spec.options, info) then
+              previous_source = { file = path, abs_path = path, label = path,
+                file_size = info.size, file_modified = info.modified, score = 0 }
+            end
+          end
+          source = previous_source
+        end
         if source and line then
           text = text:gsub("\r$", "")
           local match = not search.omitted_long_line(text) and spec.matcher.match(text)
@@ -433,6 +476,7 @@ function search.start(spec, publish)
     self.cancelled = true
     if self.proc then self.proc:terminate() end
     if self.git_job then self.git_job:cancel() end
+    if self.info_job then worker_pool.system():cancel(self.info_job) end
   end
   core.add_thread(function()
     local ok, err = pcall(function()
@@ -472,7 +516,12 @@ function search.start(spec, publish)
           return
         end
         local candidates = {}
-        candidates_from(job, spec, function(file) candidates[#candidates + 1] = file end)
+        if spec.external_path then
+          if fs.machine then error("External Text Search is not available in a Machine Project", 0) end
+          if not external_file_info(job, spec.external_path) then error("Search path does not exist: " .. spec.external_path, 0) end
+        else
+          candidates_from(job, spec, function(file) candidates[#candidates + 1] = file end)
+        end
         grep_files(job, spec, candidates, visit)
       else
         candidates_from(job, spec, visit)

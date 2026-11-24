@@ -42,6 +42,7 @@ test.describe("Fuzzy Searcher query modifiers", function()
     project_paths.configure_workspace {}
     core.projects, core.visited_files = context.projects, context.recents
     system.chdir(context.cwd)
+    if context.outside then test.ok(test.remove_tree(context.outside)) end
     common.rm(context.root, true)
   end)
 
@@ -94,6 +95,30 @@ test.describe("Fuzzy Searcher query modifiers", function()
     test.equal(picker.results[2].line, 2)
     test.equal(picker.results[2].text, "other alpha beta")
     test.ok(#picker.results[2].content_spans > 0)
+  end)
+
+  test.it("searches an external folder recursively and an explicit file alone", function(context)
+    context.outside = context.root .. " outside"
+    write_file(context.root, "unrelated.txt", "needle\n")
+    local small = write_file(context.outside, "small.txt", "needle\n")
+    local nested = write_file(context.outside, "sub" .. PATHSEP .. "large.txt", "first\nneedle\n" .. string.rep("x", 1024))
+    write_file(context.outside, ".ignore", "skip.txt\n")
+    write_file(context.outside, "skip.txt", "needle\n")
+    fuzzy.open(context.outside .. " #needle")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return #picker.results == 2 end), picker.status)
+    test.ok(command.perform("fuzzy:toggle_ignored_files"))
+    test.ok(wait_until(function() return #picker.results == 3 end), picker.status)
+    picker.input:set_text(small .. " #needle")
+    test.ok(wait_until(function() return #picker.results == 1 and common.path_equals(picker.results[1].abs_path, small) end), picker.status)
+    picker.input:set_text(context.outside .. " #needle size:>=1k sort:name")
+    test.ok(wait_until(function() return #picker.results == 1 and common.path_equals(picker.results[1].abs_path, nested) end), picker.status)
+    test.equal(picker.results[1].line, 2)
+    picker.input:set_text(small .. ":2 #needle")
+    test.ok(wait_until(function() return picker.status == "0 matches" end), picker.status)
+    picker.input:set_text(context.outside .. PATHSEP .. "missing #needle")
+    test.ok(wait_until(function() return picker.status:find("does not exist", 1, true) end), picker.status)
+    test.equal(#picker.results, 0)
   end)
 
   test.it("sorts Path Search through Everything before retrieving a limited page", function()

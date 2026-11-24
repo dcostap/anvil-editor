@@ -7565,7 +7565,7 @@ function FSView:set_static_results(results, status)
   self:schedule_update(true)
 end
 
-function FSView:start_modifier_search(base, line, col, grep, reset_selection)
+function FSView:start_modifier_search(base, line, col, grep, reset_selection, external_path)
   if self.modifier_job then self.modifier_job:cancel() end
   if self.open_revision_job then self.open_revision_job:cancel(); self.open_revision_job = nil end
   self.revision_open_token = nil
@@ -7574,7 +7574,7 @@ function FSView:start_modifier_search(base, line, col, grep, reset_selection)
   kill_fuzzy_grep_jobs()
   fuzzy_searcher.cancel_symbol_search()
   if self.path_search_query_key then self:clear_path_search_results(true) end
-  local path_plan = not self.query_modifiers.commit and path_search.plan(base, {
+  local path_plan = not external_path and not self.query_modifiers.commit and path_search.plan(base, {
     include_ignored = self.include_ignored and not grep,
   })
   self.path_search_active = path_plan and path_plan.external == true
@@ -7590,7 +7590,7 @@ function FSView:start_modifier_search(base, line, col, grep, reset_selection)
   end
   if path_plan and path_plan.external and everything.state == "unknown" then probe_everything(self) end
   if path_plan and not path_plan.external then base = path_plan.query end
-  if not self.query_modifiers.commit and not self.path_search_active then
+  if not external_path and not self.query_modifiers.commit and not self.path_search_active then
     sync_project_file_subscriptions(project_paths.search_roots())
   end
   self.modifier_metadata = self.modifier_metadata or {}
@@ -7605,6 +7605,7 @@ function FSView:start_modifier_search(base, line, col, grep, reset_selection)
     grep_less = fuzzy_searcher.grep_order.better,
     grep_results = fuzzy_searcher.grep_order.results,
     path_match_class = fuzzy_searcher.grep_order.path_match_class,
+    external_path = external_path,
     path_plan = path_plan, everything_endpoint = everything_endpoint(),
     everything_available = everything.state == "available",
     project = core.root_project().path, history = self.modifier_history,
@@ -7885,6 +7886,8 @@ function FSView:refresh(text)
   self.last_files_generation = fuzzy_searcher.files_generation
   self.last_files_scope_generation = fuzzy_searcher.files_scope_generation
 
+  local external_path = grep and not self.query_modifiers.commit and fuzzy_searcher.search.external_text_path(base)
+
   if self:is_navigation_history_mode() or self:is_bookmark_mode() then
     if self.modifier_job then self.modifier_job:cancel(); self.modifier_job = nil end
     self.path_search_active = false
@@ -7896,6 +7899,10 @@ function FSView:refresh(text)
     self:cancel_deferred_loading_feedback()
     if self:is_bookmark_mode() then self:refresh_bookmarks(text, query_changed)
     else self:refresh_navigation_history(text, query_changed) end
+  elseif external_path then
+    if query_changed or force_refresh then
+      self:start_modifier_search(base, line, col, grep, query_changed, external_path)
+    end
   elseif self.query_modifiers.active then
     if files_changed or files_scope_changed then self.modifier_metadata = nil end
     if query_changed or force_refresh or files_changed or files_scope_changed then
@@ -8092,8 +8099,8 @@ function FSView:toggle_ignored_files()
   kill_fuzzy_grep_jobs()
   local text = self.input and self.input:get_text() or ""
   local base, _, _, grep = parse_query(text)
-  local path_plan = path_search.plan(base, { include_ignored = self.include_ignored })
-  if (grep == nil or base ~= "") and not path_plan.project_scope then
+  if (grep == nil or base ~= "") and not (grep and fuzzy_searcher.search.external_text_path(base))
+      and not path_search.plan(base, { include_ignored = self.include_ignored }).project_scope then
     cancel_file_index_scan()
     fuzzy_searcher.files_cache_root = nil
     fuzzy_searcher.refresh_file_index_for_picker_open()
