@@ -51,7 +51,8 @@ local function with_sidebar(custom, run, display)
     dofile(DATADIR .. "/core/sidebar_app.lua")
     core.init()
     core.project_sidebar = {
-      {id = 1, row_id = 1, path = "C:/Alpha", state = "ready", panes = {active = 1,
+      {id = 1, row_id = 1, path = "C:/Alpha", state = "ready", terminals = {
+        {id = string.rep("a", 32), title = "ls", state = "running", activity = os.time()}}, panes = {active = 1,
         {id = "a", name = "main.lua"}, {id = "b", name = "notes.md"}}},
       windows = {{id = 7, selected_project = 1}}, revision = 1,
     }
@@ -112,6 +113,13 @@ test.describe("Sidebar application keyboard routing", function()
           test.same(requests[index], {route = "select", path = "C:/Alpha", request = {
             action = "key", pane = "b", stroke = "ctrl+alt+" .. key, keep_sidebar = true,
           }})
+        end
+        core.on_event("keyreleased", "left ctrl")
+        core.on_event("keyreleased", "left alt")
+        core.on_event("keypressed", "down", {modifiers = 0, ctrl = false, alt = false}) -- Standalone session row.
+        for _, key in ipairs {"f10", "f11"} do
+          core.on_event("keypressed", key, {modifiers = 0, ctrl = true, alt = true})
+          test.equal(#requests, 3, "Unexpected Sidebar request: " .. common.serialize(requests[4]))
         end
       end)
       keymap.map, keymap.reverse_map = saved_map, saved_reverse

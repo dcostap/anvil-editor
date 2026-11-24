@@ -491,8 +491,13 @@ function core.init()
     for _, binding in ipairs(bindings_for(name)) do
       keymap.add {[binding] = function()
         if not current then return false end
-        return name == "pane:close" and current.view:unload_cursor_project(current.key_repeat)
-          or current.view:forward_key(binding, true)
+        if name == "pane:close" and current.view:unload_cursor_project(current.key_repeat) then return true end
+        if name ~= "core:reopen_last_closed_pane" then
+          local row = current.view:get_cursor()
+          -- A session row has no Pane. An untargeted Close would close the Project's active Pane instead.
+          if not row or row.kind ~= "tab" then return true end
+        end
+        return current.view:forward_key(binding, true)
       end}
     end
   end
