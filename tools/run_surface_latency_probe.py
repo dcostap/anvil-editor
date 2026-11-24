@@ -7,8 +7,11 @@ input (the Anvil window, or the shell window), and records the time until a
 presented frame contains the edit. Hosted cases therefore include the pipe hop,
 the hosted render, the frame handoff, and the shell composite.
 Locked, display-off, or unavailable console state invalidates a typing baseline.
+Shell cases also record when DXGI frame statistics show each frame. Frames that
+queue in DXGI let Present return early, so the shown time is the visible latency.
 Raw samples remain in the case result. Invalid cases do not enter its summary.
-Exit 1 means incomplete/failed execution. Exit 2 means environment-invalid execution.
+Exit 1 means incomplete/failed execution or a shown p90 over budget.
+Exit 2 means environment-invalid execution.
 
     python tools/run_surface_latency_probe.py --no-build
 """
@@ -88,11 +91,12 @@ def run_case(exe: Path, work: Path, mode: str, renderer: str, samples: int,
         "run_dir": str(run_dir),
         "console_before": console_before, "console_after": console_after,
     }
-    for key in ("min_ms", "p50_ms", "p90_ms", "p99_ms", "max_ms", "mean_ms"):
-        if key in values:
-            case[key] = float(values[key])
-    samples_ms = values.get("samples_ms", "")
-    case["samples_ms"] = [float(value) for value in samples_ms.split(",") if value]
+    for prefix in ("", "shown_"):
+        for key in ("min_ms", "p50_ms", "p90_ms", "p99_ms", "max_ms", "mean_ms"):
+            if prefix + key in values:
+                case[prefix + key] = float(values[prefix + key])
+        samples_ms = values.get(prefix + "samples_ms", "")
+        case[prefix + "samples_ms"] = [float(value) for value in samples_ms.split(",") if value]
     case["ok"] = (case["done"] and case["requested"] == samples
                   and case["completed"] == samples and len(case["samples_ms"]) == samples
                   and case["exit_code"] == 0 and not case["timed_out"])
@@ -112,9 +116,9 @@ def run_case(exe: Path, work: Path, mode: str, renderer: str, samples: int,
     return case
 
 
-def summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize(cases: list[dict[str, Any]], key: str = "samples_ms") -> dict[str, Any]:
     eligible = [case for case in cases if case["baseline_eligible"]]
-    samples = sorted(value for case in eligible for value in case["samples_ms"])
+    samples = sorted(value for case in eligible for value in case.get(key, []))
 
     def pick(quantile: float) -> float:
         if not samples:
@@ -167,6 +171,8 @@ def main() -> int:
     parser.add_argument("--warmup-ms", type=int, default=5000)
     parser.add_argument("--renderer", action="append", choices=["d3d11", "software"])
     parser.add_argument("--mode", action="append", choices=["direct", "shell"])
+    parser.add_argument("--max-shown-p90-ms", type=float, default=70.0,
+                        help="fail when a shell case's shown p90 exceeds this budget")
     parser.add_argument("--keep", action="store_true", help="keep the temporary work directory")
     parser.add_argument("--json", type=Path, help="write the full results to this file")
     args = parser.parse_args()
@@ -380,25 +386,34 @@ def main() -> int:
                     if case["environment_invalid"]:
                         status += " environment-invalid (" + "; ".join(case["environment_invalid_reasons"]) + ")"
                     print(f"{mode:7} {renderer:8} run {run_index}: {status} "
-                          f"{case['completed']}/{case['requested']} p50={case.get('p50_ms', 0):.2f}ms",
+                          f"{case['completed']}/{case['requested']} p50={case.get('p50_ms', 0):.2f}ms "
+                          f"shown={len(case['shown_samples_ms'])} p50={case.get('shown_p50_ms', 0):.2f}ms",
                           flush=True)
 
         summary = {}
+        over_budget = False
         print()
         print("Baseline summary excludes incomplete and environment-invalid runs.")
-        print(f"{'mode':7} {'renderer':8} {'valid':>5} {'samples':>8} {'p50':>8} {'p90':>8} "
+        print("present: until Present returns. shown: until DXGI frame statistics show the frame (shell only).")
+        print(f"{'mode':7} {'renderer':8} {'end':8} {'valid':>5} {'samples':>8} {'p50':>8} {'p90':>8} "
               f"{'p99':>8} {'max':>8} {'mean':>8}")
         for renderer in renderers:
             for mode in modes:
                 group = [case for case in cases if case["mode"] == mode and case["renderer"] == renderer]
-                result = summarize(group)
-                summary[f"{mode}-{renderer}"] = result
-                print(f"{mode:7} {renderer:8} {result['eligible_runs']}/{result['runs']:<3} {result['samples']:>8} "
-                      f"{result['p50_ms']:>8.2f} {result['p90_ms']:>8.2f} {result['p99_ms']:>8.2f} "
-                      f"{result['max_ms']:>8.2f} {result['mean_ms']:>8.2f}")
+                for end, key in (("present", "samples_ms"), ("shown", "shown_samples_ms")):
+                    result = summarize(group, key)
+                    if end == "shown" and not result["samples"]:
+                        continue
+                    summary[f"{mode}-{renderer}" + ("" if end == "present" else "-shown")] = result
+                    late = end == "shown" and result["p90_ms"] > args.max_shown_p90_ms
+                    over_budget |= late
+                    print(f"{mode:7} {renderer:8} {end:8} {result['eligible_runs']}/{result['runs']:<3} "
+                          f"{result['samples']:>8} {result['p50_ms']:>8.2f} {result['p90_ms']:>8.2f} "
+                          f"{result['p99_ms']:>8.2f} {result['max_ms']:>8.2f} {result['mean_ms']:>8.2f}"
+                          + (f"  over the {args.max_shown_p90_ms:.0f} ms p90 budget" if late else ""))
         if args.json:
             args.json.write_text(json.dumps({"summary": summary, "cases": cases}, indent=2), encoding="utf-8")
-        failed = any(not case["ok"] for case in cases)
+        failed = over_budget or any(not case["ok"] for case in cases)
         return 1 if failed else 2 if any(case["environment_invalid"] for case in cases) else 0
     finally:
         if args.keep:

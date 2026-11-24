@@ -72,11 +72,12 @@ python tools/run_surface_latency_probe.py --mode shell --renderer d3d11 \
   --sidebar-hover --samples 160 --runs 2 --keep
 ```
 
-This workload types rapidly while the pointer alternates between a Sidebar row and empty space.
+This workload first simulates a Window move: the shell presents Sidebar frames inside a live resize. Then it types rapidly while the pointer alternates between a Sidebar row and empty space.
 It sends owned native window messages, not input to the user's windows.
 The shell converts each tagged typing message into SDL input events.
-The timing includes the wait for Windows message processing and ends after presentation returns.
-It does not measure hardware input delivery or physical display scanout.
+The timing includes the wait for Windows message processing. It does not measure hardware input delivery or physical display scanout.
+
+The report has two ends for each sample. `present` ends when `Present` returns. `shown` ends at the refresh where DXGI frame statistics show the frame. `Present` can return quickly while frames queue in DXGI, so compare `shown` for visible latency. A shell case whose `shown` p90 exceeds `--max-shown-p90-ms` (70 ms by default) fails. Direct cases report `present` only.
 
 The default typing check injects directly into SDL. It does not measure the Windows message wait.
 The stress check must use the shell. Its saved results identify the input path.

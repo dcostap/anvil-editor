@@ -405,6 +405,8 @@ struct ShellWindow {
   HANDLE present_ready_event;
   HANDLE present_wait;
   bool present_ready;
+  /* Presents that took no signal from present_ready_event. */
+  unsigned present_debt;
   uint64_t frame_input_seq;
   SDL_TimerID retry_timer;
   int hovered_control, pressed_control;
@@ -1889,6 +1891,7 @@ static void release_d3d11(ShellWindow *window) {
   if (window->present_ready_event) CloseHandle(window->present_ready_event);
   window->present_ready_event = NULL;
   window->present_ready = false;
+  window->present_debt = 0;
   if (window->context)
     window->context->lpVtbl->ClearState(window->context);
   SAFE_RELEASE(window->project_presentation.shared_mutex);
@@ -3217,6 +3220,17 @@ static void compose_peek(ShellWindow *window, POINT content_at) {
   compose_draw(window, COMPOSE_PILL, NULL, bead, 0, 0, color, 1.0f, pill);
 }
 
+/* Each Present must take one signal from the frame latency waitable. A Present without one, as in a live
+ * resize, leaves a spare signal for the life of the swapchain. Frames then queue behind each other for several
+ * refreshes, and typing shows late. Spare signals pay that debt first. */
+static bool take_present_signal(ShellWindow *window) {
+  while (WaitForSingleObject(window->present_ready_event, 0) == WAIT_OBJECT_0) {
+    if (!window->present_debt) return true;
+    window->present_debt--;
+  }
+  return false;
+}
+
 static void composite_and_present(ShellWindow *window) {
   ShellProject *project = window->selected;
   if (window->render_failed) { InvalidateRect(window->hwnd, NULL, FALSE); return; }
@@ -3224,15 +3238,14 @@ static void composite_and_present(ShellWindow *window) {
     return;
   /* Keep collecting input and surfaces while DXGI waits for presentation capacity.
    * Compose only when ready, so the queued frame contains the newest surfaces. */
-  if (!window->live_resize && !window->present_ready) {
-    if (window->present_wait || WaitForSingleObject(window->present_ready_event, 0) != WAIT_OBJECT_0) {
-      window->frame_present_pending = true;
-      if (!window->present_wait &&
-          !RegisterWaitForSingleObject(&window->present_wait, window->present_ready_event,
-                                       presentation_ready, window, INFINITE, WT_EXECUTEONLYONCE))
-        fail_gpu(window, "presentation wait failed", HRESULT_FROM_WIN32(GetLastError()));
-      return;
-    }
+  bool paired = window->present_ready || (!window->present_wait && take_present_signal(window));
+  if (!paired && !window->live_resize) {
+    window->frame_present_pending = true;
+    if (!window->present_wait &&
+        !RegisterWaitForSingleObject(&window->present_wait, window->present_ready_event,
+                                     presentation_ready, window, INFINITE, WT_EXECUTEONLYONCE))
+      fail_gpu(window, "presentation wait failed", HRESULT_FROM_WIN32(GetLastError()));
+    return;
   }
   window->present_ready = false;
   window->frame_present_pending = false;
@@ -3386,10 +3399,22 @@ static void composite_and_present(ShellWindow *window) {
   anvil_timing_note("present-end", window->id, (uint32_t)hr, 0);
   if (take_fault(FAULT_PRESENT))
     hr = DXGI_ERROR_DEVICE_REMOVED;
-  if (FAILED(hr))
+  if (FAILED(hr)) {
     fail_gpu(window, "presentation failed", hr);
-  else
-    anvil_latency_probe_presented(window->frame_input_seq);
+    return;
+  }
+  if (!paired) window->present_debt++;
+  if (anvil_latency_probe_enabled()) {
+    UINT count = 0;
+    window->swapchain->lpVtbl->GetLastPresentCount(window->swapchain, &count);
+    anvil_latency_probe_presented(window->frame_input_seq, count);
+  }
+}
+
+static void note_latency_probe_shown(ShellWindow *window) {
+  DXGI_FRAME_STATISTICS stats;
+  if (window->swapchain && SUCCEEDED(window->swapchain->lpVtbl->GetFrameStatistics(window->swapchain, &stats)))
+    anvil_latency_probe_shown(stats.PresentCount, (uint64_t)stats.SyncQPCTime.QuadPart);
 }
 
 static void finish_latency_probe(void) {
@@ -5651,7 +5676,12 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
       if (window && window->present_wait) {
         UnregisterWaitEx(window->present_wait, INVALID_HANDLE_VALUE);
         window->present_wait = NULL;
-        window->present_ready = true;
+        if (!window->present_debt) {
+          window->present_ready = true;
+        } else {
+          window->present_debt--;
+          if (window->frame_present_pending) continue_slide(window);
+        }
       }
       return SDL_APP_CONTINUE;
     }
@@ -8902,6 +8932,7 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
       reveal_when_ready(window);
     }
     if (window->sidebar_sliding || (window->shown && peek_animating(window))) continue_slide(window);
+    if (anvil_latency_probe_enabled()) note_latency_probe_shown(window);
   }
   anvil_timing_note("shell-step-end", 0, 0, 0);
   return shell.windows ? SDL_APP_CONTINUE : SDL_APP_SUCCESS;

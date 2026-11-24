@@ -332,6 +332,8 @@ The shell waits for swapchain capacity without blocking its event loop. It colle
 
 Idle Windows have no readiness wait. The shell composes the latest surfaces when capacity becomes available. Vsync stays enabled outside live resize.
 
+Each `Present` must take one signal from the swapchain's frame latency waitable. A live resize or Window move presents without a wait. Each such `Present` leaves one spare signal for the life of the swapchain, and `ResizeBuffers` keeps it. The shell counts these presents as debt and spends later spare signals on the debt before it composes. Without the debt, frames queue in DXGI for several refreshes after a move, and typing shows 100 ms or more late.
+
 Window destruction cancels and joins its wait before releasing its renderer. Run the Sidebar-hover latency probe and focused shell rendering, resize, GPU-failure, and Window-close probes after changes.
 
 A lost GPU device, for example during a driver update, does not fail a Project or the Sidebar. The shell rebuilds the Window's presentation after 1 second. Repeated failures double the delay, up to 60 seconds.

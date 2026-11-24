@@ -22,10 +22,15 @@ static struct {
   SDL_Window *window;
   void (*finish)(void);
   SDL_Thread *thread;
+  Uint32 wake_event;
   Uint64 sent_ns[PROBE_MAX_SAMPLES + 1];
   Uint64 done_ns[PROBE_MAX_SAMPLES + 1];
+  Uint64 sent_qpc[PROBE_MAX_SAMPLES + 1];
+  Uint64 shown_qpc[PROBE_MAX_SAMPLES + 1];
+  unsigned present_count[PROBE_MAX_SAMPLES + 1];
   SDL_AtomicInt last_sent;
   SDL_AtomicInt last_done;
+  SDL_AtomicInt last_shown;
   uint64_t consumed_seq;
   bool received[PROBE_MAX_SAMPLES + 1];
 } probe;
@@ -69,18 +74,32 @@ uint64_t anvil_latency_probe_consumed_seq(void) {
   return probe.consumed_seq;
 }
 
-void anvil_latency_probe_presented(uint64_t consumed_seq) {
+void anvil_latency_probe_presented(uint64_t consumed_seq, unsigned present_count) {
   if (!probe.started || consumed_seq == 0) return;
   int sent = SDL_GetAtomicInt(&probe.last_sent);
   int done = SDL_GetAtomicInt(&probe.last_done);
   int limit = (int)(consumed_seq < (uint64_t)sent ? consumed_seq : (uint64_t)sent);
   if (limit <= done) return;
   Uint64 now = SDL_GetTicksNS();
-  for (int seq = done + 1; seq <= limit; seq++) probe.done_ns[seq] = now;
+  for (int seq = done + 1; seq <= limit; seq++) {
+    probe.done_ns[seq] = now;
+    probe.present_count[seq] = present_count;
+  }
   SDL_SetAtomicInt(&probe.last_done, limit);
   if (probe.diagnostics)
     SDL_Log("Latency presentation: role=%s seq=%d qpc=%llu", probe.role, limit,
             (unsigned long long)SDL_GetPerformanceCounter());
+}
+
+/* Statistics name only the newest shown frame. A later frame shown before this call gives earlier frames
+ * its time, so frequent calls keep the measurement close. */
+void anvil_latency_probe_shown(unsigned present_count, uint64_t qpc) {
+  if (!probe.started) return;
+  int done = SDL_GetAtomicInt(&probe.last_done);
+  int shown = SDL_GetAtomicInt(&probe.last_shown);
+  while (shown < done && probe.present_count[shown + 1] && probe.present_count[shown + 1] <= present_count)
+    probe.shown_qpc[++shown] = qpc;
+  SDL_SetAtomicInt(&probe.last_shown, shown);
 }
 
 static void push_key(Uint32 window_id, Uint32 type, Uint32 seq) {
@@ -118,18 +137,38 @@ static double percentile(const double *sorted, int n, double p) {
   return sorted[index];
 }
 
+static void write_samples(FILE *file, const char *prefix, double *latencies, int n) {
+  double sum = 0.0;
+  fprintf(file, "%ssamples_ms=", prefix);
+  for (int i = 0; i < n; i++) {
+    fprintf(file, "%s%.3f", i ? "," : "", latencies[i]);
+    sum += latencies[i];
+  }
+  fprintf(file, "\n");
+  qsort(latencies, (size_t)n, sizeof(double), compare_double);
+  fprintf(file, "%smin_ms=%.3f\n%sp50_ms=%.3f\n%sp90_ms=%.3f\n%sp99_ms=%.3f\n%smax_ms=%.3f\n%smean_ms=%.3f\n",
+          prefix, n ? latencies[0] : 0.0, prefix, percentile(latencies, n, 0.50), prefix,
+          percentile(latencies, n, 0.90), prefix, percentile(latencies, n, 0.99), prefix,
+          n ? latencies[n - 1] : 0.0, prefix, n ? sum / n : 0.0);
+}
+
 static void write_results(void) {
   const char *path = SDL_getenv("ANVIL_INPUT_LATENCY_FILE");
   if (!path || !path[0]) return;
   double *latencies = malloc(sizeof(double) * (size_t)(probe.count + 1));
-  if (!latencies) return;
-  int n = 0;
-  double sum = 0.0;
+  double *shown = malloc(sizeof(double) * (size_t)(probe.count + 1));
+  if (!latencies || !shown) {
+    free(latencies);
+    free(shown);
+    return;
+  }
+  int n = 0, shown_n = 0;
+  double frequency = (double)SDL_GetPerformanceFrequency();
   for (int seq = 1; seq <= probe.count; seq++) {
     if (!probe.sent_ns[seq] || !probe.done_ns[seq]) continue;
-    double ms = (double)(probe.done_ns[seq] - probe.sent_ns[seq]) / 1000000.0;
-    latencies[n++] = ms;
-    sum += ms;
+    latencies[n++] = (double)(probe.done_ns[seq] - probe.sent_ns[seq]) / 1000000.0;
+    if (probe.shown_qpc[seq] > probe.sent_qpc[seq])
+      shown[shown_n++] = (double)(probe.shown_qpc[seq] - probe.sent_qpc[seq]) * 1000.0 / frequency;
   }
   FILE *file = fopen(path, "wb");
   if (file) {
@@ -137,20 +176,39 @@ static void write_results(void) {
     const char *renderer = SDL_getenv("ANVIL_RENDERER");
     fprintf(file, "renderer=%s\n", renderer && renderer[0] ? renderer : "d3d11");
     fprintf(file, "requested=%d\ncompleted=%d\n", probe.count, n);
-    fprintf(file, "samples_ms=");
-    for (int i = 0; i < n; i++) fprintf(file, "%s%.3f", i ? "," : "", latencies[i]);
-    fprintf(file, "\n");
-    qsort(latencies, (size_t)n, sizeof(double), compare_double);
-    fprintf(file, "min_ms=%.3f\np50_ms=%.3f\np90_ms=%.3f\np99_ms=%.3f\nmax_ms=%.3f\nmean_ms=%.3f\n",
-            n ? latencies[0] : 0.0, percentile(latencies, n, 0.50),
-            percentile(latencies, n, 0.90), percentile(latencies, n, 0.99),
-            n ? latencies[n - 1] : 0.0, n ? sum / n : 0.0);
+    write_samples(file, "", latencies, n);
+    /* Present can return long before the frame reaches the screen, when frames queue in DXGI. */
+    fprintf(file, "shown_completed=%d\n", shown_n);
+    write_samples(file, "shown_", shown, shown_n);
     probe.succeeded = n == probe.count;
     fprintf(file, "done=%d\nunmatched=%d\n", probe.succeeded ? 1 : 0, probe.count - n);
     fclose(file);
   }
   free(latencies);
+  free(shown);
 }
+
+/* A shell reads frame statistics after its steps, and they name only the newest shown frame. Wake the
+ * shell while a presented sample waits, so a later frame does not lend it a later time. */
+static void wait_ms(Uint32 ms) {
+  Uint64 until = SDL_GetTicks() + ms;
+  bool shell = !strcmp(probe.role, "shell");
+  while (SDL_GetTicks() < until) {
+    if (shell && probe.wake_event && SDL_GetAtomicInt(&probe.last_shown) < SDL_GetAtomicInt(&probe.last_done)) {
+      SDL_Event wake = {0};
+      wake.type = probe.wake_event;
+      SDL_PushEvent(&wake);
+    }
+    Uint64 left = until - SDL_GetTicks();
+    SDL_Delay(left < 4 ? (Uint32)left : 4);
+  }
+}
+
+#ifdef _WIN32
+static void post_hover(HWND native_window, unsigned *motion) {
+  PostMessageW(native_window, ANVIL_ROUTING_PROBE_MESSAGE, 0, ((*motion)++ % 2 ? 250 << 16 : 50 << 16) | 100);
+}
+#endif
 
 static int SDLCALL generator_thread(void *data) {
   (void)data;
@@ -164,9 +222,20 @@ static int SDLCALL generator_thread(void *data) {
   HWND native_window = sidebar_hover && !strcmp(probe.role, "shell")
     ? SDL_GetPointerProperty(SDL_GetWindowProperties(probe.window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL)
     : NULL;
+  if (native_window) {
+    /* A Window move presents frames inside its modal loop. Typing after it shows whether frames now queue. */
+    PostMessageW(native_window, WM_ENTERSIZEMOVE, 0, 0);
+    for (int i = 0; i < 40; i++) {
+      post_hover(native_window, &motion);
+      SDL_Delay(8);
+    }
+    PostMessageW(native_window, WM_EXITSIZEMOVE, 0, 0);
+    SDL_Delay(250);
+  }
 #endif
   for (int seq = 1; seq <= probe.count; seq++) {
     probe.sent_ns[seq] = SDL_GetTicksNS();
+    probe.sent_qpc[seq] = SDL_GetPerformanceCounter();
     SDL_SetAtomicInt(&probe.last_sent, seq);
     if (probe.diagnostics)
       SDL_Log("Latency generated: role=%s seq=%d qpc=%llu", probe.role, seq,
@@ -187,7 +256,7 @@ static int SDLCALL generator_thread(void *data) {
     random ^= random << 5;
     /* Keep both surfaces active in the Sidebar check. Sparse hover changes do not reproduce the queue delay. */
     Uint32 gap = sidebar_hover ? 25 + random % 25 : 90 + random % 80;
-    if (!sidebar_hover) SDL_Delay(gap);
+    if (!sidebar_hover) wait_ms(gap);
     else {
       Uint64 until = SDL_GetTicks() + gap;
       while (SDL_GetTicks() < until) {
@@ -195,23 +264,27 @@ static int SDLCALL generator_thread(void *data) {
         hover.type = SDL_EVENT_MOUSE_MOTION;
         hover.motion.windowID = window_id;
         hover.motion.x = 100;
-        hover.motion.y = motion++ % 2 ? 250 : 50;
+        hover.motion.y = motion % 2 ? 250 : 50;
 #ifdef _WIN32
         if (native_window)
-          PostMessageW(native_window, ANVIL_ROUTING_PROBE_MESSAGE, 0,
-                       ((int)hover.motion.y << 16) | (int)hover.motion.x);
+          post_hover(native_window, &motion);
         else
 #endif
+        {
+          motion++;
           SDL_PushEvent(&hover);
-        SDL_Delay(8);
+        }
+        wait_ms(8);
       }
     }
   }
 
+  bool shell = !strcmp(probe.role, "shell");
   Uint64 deadline = SDL_GetTicksNS() + 3 * SDL_NS_PER_SECOND;
-  while (SDL_GetAtomicInt(&probe.last_done) < probe.count && SDL_GetTicksNS() < deadline) {
-    SDL_Delay(10);
-  }
+  while ((SDL_GetAtomicInt(&probe.last_done) < probe.count ||
+          (shell && SDL_GetAtomicInt(&probe.last_shown) < probe.count)) &&
+         SDL_GetTicksNS() < deadline)
+    wait_ms(4);
   write_results();
   if (probe.finish) probe.finish();
   return 0;
@@ -222,6 +295,7 @@ void anvil_latency_probe_start(SDL_Window *window, void (*finish)(void)) {
   probe.started = true;
   probe.window = window;
   probe.finish = finish;
+  probe.wake_event = SDL_RegisterEvents(1);
   probe.thread = SDL_CreateThread(generator_thread, "anvil-latency-probe", NULL);
   if (probe.thread) SDL_DetachThread(probe.thread);
 }

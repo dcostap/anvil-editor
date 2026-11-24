@@ -84,7 +84,7 @@ static void rencache_finish_latency_probe(void) {
 static void rencache_note_direct_present(SDL_Window *window) {
   if (!anvil_latency_probe_enabled()) return;
   anvil_latency_probe_start(window, rencache_finish_latency_probe);
-  anvil_latency_probe_presented(anvil_latency_probe_consumed_seq());
+  anvil_latency_probe_presented(anvil_latency_probe_consumed_seq(), 0);
 }
 #define CMD_BUF_CANVAS_INIT_SIZE (1024 * 64)
 #define COMMAND_BARE_SIZE offsetof(Command, command)

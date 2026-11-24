@@ -11,7 +11,8 @@
  * native window generates tagged keystrokes for that window. The process that
  * runs Lua records contiguous consumed tags. The window owner measures
  * from generation until the first presented frame that includes that tag,
- * writes ANVIL_INPUT_LATENCY_FILE, and calls the finish callback. */
+ * writes ANVIL_INPUT_LATENCY_FILE, and calls the finish callback.
+ * A shell also reports when DXGI shows each frame, so queued frames count. */
 
 void anvil_latency_probe_init(const char *role);
 bool anvil_latency_probe_enabled(void);
@@ -20,7 +21,10 @@ void anvil_latency_probe_stage(const char *stage);
 void anvil_latency_probe_start(SDL_Window *window, void (*finish)(void));
 void anvil_latency_probe_note_event(const SDL_Event *event);
 uint64_t anvil_latency_probe_consumed_seq(void);
-void anvil_latency_probe_presented(uint64_t consumed_seq);
+/* present_count is the swapchain's count for this Present, or 0 when unknown. */
+void anvil_latency_probe_presented(uint64_t consumed_seq, unsigned present_count);
+/* Frame statistics: DXGI showed present_count, or a later frame, at qpc. */
+void anvil_latency_probe_shown(unsigned present_count, uint64_t qpc);
 
 /* Owned-window actions for the private-desktop routing scenario. */
 #define ANVIL_ROUTING_PROBE_MESSAGE 0x804au
