@@ -384,6 +384,7 @@ struct ShellWindow {
   bool sidebar_focused;
   /* Cumulative input counts. Native callbacks count only; snapshots run during SDL event handling. */
   Uint64 native_keys, native_chars, input_keys, input_texts;
+  Uint64 next_display_sample_ms;
   bool traced_key, traced_text;
   Uint64 sidebar_input_ns;  /* first Sidebar input since its last frame, for the input-to-frame diagnostic */
   bool shown;
@@ -2649,10 +2650,27 @@ static bool window_focused(ShellWindow *window) {
 static void log_input_state(ShellWindow *window, const char *reason, const SDL_Event *event) {
   ShellProject *project = window->selected;
   bool popup = sidebar_popup_shown(window);
+  char display[192] = "";
+  if (event && event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+    Uint64 now = SDL_GetTicks();
+    if (now >= window->next_display_sample_ms) {
+      window->next_display_sample_ms = now + 1000;
+      UINT submitted = 0;
+      DXGI_FRAME_STATISTICS stats;
+      IDXGISwapChain1 *chain = window->swapchain;
+      bool have_count = chain && SUCCEEDED(chain->lpVtbl->GetLastPresentCount(chain, &submitted));
+      bool have_stats = chain && SUCCEEDED(chain->lpVtbl->GetFrameStatistics(chain, &stats));
+      SDL_snprintf(display, sizeof(display), " dxgi_submitted=%lld dxgi_shown=%lld present_pending=%d wait_armed=%d "
+                   "project_busy=%d sidebar_busy=%d held=%d", have_count ? (long long)submitted : -1LL,
+                   have_stats ? (long long)stats.PresentCount : -1LL, window->frame_present_pending,
+                   window->present_wait != NULL, window->project_presentation.busy, window->sidebar_presentation.busy,
+                   window->project_presentation.held);
+    }
+  }
   SDL_Log("Shell input state: reason=%s Window=%u Project=%u connection=%u state=%d connected=%d "
           "sidebar=%d popup=%d foreground=%d native_focus=%d sdl_focus=%d text_requested=%d text_active=%d "
           "native_keys=%llu native_chars=%llu sdl_keys=%llu sdl_texts=%llu "
-          "ctrl=%d shift=%d alt=%d sdl_mod=0x%x event=%u event_ns=%llu event_mod=0x%x",
+          "ctrl=%d shift=%d alt=%d sdl_mod=0x%x event=%u event_ns=%llu event_mod=0x%x%s",
           reason, window->id, project->id, project->connection, project->state, project->connected,
           window->sidebar_focused, popup, GetForegroundWindow() == window->hwnd, GetFocus() == window->hwnd,
           window_focused(window), project->text_active, SDL_TextInputActive(window->window),
@@ -2661,7 +2679,7 @@ static void log_input_state(ShellWindow *window, const char *reason, const SDL_E
           (GetKeyState(VK_CONTROL) & 0x8000) != 0, (GetKeyState(VK_SHIFT) & 0x8000) != 0,
           (GetKeyState(VK_MENU) & 0x8000) != 0, SDL_GetModState(), event ? event->type : 0,
           (unsigned long long)(event ? event->common.timestamp : 0),
-          event && (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) ? event->key.mod : 0);
+          event && (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) ? event->key.mod : 0, display);
 }
 
 static void set_text_input(ShellWindow *window, bool active, const char *reason) {

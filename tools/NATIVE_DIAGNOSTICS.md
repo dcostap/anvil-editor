@@ -31,6 +31,10 @@ The shell assigns a new connection ID on each start. `Shell Project start`, `She
 
 `Shell transport failure` identifies allocation failure, event notification failure, invalid packets, and queue overflow. It records the stage and message size. `Shell outbound queue overflow` includes the queued size and limit.
 
+## Diagnose a frozen Window
+
+For a frozen Window, compare `Shell input state: reason=click` records for that Window. On clicks, the shell samples display state at most once per second. `dxgi_submitted` counts presents on the current swapchain. `dxgi_shown` is the last present count from Windows frame statistics. A value of `-1` means unavailable. Compare counts across clicks that should change the display, not while the Window is idle. An advancing count does not prove that the frame contains new content. `present_pending`, `wait_armed`, the two surface busy flags, and `held` describe the shell at the click. Compare these with the Sidebar click and Project Pane request records.
+
 ## Read pipe failures
 
 `IPC pipe failure` records:
