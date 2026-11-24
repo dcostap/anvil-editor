@@ -174,10 +174,28 @@ local function node_strictly_expands(node, start_byte, end_byte)
       and (node.start_byte < start_byte or node.end_byte > end_byte)
 end
 
+local function word_end_expansion(buffer, line, col, caret_byte)
+  if col <= 1 then return end
+  local text = buffer.lines[line]
+  local non_word = buffer:get_non_word_chars()
+  if non_word:find(text:sub(col - 1, col - 1), 1, true)
+    or not non_word:find(text:sub(col, col), 1, true) then return end
+
+  -- Look left of the caret, but only take a range that ends at the caret.
+  local _, left_col = utf8_boundary(buffer, line, col - 1, "backward")
+  for _, node in ipairs(selection.get_node_ranges(buffer, line, left_col)) do
+    if node.end_byte == caret_byte then return node end
+  end
+end
+
 local function choose_expansion(buffer, ts, line1, col1, line2, col2)
   line1, col1, line2, col2 = sorted_selection(line1, col1, line2, col2)
   local start_byte = byte_offset(buffer, ts, line1, col1)
   local end_byte = byte_offset(buffer, ts, line2, col2)
+  if line1 == line2 and col1 == col2 then
+    local node = word_end_expansion(buffer, line1, col1, start_byte)
+    if node then return node end
+  end
   local ranges = selection.get_node_ranges(buffer, line1, col1, line2, col2)
   for _, node in ipairs(ranges) do
     if node_strictly_expands(node, start_byte, end_byte) then return node end

@@ -5,6 +5,7 @@ local project_paths = require "core.project_paths"
 local test = require "core.test"
 local Editor = require "core.editor"
 local panes = require "core.panes"
+local treesitter = require "core.treesitter"
 local View = require "core.view"
 
 require "plugins.intellij_actions"
@@ -55,6 +56,24 @@ end
 local function view_selections(view)
   return view:with_selection_state(function()
     return { table.unpack(view.buffer.selections) }
+  end)
+end
+
+local function open_syntax_editor(context, text, filename)
+  local view, buffer = open_editor(context, text)
+  buffer:set_filename(filename, filename)
+  local deadline = system.get_time() + 5
+  repeat
+    treesitter.poll_buffer(buffer)
+    if buffer.treesitter and buffer.treesitter.status == "ready" then return view, buffer end
+    coroutine.yield(0.01)
+  until system.get_time() >= deadline
+  error("Tree-sitter did not parse " .. filename)
+end
+
+local function selected_text(view)
+  return view:with_selection_state(function()
+    return view.buffer:get_text(view.buffer:get_selection(true))
   end)
 end
 
@@ -198,6 +217,36 @@ test.describe("IntelliJ actions batch behavior", function()
       4, 2, 4, 2,
     })
     test.equal(view.selection_state.last_selection, 3)
+  end)
+
+  test.it("smart selection starts with the Odin identifier before a closing parenthesis", function(context)
+    local call = "make(map[string][]string, context.temp_allocator)"
+    local view, buffer = open_syntax_editor(context, "package main\nmain :: proc() {\n  known := " .. call .. "\n}", "smart_selection.odin")
+    local col = assert(buffer.lines[3]:find(")", 1, true))
+    local caret = { 3, col, 3, col }
+    set_view_selections(view, caret)
+
+    local steps = { "temp_allocator", "context.temp_allocator", call }
+    for _, expected in ipairs(steps) do
+      test.ok(command.perform("editor:extend_selection_smart"))
+      test.equal(selected_text(view), expected)
+    end
+    for i = #steps - 1, 1, -1 do
+      test.ok(command.perform("editor:shrink_selection_smart"))
+      test.equal(selected_text(view), steps[i])
+    end
+    test.ok(command.perform("editor:shrink_selection_smart"))
+    test.same(view_selections(view), caret)
+  end)
+
+  test.it("smart selection handles both edges of a UTF-8 identifier", function(context)
+    local view, buffer = open_syntax_editor(context, "void f(void) { sink( café, value); }", "smart_selection.c")
+    local col = assert(buffer.lines[1]:find("café", 1, true))
+    for _, caret in ipairs({ col - 1, col, col + #"café" }) do
+      set_view_selections(view, { 1, caret, 1, caret })
+      test.ok(command.perform("editor:extend_selection_smart"))
+      test.equal(selected_text(view), caret == col - 1 and " café, value" or "café")
+    end
   end)
 
   test.it("select all occurrences replaces selections in bulk", function(context)

@@ -64,6 +64,12 @@ So block spacing, wrap indentation and tables between the two ends show no gaps.
 
 Run `ui/selection_background.lua` and `ui/markdown_selection_background.lua` after changes. Check the `markdown-selection` render scenario after visual changes.
 
+## Smart Selection
+
+With a ready Tree-sitter parse, Smart Selection grows to the next syntax range. At the end of a word, it first tries the smallest syntax range that ends at the caret. This lets `run(value|)` select `value` before growing to the call. The rule applies only to carets without a selection. Shrink restores the original caret.
+
+Run `ui/intellij_actions.lua` and `ui/markdown_semantic_selection.lua` after changes.
+
 ## Shared storage
 
 `core.storage` reads generated Lua data through `system.load_file`. Windows readers share deletion, so a replacement can leave them reading the old file. `system.replace_file` uses Windows POSIX rename semantics to publish the new file while those readers stay open.
