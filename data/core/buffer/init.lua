@@ -1214,9 +1214,17 @@ end
 
 -- After a reconnect, the Client missed the Machine's changes. A clean Buffer whose file changed
 -- reloads. A Buffer with unsaved text keeps it, and gets a conflict.
-check_machine_file = function(self)
-  fs.read(self.abs_filename, function(err, bytes, version)
-    if self.machine_save or self:is_loading() then return end
+check_machine_file = function(self, on_focus)
+  if on_focus and self.machine_file_check then return end
+  local client, path, base = fs.machine, self.abs_filename, self.machine_version
+  local request = {}
+  self.machine_file_check = request
+  fs.read(path, function(err, bytes, version)
+    if self.machine_file_check ~= request then return end
+    self.machine_file_check = nil
+    if fs.machine ~= client or self.abs_filename ~= path or self.machine_version ~= base or self.machine_closed
+        or self.machine_save or self:is_loading() then return end
+    if on_focus and (not core.active_view or core.active_view.buffer ~= self) then return end
     if err and err.code ~= "not_found" then return end
     if version == self.machine_version then
       if self.machine_offline_save and self:is_dirty() then
@@ -1226,7 +1234,22 @@ check_machine_file = function(self)
       return
     end
     if bytes and not self:is_dirty() then return apply_machine_file(self, bytes, version) end
+    if on_focus and self.machine_conflict and self.machine_conflict.version == version then return end
     machine_conflict(self, version)
+  end, base)
+end
+
+function Buffer:check_machine_file_on_focus()
+  if self.abs_filename and fs.machine_file(self.abs_filename) and not self:is_loading() and not self.load_error
+      and not self.machine_save and not self.machine_closed then check_machine_file(self, true) end
+end
+
+function Buffer:read_machine_conflict_text(on_read)
+  local path, client = self.abs_filename, fs.machine
+  fs.read(path, function(err, bytes)
+    if self.machine_closed or self.abs_filename ~= path or fs.machine ~= client or not self.machine_conflict then return end
+    if err then return core.error("Cannot compare %s: %s", path, err.message or err.code) end
+    on_read((decode_bytes(self, bytes):gsub("\r\n", "\n")))
   end)
 end
 

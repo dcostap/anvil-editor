@@ -131,3 +131,7 @@ Markdown keeps its indentation. Paste as Plain Text (`core:paste_as_plain_text`)
 ## Changes Baseline
 
 Changes Baseline checks file identity once before a pending diff, not on each key. Patch export and Revert also check any pending identity before using the baseline. Run `ui/file_changes_baseline.lua` after changes.
+
+## Machine file changes
+
+Selecting an open Machine file or returning to the Window checks the active Buffer against its saved version. The host omits unchanged bytes from the reply. A clean Buffer takes the host's changes. A dirty Buffer keeps its edits, including text typed while the check was pending. Compare Changes shows the two versions without saving either. Return to the file and choose Save to resolve the conflict. Saving still checks the version on the Machine.

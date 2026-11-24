@@ -358,7 +358,8 @@ local function read_file(client, id, params)
   if not path then return end
   local bytes, code, message = load_file(disk_path(path))
   if not bytes then return fail(client, id, code, message, code == "too_large" and {limit = MAX_FILE} or nil) end
-  reply(client, id, {result = {size = #bytes, version = machine.content_version(bytes)}}, bytes)
+  local version = machine.content_version(bytes)
+  reply(client, id, {result = {size = #bytes, version = version}}, version ~= params.known_version and bytes or nil)
 end
 
 -- The server keeps the result of each recent save ID, so a Client that lost a reply can ask for it.

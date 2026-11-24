@@ -62,8 +62,8 @@ function fs.reconnected()
 end
 
 -- `on_done(err, bytes, version)`. A missing file gives the error code `not_found`.
-function fs.read(path, on_done)
-  fs.machine:request("files.read", {path = path}, nil, function(err, result, bytes)
+function fs.read(path, on_done, known_version)
+  fs.machine:request("files.read", {path = path, known_version = known_version}, nil, function(err, result, bytes)
     if err then return on_done(err) end
     on_done(nil, bytes, result.version)
   end)

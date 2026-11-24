@@ -277,6 +277,9 @@ local function show_conflict_prompt(buffer)
     "%s no longer exists at its saved path.\n\nAnvil can save your current buffer as a new file at the same path and recreate any missing parent folders, or discard it and close the buffer.",
     name
   )
+  if fs.machine_file(buffer.abs_filename) then
+    changed_message = name .. " changed on the Machine. Your edits are still here. Autosave is paused."
+  end
   local function prompt_buttons()
     if missing then
       return {
@@ -292,7 +295,10 @@ local function show_conflict_prompt(buffer)
       { font = style.font, text = "Cancel", default_no = true },
     }
     -- A copy opens a second Buffer through the local path, so Machine files do not offer it yet.
-    if fs.machine_file(buffer.abs_filename) then table.remove(buttons, 3) end
+    if fs.machine_file(buffer.abs_filename) then
+      table.remove(buttons, 3)
+      table.insert(buttons, 1, { font = style.font, text = "Compare Changes" })
+    end
     return buttons
   end
   local buttons = prompt_buttons()
@@ -323,7 +329,15 @@ local function show_conflict_prompt(buffer)
   end
 
   on_select = function(item)
-    if item.text == "Save as New File" then
+    if item.text == "Compare Changes" then
+      buffer.autosave_conflict_prompt_visible = false
+      buffer:read_machine_conflict_text(function(host)
+        local diff = require "plugins.diffview"
+        diff.open { title = "Compare Changes: " .. buffer:get_name(),
+          contents = { diff.content.text(host), diff.content.text(table.concat(buffer.lines)) },
+          content_titles = { "On the Machine", "Your edits" }, editable_policy = "read-only" }
+      end)
+    elseif item.text == "Save as New File" then
       if disk_states_differ(prompt_disk_state, capture_disk_state(buffer)) then
         return disk_changed_again()
       end

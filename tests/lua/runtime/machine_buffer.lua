@@ -156,6 +156,37 @@ test.describe("Buffer on a Machine", function()
     test.ok(buffer:is_dirty())
   end)
 
+  test.it("checks a Machine file on selection and on window return without losing typing", function(context)
+    start_server(context)
+    fs.use_machine(machine_server.discovery_path(context.user), { context.project })
+    local buffer = open(context, context.notes)
+    local previous = core.active_view
+    context.restore[#context.restore + 1] = function() core.active_view = previous end
+    write_file(machine_copy(context, context.notes), "Host edit\n")
+    core.set_active_view(require("core.textview")(buffer))
+    wait_until(function() return text(buffer) == "Host edit\n" end, "Selecting the file did not refresh it")
+    test.not_ok(buffer:is_dirty())
+    write_file(machine_copy(context, context.notes), "Another host edit\n")
+    core.on_event("focusgained")
+    buffer:insert(1, 1, "Mine: ")
+    wait_until(function() return context.prompt end, "Returning did not detect the conflict")
+    test.equal(text(buffer), "Mine: Host edit\n")
+    local compare
+    for _, button in ipairs(context.prompt.buttons) do compare = compare or button.text == "Compare Changes" end
+    test.ok(compare)
+    -- The runtime runner has no Pane. Build the real Diff View without presenting it.
+    local diff = require "plugins.diffview"
+    local present, compared = diff.open
+    context.restore[#context.restore + 1] = function() diff.open = present end
+    diff.open = function(request) compared = assert(present(request, true)); return compared end
+    context.prompt.choose("Compare Changes")
+    wait_until(function() return compared end, "The conflict comparison did not open")
+    test.equal(compared.request.contents[1].text, "Another host edit\n")
+    test.equal(compared.request.contents[2].text, "Mine: Host edit\n")
+    test.ok(buffer:is_dirty())
+    test.equal(read_file(machine_copy(context, context.notes)), "Another host edit\n")
+  end)
+
   test.it("opens and saves a file of this PC's own folders on this PC", function(context)
     start_server(context)
     fs.use_machine(machine_server.discovery_path(context.user), { context.project })

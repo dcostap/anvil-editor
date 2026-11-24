@@ -1860,6 +1860,7 @@ function core.set_active_view(view, focus_context)
     end
     core.last_active_view = old_active_view
     core.active_view = view
+    if view.buffer and view.buffer.check_machine_file_on_focus then view.buffer:check_machine_file_on_focus() end
     if core.blink_reset then
       core.blink_reset()
     else
@@ -2795,6 +2796,8 @@ function core.on_event(type, ...)
     core.blink_reset()
     core.log_quiet("Focus diagnostics: reset caret blink on focusgained")
     core.request_window_reactivation_repaint("focusgained")
+    local buffer = core.active_view and core.active_view.buffer
+    if buffer and buffer.check_machine_file_on_focus then buffer:check_machine_file_on_focus() end
   elseif type == "focuslost" then
     ime.stop()
     record_input_window_focus(false, "focuslost", true)
