@@ -106,7 +106,18 @@ test.describe("Terminal on a Machine", function()
     wait_text(view, "ECHO:hello")
     test.ok(view:move_refusal())
 
-    -- The test's teardown checks that closing the View ends the shell.
+    local report = require "core.pane_report"
+    local function listed()
+      for _, item in ipairs(report.build().terminals or {}) do
+        if item.id == id then return true end
+      end
+    end
+    wait_until(view, listed, "The Machine did not list the session")
+    view:on_close(true)
+    test.not_ok(listed(), "Closing the last View left a stale session in the Sidebar report")
+    wait_until(view, function()
+      return not require("terminal_link").host_alive(record.host_pid, record.host_creation_time)
+    end, "The Machine kept the closed shell")
   end)
 
   test.it("closes a busy session without a question while another device shows it, and keeps its shell", function(context)
@@ -207,6 +218,12 @@ test.describe("Terminal on a Machine", function()
     context.views[#context.views + 1] = opened
     wait_text(opened, "ECHO:before")
     test.is_nil(terminal.open_session(string.rep("0", 32)), "A session that the Machine does not list opened")
+    local record = assert(machine_record(context, id))
+    opened:on_close(true)
+    test.not_ok(require("core.machine_terminal").listed(id), "The closed session can still be selected")
+    wait_until(opened, function()
+      return not require("terminal_link").host_alive(record.host_pid, record.host_creation_time)
+    end, "Closing the reattached View kept its shell running")
   end)
 
   test.it("starts a new shell on the Machine when the restored session is gone", function(context)

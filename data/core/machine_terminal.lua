@@ -5,6 +5,22 @@ local core = require "core"
 local common = require "core.common"
 
 local machine_terminal = {}
+local listed, watched
+local closing, revision = {}, 0
+
+-- Stop offering the last View's session while its CLOSE travels to the host.
+function machine_terminal.closing(remote)
+  if not remote.carrying or remote.client ~= watched or remote.client.level ~= "full" then return end
+  closing[remote.id] = remote
+  if listed then
+    local items = {}
+    for _, item in ipairs(listed) do
+      if item.id ~= remote.id then items[#items + 1] = item end
+    end
+    listed = items
+  end
+  core.redraw = true
+end
 
 -- Waits in this scheduler thread for the reply of one request. Returns its error, result and bytes.
 local function call(client, method, params, bytes)
@@ -101,7 +117,12 @@ function machine_terminal.connect(client, session, id, start)
           if link then
             remote.id, attached = result.session_id, true
             core.log_quiet("Remote Terminal Session %s attached: link=%s", remote.id, tostring(result.link))
+            remote.carrying = true
             carry(remote, link, result.link)
+            remote.carrying = false
+            if closing[remote.id] == remote then
+              closing[remote.id], revision = nil, revision + 1
+            end
           elseif not err then
             -- The session closed during the attach. Its host must not keep this Client.
             call(client, "terminal.detach", {link = result.link})
@@ -148,27 +169,27 @@ local function sidebar_item(session)
   return item
 end
 
-local listed, watched
-
 -- The Terminal Sessions that the Machine of `client` lists for `project`, newest first, as Project Sidebar items.
 -- The first call starts a list every 2 seconds while the Machine is connected. Returns nil before the first list.
 -- A Machine without a Terminal service lists nothing.
 function machine_terminal.sessions(client, project)
   if watched == client then return listed end
-  watched, listed = client, nil
+  watched, listed, closing = client, nil, {}
   core.add_thread(function()
     while watched == client and client.state ~= "closed" do
       if client.state == "ready" then
+        local before = revision
         local err, result = call(client, "terminal.list", {project = project})
         if watched ~= client then return end
         if err and not TRANSPORT[err.code] then
           core.log_quiet("Machine Terminal Sessions are not listed: %s %s", tostring(err.code), tostring(err.message))
           return
         end
-        if not err then
+        if not err and before == revision then
           local items = {}
           for _, session in ipairs(type(result.sessions) == "table" and result.sessions or {}) do
-            items[#items + 1] = sidebar_item(session)
+            local item = sidebar_item(session)
+            if item and not closing[item.id] then items[#items + 1] = item end
           end
           if common.serialize(items, {sort = true}) ~= common.serialize(listed or {}, {sort = true}) or not listed then
             core.log_quiet("Machine Terminal Sessions listed: %d", #items)

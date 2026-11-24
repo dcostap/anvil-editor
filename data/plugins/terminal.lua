@@ -2909,7 +2909,12 @@ function TerminalView:on_close(reopen)
   -- A detached session belongs to its host or another Workspace. Only a live session ends for Reopen.
   -- The Machine keeps no closed sessions. Reopen starts a new shell there in the same folder.
   -- A session that another device shows keeps running. Reopen attaches it again without a closed record.
-  local shared = self.session and (select(2, self.session:update()).clients or 0) > 1
+  local clients = self.session and select(2, self.session:update()).clients
+  local shared = (clients or 0) > 1
+  if self.remote and self.session then
+    core.log_quiet("Closing Machine Terminal View: id=%s clients=%s access=%s", tostring(self.remote.id),
+      tostring(clients), tostring(self.remote.client.level))
+  end
   if reopen and (self.session or self.state == "deferred") and self.session_id and not self.machine and not shared then
     local file, err = io.open(closed_session_path(self.session_id), "wb")
     if file then retained, err = file:close() end
@@ -2926,6 +2931,7 @@ function TerminalView:on_close(reopen)
   if self.session then
     if self.vt_trace_path then self:stop_vt_trace() end
     local stats = self.session.stats and self.session:stats() or {}
+    if self.remote and not shared then require("core.machine_terminal").closing(self.remote) end
     self.session:close()
     self.session = nil
     core.log_quiet(
