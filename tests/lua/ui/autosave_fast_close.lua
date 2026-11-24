@@ -29,26 +29,47 @@ local function option_index(options, predicate)
   end
 end
 
-test.describe("Autosave Pane close", function()
+test.describe("Autosave Pane changes", function()
   test.before_each(function(context)
-    context.path = system.absolute_path(USERDIR .. PATHSEP
-      .. "autosave-pane-close-" .. system.get_process_id() .. ".txt")
+    context.folder = USERDIR .. PATHSEP .. "autosave-pane"
+    assert(system.mkdir(context.folder))
+    context.path = context.folder .. PATHSEP .. "source.txt"
     context.prompt_enter = core.global_prompt_bar.enter
     context.nag_show = core.nag_view.show
-    pcall(os.remove, context.path)
     write_file(context.path, "original\n")
   end)
 
   test.after_each(function(context)
     core.global_prompt_bar.enter = context.prompt_enter
     core.nag_view.show = context.nag_show
+    if context.previous then core.set_active_view(context.previous) end
+    if context.cwd then system.chdir(context.cwd) end
+    if context.target then context.target:on_close() end
+    if context.other then context.other:on_close() end
     if context.view then context.view:on_close() end
     if context.buffer and core.buffer_registry then
       core.buffer_registry:remove(context.buffer, true)
     elseif context.buffer then
       context.buffer:on_close()
     end
-    pcall(os.remove, context.path)
+    test.ok(test.remove_tree(context.folder))
+  end)
+
+  test.it("saves before Terminal input but not between Editors of one Buffer", function(context)
+    local terminal = require "plugins.terminal"
+    terminal._set_native_for_tests({ new = function() return nil, "no shell in this test" end })
+    context.target = terminal.TerminalView()
+    terminal._set_native_for_tests(nil)
+    context.previous = core.active_view
+    context.cwd = system.getcwd()
+    context.buffer = Buffer(context.path, context.path, false)
+    context.view, context.other = Editor(context.buffer), Editor(context.buffer)
+    core.set_active_view(context.view)
+    context.buffer:insert(1, 1, "edited ")
+    core.set_active_view(context.other)
+    test.ok(context.buffer:is_dirty())
+    core.set_active_view(context.target)
+    test.equal(read_file(context.path), "edited original\n")
   end)
 
   test.it("saves a dirty named Buffer before Pane close approval", function(context)
@@ -371,6 +392,11 @@ test.describe("Autosave save failures", function()
     test.equal(autosave_fast.save_all_dirty("binary"), 0)
     test.equal(read_file(context.path), bytes)
     test.ok(context.view:get_name():find("*", 1, true), "expected a visible unsaved mark")
+    require "plugins.autosaveonfocuslost"
+    autosave_fast.enabled = false
+    core.root_panel:on_focus_lost()
+    test.ok(buffer:is_dirty(), "the Window focus fallback must not write binary data")
+    test.equal(read_file(context.path), bytes)
   end)
 
   test.it("does not reopen a dismissed conflict during later Autosave attempts", function(context)

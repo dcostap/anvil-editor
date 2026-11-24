@@ -24,7 +24,8 @@ end
 
 local function save_node_fallback()
   for _, buffer in ipairs(core.buffers) do
-      if buffer.filename and buffer:is_dirty() and not is_protected_buffer(buffer) then
+      if buffer.filename and not buffer.binary and buffer:is_dirty()
+        and not buffer:is_read_only() and not is_protected_buffer(buffer) then
         local ok, err = pcall(buffer.save, buffer)
         if ok then
           core.log_quiet("Saved buffer \"%s\"", buffer.filename)
