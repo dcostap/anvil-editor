@@ -232,11 +232,13 @@ It closes one Window at a time, front Window first. The next Window closes after
 
 Later Windows reuse that choice. A Cancel stops Close All and turns saves on again. Windows that closed before the Cancel go on the closed-Window list.
 
+Restart All Windows (`core:restart_all_windows`) uses the same Window order and unsaved-changes prompts. It saves Workspaces and keeps Terminal Sessions running without asking. After the last Window closes, Anvil starts a new shell and restores all saved Windows. Cancel stops the restart. `core:restart` still restarts only the current Project in the shell.
+
 The shell's quit event uses Close All. Taskbar "Close all windows" sends one Window Close to each Window. Reopen Closed Window (`core:reopen_closed_window`) opens the newest closed Window with its ID, bounds, Selected Project and other loaded Projects.
 
 App State keeps 10 closed Windows. A Window without a Project does not go on the list. A Project that another Window shows stays there.
 
-Run `anvil:shell-state` and the `windows-close-all-terminals`, `windows-close-all-cancel` and `windows-close-reopen` shell probes after changes.
+Run `anvil:shell-state` and the `windows-close-all-terminals`, `windows-close-all-cancel`, `windows-close-reopen` and `windows-close-restart` shell probes after changes.
 
 ## Alt Navigation
 

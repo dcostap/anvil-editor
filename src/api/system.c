@@ -2436,9 +2436,14 @@ static int f_toggle_alt_navigation(lua_State *L) {
   return 1;
 }
 
-/* Both return false outside a shell. */
+/* These Window commands return false outside a shell. */
 static int f_close_all_windows(lua_State *L) {
   lua_pushboolean(L, anvil_hosted_surface_close_all_windows());
+  return 1;
+}
+
+static int f_restart_all_windows(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_restart_all_windows());
   return 1;
 }
 
@@ -3367,6 +3372,7 @@ static const luaL_Reg lib[] = {
   { "toggle_project_sidebar", f_toggle_project_sidebar },
   { "toggle_alt_navigation", f_toggle_alt_navigation },
   { "close_all_windows",     f_close_all_windows     },
+  { "restart_all_windows",   f_restart_all_windows   },
   { "reopen_closed_window",  f_reopen_closed_window  },
   { "focus_project_sidebar", f_focus_project_sidebar },
   { "peek_project",          f_peek_project          },

@@ -150,6 +150,8 @@ typedef enum {
   /* This Project saved Simple Mode. The shell sends it to every other Project and the Sidebar.
    * Payload: AnvilSurfaceInt, 1 when Simple Mode is on. */
   ANVIL_SURFACE_MSG_SIMPLE_MODE_SAVED = 122,
+  /* Save every Window, keep Terminal Sessions running, and start a new shell. No payload. */
+  ANVIL_SURFACE_MSG_RESTART_ALL_WINDOWS = 123,
 } AnvilSurfaceMessageType;
 
 typedef enum {
