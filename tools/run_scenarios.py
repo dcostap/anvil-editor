@@ -338,6 +338,11 @@ SCENARIOS: dict[str, Scenario] = {
         "markdown_vault_type", MARKDOWN_VAULT_LONG, actions=40, suites=("markdown", "smoke"),
         settings={"note": MARKDOWN_VAULT_LONG.note, "notes": MARKDOWN_VAULT_LONG.project_notes,
                   "line": 1}),
+    # Type at 8 carets on the task and text lines in the middle of the long task note.
+    "markdown-vault-multicaret-type": Scenario(
+        "markdown_vault_type", MARKDOWN_VAULT_LONG, actions=40, suites=("markdown",),
+        settings={"note": MARKDOWN_VAULT_LONG.note, "notes": MARKDOWN_VAULT_LONG.project_notes,
+                  "line": MARKDOWN_VAULT_LONG.typing_line, "carets": 8}),
     # Scroll a long source file with the wheel, and hold an arrow key in it.
     "editor-scroll-wheel": Scenario(
         "editor_scroll", REPO_LONG, actions=80, suites=("smoke",), targets=1,
