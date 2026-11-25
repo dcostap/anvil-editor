@@ -1,6 +1,8 @@
 -- Type into a task note while other notes from the same vault stay open.
--- Each typed character moves a wikilink on the edited line. The other notes
--- do not depend on that, so typing must not make them redo their layout.
+-- On a task line, each typed character moves a wikilink on the edited line.
+-- The other notes do not depend on that, so typing must not make them redo
+-- their layout. On a heading, each typed character changes a link target, so
+-- the note refreshes every line with a link or a task box.
 local core = require "core"
 local support = require "scenes.support"
 local vault_index = require "core.markdown.vault_index"
@@ -26,7 +28,8 @@ end
 
 local function focus_typing_line(context, view)
   local line = context.settings.line
-  local col = assert(view.buffer.lines[line]:find("[[", 1, true), "the typing line has no wikilink")
+  local text = view.buffer.lines[line]
+  local col = text:find("[[", 1, true) or #text
   view:with_selection_state(function() view.buffer:set_selection(line, col) end)
   view:scroll_to_line(line, false, true)
 end

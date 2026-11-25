@@ -70,6 +70,8 @@ NAVIGATION_SETTINGS = {"mode": "navigation", "generate": True, "note": "navigati
                        "line": 605, "previous_line": 602, "far_line": 1405, "burst_count": 23}
 # A to-do vault: a task note and 8 linked project notes of 300 lines each.
 MARKDOWN_VAULT = VaultSpec("markdown-vault")
+# The same vault with a 420-line task note: more than 128 lines with a link or a task box.
+MARKDOWN_VAULT_LONG = VaultSpec("markdown-vault-long", task_lines=420)
 # A 1440p monitor: 1.6 times the rows and about 3 times the area of the default window.
 WINDOW_LARGE = (2560, 1440)
 
@@ -330,6 +332,12 @@ SCENARIOS: dict[str, Scenario] = {
         "markdown_vault_type", MARKDOWN_VAULT, actions=40, suites=("markdown",),
         settings={"note": MARKDOWN_VAULT.note, "notes": MARKDOWN_VAULT.project_notes,
                   "line": MARKDOWN_VAULT.typing_line}),
+    # Type into the heading of a long task note. Each keystroke changes a link target,
+    # so the note refreshes its about 210 link and task lines with one wrapped rebuild.
+    "markdown-vault-heading-type": Scenario(
+        "markdown_vault_type", MARKDOWN_VAULT_LONG, actions=40, suites=("markdown", "smoke"),
+        settings={"note": MARKDOWN_VAULT_LONG.note, "notes": MARKDOWN_VAULT_LONG.project_notes,
+                  "line": 1}),
     # Scroll a long source file with the wheel, and hold an arrow key in it.
     "editor-scroll-wheel": Scenario(
         "editor_scroll", REPO_LONG, actions=80, suites=("smoke",), targets=1,

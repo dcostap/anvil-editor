@@ -286,6 +286,8 @@ it holds a laid-out presentation. Each keystroke waits until the vault index
 publishes the edited note. Compare it with the same scene and no other notes:
 the other notes should add almost no frame time.
 
+`markdown-vault-heading-type` types into the heading of a 420-line task note. A heading edit changes a link target, so each keystroke refreshes the note's lines with a link or a task box. The note has more than 128 such lines, so the refresh defers wrapping to a sliced rebuild. A slice can finish this note at once. A rebuild for each line then repeats the whole note for every line and freezes typing. The scenario also runs in `smoke`.
+
 When a scenario is over budget, one more run records the per-frame detail
 timers (`ANVIL_DOCVIEW_STATS`). The report lists the costliest timers per
 measured frame. Nested timers overlap, so read them as a tree. Scheduler
