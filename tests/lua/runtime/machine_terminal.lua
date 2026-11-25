@@ -172,7 +172,7 @@ test.describe("Remote Terminal Session", function()
     projects.own_id = function() return string.rep("0", 32) end
     context.source = require("core.control_server").open(require("core.control").new(context.project))
     local source = context.source:add_client("source-terminal")
-    context.source.control:exchange("source-terminal", {instance = "source-pi", title = "Build watcher", receipts = {}, tasks = {}})
+    context.source.control:exchange("source-terminal", {instance = "source-pi", receipts = {}, tasks = {}})
     context.source.control:exchange(context.id, {instance = "wrong-local-agent", receipts = {}, tasks = {}})
     require("core").add_thread(function()
       while context.source.listener do context.source:poll(); coroutine.yield(.01) end
@@ -190,7 +190,8 @@ test.describe("Remote Terminal Session", function()
     local received = post("/agent", report).commands[1]
     test.equal(received.id, task)
     test.equal(received.text, "ping")
-    test.equal(received.sender.title, "Build watcher")
+    -- The host derives the Agent Name from the sending Terminal.
+    test.equal(received.sender.name, require("core.agent_name").for_terminal("source-terminal"))
     test.equal(received.sender.instance, "source-pi")
     test.equal(received.sender.machine, "Client")
     test.equal(received.sender.project, context.project)
