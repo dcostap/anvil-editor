@@ -1434,7 +1434,7 @@ function SidebarView:get_tooltip()
     end
   end
   local _, cut = self:name_lines(row, self.width, os.time())
-  if cut or tab.terminal_title(item.name) ~= item.name then return item.name end
+  if cut or tab.display_name(item) ~= item.name then return item.name end
 end
 
 -- Returns true when the hover or a dragged scrollbar changed and the view needs a redraw.

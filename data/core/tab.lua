@@ -6,7 +6,6 @@ local config = require "core.config"
 local style = require "core.style"
 local view_icons = require "core.view_icons"
 local agent_icons = require "core.agent_icons"
-local agent_name = require "core.agent_name"
 
 local tab = {}
 
@@ -258,8 +257,10 @@ function tab.copy_text(item)
   return has_spinner(name) and (name:sub(4):gsub("^%s+", "")) or name
 end
 
--- A Terminal's title without executable-path noise.
-function tab.terminal_title(title)
+-- Remove executable-path noise only for Terminal Tabs. Keep the original name for hover and persistence.
+function tab.display_name(item)
+  local title = item.name
+  if not item.terminal then return title end
   local source = title:gsub("^&%s+", "")
   local executable, arguments
   local quote = source:sub(1, 1)
@@ -285,17 +286,6 @@ function tab.terminal_title(title)
   if lower == "pwsh" or lower == "powershell" then name = "PowerShell"
   elseif not is_executable and lower ~= "gradlew" then return title end
   return name .. arguments
-end
-
--- A Terminal Tab shows its cleaned title, and a running agent's Tab leads with its Agent Name. A spinner frame stays
--- first. Keep the original name for hover and persistence.
-function tab.display_name(item)
-  if not item.terminal then return item.name end
-  local title = tab.terminal_title(item.name)
-  local name = program_identity(item) and agent_name.for_terminal(item.terminal.session)
-  if not name then return title end
-  if has_spinner(title) then return title:sub(1, 3) .. " " .. name .. " · " .. (title:sub(4):gsub("^%s+", "")) end
-  return name .. " · " .. title
 end
 
 -- The space for the Pane number. A number in a gutter takes none.

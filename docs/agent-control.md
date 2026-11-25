@@ -15,7 +15,7 @@ Start a new Pi in an Anvil Terminal. Its extension registers the `anvil` MCP ser
 
 Right-click a running Pi's Tab and choose **Copy Agent Address**. This works in the Project Sidebar and Title Bar. It copies JSON with `"type":"anvil-agent-address"` and the `project`, `pane`, `terminal`, and `name` fields. The `type` field identifies the address as Anvil data. It is not a tool argument. The address contains no navigation number or credentials. Paste it into another agent's conversation to identify the target.
 
-Each Terminal Session has an Agent Name, such as `brave-otter`. Anvil derives it from the Terminal ID, so revival, Project moves and Machines keep it. A running agent's Tab leads with the name. `workspace_state` and `agent_read` report it as `agent_name` and `name`, and Pi's instructions tell Pi its own name. The name is a label: two Terminal Sessions can have the same name. Tools take the Terminal ID, not the name.
+Anvil derives each Agent Name, such as `brave-otter`, from the Terminal ID. The name stays the same across revival, Project moves, and Machines. It does not change the Terminal's title or Tab label. `workspace_state` and `agent_read` report it as `agent_name` and `name`. Pi's instructions tell Pi its own name. Two Terminal Sessions can have the same name. Tools take the Terminal ID, not the name.
 
 Use `agent_read` with the copied `project` and `terminal`. Use the returned `instance` for `agent_send`. The address identifies the Terminal, not a fixed Pi conversation. Inspect state again after a Project move.
 

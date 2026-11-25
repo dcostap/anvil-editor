@@ -696,7 +696,7 @@ A coding agent's saved conversation, such as a Pi session. When a Terminal Sessi
 _Avoid_: agent conversation, Pi session file
 
 **Agent Name**:
-A readable name, such as `brave-otter`, that Anvil derives from a Terminal Session's ID. A running agent's Tab leads with it, and agent messages name their sender with it. It is a label, not an identity: two Terminal Sessions can have the same Agent Name.
+A readable label, such as `brave-otter`, that Anvil derives from a Terminal Session's ID for agent communication. Two Terminal Sessions can have the same Agent Name.
 _Avoid_: agent ID, nickname
 
 **Agent Status**:

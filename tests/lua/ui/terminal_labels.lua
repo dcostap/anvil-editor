@@ -22,29 +22,14 @@ test.describe("Terminal labels", function()
     test.equal(tab.display_name {name="notes.bat"}, "notes.bat", "a file Tab changed its name")
   end)
 
-  test.it("leads a running agent's Tab with its Agent Name, after only a spinner frame", function()
-    local name = require("core.agent_name").for_terminal("one")
-    local function shown(record)
-      record.id = "one"
-      return tab.display_name(tab.describe_session(record))
-    end
-    test.equal(shown {title="\u{03C0} - GLP4", state="running", agent_app="pi"}, name .. " · \u{03C0} - GLP4")
-    test.equal(shown {title="\u{280B} \u{03C0} - GLP4", state="running", agent_app="pi"},
-      "\u{280B} " .. name .. " · \u{03C0} - GLP4")
-    test.equal(shown {title="npm test", state="running"}, "npm test", "a shell got an Agent Name")
-    test.equal(shown {title="\u{03C0} - GLP4", state="exited", agent_app="pi"}, "\u{03C0} - GLP4 (exited)",
-      "an ended agent kept its Agent Name")
-
-    -- The name alone does not make the Tab need a tooltip.
-    local view = SidebarView(function() end)
-    view:set_model {{id=1, row_id=1, path="C:/Work", state="ready", terminals={
-      {id="one", title="\u{03C0} - GLP4", state="running", agent_app="pi", activity=os.time()},
-    }}}
-    view:set_size(400, 600)
-    for index, row in ipairs(view.rows) do
-      if row.kind == "terminal" then view:on_mouse_moved(50, view:row_y(index) + row.h / 2) end
-    end
-    test.equal(view:get_tooltip(), nil)
+  test.it("shows Pi's title without its Agent Name", function()
+    local title = "\u{03C0} - GLP4"
+    local record = {id = "one", title = title, state = "running", agent_app = "pi"}
+    test.equal(tab.display_name(tab.describe_session(record)), title)
+    record.title = "\u{280B} " .. title
+    local item = tab.describe_session(record)
+    test.equal(tab.display_name(item), record.title)
+    test.equal(tab.copy_text(item), title)
   end)
 
   test.it("exposes the full terminal title on hover and clears it on leave", function()
