@@ -24,10 +24,11 @@ test.describe("Machine server", function()
     context.server = nil
   end
 
-  local function connect(server)
-    local address = assert(net.resolve_address("127.0.0.1"))
+  -- With `pin`, the connection uses TLS and accepts only the certificate with that fingerprint, or any with "".
+  local function connect(server, host, pin)
+    local address = assert(net.resolve_address(host or "127.0.0.1"))
     test.equal(address:wait_until_resolved(5000), "success")
-    local socket = assert(net.open_tcp(address, server.port))
+    local socket = assert(net.open_tcp(address, server.port, pin ~= nil, pin))
     test.equal(socket:wait_until_connected(5000), "success")
     return {socket = socket, decoder = machine.decoder(), next_id = 1}
   end
@@ -347,6 +348,52 @@ test.describe("Machine server", function()
     context.server, context.discovery = machine_server.start(context.user, { "--port", tostring(port), context.project })
     test.equal(context.discovery.port, port)
     owner(context).socket:close()
+  end)
+
+  test.it("shares on the local network only through TLS, and keeps the choice across restarts", function(context)
+    stop_server(context)
+    -- The test listens on another loopback address, so it opens no port to the network.
+    local args = {"--test-lan-address", "127.0.0.2", context.project}
+    context.server, context.discovery = machine_server.start(context.user, args)
+    local admin = owner(context)
+    test.equal(call(admin, "sharing.get", {}).result.lan, false)
+    test.equal(call(admin, "sharing.set", {lan = true}).result.lan, true)
+    admin.socket:close()
+
+    local plain = connect(context.discovery, "127.0.0.2")
+    test.is_nil(call(plain, "hello", {protocol = 1, token = context.discovery.token}))
+    plain.socket:close()
+    local secure = connect(context.discovery, "127.0.0.2", "")
+    test.equal(call(secure, "hello", {protocol = 1, token = context.discovery.token}).result.level, "full")
+    local pin = secure.socket:get_peer_fingerprint()
+    test.ok(type(pin) == "string" and #pin == 64 and pin:match("^%x+$"), tostring(pin))
+    -- A TLS record holds 16 KiB, so a larger reply spans many records.
+    local large = string.rep("0123456789abcdef", 64 * 1024)
+    write_file(context.project .. PATHSEP .. "large.txt", large)
+    local _, bytes = call(secure, "files.read", {path = context.project .. PATHSEP .. "large.txt"})
+    test.ok(bytes == large, "The large file changed on the way")
+    secure.socket:close()
+
+    -- The server keeps its certificate, so a pinned Client connects after a restart.
+    stop_server(context)
+    context.server, context.discovery = machine_server.start(context.user, args)
+    secure = connect(context.discovery, "127.0.0.2", pin)
+    test.equal(call(secure, "hello", {protocol = 1, token = context.discovery.token}).result.level, "full")
+    secure.socket:close()
+    local address = assert(net.resolve_address("127.0.0.2"))
+    test.equal(address:wait_until_resolved(5000), "success")
+    local wrong = assert(net.open_tcp(address, context.discovery.port, true, string.rep("0", 64)))
+    local status, err = wrong:wait_until_connected(5000)
+    test.equal(status, "failure")
+    test.ok(tostring(err):find("certificate", 1, true), tostring(err))
+    wrong:close()
+
+    admin = owner(context)
+    test.equal(call(admin, "sharing.set", {lan = false}).result.lan, false)
+    admin.socket:close()
+    local closed = net.open_tcp(address, context.discovery.port)
+    test.not_equal(closed and closed:wait_until_connected(5000), "success")
+    if closed then closed:close() end
   end)
 
   local function sorted(list)

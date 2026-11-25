@@ -30,7 +30,8 @@ local function from_hex(text)
   return (text:gsub("%x%x", function(pair) return string.char(tonumber(pair, 16)) end))
 end
 
--- Returns the host, the port and the `hello` credentials of a Machine file.
+-- Returns the host, the port, the `hello` credentials and the TLS pin of a Machine file. A record without a pin is
+-- from before TLS: it connects without TLS, which only a loopback forwarder such as Tailscale Serve accepts.
 local function read_machine_file(path)
   local file = io.open(path, "rb")
   if not file then return nil, "The Machine server is not running" end
@@ -42,18 +43,20 @@ local function read_machine_file(path)
   if type(found.host) == "string" and type(found.device) == "string" and type(found.protected_token) == "string" then
     local token, err = machine.unprotect(from_hex(found.protected_token))
     if not token then return nil, "Cannot read the Machine's token: " .. err end
-    return {host = found.host, port = found.port, hello = {device = found.device, token = token}}
+    return {host = found.host, port = found.port, hello = {device = found.device, token = token},
+      pin = type(found.pin) == "string" and found.pin or nil}
   end
   if type(found.token) ~= "string" then return nil, "The Machine file is not valid" end
   return {host = "127.0.0.1", port = found.port, hello = {token = found.token}}
 end
 
--- Connects without blocking the UI thread. Returns the socket, or nil and an error.
-local function open_socket(host, port, deadline, stopped)
+-- Connects without blocking the UI thread. Returns the socket, or nil and an error. With `pin`, the connection uses
+-- TLS and accepts only the certificate with that fingerprint. An empty pin accepts any certificate.
+local function open_socket(host, port, deadline, stopped, pin)
   local address = net.resolve_address(host)
   while address and address:get_status() == "waiting" and system.get_time() < deadline do coroutine.yield(0.01) end
   if not address or address:get_status() ~= "success" then return nil, "Cannot resolve " .. host end
-  local socket, err = net.open_tcp(address, port)
+  local socket, err = net.open_tcp(address, port, pin ~= nil, pin)
   if not socket then return nil, tostring(err) end
   local status
   repeat
@@ -108,12 +111,19 @@ end
 -- Pairs with the Machine at `host` and `port` through a pairing code. Saves the Machine's record in
 -- `USERDIR/machines` with its token protected for this user, then calls `on_done(err, path)`.
 -- A failure does not try again, because each wrong code counts as an attempt.
+-- The pairing uses TLS and pins the Machine's certificate. It trusts the certificate that it sees first, so a
+-- device in the middle at the moment of pairing could take its place.
 function MachineClient.pair(host, port, code, name, on_done)
   core.add_thread(function()
     local function done(...) core.try(on_done, ...) end
     local deadline = system.get_time() + CONNECT_TIMEOUT
-    local socket, err = open_socket(host, port, deadline, function() return false end)
+    local socket, err = open_socket(host, port, deadline, function() return false end, "")
     if not socket then return done({code = "offline", message = err}) end
+    local pin = socket:get_peer_fingerprint()
+    if not pin then
+      socket:close()
+      return done({code = "offline", message = "The Machine sent no TLS certificate"})
+    end
     local decoder, reply = machine.decoder()
     socket:write(machine.frame("request", 1, json.encode({method = "hello",
       params = {protocol = PROTOCOL, pair = code, name = name}})))
@@ -146,7 +156,7 @@ function MachineClient.pair(host, port, code, name, on_done)
     net.private_directory(directory)
     local path = directory .. PATHSEP .. hello.machine .. ".json"
     ok, err = write_file(path, json.encode {version = 1, machine = hello.machine, host = host, port = port,
-      device = hello.device.id, level = hello.level, protected_token = to_hex(protected)})
+      device = hello.device.id, level = hello.level, protected_token = to_hex(protected), pin = pin})
     if not ok then return done({code = "write_failed", message = tostring(err)}) end
     core.log_quiet("Paired with Machine %s for %s access", hello.machine, tostring(hello.level))
     done(nil, path)
@@ -225,7 +235,7 @@ function MachineClient:connect()
   -- that no server answers.
   self.hello_deadline = system.get_time() + CONNECT_TIMEOUT
   socket, err = open_socket(found.host, found.port, self.hello_deadline,
-    function() return self.state == "closed" end)
+    function() return self.state == "closed" end, found.pin)
   if self.state == "closed" then
     if socket then socket:close() end
     return

@@ -10,6 +10,9 @@
 #include <mbedtls/ssl.h>
 #include <mbedtls/x509_crt.h>
 #include <mbedtls/error.h>
+#include <mbedtls/platform_util.h>
+
+#include "../machine_tls.h"
 #ifdef _WIN32
 #include <windows.h>
 #include <sddl.h>
@@ -23,6 +26,10 @@
 #define API_TYPE_NET_UDP "NetUDP"
 #define API_TYPE_NET_SERVER "NetServer"
 #define API_TYPE_NET_DATAGRAM "NetDataGram"
+#define API_TYPE_NET_TLS "NetTLS"
+
+/* A positive code, so it differs from every mbedtls error. */
+#define TLS_PIN_MISMATCH 1
 
 typedef enum ConnectionType {
   TCP,
@@ -34,6 +41,17 @@ typedef struct Connection {
   ConnectionType type;
   Uint16 port;
   bool is_ssl;
+  /* False when a Machine TLS identity owns `conf`. */
+  bool owns_conf;
+  bool handshake_done;
+  /* A client with a pin accepts only the certificate with that fingerprint, or any with an empty pin. */
+  bool has_pin;
+  char pin[ANVIL_MACHINE_TLS_FINGERPRINT];
+  /* Keeps the server's TLS identity alive while the connection uses it. */
+  int identity_ref;
+  /* Bytes that the server read before it started TLS. The handshake reads them first. */
+  unsigned char *prefix;
+  size_t prefix_length, prefix_used;
   mbedtls_ssl_context ssl;
   mbedtls_ssl_config conf;
   mbedtls_x509_crt cacert;
@@ -57,9 +75,9 @@ static char CACERT_BUNDLE[1024] = { 0 };
 
 
 static int sdl_mbedtls_send(void *ctx, const unsigned char *buf, size_t len) {
-  NET_StreamSocket *sock = ctx;
+  Connection *self = ctx;
 
-  if (NET_WriteToStreamSocket(sock, buf, (int)len)) {
+  if (NET_WriteToStreamSocket(self->socket, buf, (int)len)) {
     return (int)len;
   }
 
@@ -67,8 +85,19 @@ static int sdl_mbedtls_send(void *ctx, const unsigned char *buf, size_t len) {
 }
 
 static int sdl_mbedtls_recv(void *ctx, unsigned char *buf, size_t len) {
-  NET_StreamSocket *sock = ctx;
-  int rc = NET_ReadFromStreamSocket(sock, buf, (int)len);
+  Connection *self = ctx;
+  if (self->prefix) {
+    size_t count = self->prefix_length - self->prefix_used;
+    if (count > len) count = len;
+    memcpy(buf, self->prefix + self->prefix_used, count);
+    self->prefix_used += count;
+    if (self->prefix_used == self->prefix_length) {
+      SDL_free(self->prefix);
+      self->prefix = NULL;
+    }
+    return (int)count;
+  }
+  int rc = NET_ReadFromStreamSocket(self->socket, buf, (int)len);
 
   if (rc > 0) return rc;
   if (rc == 0) return MBEDTLS_ERR_SSL_WANT_READ;
@@ -81,6 +110,52 @@ static bool is_ssl_retryable_read(int rc) {
     rc == MBEDTLS_ERR_SSL_WANT_READ ||
     rc == MBEDTLS_ERR_SSL_WANT_WRITE ||
     rc == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET;
+}
+
+/* Runs the handshake, then checks a client's pin once. Returns 0, an mbedtls error or TLS_PIN_MISMATCH. */
+static int tls_handshake(Connection *self) {
+  if (self->handshake_done) return 0;
+  int rc = mbedtls_ssl_handshake(&self->ssl);
+  if (rc != 0) return rc;
+  if (self->has_pin && self->pin[0]) {
+    const mbedtls_x509_crt *peer = mbedtls_ssl_get_peer_cert(&self->ssl);
+    char found[ANVIL_MACHINE_TLS_FINGERPRINT];
+    if (!peer || !anvil_machine_tls_fingerprint(peer->raw.p, peer->raw.len, found) || strcmp(found, self->pin) != 0)
+      return TLS_PIN_MISMATCH;
+  }
+  self->handshake_done = true;
+  return 0;
+}
+
+static void push_tls_error(lua_State *L, int rc) {
+  if (rc == TLS_PIN_MISMATCH) {
+    lua_pushstring(L, "The Machine's certificate changed. Pair with the Machine again");
+    return;
+  }
+  char errbuf[128];
+  mbedtls_strerror(rc, errbuf, sizeof(errbuf));
+  lua_pushstring(L, errbuf);
+}
+
+/* Frees the TLS state and the socket. Safe to call more than once. */
+static void close_connection(lua_State *L, Connection *self) {
+  if (self->socket) {
+    if (self->is_ssl) {
+      mbedtls_ssl_close_notify(&self->ssl);
+      mbedtls_ssl_free(&self->ssl);
+      if (self->owns_conf) mbedtls_ssl_config_free(&self->conf);
+      mbedtls_x509_crt_free(&self->cacert);
+      self->is_ssl = false;
+    }
+    NET_DestroyStreamSocket(self->socket);
+    self->socket = NULL;
+  }
+  SDL_free(self->prefix);
+  self->prefix = NULL;
+  if (self->identity_ref != LUA_NOREF) {
+    luaL_unref(L, LUA_REGISTRYINDEX, self->identity_ref);
+    self->identity_ref = LUA_NOREF;
+  }
 }
 
 bool load_cacert_bundle(mbedtls_x509_crt *cacert) {
@@ -188,10 +263,16 @@ static int f_get_local_addresses(lua_State* L) {
   return count > 0 ? 1 : 2;
 }
 
+/* `net.open_tcp(address, port, ssl, pin)`. With `pin`, TLS skips the certificate authorities and accepts only
+   the certificate with that SHA-256 fingerprint, or any certificate when `pin` is empty. */
 static int f_open_tcp(lua_State* L) {
   Address* address = (Address*) luaL_checkudata(L, 1, API_TYPE_NET_ADDRESS);
   unsigned short port = luaL_checkinteger(L, 2);
   bool ssl = lua_isnoneornil(L, 3) ? false : lua_toboolean(L, 3);
+  size_t pin_length = 0;
+  const char *pin = luaL_optlstring(L, 4, NULL, &pin_length);
+  if (pin && pin_length != 0 && pin_length != ANVIL_MACHINE_TLS_FINGERPRINT - 1)
+    return luaL_argerror(L, 4, "a fingerprint has 64 hex digits");
 
   NET_StreamSocket* socket = NET_CreateClient(address->address, port, 0);
 
@@ -202,66 +283,64 @@ static int f_open_tcp(lua_State* L) {
   }
 
   Connection* self = lua_newuserdata(L, sizeof(Connection));
+  memset(self, 0, sizeof(*self));
   self->type = TCP;
   self->socket = socket;
   self->port = port;
-  self->is_ssl = ssl;
+  self->identity_ref = LUA_NOREF;
 
   luaL_setmetatable(L, API_TYPE_NET_TCP);
 
-  int rc = 0;
-  if (ssl) {
-    psa_status_t status = psa_crypto_init();
-    if (status != PSA_SUCCESS) {
-      rc = MBEDTLS_ERR_SSL_INTERNAL_ERROR;
-      goto ssl_error;
-    }
+  if (!ssl) return 1;
 
-    mbedtls_ssl_init(&self->ssl);
-    mbedtls_ssl_config_init(&self->conf);
-    mbedtls_x509_crt_init(&self->cacert);
+  self->is_ssl = true;
+  self->owns_conf = true;
+  mbedtls_ssl_init(&self->ssl);
+  mbedtls_ssl_config_init(&self->conf);
+  mbedtls_x509_crt_init(&self->cacert);
 
-    if (
-      (rc = mbedtls_ssl_config_defaults(
-        &self->conf,
-        MBEDTLS_SSL_IS_CLIENT,
-        MBEDTLS_SSL_TRANSPORT_STREAM,
-        MBEDTLS_SSL_PRESET_DEFAULT
-      )) != 0
-    )
-      goto ssl_error;
+  int rc = MBEDTLS_ERR_SSL_INTERNAL_ERROR;
+  if (psa_crypto_init() != PSA_SUCCESS)
+    goto ssl_error;
 
-    if (load_cacert_bundle(&self->cacert)) {
-      mbedtls_ssl_conf_ca_chain(&self->conf, &self->cacert, NULL);
-      mbedtls_ssl_conf_authmode(&self->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
-    } else {
-      mbedtls_ssl_conf_authmode(&self->conf, MBEDTLS_SSL_VERIFY_NONE);
-    }
+  if (
+    (rc = mbedtls_ssl_config_defaults(
+      &self->conf,
+      MBEDTLS_SSL_IS_CLIENT,
+      MBEDTLS_SSL_TRANSPORT_STREAM,
+      MBEDTLS_SSL_PRESET_DEFAULT
+    )) != 0
+  )
+    goto ssl_error;
 
-    if ((rc = mbedtls_ssl_setup(&self->ssl, &self->conf)) != 0)
-      goto ssl_error;
-
-    if((rc = mbedtls_ssl_set_hostname(&self->ssl, address->hostname)) != 0)
-      goto ssl_error;
-
-    mbedtls_ssl_set_bio(
-      &self->ssl, self->socket, sdl_mbedtls_send, sdl_mbedtls_recv, NULL
-    );
+  if (pin) {
+    self->has_pin = true;
+    memcpy(self->pin, pin, pin_length);
+    self->pin[pin_length] = 0;
+    mbedtls_ssl_conf_authmode(&self->conf, MBEDTLS_SSL_VERIFY_NONE);
+  } else if (load_cacert_bundle(&self->cacert)) {
+    mbedtls_ssl_conf_ca_chain(&self->conf, &self->cacert, NULL);
+    mbedtls_ssl_conf_authmode(&self->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
+  } else {
+    mbedtls_ssl_conf_authmode(&self->conf, MBEDTLS_SSL_VERIFY_NONE);
   }
+
+  if ((rc = mbedtls_ssl_setup(&self->ssl, &self->conf)) != 0)
+    goto ssl_error;
+
+  if((rc = mbedtls_ssl_set_hostname(&self->ssl, address->hostname)) != 0)
+    goto ssl_error;
+
+  mbedtls_ssl_set_bio(
+    &self->ssl, self, sdl_mbedtls_send, sdl_mbedtls_recv, NULL
+  );
 
   return 1;
 
 ssl_error:
-  mbedtls_ssl_close_notify(&self->ssl);
-  mbedtls_ssl_free(&self->ssl);
-  mbedtls_ssl_config_free(&self->conf);
-  mbedtls_x509_crt_free(&self->cacert);
-  NET_DestroyStreamSocket(socket);
-
-  char errbuf[128];
-  mbedtls_strerror(rc, errbuf, sizeof(errbuf));
+  close_connection(L, self);
   lua_pushnil(L);
-  lua_pushstring(L, errbuf);
+  push_tls_error(L, rc);
 
   return 2;
 }
@@ -384,6 +463,53 @@ done:
   return 1;
 }
 
+/* Makes a new Machine TLS identity. Returns its key and certificate in DER. */
+static int f_create_tls_identity(lua_State *L) {
+  unsigned char *key, *cert;
+  size_t key_length, cert_length;
+  int rc = anvil_machine_tls_create(&key, &key_length, &cert, &cert_length);
+  if (rc != 0) {
+    lua_pushnil(L);
+    push_tls_error(L, rc);
+    return 2;
+  }
+  lua_pushlstring(L, (const char *)key, key_length);
+  lua_pushlstring(L, (const char *)cert, cert_length);
+  mbedtls_platform_zeroize(key, key_length);
+  free(key);
+  free(cert);
+  return 2;
+}
+
+/* `net.tls_identity(key, cert)` loads a Machine server's TLS identity for `connection:start_tls`. */
+static int f_tls_identity(lua_State *L) {
+  size_t key_length, cert_length;
+  const char *key = luaL_checklstring(L, 1, &key_length);
+  const char *cert = luaL_checklstring(L, 2, &cert_length);
+  AnvilMachineTls *self = lua_newuserdata(L, sizeof(AnvilMachineTls));
+  int rc = anvil_machine_tls_init(self, (const unsigned char *)key, key_length, (const unsigned char *)cert, cert_length);
+  if (rc != 0) {
+    anvil_machine_tls_free(self);
+    lua_pushnil(L);
+    push_tls_error(L, rc);
+    return 2;
+  }
+  luaL_setmetatable(L, API_TYPE_NET_TLS);
+  return 1;
+}
+
+static int m_tls_fingerprint(lua_State *L) {
+  AnvilMachineTls *self = luaL_checkudata(L, 1, API_TYPE_NET_TLS);
+  lua_pushstring(L, self->fingerprint);
+  return 1;
+}
+
+static int mm_tls_gc(lua_State *L) {
+  AnvilMachineTls *self = luaL_checkudata(L, 1, API_TYPE_NET_TLS);
+  anvil_machine_tls_free(self);
+  return 0;
+}
+
 static int f_gc(lua_State *L) {
   NET_Quit();
   return 0;
@@ -489,6 +615,7 @@ static int m_server_accept(lua_State* L) {
     memset(client, 0, sizeof(*client));
     client->type = TCP;
     client->socket = client_socket;
+    client->identity_ref = LUA_NOREF;
     luaL_setmetatable(L, API_TYPE_NET_TCP);
   } else {
     lua_pushnil(L);
@@ -547,7 +674,7 @@ static int m_tcp_wait_until_connected(lua_State* L) {
   // Now check handshake status if ssl enabled
   hand_shake:
   if (self->is_ssl) {
-    int rc = mbedtls_ssl_handshake(&self->ssl);
+    int rc = tls_handshake(self);
     if (rc == 0) {
       lua_pushstring(L, "success");
     } else if (rc == MBEDTLS_ERR_SSL_WANT_READ || rc == MBEDTLS_ERR_SSL_WANT_WRITE) {
@@ -562,10 +689,8 @@ static int m_tcp_wait_until_connected(lua_State* L) {
       }
       lua_pushstring(L, "waiting");
     } else {
-      char errbuf[128];
-      mbedtls_strerror(rc, errbuf, sizeof(errbuf));
       lua_pushstring(L, "failure");
-      lua_pushstring(L, errbuf);
+      push_tls_error(L, rc);
       ret++;
     }
     return ret;
@@ -622,17 +747,15 @@ static int m_tcp_get_status(lua_State* L) {
 
   // If TCP succeeded and it's SSL, do handshake
   if (self->is_ssl) {
-    int rc = mbedtls_ssl_handshake(&self->ssl);
+    int rc = tls_handshake(self);
 
     if (rc == 0) {
       lua_pushstring(L, "success");
     } else if (rc == MBEDTLS_ERR_SSL_WANT_READ || rc == MBEDTLS_ERR_SSL_WANT_WRITE) {
       lua_pushstring(L, "waiting");
     } else {
-      char errbuf[128];
-      mbedtls_strerror(rc, errbuf, sizeof(errbuf));
       lua_pushstring(L, "failure");
-      lua_pushstring(L, errbuf);
+      push_tls_error(L, rc);
       ret++;
     }
     return ret;
@@ -659,17 +782,24 @@ static int m_tcp_write(lua_State* L) {
 
     lua_pushboolean(L, 1);
   } else {
-    int rc = mbedtls_ssl_write(&self->ssl, (const unsigned char*)data, data_len);
-    if (rc >= 0) {
-      lua_pushboolean(L, 1);
-    } else {
-      // Real error
-      char errbuf[128];
-      mbedtls_strerror(rc, errbuf, sizeof(errbuf));
+    // A pinned client sends nothing before the Machine's certificate matches.
+    int rc = self->has_pin ? tls_handshake(self) : 0;
+    // Each call writes at most one record. The socket queues every byte, so the loop does not wait.
+    for (size_t sent = 0; rc == 0 && sent < data_len; ) {
+      rc = mbedtls_ssl_write(&self->ssl, (const unsigned char*)data + sent, data_len - sent);
+      if (rc > 0) {
+        sent += (size_t)rc;
+        rc = 0;
+      } else if (rc == 0) {
+        rc = MBEDTLS_ERR_SSL_INTERNAL_ERROR;
+      }
+    }
+    if (rc != 0) {
       lua_pushboolean(L, 0);
-      lua_pushstring(L, errbuf);
+      push_tls_error(L, rc);
       return 2;
     }
+    lua_pushboolean(L, 1);
   }
 
   return 1;
@@ -725,16 +855,15 @@ static int m_tcp_read(lua_State* L) {
       lua_pushlstring(L, data, received);
     }
   } else {
-    int rc = mbedtls_ssl_read(&self->ssl, (unsigned char*) data, max_len);
+    int rc = self->has_pin ? tls_handshake(self) : 0;
+    if (rc == 0) rc = mbedtls_ssl_read(&self->ssl, (unsigned char*) data, max_len);
     if (rc >= 0) {
       lua_pushlstring(L, data, rc);
     } else if (is_ssl_retryable_read(rc)) {
       lua_pushstring(L, "");
     } else {
-      char errbuf[128];
-      mbedtls_strerror(rc, errbuf, sizeof(errbuf));
       lua_pushnil(L);
-      lua_pushstring(L, errbuf);
+      push_tls_error(L, rc);
       return_count = 2;
     }
   }
@@ -744,18 +873,55 @@ static int m_tcp_read(lua_State* L) {
   return return_count;
 }
 
+/* `connection:start_tls(identity, prefix)` makes an accepted connection a TLS server connection.
+   `prefix` holds the bytes that the caller already read, such as the start of the handshake. */
+static int m_tcp_start_tls(lua_State* L) {
+  Connection* self = (Connection*) luaL_checkudata(L, 1, API_TYPE_NET_TCP);
+  AnvilMachineTls* identity = luaL_checkudata(L, 2, API_TYPE_NET_TLS);
+  size_t prefix_length = 0;
+  const char* prefix = luaL_optlstring(L, 3, "", &prefix_length);
+  if (!self->socket || self->is_ssl) return luaL_error(L, "The connection cannot start TLS");
+  if (prefix_length > 0) {
+    self->prefix = SDL_malloc(prefix_length);
+    if (!self->prefix) return luaL_error(L, "Out of memory");
+    memcpy(self->prefix, prefix, prefix_length);
+    self->prefix_length = prefix_length;
+    self->prefix_used = 0;
+  }
+  mbedtls_ssl_init(&self->ssl);
+  int rc = mbedtls_ssl_setup(&self->ssl, &identity->conf);
+  if (rc != 0) {
+    mbedtls_ssl_free(&self->ssl);
+    lua_pushboolean(L, 0);
+    push_tls_error(L, rc);
+    return 2;
+  }
+  mbedtls_x509_crt_init(&self->cacert);
+  mbedtls_ssl_set_bio(&self->ssl, self, sdl_mbedtls_send, sdl_mbedtls_recv, NULL);
+  self->is_ssl = true;
+  self->owns_conf = false;
+  lua_pushvalue(L, 2);
+  self->identity_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
+/* The lowercase hex SHA-256 of the peer's TLS certificate, or nil. */
+static int m_tcp_get_peer_fingerprint(lua_State* L) {
+  Connection* self = (Connection*) luaL_checkudata(L, 1, API_TYPE_NET_TCP);
+  const mbedtls_x509_crt *peer = self->is_ssl && self->socket ? mbedtls_ssl_get_peer_cert(&self->ssl) : NULL;
+  char fingerprint[ANVIL_MACHINE_TLS_FINGERPRINT];
+  if (!peer || !anvil_machine_tls_fingerprint(peer->raw.p, peer->raw.len, fingerprint)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_pushstring(L, fingerprint);
+  return 1;
+}
+
 static int m_tcp_close(lua_State* L) {
   Connection* self = (Connection*) luaL_checkudata(L, 1, API_TYPE_NET_TCP);
-  if (self->socket) {
-    if (self->is_ssl) {
-      mbedtls_ssl_close_notify(&self->ssl);
-      mbedtls_ssl_free(&self->ssl);
-      mbedtls_ssl_config_free(&self->conf);
-      mbedtls_x509_crt_free(&self->cacert);
-    }
-    NET_DestroyStreamSocket(self->socket);
-    self->socket = NULL;
-  }
+  close_connection(L, self);
   return 0;
 }
 
@@ -867,6 +1033,8 @@ static const struct luaL_Reg net_lib[] = {
   { "create_server",       f_create_server       },
   { "random_token",        f_random_token        },
   { "private_directory",   f_private_directory   },
+  { "create_tls_identity", f_create_tls_identity },
+  { "tls_identity",        f_tls_identity        },
   { "__gc",                f_gc                  },
   { NULL, NULL}
 };
@@ -897,8 +1065,16 @@ static const struct luaL_Reg net_tcp_object[] = {
   { "get_pending_writes",   m_tcp_get_pending_writes   },
   { "wait_until_drained",   m_tcp_wait_until_drained   },
   { "wait_until_connected", m_tcp_wait_until_connected },
+  { "start_tls",            m_tcp_start_tls            },
+  { "get_peer_fingerprint", m_tcp_get_peer_fingerprint },
   { "close",                m_tcp_close                },
   { "__gc",                 mm_tcp_gc                  },
+  { NULL, NULL}
+};
+
+static const struct luaL_Reg net_tls_object[] = {
+  { "fingerprint", m_tls_fingerprint },
+  { "__gc",        mm_tls_gc         },
   { NULL, NULL}
 };
 
@@ -948,6 +1124,11 @@ int luaopen_net(lua_State *L) {
 
   luaL_newmetatable(L, API_TYPE_NET_TCP);
   luaL_setfuncs(L, net_tcp_object, 0);
+  lua_pushvalue(L, -1);
+  lua_setfield(L, -2, "__index");
+
+  luaL_newmetatable(L, API_TYPE_NET_TLS);
+  luaL_setfuncs(L, net_tls_object, 0);
   lua_pushvalue(L, -1);
   lua_setfield(L, -2, "__index");
 
