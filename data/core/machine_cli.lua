@@ -13,6 +13,7 @@ Usage: anvil machine <command>
   code full|view   Make a pairing code for a new device, with Full control or View access
   devices          List the paired devices
   revoke <device>  Remove a device and close its connections
+  lan on|off       Share this PC on the local network, or stop
 ]]
 
 local function fail(message)
@@ -89,6 +90,17 @@ function core.init()
     call(client, "hello", {protocol = PROTOCOL, token = found.token})
     call(client, "devices.revoke", {device = argument})
     io.stdout:write("Revoked device " .. argument .. ".\n")
+  elseif name == "lan" and (argument == "on" or argument == "off") then
+    local found = read_discovery()
+    local client = connect(found.port)
+    call(client, "hello", {protocol = PROTOCOL, token = found.token})
+    local result = call(client, "sharing.set", {lan = argument == "on"})
+    if result.lan then
+      local host = (os.getenv("COMPUTERNAME") or os.getenv("HOSTNAME") or "this PC's name"):lower()
+      io.stdout:write(string.format("Sharing on the local network. Pair with %s:%d\n", host, result.port))
+    else
+      io.stdout:write("Stopped sharing on the local network.\n")
+    end
   else
     io.stdout:write(USAGE)
     os.exit(name and 1 or 0)

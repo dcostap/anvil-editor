@@ -388,9 +388,9 @@ test.describe("Machine server", function()
     test.ok(tostring(err):find("certificate", 1, true), tostring(err))
     wrong:close()
 
-    admin = owner(context)
-    test.equal(call(admin, "sharing.set", {lan = false}).result.lan, false)
-    admin.socket:close()
+    local code, output = machine_command(context, "lan", "off")
+    test.equal(code, 0, output)
+    test.equal(call(owner(context), "sharing.get", {}).result.lan, false)
     local closed = net.open_tcp(address, context.discovery.port)
     test.not_equal(closed and closed:wait_until_connected(5000), "success")
     if closed then closed:close() end
