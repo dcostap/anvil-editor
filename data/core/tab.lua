@@ -14,6 +14,8 @@ local WEEK, MONTH = 7 * DAY, 30 * DAY
 -- Programs such as Pi lead their title with a braille spinner frame while they work. The title arrives at most a
 -- few times a second, so the Tab turns a leading spinner itself.
 local SPINNER = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+local spinner_bytes = {}
+for _, frame in ipairs(SPINNER) do spinner_bytes[frame:byte(3)] = true end
 local SPINNER_FRAME = 0.08
 local ELLIPSIS = "\u{2026}"
 
@@ -30,10 +32,14 @@ function tab.age_text(activity, now)
   return math.floor(age / (365 * DAY)) .. "y"
 end
 
--- Whether the title leads with a braille character (U+2800 to U+28FF).
 local function has_spinner(title)
-  local first, second = title:byte(1, 2)
-  return first == 0xE2 and second and second >= 0xA0 and second <= 0xA3
+  local a, b, c = title:byte(1, 3)
+  return a == 0xE2 and b == 0xA0 and spinner_bytes[c]
+end
+
+function tab.stable_title(title)
+  if title and has_spinner(title) then return SPINNER[1] .. title:sub(4) end
+  return title
 end
 
 -- The title with its leading braille character swapped for the spinner frame at `clock`, or nil.
@@ -53,7 +59,7 @@ function tab.describe(pane, number)
   local item = {id = pane.id, number = number, name = view.get_name and view:get_name() or "View"}
   if view.terminal_view then
     -- Each spinner frame would otherwise change the item. The Tab turns the spinner itself.
-    if has_spinner(item.name) then item.name = SPINNER[1] .. item.name:sub(4) end
+    item.name = tab.stable_title(item.name)
     item.terminal = {session = view.session_id, state = view.state, busy = view.busy, bell = view.bell_at,
       activity = view.get_activity and view:get_activity() or nil,
       app = view.state == "running" and view.agent_app or nil, model = view.agent_model}

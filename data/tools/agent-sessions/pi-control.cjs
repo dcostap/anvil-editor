@@ -17,7 +17,7 @@ module.exports = function (pi) {
   const inspect = require("./pi-inspection.cjs")(pi);
   let ctx, stopped = true, timer, controller, connection, inFlight;
   let active, lastMessage;
-  let instance;
+  let instance, agentName;
   const receipts = new Map(), tasks = new Map();
   const reports = new Map();
 
@@ -62,8 +62,8 @@ module.exports = function (pi) {
         let label = clean(command.from) || "local client";
         if (sender) {
           const short = clean(sender.terminal).slice(0, 8);
-          label = clean(sender.title) || `Terminal ${short}`;
-          if (sender.title && sender.ambiguous) label += ` (${short})`;
+          label = clean(sender.name) || `Terminal ${short}`;
+          if (sender.name && sender.ambiguous) label += ` (${short})`;
           if (sender.other_project) label += ` in ${path.win32.basename(clean(sender.project))}`;
           if (sender.machine) label += ` @ ${clean(sender.machine)}`;
         }
@@ -129,7 +129,7 @@ module.exports = function (pi) {
       }).slice(0, 32).map(({ text, ...task }) => task);
       const response = await fetch(next.url + "/agent", { method: "POST", redirect: "error",
         headers: { Authorization: "Bearer " + next.token, "Content-Type": "application/json" },
-        body: JSON.stringify({ instance, title: ctx.sessionManager.getSessionName?.(), session: ctx.sessionManager.getSessionFile(),
+        body: JSON.stringify({ instance, session: ctx.sessionManager.getSessionFile(),
           model: ctx.model && { provider: ctx.model.provider, id: ctx.model.id },
           thinking: pi.getThinkingLevel(), busy: !ctx.isIdle(),
           capabilities: {transcript: true, activity: true}, activity: inspect.activity(ctx),
@@ -141,6 +141,7 @@ module.exports = function (pi) {
       const data = await response.json();
       for (const [key, text] of changes) reported.set(key, text);
       if (!stopped) {
+        if (typeof data.name === "string") agentName = data.name.replace(/[^a-z-]/g, "").slice(0, 64);
         for (const id of data.transcript_acks || []) transcripts.delete(id);
         for (const request of data.transcript_requests || []) {
           if (transcripts.has(request.id) || transcripts.size >= 16) continue;
@@ -198,9 +199,11 @@ module.exports = function (pi) {
   });
   pi.on("before_agent_start", event => {
     if (stopped) return;
+    const name = agentName ? ` Your Agent Name is ${agentName}. The user and other agents use it to name you.` : "";
+    const text = INSTRUCTIONS + addressInstructions + name;
     if (event.systemPromptOptions?.sections && !event.systemPromptOptions.forceSystemPrompt) {
-      event.systemPromptOptions.sections.anvil = INSTRUCTIONS + addressInstructions;
-    } else return { systemPrompt: event.systemPrompt + "\n\n" + INSTRUCTIONS + addressInstructions };
+      event.systemPromptOptions.sections.anvil = text;
+    } else return { systemPrompt: event.systemPrompt + "\n\n" + text };
   });
   pi.on("message_end", event => {
     if (active && event.message.role === "assistant") lastMessage = event.message;

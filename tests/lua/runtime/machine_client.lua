@@ -142,6 +142,17 @@ test.describe("Machine client", function()
     test.is_nil(read_err)
     test.equal(bytes, "Machine copy\n")
     test.equal(context.device.level, "view")
+    context.device:close()
+
+    -- The pairing pins the Machine's TLS certificate. A Client refuses a Machine with another certificate.
+    test.ok(type(record.pin) == "string" and #record.pin == 64, tostring(record.pin))
+    record.pin = string.rep("0", 64)
+    write_file(path, json.encode(record))
+    context.device = MachineClient.new(path)
+    local deadline = system.get_time() + 10
+    while context.device.state ~= "waiting" and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.equal(context.device.state, "waiting")
+    test.ok(tostring(context.device.error):find("certificate", 1, true), tostring(context.device.error))
   end)
 
   test.it("saves no record when the pairing code is wrong", function(context)

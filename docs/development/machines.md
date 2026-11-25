@@ -66,15 +66,19 @@ A `pair` without an active code gets `pairing_ended`, so the user knows to make 
 
 `USERDIR/machine/devices.json` keeps the paired devices with the SHA-256 of each token, not the token. `devices.revoke {device}` deletes the device and closes its connections at once. `--port <number>` before the Projects makes the server listen on that port.
 
-Tailscale Serve and other forwarders need a port that stays the same. The server still listens on loopback only. `anvil machine code full|view`, `anvil machine devices` and `anvil machine revoke <device>` manage the server that runs with the same user folder.
+Tailscale Serve and other forwarders need a port that stays the same. `anvil machine code full|view`, `anvil machine devices`, `anvil machine revoke <device>` and `anvil machine lan on|off` manage the server that runs with the same user folder.
 
-`core.machine_cli` runs them without a window, like `anvil serve`, and exits. The Machines Dialog (`core.machine_dialog`, `machine:manage`) manages both sides. `machine:pair` opens it at its pairing fields. On "This PC", "Pair Another Device" shows the Address and Code rows. Make Code creates a pairing code with Full control or View. Copy Code copies the active code without spaces. Revoke removes a paired device.
+`sharing.set {lan}` (Full control) opens or closes a second listener on `0.0.0.0` with the server's port, and saves the choice in `USERDIR/machine/sharing.json`. `sharing.get` gives `{lan, port, error}`. Windows lets that listener share the port with the loopback listener, and loopback connections go to the loopback listener. Turning sharing off closes the connections from the network. Tests pass `--test-lan-address 127.0.0.2`, so they open no port to the network and Windows shows no firewall prompt.
 
-The Dialog connects as the local owner through `server.json`. A code hides when it expires or a device uses it. The Address row runs the Tailscale CLI through `core.machine_access`, in a worker.
+The server reads the first bytes of each connection. A TLS handshake starts with `0x16`, and a Machine frame starts with its type, 1 or 2. On TLS, `connection:start_tls(identity, bytes)` gives the bytes that the server already read to the handshake. A connection from the network without TLS closes. The certificate is a self-signed P-256 key in `USERDIR/machine/tls-key.der` and `tls-cert.der` (`src/machine_tls.c`). `MachineClient.pair` connects with `net.open_tcp(address, port, true, "")`, saves `socket:get_peer_fingerprint()` as the record's `pin`, and later connections pass that pin. A pin mismatch fails the handshake in C before Lua can send the token. A record without a pin connects without TLS. Run `runtime/machine_serve.lua` and `runtime/machine_client.lua` after changes to TLS.
 
-Share on Tailnet runs `tailscale serve --bg --tcp <port> tcp://localhost:<port>`, and Stop Sharing turns that port off. Copy Address copies the displayed `host:port` while sharing is on. Sharing lets the other device reach this PC. The code grants access to Anvil. "Other Machines" lists the paired Machines with their connection state. Pair takes `host` or `host:port` (default 7690) and the code.
+`core.machine_cli` runs them without a window, like `anvil serve`, and exits. The Machines Dialog (`core.machine_dialog`, `machine:manage`) opens at Connect to a Machine. Without a paired Machine it shows the pairing form. Otherwise it shows the paired list. `machine:pair` always opens the form. Share this PC shows network access, permissions and devices with access. Create Pairing Code grants Full control or View only to the device that uses the code. Copy Code copies the active code without spaces. Revoke removes a paired device.
 
-Open Project runs `machine:open_project` for the Machine. Forget deletes the record (`MachineClient.forget`). With Full control, Forget also revokes this PC on the Machine.
+The Dialog connects as the local owner through `server.json`. A code hides when it expires or a device uses it. The Address row runs the Tailscale CLI through `core.machine_access`, in a worker. The Local network row uses `sharing.get` and `sharing.set`, and shows `COMPUTERNAME:port` while sharing is on.
+
+Share on Tailnet runs `tailscale serve --bg --tcp <port> tcp://localhost:<port>`, and Stop Sharing turns that port off. Copy Address copies the displayed `host:port` while sharing is on. Sharing lets the other device reach this PC. The code grants access to Anvil. Pair Machine takes `host` or `host:port` (default 7690) and the six-digit code.
+
+Browse Projects lists the selected Machine's Projects inside the Dialog. Back returns to the Machine list. Open Project opens the Machine-qualified Project and closes the Dialog. `machine:open_project` uses the same Dialog. Forget deletes the record (`MachineClient.forget`). With Full control, Forget also revokes this PC on the Machine.
 
 Tests replace `machine_access.run`, so they never change the tailnet. Run `ui/machine_dialog.lua` and `runtime/machine_client.lua` after changes. Check the `machines-dialog` and `machines-dialog-others` render scenarios after visual changes.
 
@@ -194,13 +198,15 @@ A Project on another Machine has a key: `anvil-machine://<Machine ID>/<path on t
 
 The shell uses the key as the Project's identity and passes it to the Project process with `--project`. That process connects with `fs.use_machine`: to this PC's own server when the ID is its own, or else to the paired Machine's record in `USERDIR/machines`. Inside the process, paths are native paths.
 
-Project labels use `folder @ host` for a Machine Project and `folder` for a local Project. A Machine badge shows `@` even when the name does not fit. Until the paired address is available, the label uses a short Machine ID. Path Search matches the displayed address but opens the original key. Pairing grants access; it does not add all the Machine's Projects to Path Search. Use Machines → Open Project for the first open. After that, the Sidebar and Path Search list the Project on this PC.
+Project labels use `folder @ host` for a Machine Project and `folder` for a local Project. A Machine badge shows `@` even when the name does not fit. Until the paired address is available, the label uses a short Machine ID. Path Search matches the displayed address but opens the original key. Pairing grants access; it does not add all the Machine's Projects to Path Search. Use Machines → Browse Projects for the first open. After that, the Sidebar and Path Search list the Project on this PC.
 
 Code that names this Project to the Sidebar or to other Projects uses `machine_project.root_key(path)`: Workspaces, Untitled recovery, recent Projects, Numbered Panes, Sidebar Tab drags, Pane transfers and Other Project search. Pane requests accept a key in their Project fields. Path normalization would change a key's separators, so Path Search and other code do not normalize a key.
 
 `core.open_project_in_same_window` and `core.open_project_in_new_window` give a folder of this process's Machine its key (`machine_project.folder_key`). A Pane moves only between Projects of the same Machine, or between Projects of this PC. On a Machine, the target Project must hold each file of the Pane: each Buffer's file, each Image View's image and each File Tree's folder.
 
-A Project on a Machine adds only its own folders as Project Paths, so they are Vendored. External folders are refused. `machine:open_project` lists the paired Machines, then the chosen Machine's Projects (`projects.list`).
+`machine:open_project` lists the paired Machines, then the chosen Machine's Projects (`projects.list`). On connection and reconnection, `projects.paths {project}` reads the Project Paths from the Machine's saved Workspace. The Client uses their labels, roles and read-only settings. File Search lists each external root through the Machine, not the Client's disk. External roots do not become Sidebar Projects or Terminal roots.
+
+Change Project Paths on the Machine. Reopen the remote Project to load the new configuration. A Client cannot grant itself access by sending a folder name. The server protects its Workspace storage from remote file operations. Servers without `projects.paths` retain the Client's Workspace behavior.
 
 A Project on a Machine skips its Project module, Git, Git file changes and the symbol index until their services exist. The guard would show an error for each. Run the `launch-machine-project` shell probe after changes.
 
@@ -244,7 +250,9 @@ A rename moves the record to the new name.
 
 ### Remote Terminals
 
-On Windows, the server has a Terminal service (`core.serve_terminal`). `terminal.list {project}` gives the running Terminal Sessions of a Project, newest first, with the record fields that the Sidebar shows. A session with a `.closed` marker is not listed.
+On Windows, the server has a Terminal service (`core.serve_terminal`). `terminal.list {project, known, wait}` gives the running Terminal Sessions of a Project, newest first, with the record fields that the Sidebar shows, and the list's `revision`. A session with a `.closed` marker is not listed.
+
+With `wait` and the current revision as `known`, the reply waits until the Project's list changes. A directory watch on `terminal-sessions` wakes the waits, so a waiting Client costs no traffic. A host that ends without a record write shows only at the next change in that folder, as in the shell's scan. The `terminal.list.wait` feature tells the Client that the server waits.
 
 `terminal.attach {id, cols, rows, cell_width, cell_height}` connects the server to the session's host as one more Client (`terminal_link.connect`). The reply gives the `link`, the `session_id`, the `shell_pid` and the host's size. `terminal.start {project, cwd, shell, scrollback_lines, cols, rows, cell_width, cell_height}` starts a new host in a Project folder and attaches the device as its Controller (`terminal_link.launch`).
 
@@ -274,7 +282,7 @@ When the Machine no longer has it, a new shell starts in the saved folder, as a 
 
 A failed start shows its error in the View. These Terminals cannot move to another Project. Programs in them reach the Machine's Anvil, so the View publishes no control endpoint.
 
-The shell's scan reads only this PC's records. So the Project process lists its Machine's sessions every 2 seconds (`machine_terminal.sessions`), and its Pane report sends them as `terminals`. The Sidebar model adds them to the Project's Terminal Sessions, so they show agent status, age groups and attention as local sessions do.
+The shell's scan reads only this PC's records. So the Project process lists its Machine's sessions (`machine_terminal.sessions`), and its Pane report sends them as `terminals`. Each list waits on the Machine until a change, and the Client sends at most one list each 2 seconds. A server without `terminal.list.wait` answers at once, so it gets a list each 2 seconds. The Sidebar model adds them to the Project's Terminal Sessions, so they show agent status, age groups and attention as local sessions do.
 
 A Dormant Project on a Machine lists none. A visible Terminal Tab takes the place of its session row. A session in Pane history keeps its session row, so selecting another session does not hide it. A Sidebar click restores the existing View or attaches to the listed session.
 

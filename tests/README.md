@@ -19,10 +19,10 @@ Run automated tests through Meson:
 meson test -C build-windows-x86_64 --print-errorlogs
 ```
 
-If Meson is not on `PATH` in the MSYS shell on this PC, call it explicitly and prefix MinGW's bin directory so Meson can find `ninja` for rebuilds:
+If Meson is not on `PATH` in the MSYS shell on this PC, call it explicitly. Prefix MinGW's bin directory so Meson can find `ninja` for rebuilds. Prefix the pinned Zig too, because a Ghostty rebuild fails with another Zig:
 
 ```sh
-PATH=/c/msys64/mingw64/bin:$PATH /c/msys64/mingw64/bin/meson.exe test -C build-windows-x86_64 --print-errorlogs
+PATH="$(./scripts/ensure-zig.sh):/c/msys64/mingw64/bin:$PATH" /c/msys64/mingw64/bin/meson.exe test -C build-windows-x86_64 --print-errorlogs
 ```
 
 To run only Anvil's own tests and skip third-party subproject tests:

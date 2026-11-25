@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <dwmapi.h>
 #include <d3d11.h>
+#include <d3d11_1.h>
 #include <dxgi1_2.h>
 #include <SDL3_image/SDL_image.h>
 #include <stdbool.h>
@@ -85,6 +86,8 @@ struct D3D11Window {
      copied into a named shared texture that the shell composites. */
   bool hosted;
   int capacity_w, capacity_h; /* hosted texture size; width and height are the used region */
+  /* The hosted texture holds the last complete frame, so the next frame can redraw only its changes. */
+  bool retained;
   ID3D11Texture2D *shared_texture;
   IDXGIKeyedMutex *shared_mutex;
   HANDLE shared_handle;
@@ -182,6 +185,8 @@ typedef struct D3D11State {
   char adapter_name[128];
   ID3D11Device *device;
   ID3D11DeviceContext *context;
+  /* ClearView for partial hosted frames; NULL without the D3D11.1 runtime. */
+  ID3D11DeviceContext1 *context1;
   IDXGIFactory2 *factory;
   ID3D11BlendState *blend;
   ID3D11RasterizerState *raster;
@@ -218,6 +223,9 @@ typedef struct D3D11State {
   /* Advances whenever any surface's "anvil_d3d11_generation" changes. */
   uint64_t surface_generation_epoch;
   uint64_t frame_index;
+  uint64_t pruned_frame;
+  /* The active frame keeps its last pixels and redraws only regions. */
+  bool frame_kept;
   D3D11Window *windows;
   D3D11Stats stats;
   double last_present_ms;
@@ -714,6 +722,9 @@ static bool d3d11_create_device(void) {
   }
   g_d3d11.device_is_warp = used_warp;
   g_d3d11.feature_level = selected;
+  if (FAILED(g_d3d11.context->lpVtbl->QueryInterface(g_d3d11.context, &IID_ID3D11DeviceContext1,
+                                                     (void **)&g_d3d11.context1)))
+    g_d3d11.context1 = NULL;
 
   IDXGIDevice *dxgi_device = NULL;
   IDXGIAdapter *adapter = NULL;
@@ -746,6 +757,7 @@ static bool d3d11_create_device(void) {
     SDL_Log("D3D11 adapter setup failed (hr=0x%08lx). Anvil uses the software renderer.", (unsigned long)hr);
     /* No other device object exists yet. */
     SAFE_RELEASE(g_d3d11.factory);
+    SAFE_RELEASE(g_d3d11.context1);
     SAFE_RELEASE(g_d3d11.context);
     SAFE_RELEASE(g_d3d11.device);
     return false;
@@ -926,6 +938,7 @@ static void d3d11_unbind_resize_references(void) {
 
 static void d3d11_release_window_buffers(D3D11Window *w) {
   if (!w) return;
+  w->retained = false;
   SAFE_RELEASE(w->rtv);
   if (w->hosted) d3d11_release_texture(&w->backbuffer);
   else SAFE_RELEASE(w->backbuffer);
@@ -1184,6 +1197,7 @@ static bool d3d11_resize_window(D3D11Window *w, int width, int height) {
     bool fits = w->backbuffer && width <= w->capacity_w && height <= w->capacity_h;
     bool oversized = width * 2 < w->capacity_w || height * 2 < w->capacity_h;
     if (fits && (!oversized || anvil_resize_diag_live_resize())) {
+      if (width != w->width || height != w->height) w->retained = false;
       w->width = width;
       w->height = height;
       return true;
@@ -1310,7 +1324,7 @@ static bool d3d11_queue_quad(ID3D11ShaderResourceView *srv,
                              const D3D11QuadInstance *inst,
                              bool texture_dependent, D3D11CachedTexture *cached_texture);
 
-bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor clear_color) {
+bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor clear_color, bool *kept) {
   if (!anvil_d3d11_enabled() || !window || width <= 0 || height <= 0) return false;
   D3D11SetupStats setup_stats = {0};
   LARGE_INTEGER start, end;
@@ -1363,7 +1377,12 @@ bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor
     clear_color.a / 255.0f,
   };
   g_d3d11.context->lpVtbl->OMSetRenderTargets(g_d3d11.context, 1, &w->rtv, NULL);
-  g_d3d11.context->lpVtbl->ClearRenderTargetView(g_d3d11.context, w->rtv, clear);
+  bool keep = kept && w->retained && g_d3d11.context1;
+  if (kept) *kept = keep;
+  g_d3d11.frame_kept = keep;
+  if (!keep) g_d3d11.context->lpVtbl->ClearRenderTargetView(g_d3d11.context, w->rtv, clear);
+  /* An unfinished frame leaves the texture partly drawn. */
+  w->retained = false;
 
   D3D11_VIEWPORT viewport;
   memset(&viewport, 0, sizeof(viewport));
@@ -1381,15 +1400,29 @@ bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor
 
   g_d3d11.frame_index++;
   if (g_d3d11.frame_index == 0) g_d3d11.frame_index = 1;
-  if ((g_d3d11.frame_index % 120u) == 0) {
-    d3d11_prune_texture_cache(600u);
-  }
   g_d3d11.quad_instance_count = 0;
   g_d3d11.quad_srv_count = 0;
   g_d3d11.quad_last_texture_srv = NULL;
   g_d3d11.quad_texture_runs = 0;
   g_d3d11.transform = (RenTransform){ 1.0f, 0.0f, 0.0f, 1.0f };
   g_d3d11.active_window = window;
+  return true;
+}
+
+bool anvil_d3d11_begin_region(SDL_Window *window, RenRect region, RenColor color) {
+  if (window != g_d3d11.active_window || !g_d3d11.context1) return false;
+  D3D11Window *w = d3d11_find_window(window);
+  if (!w || !d3d11_flush_quads()) return false;
+  D3D11_RECT rect = {
+    SDL_max(region.x, 0), SDL_max(region.y, 0),
+    SDL_min(region.x + region.width, w->width), SDL_min(region.y + region.height, w->height),
+  };
+  if (rect.right < rect.left) rect.right = rect.left;
+  if (rect.bottom < rect.top) rect.bottom = rect.top;
+  g_d3d11.context->lpVtbl->RSSetScissorRects(g_d3d11.context, 1, &rect);
+  /* ClearView replaces the pixels, so a transparent clear works. */
+  FLOAT clear[4] = { color.r / 255.0f, color.g / 255.0f, color.b / 255.0f, color.a / 255.0f };
+  g_d3d11.context1->lpVtbl->ClearView(g_d3d11.context1, (ID3D11View *)w->rtv, clear, &rect, 1);
   return true;
 }
 
@@ -2266,6 +2299,13 @@ bool anvil_d3d11_end_frame(SDL_Window *window) {
     anvil_d3d11_abort_frame_reason(window, "end_frame_flush_quads");
     return false;
   }
+  w->retained = w->hosted;
+  /* A whole frame has used every texture that it shows, so the prune keeps them. A kept frame still shows
+   * textures that it did not draw. */
+  if (!g_d3d11.frame_kept && g_d3d11.frame_index - g_d3d11.pruned_frame >= 120u) {
+    d3d11_prune_texture_cache(600u);
+    g_d3d11.pruned_frame = g_d3d11.frame_index;
+  }
 
   if (w->capture_path) {
     char *capture_path = w->capture_path;
@@ -2441,6 +2481,7 @@ void anvil_d3d11_shutdown(void) {
   g_d3d11.quad_texture_runs = 0;
   g_d3d11.active_window = NULL;
   SAFE_RELEASE(g_d3d11.factory);
+  SAFE_RELEASE(g_d3d11.context1);
   SAFE_RELEASE(g_d3d11.context);
   SAFE_RELEASE(g_d3d11.device);
   g_d3d11.adapter_name[0] = 0;

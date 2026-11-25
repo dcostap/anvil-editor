@@ -1414,8 +1414,9 @@ local function scenario_is_ready()
     open.owner:close()
     local function closed() end
     open.owner = { state = "ready", request = closed, close = closed }
-    open.access = { state = "on", address = "desktop-toros8f.tailf9fe20.ts.net:7690" }
-    open.code = { code = "482913", level = "full", expires = system.get_time() + 271.5, made = os.time() }
+    -- The one-second countdown must not change between the three static captures.
+    local code = { code = "482913", level = "full", made = os.time() }
+    open.active_code = function() code.expires = system.get_time() + 271.5; return code end
     open.device_list:set_rows({
       { id = "a", name = "2412DPC0AG", level = "view", paired = os.time() - 86400 },
       { id = "b", name = "PC-035", level = "full", paired = os.time() - 3 * 86400 },
@@ -1425,7 +1426,8 @@ local function scenario_is_ready()
       { machine = "a", host = "pc-035.tailf9fe20.ts.net", port = 7690 },
       { machine = "b", host = "laptop.tailf9fe20.ts.net", port = 7690 },
     })
-    if benchmark.scenario == "machines-dialog-others" then open:show_page("others") end
+    open:show_page(benchmark.scenario == "machines-dialog-others" and "others" or "this")
+    open.access = { state = "on", address = "desktop-toros8f.tailf9fe20.ts.net:7690" }
     open:update_buttons()
     return false
   end

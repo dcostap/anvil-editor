@@ -75,7 +75,7 @@ Each piece of state also has one owner:
 | State | Owner | Notes |
 |---|---|---|
 | Known Project paths | Machine | Saved on the Machine. Clients read this list. |
-| Project configuration: extra Project Paths and the search and index settings | Machine | The indexes and searches run with no UI, so they need this. Today, extra Project Paths are Workspace state (`data/core/project_paths.lua`). |
+| Project configuration: extra Project Paths and the search and index settings | Machine | The Machine reads extra Project Paths from its saved Workspace and serves them to Clients. |
 | Terminal records and saved screens | Machine | As today |
 | Loaded state, Windows, Panes and Workspace layout | Client | Each Client saves its own |
 | Buffers, unsaved text and recovery records | Client | See [Recovery](#recovery) |
@@ -102,7 +102,7 @@ On a Machine, split `core.control` into two parts:
 - A server that Anvil started ends when Anvil ends. Terminal Sessions keep running, as they do today, but other devices cannot reach them until Anvil starts again.
 - For a Machine that other devices must always reach, the user runs `anvil serve` alone. That server runs without a UI and does not end with Anvil.
 - Without a Project list, the server serves the Projects of its user folder's Sidebar: Scratch and the recent Projects.
-- The server listens on loopback only. Other devices reach it only through a forwarder that the user sets up, such as Tailscale Serve, and only after pairing. So it needs no separate setting for connections from other devices.
+- The server listens on loopback. Other devices reach it through a forwarder that the user sets up, such as Tailscale Serve, or through Share on Local Network. That setting opens a second listener on all networks with the same port. A Client on that listener must use TLS.
 - The server uses port 7690 when it can, so a forwarder's configuration stays correct across restarts.
 
 ## Identity
@@ -241,7 +241,9 @@ Full control covers all Projects on the Machine. Limits for each Project are a l
 - The Machine shows a short pairing code. The code works one time, for a few minutes, with a limited number of attempts.
 - The paired device stores its token in the OS's protected storage: Android Keystore on the phone, DPAPI on Windows.
 - Revocation removes the token and closes the device's open connections and streams at once.
-- Machines reach each other through Tailscale or another private network. The server listens on loopback, and Tailscale Serve exposes it. The network is not the authority: each request carries the device token, because any local process can reach loopback.
+- Machines reach each other through Tailscale or a local network. The server listens on loopback, and Tailscale Serve exposes it. Share on Local Network makes it listen on the local network too. The network is not the authority: each request carries the device token, because any local process can reach loopback.
+- The server has one self-signed TLS certificate. A pairing uses TLS and saves the certificate's SHA-256 fingerprint in the record. Later connections accept only that certificate. The pairing trusts the first certificate that it sees, so a device in the middle at the moment of pairing could take its place. A short code cannot prevent that without a password-based key exchange.
+- On loopback, the server also accepts connections without TLS: from the local owner, from records paired before TLS and from the Companion. Tailscale encrypts those connections between devices.
 - Each identity has a person field and a device field. Only the owner exists at first.
 
 Reference: t3code uses pairing with scoped sessions, read-only guest links and an optional cloud relay. Its server owns all execution, and each client is a thin view.

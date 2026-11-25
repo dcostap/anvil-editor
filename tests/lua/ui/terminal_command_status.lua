@@ -22,6 +22,29 @@ local function wait_record(view, predicate)
 end
 
 test.describe("Terminal command status", function()
+  test.it("publishes a stable spinner in the Terminal registry", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    terminal._set_native_for_tests(nil)
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /d /q" })
+    local ok, err = pcall(function()
+      test.ok(view.session:write('powershell -NoProfile -Command "'
+        .. "[Console]::Title = [char]0x280B + ' build'; Start-Sleep -Seconds 3; "
+        .. "[Console]::Title = [char]0x2819 + ' build'; Start-Sleep -Seconds 3; "
+        .. "[Console]::Title = [char]0x2839 + ' test'; Start-Sleep -Seconds 3\"\r"))
+      local first = wait_record(view, function(r) return r.busy and r.title == "⠋ build" end)
+      local last = wait_record(view, function(r)
+        if r.title:match(" build$") then
+          test.equal(r.title, first.title)
+          test.equal(r.activity, first.activity)
+        end
+        return r.title == "⠋ test"
+      end)
+      test.ok(last.activity > first.activity)
+    end)
+    view:on_close()
+    test.ok(ok, err)
+  end)
+
   test.it("shows the submitted command, elapsed time and completed duration", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)

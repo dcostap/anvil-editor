@@ -16,8 +16,8 @@ fs.roots = nil
 
 -- `path` names a Machine file: the local server's `server.json` or a paired Machine's record.
 -- `roots` lists the Project's paths. The raw file functions then refuse them (`core.machine_guard`).
--- Only tests call this until Projects on other Machines exist.
-function fs.use_machine(path, roots)
+-- `on_connect` can request Project configuration after each handshake.
+function fs.use_machine(path, roots, on_connect)
   fs.use_local()
   machine_guard.enable(roots)
   fs.roots = roots
@@ -29,6 +29,7 @@ function fs.use_machine(path, roots)
     end,
   }
   fs.machine = MachineClient.new(path, function(reconnect)
+    if on_connect then on_connect(fs.machine) end
     if reconnect then fs.reconnected() end
   end)
 end

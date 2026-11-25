@@ -1620,6 +1620,10 @@ int anvil_terminal_host_main(int argc, char **argv) {
         title[length] = 0;
       }
       LeaveCriticalSection(&host.lock);
+      /* The Tab animates these ten frames locally. Publish one stable frame. */
+      if ((unsigned char)title[0] == 0xe2 && (unsigned char)title[1] == 0xa0 && title[2] &&
+          strchr("\x8b\x99\xb9\xb8\xbc\xb4\xa6\xa7\x87\x8f", (unsigned char)title[2]))
+        title[2] = (char)0x8b;
       if (strcmp(title, host.title)) {
         strcpy(host.title, title);
         host.activity = (int64_t)time(NULL);

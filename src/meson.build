@@ -672,7 +672,7 @@ if get_option('net')
 
     anvil_deps += [mbedtls_dep, mbedx509_dep, tfpsacrypto_dep]
 
-    anvil_sources += ['api/net.c', 'api/machine.c', 'machine_frame.c']
+    anvil_sources += ['api/net.c', 'api/machine.c', 'machine_frame.c', 'machine_tls.c']
     anvil_cargs += '-DANVIL_NET'
 endif
 

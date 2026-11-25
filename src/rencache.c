@@ -856,157 +856,9 @@ static RenColor rencache_detect_frame_clear_color(RenCache *ren_cache) {
   return clear;
 }
 
-static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
-  if (!anvil_d3d11_enabled() || !ren_cache || !ren_cache->window) return false;
-
-  int width = 0, height = 0;
-  rencache_get_size(ren_cache, &width, &height);
-  if (width <= 0 || height <= 0) return false;
-
-  RenColor clear = rencache_detect_frame_clear_color(ren_cache);
-  win32_frame_set_background(ren_cache->window, clear);
-  if (!anvil_d3d11_begin_frame(ren_cache->window, width, height, clear)) return false;
-  uint64_t command_replay_start = SDL_GetPerformanceCounter();
-
-  Command *cmd = NULL;
-  RenRect clip = ren_cache->screen_rect;
-  RenTransform transform = identity_transform();
-  RenTransform transform_stack[RENCACHE_TRANSFORM_STACK_MAX];
-  int transform_depth = 0;
-  anvil_d3d11_set_transform(transform);
-  const char *fail_reason = "unknown";
-  while (next_command(ren_cache, &cmd)) {
-    switch (cmd->type) {
-      case SET_CLIP: {
-        SetClipCommand *ccmd = (SetClipCommand*)&cmd->command;
-        clip = intersect_rects(ccmd->rect, ren_cache->screen_rect);
-      } break;
-      case PUSH_TRANSFORM: {
-        PushTransformCommand *tcmd = (PushTransformCommand*)&cmd->command;
-        if (transform_depth >= RENCACHE_TRANSFORM_STACK_MAX) {
-          fail_reason = "transform_stack_overflow";
-          goto fail;
-        }
-        transform_stack[transform_depth++] = transform;
-        transform = compose_transform(transform, tcmd);
-        anvil_d3d11_set_transform(transform);
-      } break;
-      case POP_TRANSFORM: {
-        if (transform_depth <= 0) {
-          fail_reason = "transform_stack_underflow";
-          goto fail;
-        }
-        transform = transform_stack[--transform_depth];
-        anvil_d3d11_set_transform(transform);
-      } break;
-      case DRAW_RECT: {
-        DrawRectCommand *rcmd = (DrawRectCommand*)&cmd->command;
-        if (!anvil_d3d11_push_rect(ren_cache->window, rcmd->rect, clip, rcmd->color)) { fail_reason = "draw_rect"; goto fail; }
-      } break;
-      case DRAW_ROUNDED_RECT: {
-        DrawRoundedRectCommand *rcmd = (DrawRoundedRectCommand*)&cmd->command;
-        if (!anvil_d3d11_push_rounded_rect(ren_cache->window, rcmd->shape, rcmd->radius, clip, rcmd->color,
-                                           rcmd->bottom, rcmd->softness, rcmd->stroke)) { fail_reason = "draw_rounded_rect"; goto fail; }
-      } break;
-      case DRAW_RECT_GRID: {
-        DrawRectGridCommand *gcmd = (DrawRectGridCommand*)&cmd->command;
-        if (!anvil_d3d11_push_rect_grid(ren_cache->window, gcmd->x, gcmd->y, gcmd->step_x, gcmd->w, gcmd->h, gcmd->count, clip, gcmd->color)) { fail_reason = "draw_rect_grid"; goto fail; }
-      } break;
-      case DRAW_TEXT: {
-        DrawTextCommand *tcmd = (DrawTextCommand*)&cmd->command;
-        ren_font_group_set_tab_size(tcmd->fonts, tcmd->tab_size);
-        if (tcmd->cell_count) {
-          if (!ren_draw_text_cells_d3d11(
-                ren_cache->window, intersect_rects(clip, tcmd->rect), tcmd->fonts,
-                tcmd->text, tcmd->len, (const uint8_t *)tcmd->text + tcmd->len + 1,
-                tcmd->cell_count, tcmd->text_x, tcmd->text_y, tcmd->cell_width,
-                tcmd->color)) { fail_reason = "draw_text_cells"; goto fail; }
-        } else if (!ren_draw_text_d3d11(ren_cache->window, clip, tcmd->fonts, tcmd->text, tcmd->len,
-                                 tcmd->text_x, tcmd->rect.y, tcmd->color, tcmd->tab)) { fail_reason = "draw_text"; goto fail; }
-      } break;
-      case DRAW_CANVAS: {
-        DrawCanvasCommand *cvcmd = (DrawCanvasCommand*)&cmd->command;
-        rencache_end_frame(cvcmd->canvas);
-        SDL_Surface *surface = cvcmd->canvas->rensurface.surface;
-        if (surface) {
-          RenRect src = { 0, 0, surface->w, surface->h };
-          RenRect dst = cvcmd->rect;
-          if (!anvil_d3d11_push_texture(ren_cache->window, surface, src, dst, clip,
-                                        cvcmd->color, ANVIL_D3D11_IMAGE_TEXTURE)) { fail_reason = "draw_canvas"; goto fail; }
-        }
-      } break;
-      case DRAW_PIXELS: {
-        DrawPixelsCommand *pcmd = (DrawPixelsCommand*)&cmd->command;
-        int pitch = (int)pcmd->rect.width * 4;
-        if (!anvil_d3d11_push_pixels(ren_cache->window, pcmd->bytes, pcmd->len,
-                                     (int)pcmd->rect.width, (int)pcmd->rect.height, pitch,
-                                     pcmd->rect, clip)) { fail_reason = "draw_pixels"; goto fail; }
-      } break;
-      case DRAW_POLY: {
-        DrawBezierCommand *bcmd = (DrawBezierCommand*)&cmd->command;
-        if (!ren_draw_poly_commands(ren_cache->window, bcmd->points,
-                                   bcmd->npoints, clip, bcmd->color)) {
-          fail_reason = "draw_poly_spans";
-          goto fail;
-        }
-      } break;
-    }
-  }
-  if (transform_depth != 0) {
-    fail_reason = "unbalanced_transform_stack";
-    goto fail;
-  }
-
-  g_rencache_frame_stats.command_replay_ms = rencache_perf_ms(
-    command_replay_start, SDL_GetPerformanceCounter()
-  );
-  if (!anvil_d3d11_end_frame(ren_cache->window)) return false;
-  /* The shell shows hosted surfaces; their SDL window stays hidden. */
-  if (!anvil_hosted_surface_is_window(ren_cache->window)) {
-    SDL_ShowWindow(ren_cache->window);
-    if (!ren_cache->window_shown) {
-      SDL_RaiseWindow(ren_cache->window);
-#ifdef _WIN32
-      rencache_activate_window(ren_cache->window);
-#endif
-      ren_cache->window_shown = true;
-    }
-    rencache_note_direct_present(ren_cache->window);
-  }
-  ren_text_stats_end_frame();
-  g_rencache_last_frame_stats = g_rencache_frame_stats;
-  ren_cache->command_buf_idx = 0;
-  ren_cache->frame_active = false;
-  return true;
-
-fail:
-  g_rencache_frame_stats.command_replay_ms = rencache_perf_ms(
-    command_replay_start, SDL_GetPerformanceCounter()
-  );
-  anvil_d3d11_abort_frame_reason(ren_cache->window, fail_reason);
-  return false;
-}
-
-void rencache_end_frame(RenCache *ren_cache) {
-  if (!ren_cache) return;
-  if (ren_cache->frame_failed) {
-    ren_cache->command_buf_idx = 0;
-    ren_cache->resize_issue = false;
-    ren_cache->frame_active = false;
-    if (ren_cache->window) {
-      ren_text_stats_end_frame();
-      g_rencache_last_frame_stats = g_rencache_frame_stats;
-    }
-    return;
-  }
-  if (ren_cache->window && anvil_hosted_surface_is_window(ren_cache->window)) {
-    RenColor clear = rencache_detect_frame_clear_color(ren_cache);
-    anvil_hosted_surface_set_background(ren_cache->window,
-      (uint32_t)clear.r | (uint32_t)clear.g << 8 | (uint32_t)clear.b << 16 | (uint32_t)clear.a << 24);
-  }
-  if (rencache_try_d3d11_command_frame(ren_cache)) return;
-
-  /* update cells from commands */
+/* Hashes each command into the cells that it covers. Puts the merged pixel rects of the cells that changed since
+ * the last frame in rect_buf, and returns their count. rencache_swap_cells ends the frame. */
+static int rencache_find_changed_rects(RenCache *ren_cache) {
   Command *cmd = NULL;
   RenRect cr = ren_cache->screen_rect;
   RenTransform transform = identity_transform();
@@ -1041,6 +893,8 @@ void rencache_end_frame(RenCache *ren_cache) {
     unsigned h = HASH_INITIAL;
     hash(&h, cmd, cmd->size);
     hash(&h, &transform, sizeof(transform));
+    /* A clip change can change what a command draws without a change to the command. */
+    hash(&h, &r, sizeof(r));
     update_overlapping_cells(ren_cache, r, h);
   }
 
@@ -1068,6 +922,203 @@ void rencache_end_frame(RenCache *ren_cache) {
     r->height *= RENCACHE_CELL_SIZE;
     *r = intersect_rects(*r, ren_cache->screen_rect);
   }
+
+  return rect_count;
+}
+
+static void rencache_swap_cells(RenCache *ren_cache) {
+  unsigned *tmp = ren_cache->cells;
+  ren_cache->cells = ren_cache->cells_prev;
+  ren_cache->cells_prev = tmp;
+}
+
+/* At most this many changed rects redraw alone in a kept frame; more redraw the whole frame. */
+#define RENCACHE_D3D11_REGIONS_MAX 8
+/* Text and soft edges can draw a little outside their command rect. */
+#define RENCACHE_D3D11_INK_MARGIN 8
+
+/* Replays the frame's commands. With a region, it replays only the commands near the region, and the region's
+ * scissor clips them. Returns NULL, or the reason for a failure. */
+static const char *rencache_replay_d3d11(RenCache *ren_cache, const RenRect *region) {
+  Command *cmd = NULL;
+  RenRect clip = ren_cache->screen_rect;
+  RenTransform transform = identity_transform();
+  RenTransform transform_stack[RENCACHE_TRANSFORM_STACK_MAX];
+  int transform_depth = 0;
+  anvil_d3d11_set_transform(transform);
+  while (next_command(ren_cache, &cmd)) {
+    if (region && cmd->type != SET_CLIP && cmd->type != PUSH_TRANSFORM && cmd->type != POP_TRANSFORM) {
+      RenRect r = intersect_rects(transform_rect(cmd->command[0], transform), transform_rect(clip, transform));
+      r = (RenRect){ r.x - RENCACHE_D3D11_INK_MARGIN, r.y - RENCACHE_D3D11_INK_MARGIN,
+                     r.width + 2 * RENCACHE_D3D11_INK_MARGIN, r.height + 2 * RENCACHE_D3D11_INK_MARGIN };
+      if (!rects_overlap(r, *region)) continue;
+    }
+    switch (cmd->type) {
+      case SET_CLIP: {
+        SetClipCommand *ccmd = (SetClipCommand*)&cmd->command;
+        clip = intersect_rects(ccmd->rect, ren_cache->screen_rect);
+      } break;
+      case PUSH_TRANSFORM: {
+        PushTransformCommand *tcmd = (PushTransformCommand*)&cmd->command;
+        if (transform_depth >= RENCACHE_TRANSFORM_STACK_MAX) return "transform_stack_overflow";
+        transform_stack[transform_depth++] = transform;
+        transform = compose_transform(transform, tcmd);
+        anvil_d3d11_set_transform(transform);
+      } break;
+      case POP_TRANSFORM: {
+        if (transform_depth <= 0) return "transform_stack_underflow";
+        transform = transform_stack[--transform_depth];
+        anvil_d3d11_set_transform(transform);
+      } break;
+      case DRAW_RECT: {
+        DrawRectCommand *rcmd = (DrawRectCommand*)&cmd->command;
+        if (!anvil_d3d11_push_rect(ren_cache->window, rcmd->rect, clip, rcmd->color)) return "draw_rect";
+      } break;
+      case DRAW_ROUNDED_RECT: {
+        DrawRoundedRectCommand *rcmd = (DrawRoundedRectCommand*)&cmd->command;
+        if (!anvil_d3d11_push_rounded_rect(ren_cache->window, rcmd->shape, rcmd->radius, clip, rcmd->color,
+                                           rcmd->bottom, rcmd->softness, rcmd->stroke)) return "draw_rounded_rect";
+      } break;
+      case DRAW_RECT_GRID: {
+        DrawRectGridCommand *gcmd = (DrawRectGridCommand*)&cmd->command;
+        if (!anvil_d3d11_push_rect_grid(ren_cache->window, gcmd->x, gcmd->y, gcmd->step_x, gcmd->w, gcmd->h, gcmd->count, clip, gcmd->color)) return "draw_rect_grid";
+      } break;
+      case DRAW_TEXT: {
+        DrawTextCommand *tcmd = (DrawTextCommand*)&cmd->command;
+        ren_font_group_set_tab_size(tcmd->fonts, tcmd->tab_size);
+        if (tcmd->cell_count) {
+          if (!ren_draw_text_cells_d3d11(
+                ren_cache->window, intersect_rects(clip, tcmd->rect), tcmd->fonts,
+                tcmd->text, tcmd->len, (const uint8_t *)tcmd->text + tcmd->len + 1,
+                tcmd->cell_count, tcmd->text_x, tcmd->text_y, tcmd->cell_width,
+                tcmd->color)) return "draw_text_cells";
+        } else if (!ren_draw_text_d3d11(ren_cache->window, clip, tcmd->fonts, tcmd->text, tcmd->len,
+                                 tcmd->text_x, tcmd->rect.y, tcmd->color, tcmd->tab)) return "draw_text";
+      } break;
+      case DRAW_CANVAS: {
+        DrawCanvasCommand *cvcmd = (DrawCanvasCommand*)&cmd->command;
+        if (cvcmd->canvas->frame_active) rencache_end_frame(cvcmd->canvas);
+        SDL_Surface *surface = cvcmd->canvas->rensurface.surface;
+        if (surface) {
+          RenRect src = { 0, 0, surface->w, surface->h };
+          RenRect dst = cvcmd->rect;
+          if (!anvil_d3d11_push_texture(ren_cache->window, surface, src, dst, clip,
+                                        cvcmd->color, ANVIL_D3D11_IMAGE_TEXTURE)) return "draw_canvas";
+        }
+      } break;
+      case DRAW_PIXELS: {
+        DrawPixelsCommand *pcmd = (DrawPixelsCommand*)&cmd->command;
+        int pitch = (int)pcmd->rect.width * 4;
+        if (!anvil_d3d11_push_pixels(ren_cache->window, pcmd->bytes, pcmd->len,
+                                     (int)pcmd->rect.width, (int)pcmd->rect.height, pitch,
+                                     pcmd->rect, clip)) return "draw_pixels";
+      } break;
+      case DRAW_POLY: {
+        DrawBezierCommand *bcmd = (DrawBezierCommand*)&cmd->command;
+        if (!ren_draw_poly_commands(ren_cache->window, bcmd->points,
+                                   bcmd->npoints, clip, bcmd->color)) return "draw_poly_spans";
+      } break;
+    }
+  }
+  return transform_depth != 0 ? "unbalanced_transform_stack" : NULL;
+}
+
+static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
+  if (!anvil_d3d11_enabled() || !ren_cache || !ren_cache->window) return false;
+
+  int width = 0, height = 0;
+  rencache_get_size(ren_cache, &width, &height);
+  if (width <= 0 || height <= 0) return false;
+
+  RenColor clear = rencache_detect_frame_clear_color(ren_cache);
+  win32_frame_set_background(ren_cache->window, clear);
+  /* A hosted window keeps its last frame, so a frame redraws only the cells that changed. */
+  bool hosted = anvil_hosted_surface_is_window(ren_cache->window);
+  int rect_count = hosted ? rencache_find_changed_rects(ren_cache) : 0;
+  RenRect screen = ren_cache->screen_rect, first = ren_cache->rect_buf[0];
+  bool whole = rect_count == 1 && first.x == screen.x && first.y == screen.y
+    && first.width == screen.width && first.height == screen.height;
+  bool kept = false;
+  if (!anvil_d3d11_begin_frame(ren_cache->window, width, height, clear,
+                               hosted && !whole && rect_count <= RENCACHE_D3D11_REGIONS_MAX ? &kept : NULL)) {
+    if (hosted) rencache_invalidate(ren_cache);
+    return false;
+  }
+  uint64_t command_replay_start = SDL_GetPerformanceCounter();
+
+  const char *fail_reason = NULL;
+  if (!kept) fail_reason = rencache_replay_d3d11(ren_cache, NULL);
+  for (int i = 0; kept && i < rect_count && !fail_reason; i++) {
+    RenRect region = ren_cache->rect_buf[i];
+    fail_reason = anvil_d3d11_begin_region(ren_cache->window, region, clear)
+      ? rencache_replay_d3d11(ren_cache, &region) : "begin_region";
+  }
+  if (fail_reason) goto fail;
+  /* End the canvases that no region reached. */
+  for (Command *cmd = NULL; kept && next_command(ren_cache, &cmd);) {
+    DrawCanvasCommand *cvcmd = (DrawCanvasCommand*)&cmd->command;
+    if (cmd->type == DRAW_CANVAS && cvcmd->canvas->frame_active) rencache_end_frame(cvcmd->canvas);
+  }
+
+  g_rencache_frame_stats.command_replay_ms = rencache_perf_ms(
+    command_replay_start, SDL_GetPerformanceCounter()
+  );
+  if (!anvil_d3d11_end_frame(ren_cache->window)) {
+    if (hosted) rencache_invalidate(ren_cache);
+    return false;
+  }
+  /* The shell shows hosted surfaces; their SDL window stays hidden. */
+  if (!anvil_hosted_surface_is_window(ren_cache->window)) {
+    SDL_ShowWindow(ren_cache->window);
+    if (!ren_cache->window_shown) {
+      SDL_RaiseWindow(ren_cache->window);
+#ifdef _WIN32
+      rencache_activate_window(ren_cache->window);
+#endif
+      ren_cache->window_shown = true;
+    }
+    rencache_note_direct_present(ren_cache->window);
+  }
+  if (hosted) rencache_swap_cells(ren_cache);
+  ren_text_stats_end_frame();
+  g_rencache_last_frame_stats = g_rencache_frame_stats;
+  ren_cache->command_buf_idx = 0;
+  ren_cache->frame_active = false;
+  return true;
+
+fail:
+  g_rencache_frame_stats.command_replay_ms = rencache_perf_ms(
+    command_replay_start, SDL_GetPerformanceCounter()
+  );
+  anvil_d3d11_abort_frame_reason(ren_cache->window, fail_reason);
+  if (hosted) rencache_invalidate(ren_cache);
+  return false;
+}
+
+void rencache_end_frame(RenCache *ren_cache) {
+  if (!ren_cache) return;
+  if (ren_cache->frame_failed) {
+    ren_cache->command_buf_idx = 0;
+    ren_cache->resize_issue = false;
+    ren_cache->frame_active = false;
+    if (ren_cache->window) {
+      ren_text_stats_end_frame();
+      g_rencache_last_frame_stats = g_rencache_frame_stats;
+    }
+    return;
+  }
+  if (ren_cache->window && anvil_hosted_surface_is_window(ren_cache->window)) {
+    RenColor clear = rencache_detect_frame_clear_color(ren_cache);
+    anvil_hosted_surface_set_background(ren_cache->window,
+      (uint32_t)clear.r | (uint32_t)clear.g << 8 | (uint32_t)clear.b << 16 | (uint32_t)clear.a << 24);
+  }
+  if (rencache_try_d3d11_command_frame(ren_cache)) return;
+
+  int rect_count = rencache_find_changed_rects(ren_cache);
+  Command *cmd = NULL;
+  RenTransform transform = identity_transform();
+  RenTransform transform_stack[RENCACHE_TRANSFORM_STACK_MAX];
+  int transform_depth = 0;
 
   RenSurface rs = rencache_get_surface(ren_cache);
   /* redraw updated regions */
@@ -1233,10 +1284,7 @@ void rencache_end_frame(RenCache *ren_cache) {
     anvil_d3d11_note_surface_generation();
   }
 
-  /* swap cell buffer and reset */
-  unsigned *tmp = ren_cache->cells;
-  ren_cache->cells = ren_cache->cells_prev;
-  ren_cache->cells_prev = tmp;
+  rencache_swap_cells(ren_cache);
   if (ren_cache->window) {
     ren_text_stats_end_frame();
     g_rencache_last_frame_stats = g_rencache_frame_stats;

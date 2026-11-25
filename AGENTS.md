@@ -80,10 +80,10 @@ Validate changed Lua without executing it:
 
 Pass all changed Lua files. If the CLI is missing, use `scripts/ensure-luajit-cli.sh`; ask before installing tools globally.
 
-Run tests through Meson:
+Run tests through Meson. Put the pinned Zig first: a test run can rebuild Ghostty, and another Zig fails that build.
 
 ```sh
-export PATH=/c/msys64/mingw64/bin:$PATH
+export PATH="$(./scripts/ensure-zig.sh):/c/msys64/mingw64/bin:$PATH"
 meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/terminal.lua --print-errorlogs
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/storage.lua --print-errorlogs
 ```

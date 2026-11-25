@@ -28,6 +28,8 @@ ANVIL_RENDERER=software
 
 Unset `ANVIL_RENDERER`, or set it to `d3d11`, to use the default D3D11 path. D3D stats are still opt-in with `ANVIL_D3D11_STATS=1` and `ANVIL_D3D11_STATS_FILE=...`.
 
+A hosted D3D11 surface keeps its last frame in its texture. The cell hashes of `rencache.c` find the areas that changed, and only the commands near an area replay, under that area's scissor. `ClearView` clears each area first, so the transparent Sidebar also works. More than 8 areas, a change to the whole surface, a new texture, a size change and a failed frame redraw the whole frame. The texture cache prunes only after a whole frame, because kept pixels still show textures that a kept frame did not draw. On the integrated GPU this cut typing latency by about 2.5 ms at p50, because the GPU finishes the Project's frame sooner. `renwindow._invalidate(window)` makes the next frame a whole redraw, for tests. Run the `partial-redraw` shell probe after changes to `rencache.c` or the D3D11 backend.
+
 ## Tabs inside a View
 
 `core.tab` draws the Title Bar's Tabs: `tab.draw_tile`, `tab.bar_fonts` and `tab.bar_width`. A View that shows its own Tabs, such as the SQL Result Tabs (`plugins.sql_server.result_tabs`), uses them with the Title Bar's styles, so both look the same. A View can take a Pane that the Title Bar drags over it.

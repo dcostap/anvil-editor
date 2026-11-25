@@ -175,7 +175,7 @@ function LineWrapping.rebase_async_transaction(textview, ranges)
   local prepared = token.next_line - 1
   local function shift(cache)
     if not cache or first > old_prepared then return end
-    if last < old_prepared then
+    if last < old_prepared and delta ~= 0 then
       table.move(cache, last + 1, old_prepared, last + 1 + delta)
     end
     for line = first, math.min(last + delta, prepared) do cache[line] = nil end
@@ -1447,10 +1447,6 @@ function LineWrapping.update_multiple_nonstructural_breaks(textview, ranges)
   ) then
     return false
   end
-  if textview.has_line_render_providers
-  and textview:has_line_render_providers() then
-    return false
-  end
 
   local buffer = textview.buffer
   local line_count = #buffer.lines
@@ -1515,6 +1511,15 @@ function LineWrapping.update_multiple_nonstructural_breaks(textview, ranges)
   for index, line in ipairs(affected_lines) do
     replacement_breaks[line] = line_breaks[index]
     replacement_offsets[line] = offsets[index]
+  end
+  -- Commit the measured render plans with their rows, as update_breaks does.
+  if measurement.presentations then
+    textview.wrapped_presentations = textview.wrapped_presentations or {}
+    for _, line in ipairs(affected_lines) do
+      textview.wrapped_presentations[line] = measurement.presentations[line]
+    end
+  else
+    textview.wrapped_presentations = nil
   end
 
   -- Build one replacement row map instead of repeatedly splicing and

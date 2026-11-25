@@ -97,8 +97,12 @@ function ui.metrics()
   return metrics
 end
 
+-- False while a Dialog that the pointer focused draws, so its focus rings hide.
+ui.focus_ring_visible = true
+
 ---The focus ring of core.ui's controls: a 2 px outline just outside (x, y, w, h).
 function ui.draw_ring(x, y, w, h, radius, color)
+  if not ui.focus_ring_visible then return end
   local ring = ui.metrics().ring
   ui.draw_rounded_outline(x - ring, y - ring, w + 2 * ring, h + 2 * ring, radius + ring, ring,
     color or style.dialog_focus_ring)

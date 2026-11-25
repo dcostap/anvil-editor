@@ -1,6 +1,9 @@
 -- Type into a task note while other notes from the same vault stay open.
--- Each typed character moves a wikilink on the edited line. The other notes
--- do not depend on that, so typing must not make them redo their layout.
+-- On a task line, each typed character moves a wikilink on the edited line.
+-- The other notes do not depend on that, so typing must not make them redo
+-- their layout. On a heading, each typed character changes a link target, so
+-- the note refreshes every line with a link or a task box. With `carets`,
+-- each keystroke types on that many lines below, but not on headings.
 local core = require "core"
 local support = require "scenes.support"
 local vault_index = require "core.markdown.vault_index"
@@ -25,10 +28,18 @@ local function open(context, path)
 end
 
 local function focus_typing_line(context, view)
-  local line = context.settings.line
-  local col = assert(view.buffer.lines[line]:find("[[", 1, true), "the typing line has no wikilink")
-  view:with_selection_state(function() view.buffer:set_selection(line, col) end)
-  view:scroll_to_line(line, false, true)
+  local buffer, first = view.buffer, context.settings.line
+  local carets, line = context.settings.carets or 1, first
+  view:with_selection_state(function()
+    for index = 1, carets do
+      while index > 1 and buffer.lines[line]:find("^#") do line = line + 1 end
+      local text = buffer.lines[line]
+      local col = text:find("[[", 1, true) or #text
+      if index == 1 then buffer:set_selection(line, col) else buffer:add_selection(line, col) end
+      line = line + 1
+    end
+  end)
+  view:scroll_to_line(first, false, true)
 end
 
 -- The task note opens last, so it is the measured View.
@@ -81,6 +92,7 @@ end
 function scene.state(context)
   return {
     open_notes = #context.others + 1,
+    carets = #context.view.buffer.selections / 4,
     vault_updates = context.index.diagnostics.buffer_updates,
   }
 end

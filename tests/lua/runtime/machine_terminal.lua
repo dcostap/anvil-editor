@@ -107,6 +107,30 @@ test.describe("Remote Terminal Session", function()
       "The remote session did not take control")
   end)
 
+  test.it("answers a waiting list only when the Machine's sessions change", function(context)
+    local err, first = call(context.owner, "terminal.list", {project = context.project})
+    test.is_nil(err)
+    local waited
+    context.owner:request("terminal.list", {project = context.project, known = first.revision, wait = true}, nil,
+      function(e, r) waited = e or r end)
+    local deadline = system.get_time() + 1
+    while system.get_time() < deadline do
+      test.is_nil(waited, "An unchanged list answered")
+      coroutine.yield(0.05)
+    end
+
+    local start_err, started = call(context.owner, "terminal.start", {project = context.project, cwd = context.project,
+      shell = ECHO_SHELL, scrollback_lines = 1000, cols = 60, rows = 10, cell_width = 8, cell_height = 16})
+    test.is_nil(start_err)
+    wait_until(function() return waited end, "The waiting list did not answer the new shell")
+    local ids = {}
+    for _, session in ipairs(waited.sessions or {}) do ids[#ids + 1] = session.id end
+    test.contains(ids, started.session_id)
+    test.ok(waited.revision > first.revision)
+    -- The new shell ends: nothing read it.
+    test.is_nil(call(context.owner, "terminal.detach", {link = started.link}))
+  end)
+
   test.it("resolves an agent only in its own Machine Project", function(context)
     local args = {project = context.project, terminal = context.id}
     local err = call(context.owner, "agent_read", args)
@@ -148,7 +172,7 @@ test.describe("Remote Terminal Session", function()
     projects.own_id = function() return string.rep("0", 32) end
     context.source = require("core.control_server").open(require("core.control").new(context.project))
     local source = context.source:add_client("source-terminal")
-    context.source.control:exchange("source-terminal", {instance = "source-pi", title = "Build watcher", receipts = {}, tasks = {}})
+    context.source.control:exchange("source-terminal", {instance = "source-pi", receipts = {}, tasks = {}})
     context.source.control:exchange(context.id, {instance = "wrong-local-agent", receipts = {}, tasks = {}})
     require("core").add_thread(function()
       while context.source.listener do context.source:poll(); coroutine.yield(.01) end
@@ -166,7 +190,8 @@ test.describe("Remote Terminal Session", function()
     local received = post("/agent", report).commands[1]
     test.equal(received.id, task)
     test.equal(received.text, "ping")
-    test.equal(received.sender.title, "Build watcher")
+    -- The host derives the Agent Name from the sending Terminal.
+    test.equal(received.sender.name, require("core.agent_name").for_terminal("source-terminal"))
     test.equal(received.sender.instance, "source-pi")
     test.equal(received.sender.machine, "Client")
     test.equal(received.sender.project, context.project)

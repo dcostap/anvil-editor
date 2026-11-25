@@ -73,7 +73,32 @@ end
 -- Connects this Project process to the Machine of `key`, and returns the Project's path on the Machine.
 function machine_project.use(key)
   local machine, path = machine_project.parse(key)
-  fs.use_machine(machine_project.machine_file(machine), { path })
+  local common = require "core.common"
+  local guarded, seen = {path}, {[common.path_compare_key(path)] = true}
+  machine_project.paths = nil
+  fs.use_machine(machine_project.machine_file(machine), { path }, function(client)
+    local supported = false
+    for _, method in ipairs(client.features or {}) do supported = supported or method == "projects.paths" end
+    if not supported then return end
+    client:request("projects.paths", {project = path}, nil, function(err, state)
+      if fs.machine ~= client then return end
+      if err then return require("core").log_quiet("Machine Project Paths: %s", err.message) end
+      local roots = {path}
+      for _, entry in ipairs(state.entries) do
+        roots[#roots + 1] = entry.path
+        local id = common.path_compare_key(entry.path)
+        if not seen[id] then guarded[#guarded + 1], seen[id] = entry.path, true end
+      end
+      -- An open View of a removed root must not start reading the Client's disk.
+      require("core.machine_guard").set_roots(guarded)
+      fs.roots, machine_project.paths = roots, state
+      local core = require "core"
+      if core.workspace_restored then
+        local _, changed = require("core.project_paths").load_workspace_state(state)
+        if changed then core.refresh_project_path_consumers("Machine Project Paths") end
+      end
+    end)
+  end)
   machine_project.current = key
   return path
 end

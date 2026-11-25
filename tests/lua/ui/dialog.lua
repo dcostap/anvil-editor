@@ -119,6 +119,26 @@ test.describe("Dialog", function()
     test.equal(instance.focused, instance.second)
   end)
 
+  test.it("shows the focus ring after keys, not after clicks", function()
+    open_editor("behind")
+    local instance = open_dialog()
+    test.ok(instance:shows_focus_ring())
+
+    click(center(instance.first))
+    test.equal(instance.focused, instance.first)
+    test.ok(not instance:shows_focus_ring())
+
+    test.ok(press(keymap.get_binding("dialog:focus_next")))
+    test.equal(instance.focused, instance.second)
+    test.ok(instance:shows_focus_ring())
+
+    instance:close()
+    core.focus_feedback_source = "pointer"
+    instance:open()
+    core.focus_feedback_source = nil
+    test.ok(not instance:shows_focus_ring())
+  end)
+
   test.it("cancels a field edit first, then closes and gives focus back", function()
     local view = open_editor("behind")
     local instance = open_dialog({ text = "kept" })

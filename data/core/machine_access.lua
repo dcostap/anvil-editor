@@ -1,4 +1,4 @@
--- Access to this PC's Machine server from other devices. The server listens on loopback only, so other
+-- Access to this PC's Machine server through Tailscale. The server listens on loopback, so tailnet
 -- devices reach it through Tailscale Serve: Tailscale takes connections on the PC's tailnet address and forwards
 -- them to the server's loopback port. Only devices in the user's tailnet reach that address.
 local core = require "core"

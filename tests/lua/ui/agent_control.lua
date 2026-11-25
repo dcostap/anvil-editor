@@ -415,6 +415,27 @@ test.describe("Agent editor control", function()
     end), false, "A stale request cannot target a replacement conversation")
   end)
 
+  test.it("names each agent by its Terminal Session, also when another Project names the sender", function()
+    local name = require("core.agent_name").for_terminal
+    local response = control:exchange("terminal-b", {instance = "pi-one", busy = false, receipts = {}, tasks = {}})
+    test.equal(response.name, name("terminal-b"), "Pi did not learn its own Agent Name")
+    control:exchange("terminal-a", {instance = "pi-a", busy = false, receipts = {}, tasks = {}})
+    test.equal(control:call("agent_read", {terminal = "terminal-b"}, "terminal-a").name, name("terminal-b"))
+    control:call("agent_send", {terminal = "terminal-b", instance = "pi-one", text = "Local", request_id = "local"},
+      "terminal-a")
+    control:call("agent_send", {terminal = "terminal-b", instance = "pi-one", text = "Remote", request_id = "remote"},
+      "machine:laptop/terminal-c", {terminal = "terminal-c", name = "chosen-name", other_project = true})
+    control:call("agent_send", {terminal = "terminal-b", instance = "pi-one", text = "Client", request_id = "client"},
+      "local")
+    local senders = {}
+    for _, command in ipairs(control:exchange("terminal-b", {instance = "pi-one", busy = false, receipts = {},
+        tasks = {}}).commands) do senders[command.text] = command.sender end
+    test.equal(senders.Local.name, name("terminal-a"))
+    test.is_nil(senders.Local.ambiguous)
+    test.equal(senders.Remote.name, name("terminal-c"), "A sender chose its own Agent Name")
+    test.is_nil(senders.Client.name, "A client without a Terminal got an Agent Name")
+  end)
+
   test.it("returns observed activity without treating stale commands as live work", function()
     control:exchange("terminal-b", {instance = "pi-one", busy = true, receipts = {}, tasks = {},
       session = "C:/sessions/pi-one.jsonl", capabilities = {transcript = true, activity = true},

@@ -22,6 +22,16 @@ test.describe("Terminal labels", function()
     test.equal(tab.display_name {name="notes.bat"}, "notes.bat", "a file Tab changed its name")
   end)
 
+  test.it("shows Pi's title without its Agent Name", function()
+    local title = "\u{03C0} - GLP4"
+    local record = {id = "one", title = title, state = "running", agent_app = "pi"}
+    test.equal(tab.display_name(tab.describe_session(record)), title)
+    record.title = "\u{280B} " .. title
+    local item = tab.describe_session(record)
+    test.equal(tab.display_name(item), record.title)
+    test.equal(tab.copy_text(item), title)
+  end)
+
   test.it("exposes the full terminal title on hover and clears it on leave", function()
     local title = [["C:\Program Files\Tools\build.exe" --target desktop]]
     local view = SidebarView(function() end)

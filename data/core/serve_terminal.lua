@@ -126,11 +126,8 @@ function terminal.new(server)
     end
   end
 
-  -- `terminal.list {project}` lists the running Terminal Sessions of a Project, newest first, with the record
-  -- fields that the Project Sidebar shows.
-  local function list(client, id, params)
-    local root = server.project_root(params.project)
-    if not root then return server.fail(client, id, "outside_project", "This Machine has no such Project") end
+  -- The running Terminal Sessions of a Project, newest first, with the record fields that the Project Sidebar shows.
+  local function sessions_of(root)
     local sessions = {}
     for _, name in ipairs(system.list_dir(USERDIR .. PATHSEP .. "terminal-sessions") or {}) do
       local record = read_record(name:match("^(%x+)%.lua$"))
@@ -142,8 +139,73 @@ function terminal.new(server)
         sessions[#sessions + 1] = session
       end
     end
-    table.sort(sessions, function(a, b) return (a.activity or 0) > (b.activity or 0) end)
-    server.reply(client, id, {result = {sessions = sessions}})
+    table.sort(sessions, function(a, b)
+      if (a.activity or 0) ~= (b.activity or 0) then return (a.activity or 0) > (b.activity or 0) end
+      return a.id < b.id
+    end)
+    return sessions
+  end
+
+  -- Each Project's last list gets a new revision when it changes. A waiting list request is answered when its
+  -- Project's list changes. Only a change in the session folder wakes the waits, so a waiting Client costs no
+  -- traffic.
+  local lists, waiters, watching = {}, {}, false
+  local function current(root)
+    local state = lists[root] or {revision = 0}
+    local sessions = sessions_of(root)
+    local text = common.serialize(sessions, {sort = true})
+    if text ~= state.text then
+      state = {revision = state.revision + 1, text = text, sessions = sessions}
+      lists[root] = state
+    end
+    return state
+  end
+
+  local function answer(waiter, state)
+    server.reply(waiter.client, waiter.id, {result = {sessions = state.sessions, revision = state.revision}})
+  end
+
+  local function watch()
+    if watching then return end
+    watching = true
+    local directory = USERDIR .. PATHSEP .. "terminal-sessions"
+    common.mkdirp(directory)
+    local dirwatch = require("core.dirwatch")()
+    dirwatch:watch(directory)
+    core.add_thread(function()
+      -- The first pass also finds a change from before the watch started.
+      local first = true
+      while #waiters > 0 do
+        if dirwatch:check(function() end) or first then
+          first = false
+          local states = {}
+          for i = #waiters, 1, -1 do
+            local waiter = waiters[i]
+            states[waiter.root] = states[waiter.root] or current(waiter.root)
+            if states[waiter.root].revision ~= waiter.known then
+              table.remove(waiters, i)
+              answer(waiter, states[waiter.root])
+            end
+          end
+        end
+        coroutine.yield(0.25)
+      end
+      dirwatch:unwatch(directory)
+      watching = false
+    end)
+  end
+
+  -- `terminal.list {project, known, wait}` lists the Project's sessions and gives the list's `revision`. With
+  -- `wait` and the current revision as `known`, the reply waits until the list changes.
+  local function list(client, id, params)
+    local root = server.project_root(params.project)
+    if not root then return server.fail(client, id, "outside_project", "This Machine has no such Project") end
+    local state = current(root)
+    if params.wait == true and params.known == state.revision then
+      waiters[#waiters + 1] = {client = client, id = id, root = root, known = state.revision}
+      return watch()
+    end
+    answer({client = client, id = id}, state)
   end
 
   local function valid_size(client, id, params)
@@ -244,6 +306,9 @@ function terminal.new(server)
   server.on_close(function(client)
     for _, state in pairs(links) do
       if state.client == client then remove(state) end
+    end
+    for i = #waiters, 1, -1 do
+      if waiters[i].client == client then table.remove(waiters, i) end
     end
   end)
 

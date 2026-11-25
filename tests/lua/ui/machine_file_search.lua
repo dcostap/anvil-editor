@@ -77,6 +77,7 @@ test.describe("File Search on a Machine", function()
     end
     project_files.invalidate(context.project)
     fs.use_local()
+    if context.restore_machine then context.restore_machine() end
     project_paths.configure_workspace {}
     core.projects, core.visited_files = context.projects, context.visited_files
     machine_server.stop(context.server)
@@ -105,6 +106,33 @@ test.describe("File Search on a Machine", function()
     end), "The editor did not find the Machine file reference")
     local opened = assert(target.activate(view, target, { placement = "new" }))
     test.ok(wait_until(function() return table.concat(opened.buffer.lines) == "Notes\n" end))
+  end)
+
+  test.it("finds and previews an Odin file in the Machine's saved Project Path", function(context)
+    local extra = context.root .. PATHSEP .. "lib"
+    local source = extra .. PATHSEP .. "core.odin"
+    write_file(source, "Wrong PC\n")
+    write_file(machine_copy(context, source), "package core\n")
+    write_file(context.user .. PATHSEP .. "storage" .. PATHSEP .. "ws" .. PATHSEP .. "project-1",
+      "return " .. common.serialize({path = context.project, project_paths = {entries = {{path = extra, label = "lib", role = "external"}}}}))
+    local mp = require "core.machine_project"
+    local original, current, paths, ready = mp.machine_file, mp.current, mp.paths, core.workspace_restored
+    context.restore_machine = function()
+      mp.machine_file, mp.current, mp.paths, core.workspace_restored = original, current, paths, ready
+      project_files.invalidate(extra)
+    end
+    core.workspace_restored = true
+    mp.machine_file = function() return machine_server.discovery_path(context.user) end
+    mp.use(mp.key("abcd", context.project))
+    test.ok(wait_until(function() return #project_paths.search_roots() == 2 end), "Missing Machine search root")
+    fuzzy_searcher.open(".odin")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return #file_rows(picker) == 1 end), "Missing Odin file")
+    test.same(file_rows(picker), {"core.odin"})
+    test.ok(wait_until(function()
+      local view = picker.preview_view
+      return view and view.buffer and table.concat(view.buffer.lines) == "package core\n"
+    end), "Preview did not read the Machine's copy")
   end)
 
   test.it("finds the Machine's files and opens the chosen file", function(context)

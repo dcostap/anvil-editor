@@ -2037,6 +2037,17 @@ test.describe("Terminal View", function()
     check_destination(3)
   end)
 
+  test.it("does not count a spinner frame as Terminal activity", function()
+    local view = terminal.open()
+    view.snapshot.title = "⠋ build"
+    view:get_activity()
+    view.activity = 1
+    view.snapshot.title = "⠙ build"
+    test.equal(view:get_activity(), 1)
+    view.snapshot.title = "⠙ test"
+    test.ok(view:get_activity() > 1)
+  end)
+
   test.it("opens a folder hyperlink in a File Tree with a normal click", function(context)
     context.link_cwd = system.getcwd()
     context.link_folder = USERDIR .. PATHSEP .. "terminal-folder-link"

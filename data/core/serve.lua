@@ -1,7 +1,9 @@
 -- `anvil serve [<project>...]`: the Machine server. It runs Anvil's Lua without a window.
 -- Without Projects, it serves the Projects of this user folder's Sidebar. One server runs for each user folder.
--- It listens on loopback only. Each Client sends `hello` first: the local owner with the token from the
--- discovery file, a paired device with its own token, and a new device with a pairing code.
+-- It listens on loopback. With LAN sharing on, it also listens on the local network, and a Client there must use TLS.
+-- A loopback Client can use TLS too: Tailscale Serve forwards the bytes unchanged. Each Client sends `hello` first:
+-- the local owner with the token from the discovery file, a paired device with its own token, and a new device with
+-- a pairing code.
 local common = require "core.common"
 local json = require "core.json"
 local machine = require "machine"
@@ -11,9 +13,10 @@ local net = require "net"
 local core = {threads = {}, background_threads = 0}
 package.loaded.core = core
 local PROTOCOL = 1
-local FEATURES = {"projects.list", "files.list", "files.changes", "files.stat", "files.list_dir", "files.mkdir", "files.move", "files.copy", "files.delete", "search.start", "search.read", "search.cancel", "files.read", "files.write", "files.save_result", "pairing.start", "devices.list", "devices.revoke"}
+local FEATURES = {"projects.list", "files.list", "files.changes", "files.stat", "files.list_dir", "files.mkdir", "files.move", "files.copy", "files.delete", "search.start", "search.read", "search.cancel", "files.read", "files.write", "files.save_result", "pairing.start", "devices.list", "devices.revoke", "sharing.get", "sharing.set"}
 -- Terminal hosts use ConPTY, so only a Windows Machine has Terminal Sessions.
 local SERVICES = {"core.serve_files", "core.serve_search", "core.serve_layout"}
+FEATURES[#FEATURES + 1] = "projects.paths"
 FEATURES[#FEATURES + 1] = "layout.get"
 FEATURES[#FEATURES + 1] = "layout.set"
 if PLATFORM == "Windows" then
@@ -22,13 +25,15 @@ if PLATFORM == "Windows" then
       "terminal.start"}) do
     FEATURES[#FEATURES + 1] = name
   end
+  -- `terminal.list` accepts `known` and `wait`. Older servers list at once, so their Clients list on a timer.
+  FEATURES[#FEATURES + 1] = "terminal.list.wait"
 end
 local MAX_CLIENTS, MAX_REQUEST_JSON, MAX_FILE, HELLO_TIMEOUT = 32, 64 * 1024, 16 * 1024 * 1024, 10
 local MAX_SAVES, PAIRING_TIME, PAIRING_ATTEMPTS, MAX_NAME = 1024, 300, 5, 100
 -- A View device only reads. These methods need Full control.
 local FULL_CONTROL = {["layout.set"] = true, ["files.write"] = true, ["files.mkdir"] = true, ["files.move"] = true,
   ["files.copy"] = true, ["files.delete"] = true, ["pairing.start"] = true, ["devices.list"] = true, ["devices.revoke"] = true,
-  ["terminal.start"] = true}
+  ["terminal.start"] = true, ["sharing.set"] = true}
 -- Tailscale Serve and other forwarders need a port that stays the same across restarts.
 local DEFAULT_PORT, OWNER_CHECK_SECONDS = 7690, 1
 if PLATFORM == "Windows" then
@@ -39,7 +44,11 @@ end
 -- A Client that does not read its replies holds them in memory. Above MAX_PENDING unsent bytes the server reads
 -- no more requests from it, and after STALL_SECONDS without progress it closes the connection.
 local MAX_PENDING, STALL_SECONDS = 64 * 1024 * 1024, 30
+-- The first byte of a TLS handshake. A Machine frame starts with its type, 1 or 2.
+local TLS_HANDSHAKE = 0x16
 local server, test_root, lose_reply, fixed_port, owner, owner_created, waiting
+-- `--test-lan-address <address>` replaces the address of all networks, so a test opens no port to the network.
+local lan_address = "0.0.0.0"
 
 -- A server often ends by a forced stop, and it logs little. So each record goes to disk at once.
 local function log(...)
@@ -207,6 +216,48 @@ local function open_listener(token)
   error("Cannot open the Machine server's listener: " .. tostring(err))
 end
 
+-- The server's TLS certificate stays in USERDIR, because paired Clients pin it.
+local function load_tls(directory)
+  local function read(name)
+    local file = io.open(directory .. PATHSEP .. name, "rb")
+    local bytes = file and file:read("*a")
+    if file then file:close() end
+    return bytes
+  end
+  local key, cert = read("tls-key.der"), read("tls-cert.der")
+  local identity = key and cert and net.tls_identity(key, cert)
+  if identity then return identity end
+  key, cert = assert(net.create_tls_identity())
+  write_file(directory .. PATHSEP .. "tls-key.der", key)
+  write_file(directory .. PATHSEP .. "tls-cert.der", cert)
+  log("Machine server made a new TLS certificate")
+  return assert(net.tls_identity(key, cert))
+end
+
+local function sharing_path()
+  return USERDIR .. PATHSEP .. "machine" .. PATHSEP .. "sharing.json"
+end
+
+-- Opens or closes the listener on the local network. Returns true, or nil and an error.
+local function share_on_lan(on)
+  if not on then
+    if server.lan then server.lan:close() end
+    server.lan = nil
+    -- Devices on the network lose access at once, as after a revocation.
+    for _, client in ipairs(server.clients) do
+      if client.lan then client.dead = true end
+    end
+    return true
+  end
+  if server.lan then return true end
+  local address = net.resolve_address(lan_address)
+  if not address or address:wait_until_resolved(5000) ~= "success" then return nil, "Cannot resolve " .. lan_address end
+  local listener, err = net.create_server(address, server.port)
+  if not listener then return nil, tostring(err) end
+  server.lan = listener
+  return true
+end
+
 local function reply(client, id, value, bytes)
   -- `--test-lose-reply <method>` does the first such request, then closes the connection without its reply.
   if lose_reply and lose_reply == client.method then
@@ -297,6 +348,61 @@ local function is_private(disk)
   return false
 end
 
+-- Read only host-owned Workspace slots. Never accept a list of roots from a Client.
+local path_states = {}
+local function slot_path(key)
+  return USERDIR .. PATHSEP .. "storage" .. PATHSEP .. "ws" .. PATHSEP .. common.encode_filename_component(key)
+end
+
+local function load_paths(root)
+  local selected = require("core.workspace_slots").matching(root, function(_, key)
+    local chunk = loadfile(slot_path(key), "t", {})
+    if chunk then
+      local ok, workspace = pcall(chunk)
+      if ok then return workspace end
+    end
+  end)[1]
+  local workspace = selected and selected.workspace or {}
+  local saved = workspace.project_paths or {}
+  local state = {entries = {}, root_read_only = saved.root_read_only or nil}
+  local roots = {}
+  local function add(entry)
+    if type(entry) ~= "table" or type(entry.path) ~= "string" or entry.path == "" then return end
+    local path = common.normalize_path(common.is_absolute_path(entry.path) and entry.path or root .. PATHSEP .. entry.path)
+    local disk = machine.final_path(disk_path(path))
+    local info = disk and system.get_file_info(disk)
+    if not info or info.type ~= "dir" or is_private(disk) then return end
+    if contains(root, path) and not contains(machine.final_path(disk_path(root)), disk) then return end
+    state.entries[#state.entries + 1] = {path = path, role = entry.role, label = entry.label,
+      read_only = entry.read_only, rank_penalty = entry.rank_penalty, filetree_style = entry.filetree_style}
+    if not contains(root, path) then roots[#roots + 1] = path end
+  end
+  for _, entry in ipairs(saved.entries or saved) do add(entry) end
+  for _, path in ipairs(workspace.directories or {}) do add({path = path, role = "external"}) end
+  local slot = selected and slot_path(selected.key)
+  local info = slot and system.get_file_info(slot)
+  path_states[root] = info and {roots = roots, slot = slot, size = info.size, modified = info.modified} or nil
+  return state
+end
+
+local function content_roots()
+  local roots = {}
+  for _, project in ipairs(projects()) do
+    local path = project.path
+    roots[#roots + 1] = path
+    local state = path_states[path]
+    if state then
+      local info = system.get_file_info(state.slot)
+      if not info or state.modified ~= info.modified or state.size ~= info.size then
+        load_paths(path)
+        state = path_states[path]
+      end
+      for _, extra in ipairs(state and state.roots or {}) do roots[#roots + 1] = extra end
+    end
+  end
+  return roots
+end
+
 -- Returns the absolute Machine path, or nil, an error code and a message.
 local function check_path(path)
   if type(path) ~= "string" or not common.is_absolute_path(path) then
@@ -310,8 +416,7 @@ local function check_path(path)
       or path:match("[ .]\\") or path:match("[ .]$") or common.path_has_windows_reserved_filename(path)) then
     return nil, "invalid_path", "Invalid Windows path"
   end
-  for _, project in ipairs(projects()) do
-    local root = project.path
+  for _, root in ipairs(content_roots()) do
     if contains(root, path) then
       local disk = resolved_disk(disk_path(path))
       if not disk then return nil, "invalid_path", "Cannot resolve the path" end
@@ -327,8 +432,8 @@ end
 -- True when a Project root is inside the path, so a change of the path changes that Project too.
 local function holds_project(path)
   local disk = resolved_disk(disk_path(path))
-  for _, project in ipairs(projects()) do
-    if contains(disk, machine.final_path(disk_path(project.path))) or contains(path, project.path) then return true end
+  for _, root in ipairs(content_roots()) do
+    if contains(disk, machine.final_path(disk_path(root))) or contains(path, root) then return true end
   end
   return false
 end
@@ -454,6 +559,24 @@ local function revoke_device(client, id, params)
   reply(client, id, {result = true})
 end
 
+local function sharing_state()
+  return {lan = server.lan ~= nil, port = server.port, error = server.lan_error}
+end
+
+-- `sharing.set {lan}` turns sharing on the local network on or off. The choice stays across restarts.
+local function set_sharing(client, id, params)
+  if type(params.lan) ~= "boolean" then return fail(client, id, "invalid_request", "lan must be true or false") end
+  local ok, err = share_on_lan(params.lan)
+  server.lan_error = not ok and err or nil
+  if not ok then
+    log("Machine server cannot share on the local network: %s", err)
+    return fail(client, id, "listen_failed", "Cannot listen on the local network: " .. err)
+  end
+  write_file(sharing_path(), json.encode {version = 1, lan = params.lan})
+  log("Machine server sharing on the local network: %s", tostring(params.lan))
+  reply(client, id, {result = sharing_state()})
+end
+
 local services = {}
 
 local function handle(client, id, body, bytes)
@@ -495,12 +618,19 @@ local function handle(client, id, body, bytes)
     return fail(client, id, "forbidden", "This device has View access")
   end
   if request.method == "projects.list" then return list_projects(client, id) end
+  if request.method == "projects.paths" then
+    local root = project_root(params.project)
+    if not root then return fail(client, id, "not_a_project", "Unknown Project") end
+    return reply(client, id, {result = load_paths(root)})
+  end
   if request.method == "files.read" then return read_file(client, id, params) end
   if request.method == "files.write" then return write_file_request(client, id, params, bytes) end
   if request.method == "files.save_result" then return save_result(client, id, params) end
   if request.method == "pairing.start" then return start_pairing(client, id, params) end
   if request.method == "devices.list" then return list_devices(client, id) end
   if request.method == "devices.revoke" then return revoke_device(client, id, params) end
+  if request.method == "sharing.get" then return reply(client, id, {result = sharing_state()}) end
+  if request.method == "sharing.set" then return set_sharing(client, id, params) end
   if services[request.method] then return services[request.method](client, id, params, bytes) end
   fail(client, id, "unknown_method", "This Machine has no method " .. request.method)
 end
@@ -540,18 +670,35 @@ local function poll_client(client)
     local chunk = client.socket:read(65536)
     if not chunk then client.dead = true; return end
     if chunk == "" then return end
+    if client.first_read then
+      client.first_read = nil
+      if chunk:byte(1) == TLS_HANDSHAKE then
+        -- The handshake reads these bytes, and the next reads give the requests.
+        client.socket:start_tls(server.tls, chunk)
+        chunk = ""
+      elseif client.lan then
+        log("Machine server refused a Client on the local network without TLS")
+        client.dead = true
+        return
+      end
+    end
     client.decoder:feed(chunk)
   end
 end
 
-local function poll()
+local function accept(listener, lan)
   for _ = 1, 4 do
     if #server.clients >= MAX_CLIENTS then break end
-    local socket = server.listener:accept()
+    local socket = listener:accept()
     if not socket then break end
     server.clients[#server.clients + 1] = {socket = socket, decoder = machine.decoder(MAX_REQUEST_JSON, 0),
-      deadline = system.get_time() + HELLO_TIMEOUT}
+      deadline = system.get_time() + HELLO_TIMEOUT, first_read = true, lan = lan}
   end
+end
+
+local function poll()
+  accept(server.listener, false)
+  if server.lan then accept(server.lan, true) end
   local now = system.get_time()
   for i = #server.clients, 1, -1 do
     local client = server.clients[i]
@@ -576,11 +723,28 @@ local function start(listed)
     discovery = directory .. PATHSEP .. "server.json", owner_check = system.get_time(), on_close = {},
     private = {}}
   local user = system.absolute_path(USERDIR) or USERDIR
-  for _, name in ipairs({"machine", "machines", "control"}) do
+  for _, name in ipairs({"machine", "machines", "control", "storage" .. PATHSEP .. "ws"}) do
     server.private[#server.private + 1] = assert(resolved_disk(user .. PATHSEP .. name), "Cannot resolve credential folder")
   end
   server.devices = load_devices(server.devices_path)
+  server.tls = load_tls(directory)
+  local file = io.open(sharing_path(), "rb")
+  local ok, sharing = pcall(json.decode, file and file:read("*a") or "")
+  if file then file:close() end
+  if ok and type(sharing) == "table" and sharing.lan == true then
+    local shared, err = share_on_lan(true)
+    if not shared then
+      server.lan_error = err
+      log("Machine server cannot share on the local network: %s", err)
+    end
+  end
   local service_context = {reply = reply, fail = fail, check_path = check_path, disk_path = disk_path,
+    content_root = function(path)
+      if type(path) ~= "string" then return end
+      for _, root in ipairs(content_roots()) do
+        if common.path_equals(root, path) then return check_path(root) end
+      end
+    end,
     project_root = project_root, holds_project = holds_project, log = log,
     private = server.private, on_close = function(fn) server.on_close[#server.on_close + 1] = fn end}
   for _, module in ipairs(SERVICES) do
@@ -603,6 +767,8 @@ function core.init()
       test_root = system.absolute_path(ARGS[first + 1] or ".")
     elseif ARGS[first] == "--test-lose-reply" then
       lose_reply = ARGS[first + 1]
+    elseif ARGS[first] == "--test-lan-address" then
+      lan_address = ARGS[first + 1]
     elseif ARGS[first] == "--port" or ARGS[first] == "--owner" then
       local value = tonumber(ARGS[first + 1])
       if not value then
@@ -648,6 +814,7 @@ local function shutdown()
   if not server then return end
   for _, client in ipairs(server.clients) do client.socket:close() end
   server.listener:close()
+  if server.lan then server.lan:close() end
   -- Another server can have replaced the discovery file. Remove only this server's file.
   local file = io.open(server.discovery, "rb")
   local found = file and json.decode(file:read("*a") or "")

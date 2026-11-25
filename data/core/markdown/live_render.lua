@@ -7641,14 +7641,18 @@ local function bind_link_index(view)
       core.log_quiet("Markdown Live Preview deferred link refresh until vault publication")
       return
     end
-    local own_update = reason == "buffer-updated" and detail.buffer == view.buffer
-    if own_update and owner.link_targets_changed_revision ~= view.buffer.text_revision then
+    local buffer_update = reason == "buffer-updated"
+    -- Links reach a note by its name, an alias, a heading or a block ID. An
+    -- edit that keeps all of them cannot change where any link resolves.
+    -- The edited note's own lines refresh through its semantic publication.
+    if buffer_update and not detail.aliases_changed and not detail.subtargets_changed then
       core.log_quiet(
-        "Markdown Live Preview skipped self-overlay link refresh for ordinary edit revision=%d",
-        view.buffer.text_revision
+        "Markdown Live Preview skipped vault update without new link targets: %s",
+        tostring(detail.path)
       )
       return
     end
+    local own_update = buffer_update and detail.buffer == view.buffer
     local had_pending_resolution = owner.link_resolution_pending == true
     if reason == "ready" then owner.link_resolution_pending = nil end
     if reason == "ready" and detail and (detail.notes_rebuilt or 0) == 0
@@ -7661,8 +7665,28 @@ local function bind_link_index(view)
     end
     -- Another note's edit only changes links that reach that note. They
     -- name it by file name or alias, unless its aliases changed.
-    local names = reason == "buffer-updated" and not own_update and not detail.aliases_changed
+    local names = buffer_update and not own_update and not detail.aliases_changed
       and note_link_names(index, detail.path)
+    -- A heading or block change only reaches links with a `#` fragment.
+    local fragments_only = buffer_update and not detail.aliases_changed
+    local function depends(source)
+      if fragments_only and not source:find("#", 1, true) then return false end
+      return not names or mentions_link_name(source, names)
+    end
+    -- A reference use names only its label. Its definition names the target.
+    local labels = {}
+    local reference_cache = view.__markdown_live_reference_cache
+    for label, definition in pairs(reference_cache and reference_cache.definitions or {}) do
+      if depends(definition.destination) then labels[#labels + 1] = "[" .. label .. "]" end
+    end
+    local function uses_label(source)
+      if #labels == 0 then return false end
+      source = source:lower()
+      for _, label in ipairs(labels) do
+        if source:find(label, 1, true) then return true end
+      end
+      return false
+    end
     local refresh_started = system.get_time()
     perf_frame_add("markdown_live_link_index_invalidations", 1)
     perf_detail(
@@ -7682,7 +7706,7 @@ local function bind_link_index(view)
       local dependent = source:find("[", 1, true) ~= nil
         or source:find("](", 1, true) ~= nil
         or source:find("<http", 1, true) ~= nil
-      if dependent and (not names or mentions_link_name(source, names)) then
+      if dependent and (depends(source) or uses_label(source)) then
         if line2 and line == line2 + 1 then
           line2 = line
         else
@@ -7706,12 +7730,10 @@ local function bind_link_index(view)
     end
     local invalidate_opts = dependent_lines > linewrapping.MAX_SYNC_WRAP_LINES
       and { defer_wrapped_reconstruction = true, update_visible = true } or nil
-    for _, range in ipairs(ranges) do
-      -- Keep the committed rows for unrelated text. A full wrapped rebuild
-      -- made each edited heading reconstruct the complete document when its
-      -- vault target changed.
-      view:invalidate_line_render(PROVIDER_ID, range.line1, range.line2, invalidate_opts)
-    end
+    -- Keep the committed rows for unrelated text. A full wrapped rebuild
+    -- made each edited heading reconstruct the complete document when its
+    -- vault target changed.
+    view:invalidate_line_render_ranges(PROVIDER_ID, ranges, invalidate_opts)
     view:invalidate_visual_metric_ranges(PROVIDER_ID, ranges)
     core.log_quiet(
       "Markdown Live Preview refreshed %d link-dependent range(s) after vault %s%s in %.1fms",

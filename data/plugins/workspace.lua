@@ -47,6 +47,7 @@ end
 
 local loaded_workspace_key
 local loaded_workspace_path
+local client_path_settings
 local suppress_next_exit_workspace_save = false
 -- False while a Project's Workspace restores. Saves during use would replace
 -- the saved state with the partly restored one.
@@ -60,61 +61,11 @@ local function empty_window_requested()
   return core.empty_window_request == true
 end
 
-local function workspace_key_matches_basename(key, basename)
-  local prefix = key:sub(1, #basename)
-  if PATHSEP == "\\" then
-    return prefix:lower() == basename:lower()
-  end
-  return prefix == basename
-end
-
-
-local function workspace_key_id(key, basename)
-  if not workspace_key_matches_basename(key, basename) then return nil end
-  return tonumber(key:sub(#basename + 1):match("^-(%d+)$"))
-end
-
-
-local function workspace_key_entries_for(project_dir)
-  local basename = common.basename(project_dir)
-  local entries = {}
-  for _, key in ipairs(storage.keys(STORAGE_MODULE) or {}) do
-    local id = workspace_key_id(key, basename)
-    if id then
-      entries[#entries + 1] = { key = key, id = id }
-    end
-  end
-  table.sort(entries, function(a, b) return a.id < b.id end)
-  return entries
-end
-
-
-local function count_saved_views(node)
-  if type(node) ~= "table" then return 0 end
-  return type(node.panes) == "table" and #node.panes or 0
-end
-
-
+local slots = require "core.workspace_slots"
+local workspace_key_entries_for = slots.for_project
+local count_saved_views = slots.count_views
 local function matching_workspace_entries(project_dir)
-  local entries = {}
-  for _, entry in ipairs(workspace_key_entries_for(project_dir)) do
-    local workspace = storage.load(STORAGE_MODULE, entry.key)
-    if type(workspace) == "table" and common.path_equals(workspace.path, project_dir) then
-      entry.workspace = workspace
-      entry.saved_view_count = count_saved_views(workspace.pane_state)
-      entries[#entries + 1] = entry
-    end
-  end
-  table.sort(entries, function(a, b)
-    local a_nonempty = a.saved_view_count > 0
-    local b_nonempty = b.saved_view_count > 0
-    if a_nonempty ~= b_nonempty then return a_nonempty end
-    if a.saved_view_count ~= b.saved_view_count then
-      return a.saved_view_count > b.saved_view_count
-    end
-    return a.id < b.id
-  end)
-  return entries
+  return slots.matching(project_dir, storage.load)
 end
 
 
@@ -159,6 +110,7 @@ end
 
 local function consume_workspace(project_dir)
   local entries = matching_workspace_entries(project_dir)
+  client_path_settings = nil
   if #entries == 0 then
     loaded_workspace_key = nil
     loaded_workspace_path = nil
@@ -166,6 +118,7 @@ local function consume_workspace(project_dir)
   end
 
   local chosen = entries[1]
+  if machine_project.current then client_path_settings = chosen.workspace.project_paths end
   -- Keep the chosen workspace file durable. Local Project Paths are stored in
   -- workspace state; deleting the restored file makes them depend on a later
   -- clean exit/save and loses them after restart/crash. Only remove duplicate
@@ -330,7 +283,7 @@ local function save_workspace(during_use)
     version = 1,
     path = project_dir,
     pane_state = pane_state,
-    project_paths = project_paths.save_workspace_state(),
+    project_paths = not machine_project.paths and project_paths.save_workspace_state() or client_path_settings,
     language_modes = language_mode.save_workspace_state(),
     visited_files = core.prune_visited_files and core.prune_visited_files() or core.visited_files,
     diff_layout = diffview.save_workspace_state(),
@@ -424,6 +377,11 @@ end
 
 local function workspace_ready()
   core.workspace_restored = true
+  -- The Machine can answer while a View yields during Workspace restore.
+  if machine_project.paths then
+    local _, changed = project_paths.load_workspace_state(machine_project.paths)
+    if changed then refresh_project_path_consumers("Machine Project Paths") end
+  end
   if system.is_hosted_surface() and not empty_window_requested() and core.root_project() then
     require("core.shared_layout").start(core.root_project().path)
   end
@@ -445,8 +403,8 @@ local function load_workspace()
       diffview.load_workspace_state(workspace and workspace.diff_layout)
       language_mode.load_workspace_state(workspace and workspace.language_modes)
       local _, project_paths_changed = project_paths.load_workspace_state(
-        workspace and workspace.project_paths,
-        workspace and workspace.directories
+        machine_project.paths or workspace and workspace.project_paths,
+        not machine_project.paths and workspace and workspace.directories
       )
       if project_paths_changed then
         refresh_project_path_consumers("workspace load")

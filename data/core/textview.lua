@@ -2336,6 +2336,50 @@ function TextView:invalidate_line_render(_provider_id, line1, line2, opts)
   end
 end
 
+---Invalidate the plans of several line ranges `{ line1 = , line2 = }`.
+---The wrapped layout updates once for all ranges. Each sliced rebuild of a
+---short note can finish at once, so a rebuild per range repeated the whole
+---note for every link line.
+function TextView:invalidate_line_render_ranges(provider_id, ranges, opts)
+  if #ranges == 0 then return end
+  opts = opts or {}
+  local lines = 0
+  for _, range in ipairs(ranges) do lines = lines + range.line2 - range.line1 + 1 end
+  if not (opts.defer_wrapped_reconstruction or lines > MAX_SYNC_LINE_RENDER_WRAP_LINES)
+    or not self.wrapped_settings or self.__line_render_wrap_invalidating
+    or self.__presentation_reload_frozen
+  then
+    for _, range in ipairs(ranges) do
+      self:invalidate_line_render(provider_id, range.line1, range.line2, opts)
+    end
+    return
+  end
+  local previous_generation = self.__line_render_invalidation_generation or 0
+  self.__line_render_wrap_invalidating = true
+  for _, range in ipairs(ranges) do
+    self:invalidate_line_render(provider_id, range.line1, range.line2)
+  end
+  -- A pending rebuild takes every range as a repair. Otherwise start one.
+  local rebased = true
+  for _, range in ipairs(ranges) do
+    rebased = rebased and linewrapping.invalidate_async_range(
+      self, range.line1, range.line2, previous_generation
+    )
+    previous_generation = self.__line_render_invalidation_generation
+  end
+  if not rebased or opts.on_wrapped_reconstructed then
+    perf_frame_add("linewrapping_async_line_render_invalidation_calls", 1)
+    linewrapping.reconstruct_breaks_async(
+      self, self:get_font(), self:compute_wrap_width(), {
+        on_complete = opts.on_wrapped_reconstructed,
+        update_visible = opts.update_visible,
+      }
+    )
+  end
+  self.__line_render_wrap_invalidating = nil
+  self.__line_render_wrap_change = nil
+end
+
 function TextView:line_render_provider_entries()
   if not self.__line_render_provider_entries then
     self.__line_render_provider_entries = sorted_inline_provider_entries(self.line_render_providers)
