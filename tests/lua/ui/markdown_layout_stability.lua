@@ -232,6 +232,37 @@ test.describe("Markdown layout stability", function()
     same_position(position(view, 300, 1), before, "heading link refresh")
   end)
 
+  test.it("wraps only the edited lines when typing at several carets", function(context)
+    local buffer, lines = fixture("multi-caret-wrap-layout")
+    for line = #lines + 1, 600 do
+      lines[line] = string.rep("More ordinary paragraph content. ", 8)
+    end
+    buffer:insert(1, 1, table.concat(lines, "\n"))
+    local view = make_editor(context, buffer, 420, 400)
+    core.set_active_view(view)
+    buffer:set_selection(100, #buffer.lines[100])
+    for line = 101, 107 do buffer:add_selection(line, #buffer.lines[line]) end
+    prepare(view)
+
+    local rebuilds = 0
+    local reconstruct, reconstruct_async = wrapping.reconstruct_breaks, wrapping.reconstruct_breaks_async
+    wrapping.reconstruct_breaks = function(...) rebuilds = rebuilds + 1 return reconstruct(...) end
+    wrapping.reconstruct_breaks_async = function(...) rebuilds = rebuilds + 1 return reconstruct_async(...) end
+    local ok, err = pcall(view.on_text_input, view, " typed at each caret")
+    wrapping.reconstruct_breaks, wrapping.reconstruct_breaks_async = reconstruct, reconstruct_async
+    test.ok(ok, err)
+    test.equal(rebuilds, 0, "typing at 8 carets rewrapped the whole note")
+
+    ready(model.peek(buffer))
+    wrapping.complete_async_reconstruction(view)
+    prepare(view)
+    local typed = { position(view, 104, #buffer.lines[104]), position(view, 300, 1) }
+    wrapping.reconstruct_breaks(view, view.wrapped_settings.font, view.wrapped_settings.width)
+    prepare(view)
+    same_position(position(view, 104, #buffer.lines[104]), typed[1], "edited line after a full rewrap")
+    same_position(position(view, 300, 1), typed[2], "later line after a full rewrap")
+  end)
+
   test.it("keeps fenced code visible after the edited Markdown parse publishes", function(context)
     local buffer, lines = fixture("local-fence-publication-layout")
     for line = #lines + 1, 600 do
