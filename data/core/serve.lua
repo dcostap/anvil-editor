@@ -22,6 +22,8 @@ if PLATFORM == "Windows" then
       "terminal.start"}) do
     FEATURES[#FEATURES + 1] = name
   end
+  -- `terminal.list` accepts `known` and `wait`. Older servers list at once, so their Clients list on a timer.
+  FEATURES[#FEATURES + 1] = "terminal.list.wait"
 end
 local MAX_CLIENTS, MAX_REQUEST_JSON, MAX_FILE, HELLO_TIMEOUT = 32, 64 * 1024, 16 * 1024 * 1024, 10
 local MAX_SAVES, PAIRING_TIME, PAIRING_ATTEMPTS, MAX_NAME = 1024, 300, 5, 100

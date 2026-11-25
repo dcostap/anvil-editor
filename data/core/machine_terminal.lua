@@ -174,16 +174,25 @@ local function sidebar_item(session)
 end
 
 -- The Terminal Sessions that the Machine of `client` lists for `project`, newest first, as Project Sidebar items.
--- The first call starts a list every 2 seconds while the Machine is connected. Returns nil before the first list.
--- A Machine without a Terminal service lists nothing.
+-- The first call starts listing while the Machine is connected. Returns nil before the first list. A Machine without
+-- a Terminal service lists nothing. Each list waits on the Machine until its sessions change, at most one list each
+-- LIST_INTERVAL. An older Machine answers at once, so it gets a list each LIST_INTERVAL.
 function machine_terminal.sessions(client, project)
   if watched == client then return listed end
   watched, listed, closing = client, nil, {}
   core.add_thread(function()
+    -- The Machine's revision of the last list, for this connection only.
+    local known, connection
     while watched == client and client.state ~= "closed" do
       if client.state == "ready" then
+        if connection ~= client.connections then known, connection = nil, client.connections end
+        local waits = false
+        for _, method in ipairs(client.features or {}) do waits = waits or method == "terminal.list.wait" end
         local before = revision
-        local err, result = call(client, "terminal.list", {project = project})
+        local err, result = call(client, "terminal.list",
+          {project = project, known = waits and known or nil, wait = waits and known ~= nil or nil})
+        -- A list from before a close finished is old. The next list does not wait.
+        known = not err and before == revision and tonumber(result.revision) or nil
         if watched ~= client then return end
         if err and not TRANSPORT[err.code] then
           core.log_quiet("Machine Terminal Sessions are not listed: %s %s", tostring(err.code), tostring(err.message))
