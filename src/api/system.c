@@ -2716,11 +2716,13 @@ static int f_test_surface_failure(lua_State *L) {
   luaL_argcheck(L, enabled && !strcmp(enabled, "1") && anvil_hosted_surface_active(), 1, "isolated hosted surface probe is disabled");
   const char *fault = luaL_checkstring(L, 1);
   luaL_argcheck(L,
-                !strcmp(fault, "device") || !strcmp(fault, "stale") ||
+                !strcmp(fault, "device") || !strcmp(fault, "texture") || !strcmp(fault, "stale") ||
                     !strcmp(fault, "malformed") || !strcmp(fault, "project-release") || !strcmp(fault, "window-size"),
                 1, "unknown surface fault");
   if (!strcmp(fault, "device"))
     anvil_d3d11_test_sync_failure(false);
+  else if (!strcmp(fault, "texture"))
+    anvil_d3d11_test_texture_failure();
   else if (!strcmp(fault, "window-size"))
     anvil_hosted_surface_test_window_size();
   else if (!strcmp(fault, "project-release")) {

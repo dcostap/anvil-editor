@@ -280,6 +280,8 @@ if project:find("/driver$", 1) then
             bounds[0].right - bounds[0].left + 40, bounds[0].bottom - bounds[0].top + 30, 0x14)
         end
         save(root .. "/fault-go.lua", {continue = true})
+        local hosted_gpu_fault = fault == "device" or fault == "texture"
+          or (fault == "project-release" and os.getenv("ANVIL_RENDERER") ~= "software")
         if fault == "stale" or fault == "busy" then
           assert(wait_for(function() return load(root .. "/fault-sent.lua") end, 5))
           local acknowledgement = fault == "stale" and "Shell discarded stale frame:" or "Shell frame retry started;"
@@ -298,9 +300,9 @@ if project:find("/driver$", 1) then
           local record = trace():sub(trace_start + 1):match("Shell discarded stale frame:[^\n]*")
           assert(not record, "the shell refused frames after the hidden window changed size: " .. tostring(record))
           save(root .. "/continue.lua", {continue = true})
-        elseif fault == "present" or fault == "resize" or fault == "release" or fault == "device" then
+        elseif fault == "present" or fault == "resize" or fault == "release" or hosted_gpu_fault then
           -- A lost GPU device gets a new device. The Project keeps running and presents again.
-          local mark = fault == "device" and "D3D11 device lost" or "Shell rebuilt GPU presentation"
+          local mark = hosted_gpu_fault and "D3D11 device lost" or "Shell rebuilt GPU presentation"
           local opened = "Shell opened surface Local\\AnvilSurface-" .. state.pid .. "-"
           assert(wait_for(function()
             local text = trace():sub(trace_start + 1)
@@ -1063,7 +1065,7 @@ else
           assert(wait_for(function() return draws > drawn end, 5), "the Project did not draw")
         end
         core.root_panel.draw = draw
-      elseif fault == "device" or fault == "project-release" then
+      elseif fault == "device" or fault == "texture" or fault == "project-release" then
         system.test_surface_failure(fault)
         local view = core.open_file(project .. "/edited.txt")
         view.buffer:insert(1, 1, "fault")

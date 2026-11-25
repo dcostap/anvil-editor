@@ -177,6 +177,7 @@ typedef struct D3D11Stats {
 
 typedef struct D3D11State {
   bool attempted_init;
+  Uint64 hosted_retry_after;
   /* Creates the device while Lua starts. The first device use waits for it. */
   SDL_Thread *prewarm;
   bool available;
@@ -562,6 +563,15 @@ static void d3d11_reset_device(void) {
   g_d3d11.attempted_init = false;
 }
 
+/* A failed shared resource does not break the pipe. Rebuild it on a fresh device.
+ * Limit repeated rebuilds while the driver is unavailable; software frames still use the pipe. */
+static void d3d11_reset_hosted_device(const char *operation, HRESULT hr) {
+  SDL_Log("D3D11 shared %s failed: HRESULT=0x%08lx removal_reason=0x%08lx", operation,
+          (unsigned long)hr, (unsigned long)g_d3d11.device->lpVtbl->GetDeviceRemovedReason(g_d3d11.device));
+  d3d11_reset_device();
+  if (!g_d3d11.hosted_retry_after) g_d3d11.hosted_retry_after = 1;
+}
+
 bool anvil_d3d11_enabled(void) {
   /* One runtime renderer switch:
      - unset / "d3d11" / "auto" / "1" => D3D11 command renderer
@@ -792,8 +802,14 @@ static void d3d11_join_prewarm(void) {
 static bool d3d11_init(void) {
   d3d11_join_prewarm();
   if (g_d3d11.attempted_init) return g_d3d11.available;
-  g_d3d11.attempted_init = true;
-  return d3d11_create_device();
+  if (g_d3d11.hosted_retry_after) {
+    Uint64 now = SDL_GetTicks();
+    if (now < g_d3d11.hosted_retry_after) return false;
+    g_d3d11.hosted_retry_after = now + 1000;
+  }
+  bool ready = d3d11_create_device();
+  g_d3d11.attempted_init = ready || !g_d3d11.hosted_retry_after;
+  return ready;
 }
 
 static bool d3d11_ensure_common_pipeline(void) {
@@ -950,6 +966,14 @@ static void d3d11_release_window_buffers(D3D11Window *w) {
   }
 }
 
+static bool test_texture_failure;
+void anvil_d3d11_test_texture_failure(void) {
+  if (!SDL_getenv("ANVIL_SURFACE_FAULT_PROBE")) return;
+  for (D3D11Window *w = g_d3d11.windows; w; w = w->next)
+    if (w->hosted) d3d11_release_window_buffers(w);
+  test_texture_failure = true;
+}
+
 /* The hosted surface grows with slack, so a live resize reuses one shared texture.
  * Frames publish their used size; the shell copies only that region. */
 static bool d3d11_create_hosted_buffers(D3D11Window *w, int width, int height) {
@@ -967,7 +991,8 @@ static bool d3d11_create_hosted_buffers(D3D11Window *w, int width, int height) {
   desc.SampleDesc.Count = 1;
   desc.Usage = D3D11_USAGE_DEFAULT;
   desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-  HRESULT hr = d3d11_create_texture(&desc, NULL, &w->backbuffer);
+  HRESULT hr = test_texture_failure ? DXGI_ERROR_DEVICE_REMOVED : d3d11_create_texture(&desc, NULL, &w->backbuffer);
+  test_texture_failure = false;
   if (SUCCEEDED(hr)) {
     hr = g_d3d11.device->lpVtbl->CreateRenderTargetView(g_d3d11.device,
                                                          (ID3D11Resource *)w->backbuffer,
@@ -999,7 +1024,7 @@ static bool d3d11_create_hosted_buffers(D3D11Window *w, int width, int height) {
   SAFE_RELEASE(resource);
   if (FAILED(hr)) {
     d3d11_release_window_buffers(w);
-    anvil_hosted_surface_render_failed("Project shared GPU texture creation failed");
+    d3d11_reset_hosted_device("texture creation", hr);
     return false;
   }
   w->width = width;
@@ -2273,10 +2298,8 @@ static bool d3d11_publish_hosted_frame(D3D11Window *w) {
   if (!acquired) {
     g_d3d11.stats.frame.fail_reason = "hosted_sync";
     d3d11_stats_end(false, FAILED(hr) ? hr : E_ABORT);
-    if (d3d11_device_lost(hr))
-      d3d11_reset_device();
-    else if (hr != WAIT_TIMEOUT && hr != DXGI_ERROR_WAIT_TIMEOUT)
-      anvil_hosted_surface_render_failed("Project shared GPU mutex failed");
+    if (hr != WAIT_TIMEOUT && hr != DXGI_ERROR_WAIT_TIMEOUT)
+      d3d11_reset_hosted_device("mutex", hr);
     return false;
   }
   if (d3d11_should_clear_state_after_present()) {

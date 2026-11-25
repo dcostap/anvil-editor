@@ -373,10 +373,6 @@ bool anvil_hosted_surface_timing_capture(const char *path) {
   return true;
 }
 bool anvil_hosted_surface_sidebar(void) { return hosted.active && hosted.sidebar; }
-void anvil_hosted_surface_render_failed(const char *cause) {
-  SDL_SetAtomicInt(&hosted.render_failed, 1);
-  signal_loss(cause, ANVIL_SURFACE_MSG_FRAME, 0);
-}
 uint32_t anvil_hosted_surface_shell_pid(void) { return hosted.shell_pid; }
 void anvil_hosted_surface_controls(int *x, int *y, int *w, int *h) {
   *x = view->config.controls_x; *y = view->config.controls_y;
@@ -1670,6 +1666,7 @@ bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surf
     SetLastError(ERROR_NOT_OWNER);
   }
   if (!released) {
+    SDL_SetAtomicInt(&hosted.render_failed, 1);
     signal_loss("Project shared memory mutex release failed", ANVIL_SURFACE_MSG_FRAME, 0);
     return false;
   }
@@ -1844,7 +1841,6 @@ void anvil_hosted_surface_close_decision(AnvilSurfaceCloseDecision decision) { (
 bool anvil_hosted_surface_terminal_quit_query(void) { return false; }
 void anvil_hosted_surface_terminal_quit_choice(AnvilSurfaceTerminalQuit choice) { (void)choice; }
 void anvil_hosted_surface_dialog_result_failed(void) {}
-void anvil_hosted_surface_render_failed(const char *cause) { (void)cause; }
 void anvil_hosted_surface_test_packet(bool stale) { (void)stale; }
 void anvil_hosted_surface_test_memory_release_failure(void) {}
 void anvil_hosted_surface_test_window_size(void) {}

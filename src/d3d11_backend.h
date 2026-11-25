@@ -17,6 +17,7 @@ bool anvil_d3d11_enabled(void);
 /* Starts device creation on a thread. The first frame waits for it. */
 void anvil_d3d11_prewarm(void);
 void anvil_d3d11_test_sync_failure(bool release);
+void anvil_d3d11_test_texture_failure(void);
 bool anvil_d3d11_is_present_paced(void);
 double anvil_d3d11_last_present_ms(void);
 int anvil_d3d11_last_sync_interval(void);
@@ -77,6 +78,7 @@ void anvil_d3d11_shutdown(void);
 static inline bool anvil_d3d11_enabled(void) { return false; }
 static inline void anvil_d3d11_prewarm(void) {}
 static inline void anvil_d3d11_test_sync_failure(bool release) { (void)release; }
+static inline void anvil_d3d11_test_texture_failure(void) { }
 static inline bool anvil_d3d11_is_present_paced(void) { return false; }
 static inline double anvil_d3d11_last_present_ms(void) { return 0.0; }
 static inline int anvil_d3d11_last_sync_interval(void) { return 0; }

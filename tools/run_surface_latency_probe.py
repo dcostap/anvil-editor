@@ -156,7 +156,7 @@ def main() -> int:
         "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close",
         "fault-alloc", "fault-event", "fault-window-size", "fault-open", "fault-acquire", "fault-present", "fault-resize",
         "fault-write", "fault-pipe", "fault-busy", "fault-stale", "fault-malformed", "fault-device",
-        "fault-startup", "fault-release", "fault-project-release", "fault-pipe-force-close",
+        "fault-startup", "fault-release", "fault-project-release", "fault-texture", "fault-pipe-force-close",
         "probe-exit-error", "startup-reader", "startup-writer", "startup-timer", "restart-startup-timer",
         "hidden-render", "hidden-close", "hidden-startup", "hidden-close-cancel",
         "loaded-switch", "loaded-launch", "loaded-restart", "identity-trailing", "identity-cwd",
