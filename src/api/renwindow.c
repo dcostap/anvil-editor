@@ -169,6 +169,13 @@ static int f_request_frame_capture(lua_State *L) {
   }
 }
 
+/* Test hook: the next frame redraws the whole window. */
+static int f_renwin_invalidate(lua_State *L) {
+  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  rencache_invalidate(&window_renderer->cache);
+  return 0;
+}
+
 static const luaL_Reg renwindow_lib[] = {
   { "create",           f_renwin_create     },
   { "__gc",             f_renwin_gc         },
@@ -177,6 +184,7 @@ static const luaL_Reg renwindow_lib[] = {
   { "get_refresh_rate", f_get_refresh_rate  },
   { "get_color",        f_get_color         },
   { "request_frame_capture", f_request_frame_capture },
+  { "_invalidate",      f_renwin_invalidate },
   { "_persist",         f_renwin_persist    },
   { "_restore",         f_renwin_restore    },
   {NULL, NULL}
