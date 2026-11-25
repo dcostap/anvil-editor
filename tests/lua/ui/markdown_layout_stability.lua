@@ -183,7 +183,8 @@ test.describe("Markdown layout stability", function()
 
     view:on_text_input("x")
     local link_index = markdown.vault_index.index_for_path(buffer.abs_filename)
-    link_index:notify("buffer-updated", { buffer = buffer, path = buffer.abs_filename })
+    link_index:notify("buffer-updated",
+      { buffer = buffer, path = buffer.abs_filename, aliases_changed = true })
     ready(model.peek(buffer))
     prepare(view)
     same_position(position(view, 100, 1), before, "link refresh")
@@ -197,7 +198,8 @@ test.describe("Markdown layout stability", function()
       lines[line] = string.rep("More ordinary paragraph content. ", 8)
     end
     -- Separate task lines each form one link-dependent range.
-    for line = 3, 600, 3 do lines[line] = "- [ ] task " .. line end
+    for line = 3, 600, 3 do lines[line] = "- [ ] task " .. line .. " [[#Heading 1]]" end
+    lines[302] = "- [ ] plain task"
     buffer:insert(1, 1, table.concat(lines, "\n"))
     local view = make_editor(context, buffer, 420, 400)
     core.set_active_view(view)
@@ -206,6 +208,7 @@ test.describe("Markdown layout stability", function()
     local before = position(view, 300, 1)
 
     view:on_text_input("x")
+    local link_plan, task_plan = view:get_line_render(300), view:get_line_render(302)
     -- An idle UI gives a slice enough time to finish this note's rebuild.
     local co_max_time = core.co_max_time
     core.co_max_time = 1
@@ -216,17 +219,17 @@ test.describe("Markdown layout stability", function()
       return reconstruct(...)
     end
     local link_index = markdown.vault_index.index_for_path(buffer.abs_filename)
-    local ok, err = pcall(link_index.notify, link_index, "buffer-updated",
-      { buffer = buffer, path = buffer.abs_filename })
+    link_index:notify("buffer-updated",
+      { buffer = buffer, path = buffer.abs_filename, subtargets_changed = true })
     wrapping.reconstruct_breaks_async = reconstruct
     core.co_max_time = co_max_time
-    test.ok(ok, err)
     test.ok(rebuilds <= 1, string.format("the refresh started %d wrapped rebuilds", rebuilds))
+    test.ok(view:get_line_render(300) ~= link_plan, "the heading link line kept its old plan")
+    test.equal(view:get_line_render(302), task_plan, "a task line without a heading link was refreshed")
     ready(model.peek(buffer))
     wrapping.complete_async_reconstruction(view)
     prepare(view)
     same_position(position(view, 300, 1), before, "heading link refresh")
-    test.not_nil(view:get_line_render(300))
   end)
 
   test.it("keeps fenced code visible after the edited Markdown parse publishes", function(context)

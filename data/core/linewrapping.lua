@@ -175,7 +175,7 @@ function LineWrapping.rebase_async_transaction(textview, ranges)
   local prepared = token.next_line - 1
   local function shift(cache)
     if not cache or first > old_prepared then return end
-    if last < old_prepared then
+    if last < old_prepared and delta ~= 0 then
       table.move(cache, last + 1, old_prepared, last + 1 + delta)
     end
     for line = first, math.min(last + delta, prepared) do cache[line] = nil end

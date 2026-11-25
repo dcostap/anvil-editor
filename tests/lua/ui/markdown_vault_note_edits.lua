@@ -45,10 +45,12 @@ test.describe("Markdown notes open beside an edited note", function()
     c.projects, c.active_view = core.projects, core.active_view
     c.root = USERDIR .. PATHSEP .. "vault-note-edits-" .. math.floor(system.get_time() * 1000000)
     test.ok(common.mkdirp(c.root))
-    write_file(c.root .. PATHSEP .. "Tasks.md", "# Tasks\n\n- [ ] Call about [[Plans]] soon\n")
+    write_file(c.root .. PATHSEP .. "Tasks.md",
+      "# Tasks\n\n- [ ] Call about [[Plans]] soon\n\n## Later\n\nSee [[#Later]] below\n- [ ] plain task\n")
     write_file(c.root .. PATHSEP .. "Plans.md", "# Plans\n\n- [ ] Draft the [[Budget]] outline\n")
     write_file(c.root .. PATHSEP .. "Budget.md", "# Budget\n")
-    write_file(c.root .. PATHSEP .. "Review.md", "# Review\n\nSee [[tasks#Done]] first\n")
+    write_file(c.root .. PATHSEP .. "Review.md",
+      "# Review\n\nSee [[tasks#Done]] first\n\nRead [it][r] now\n\n[r]: Tasks.md#Done\n")
     core.projects = { Project(c.root) }
     c.index = markdown.vault_index.get_index(c.root):rebuild("vault-note-edits-test")
     c.views, c.buffers = {}, {}
@@ -63,7 +65,9 @@ test.describe("Markdown notes open beside an edited note", function()
     c.plans, c.review, c.tasks = open("Plans.md"), open("Review.md"), open("Tasks.md")
     wait_until(function()
       local plans, review = link_resolution(c.plans, 3), link_resolution(c.review, 3)
+      local reference = link_resolution(c.review, 5)
       return plans and plans.status == "resolved" and review and review.status ~= "pending"
+        and reference and reference.status ~= "pending"
     end, "the open notes did not resolve their links")
   end)
 
@@ -96,9 +100,34 @@ test.describe("Markdown notes open beside an edited note", function()
 
   test.it("resolves a link to the edited note once the note gains its target heading", function(c)
     test.ok(link_resolution(c.review, 3).subtarget_missing, "the heading should start out missing")
+    test.ok(link_resolution(c.review, 5).subtarget_missing, "the reference heading should start out missing")
     edit_tasks(c, 4, 1, "\n## Done\n")
     local resolution = link_resolution(c.review, 3)
     test.equal(resolution.status, "resolved")
     test.not_ok(resolution.subtarget_missing, "the link did not find the new heading")
+    -- The use names only its label. Its definition names the edited note.
+    test.not_ok(link_resolution(c.review, 5).subtarget_missing,
+      "the reference link did not find the new heading")
+  end)
+
+  test.it("keeps the other notes' link lines while an edit leaves link targets unchanged", function(c)
+    local before = c.review:get_render_cache_diagnostics().line_invalidations
+    edit_tasks(c, 3, 16, "x")
+    test.equal(c.review:get_render_cache_diagnostics().line_invalidations, before,
+      "an edit without new link targets refreshed a note that links to the edited note")
+  end)
+
+  test.it("refreshes only the edited note's heading links when its heading changes", function(c)
+    wait_until(function()
+      local resolution = link_resolution(c.tasks, 7)
+      return resolution and resolution.status == "resolved" and not resolution.subtarget_missing
+    end, "the heading link did not resolve")
+    local task = c.tasks:get_line_render(8)
+    edit_tasks(c, 5, #c.tasks.buffer.lines[5], "s")
+    wait_until(function()
+      local resolution = link_resolution(c.tasks, 7)
+      return resolution and resolution.subtarget_missing
+    end, "the renamed heading's link still resolved")
+    test.equal(c.tasks:get_line_render(8), task, "a task line without a heading link was refreshed")
   end)
 end)

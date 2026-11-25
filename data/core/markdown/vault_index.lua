@@ -257,6 +257,21 @@ function Index:clear()
   self.files_by_name = {}
 end
 
+-- A link reaches a heading by its text or path, and a block by its ID.
+-- Lines and the note's own links do not change where links resolve.
+local function subtarget_signature(entry)
+  if not entry then return nil end
+  if not entry.subtarget_signature then
+    local parts = {}
+    for _, heading in ipairs(entry.headings or {}) do
+      parts[#parts + 1] = tostring(heading.path_text or heading.text)
+    end
+    for _, block in ipairs(entry.blocks or {}) do parts[#parts + 1] = "^" .. tostring(block.id) end
+    entry.subtarget_signature = table.concat(parts, "\0")
+  end
+  return entry.subtarget_signature
+end
+
 local function release_vault_snapshot(snapshot)
   if not snapshot then return end
   local pool = worker_pool.current_system()
@@ -1210,6 +1225,7 @@ function Index:update_buffer(buffer, opts)
       local known_entry = previous_entry or (self.disk_snapshot and self.disk_snapshot:note(path))
       local aliases_changed = not known_entry
         or table.concat(known_entry.aliases or {}, "\0") ~= table.concat(entry.aliases or {}, "\0")
+      local subtargets_changed = subtarget_signature(known_entry) ~= subtarget_signature(entry)
       local previous_overlay = self.buffer_overlays[buffer]
       self.buffer_overlays[buffer] = { snapshot = snapshot, path = path, serial = serial }
       self:add_note_entry(entry)
@@ -1219,10 +1235,14 @@ function Index:update_buffer(buffer, opts)
       self.diagnostics.buffer_updates = self.diagnostics.buffer_updates + 1
       if not opts.rebuilding and facts_changed then
         self.generation = self.generation + 1
-        self:notify("buffer-updated", { buffer = buffer, path = path, aliases_changed = aliases_changed })
+        self:notify("buffer-updated", {
+          buffer = buffer, path = path,
+          aliases_changed = aliases_changed, subtargets_changed = subtargets_changed,
+        })
       end
-      core.log_quiet("Markdown vault native overlay published: path=%s generation=%d bytes=%d shallow=%s facts_changed=%s aliases_changed=%s",
-        path, serial, #text, tostring(entry.shallow == true), tostring(facts_changed), tostring(aliases_changed))
+      core.log_quiet("Markdown vault native overlay published: path=%s generation=%d bytes=%d shallow=%s facts_changed=%s aliases_changed=%s subtargets_changed=%s",
+        path, serial, #text, tostring(entry.shallow == true), tostring(facts_changed),
+        tostring(aliases_changed), tostring(subtargets_changed))
     end,
   }
   if not handle then

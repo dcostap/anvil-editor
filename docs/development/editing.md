@@ -36,6 +36,8 @@ The existing Text View line anchor keeps the destination visible through layout 
 
 Run `ui/markdown_open_at_line.lua`, `ui/markdown_live_editor.lua`, `ui/terminal.lua` and `ui/binary_file_open.lua` after changes.
 
+A link reaches a note by its name, an alias, a heading or a block ID. When the vault index publishes an edited note, Live Preview refreshes link lines only if the note's aliases, headings or block IDs changed. The edited note's own text refreshes through its semantic publication. A heading or block change refreshes only lines with a `#`, and reference uses whose definition has one. Other notes refresh only the lines that name the edited note. All refreshed lines share one wrapped rebuild. Run `ui/markdown_vault_note_edits.lua`, `ui/markdown_layout_stability.lua` and the `markdown-vault-type` and `markdown-vault-heading-type` scenarios after changes.
+
 ## Recycle Bin
 
 Windows Recycle Bin operations run through the `file_trash` worker. `src/file_trash.c` owns the blocking shell call. The File Tree keeps its edit guard until the worker finishes. Machine requests use the same worker without blocking other requests.
