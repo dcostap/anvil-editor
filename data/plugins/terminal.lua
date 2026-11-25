@@ -13,6 +13,7 @@ local panes = require "core.panes"
 local blocks = require "plugins.terminal.blocks"
 local TerminalFind = require "plugins.terminal.find"
 local style = require "core.style"
+local tab = require "core.tab"
 local system_link = require "core.system_link"
 local location_list = require "core.file_location_list"
 local text_capture = require "core.text_capture"
@@ -1863,9 +1864,11 @@ end
 -- host keeps the same time for its Terminal Session record.
 function TerminalView:get_activity()
   local title = self.snapshot and self.snapshot.title
-  if title ~= self.activity_title then
-    if self.activity_title ~= nil then self.activity = os.time() end
-    self.activity_title = title
+  if title ~= self.last_raw_title then
+    self.last_raw_title = title
+    local stable = tab.stable_title(title)
+    if self.activity_title ~= nil and self.activity_title ~= stable then self.activity = os.time() end
+    self.activity_title = stable
   end
   return self.activity
 end
