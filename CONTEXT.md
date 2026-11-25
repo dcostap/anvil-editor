@@ -695,6 +695,10 @@ An Anvil Agent is an agent running inside Anvil.
 A coding agent's saved conversation, such as a Pi session. When a Terminal Session revives after its shell ended, it resumes the Agent Session that its agent had open.
 _Avoid_: agent conversation, Pi session file
 
+**Agent Name**:
+A readable name, such as `brave-otter`, that Anvil derives from a Terminal Session's ID. A running agent's Tab leads with it, and agent messages name their sender with it. It is a label, not an identity: two Terminal Sessions can have the same Agent Name.
+_Avoid_: agent ID, nickname
+
 **Agent Status**:
 What a coding agent in a Terminal Session reports about itself: working, waiting for an answer, done, failed, or idle. While it works, it also reports its current step, such as thinking or running a command. The Project Sidebar shows the Agent Status on a second line of the agent's Tab. The status ends when the agent ends.
 _Avoid_: agent state, program status, agent activity

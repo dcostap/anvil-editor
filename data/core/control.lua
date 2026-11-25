@@ -5,6 +5,7 @@ local json = require "core.json"
 local protocol_json = require "core.lsp.json"
 local net = require "net"
 local common = require "core.common"
+local agent_name = require "core.agent_name"
 local M = {}
 M.__index = M
 
@@ -154,6 +155,7 @@ function M:workspace_state(_, caller)
       file = view.buffer and view.buffer.abs_filename, terminal = view.session_id,
       terminal_state = view.state, agent_model = view.agent_model, snoozed = panes.is_snoozed(pane) }
     local peer = view.session_id and self.peers[view.session_id]
+    if peer or view.agent_app then state.panes[pane.id].agent_name = agent_name.for_terminal(view.session_id) end
     if peer then
       state.panes[pane.id].agent_instance = peer.instance
       state.panes[pane.id].agent_connected = system.get_time() - peer.seen < 10
@@ -166,6 +168,7 @@ function M:workspace_state(_, caller)
         local status = owned:close_status()
         state.terminals[owned.session_id] = {terminal = owned.session_id, pane = pane.id, current = owned == view,
           state = owned.state, program = owned.agent_app, agent_status = status.agent_state,
+          agent_name = (peer or owned.agent_app) and agent_name.for_terminal(owned.session_id) or nil,
           agent_model = owned.agent_model, agent_instance = peer and peer.instance,
           agent_activity = activity_summary(peer),
           agent_connected = peer and system.get_time() - peer.seen < 10}
@@ -424,7 +427,6 @@ function M:exchange(terminal, report)
   end
   peer.seen, peer.busy = system.get_time(), report.busy == true
   peer.session, peer.model, peer.thinking = report.session, report.model, report.thinking
-  peer.title = type(report.title) == "string" and report.title:sub(1, 256) or nil
   peer.activity, peer.capabilities = report.activity, report.capabilities
   peer.capacity = type(report.capacity) == "number" and math.max(0, math.min(256, report.capacity)) or 256
   for _, receipt in ipairs(report.receipts) do
@@ -464,7 +466,8 @@ function M:exchange(terminal, report)
   for token, query in pairs(peer.transcripts) do
     if system.get_time() < query.deadline then requests[#requests + 1] = {id = token, options = query.options} end
   end
-  return {commands = protocol_json.array(commands), transcript_requests = requests, transcript_acks = acks}
+  return {name = agent_name.for_terminal(terminal), commands = protocol_json.array(commands),
+    transcript_requests = requests, transcript_acks = acks}
 end
 
 function M:peer(args, live)
@@ -479,12 +482,10 @@ end
 
 function M:sender(caller)
   local peer = self.peers[caller]
-  local title = peer and peer.title
-  local sender = {terminal = caller, project = self.project_key, instance = peer and peer.instance, title = title}
-  if title then
-    for other, p in pairs(self.peers) do
-      if other ~= caller and p.title == title then sender.ambiguous = true; break end
-    end
+  local sender = {terminal = caller, project = self.project_key, instance = peer and peer.instance}
+  local name = agent_name.for_terminal(caller)
+  for other in pairs(self.peers) do
+    if other ~= caller and agent_name.for_terminal(other) == name then sender.ambiguous = true; break end
   end
   return sender
 end
@@ -497,8 +498,11 @@ function M:send(args, caller, action, sender)
   assert(count < peer.capacity, "Pi control capacity reached; start a new Pi conversation")
   local task = net.random_token()
   peer.order = (peer.order or 0) + 1
+  sender = sender or self:sender(caller)
+  -- Derive the name here, so a sender from another Project or Machine cannot choose its own.
+  sender.name = sender.terminal ~= "local" and agent_name.for_terminal(sender.terminal) or nil
   peer.commands[task] = {id = task, action = action, text = args.text,
-    from = caller or "local", sender = sender or self:sender(caller), order = peer.order}
+    from = caller or "local", sender = sender, order = peer.order}
   return {terminal = args.terminal, instance = peer.instance, task = task, status = "pending"}
 end
 
@@ -509,7 +513,8 @@ function M:agent_read(args)
   local peer = self:peer(args)
   local age = system.get_time() - peer.seen
   local connected = age < 10
-  local result = {terminal = args.terminal, instance = peer.instance, connected = connected,
+  local result = {terminal = args.terminal, name = agent_name.for_terminal(args.terminal),
+    instance = peer.instance, connected = connected,
     status = connected and (peer.busy and "working" or "idle") or "disconnected",
     model = peer.model, thinking = peer.thinking, capabilities = peer.capabilities,
     session_file = peer.session, activity_stale = not connected,

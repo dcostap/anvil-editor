@@ -13,7 +13,9 @@ Start a new Pi in an Anvil Terminal. Its extension registers the `anvil` MCP ser
 3. Set `project` to a listed Project path when controlling another Project.
 4. Use a new `request_id` for each mutation. Reuse it only to retry identical work.
 
-Right-click a running Pi's Tab and choose **Copy Agent Address**. This works in the Project Sidebar and Title Bar. It copies JSON with `"type":"anvil-agent-address"` and the `project`, `pane`, and `terminal` fields. The `type` field identifies the address as Anvil data. It is not a tool argument. The address contains no navigation number or credentials. Paste it into another agent's conversation to identify the target.
+Right-click a running Pi's Tab and choose **Copy Agent Address**. This works in the Project Sidebar and Title Bar. It copies JSON with `"type":"anvil-agent-address"` and the `project`, `pane`, `terminal`, and `name` fields. The `type` field identifies the address as Anvil data. It is not a tool argument. The address contains no navigation number or credentials. Paste it into another agent's conversation to identify the target.
+
+Each Terminal Session has an Agent Name, such as `brave-otter`. Anvil derives it from the Terminal ID, so revival, Project moves and Machines keep it. A running agent's Tab leads with the name. `workspace_state` and `agent_read` report it as `agent_name` and `name`, and Pi's instructions tell Pi its own name. The name is a label: two Terminal Sessions can have the same name. Tools take the Terminal ID, not the name.
 
 Use `agent_read` with the copied `project` and `terminal`. Use the returned `instance` for `agent_send`. The address identifies the Terminal, not a fixed Pi conversation. Inspect state again after a Project move.
 
@@ -116,7 +118,7 @@ Each transcript reply has a 256 KiB limit, including metadata and JSON escaping.
 
 A wait timeout does not cancel work. A disconnect does not mean completion. A reported question ends the wait with `waiting_for_user`. Use `agent_interrupt` to stop active work without closing the Terminal.
 
-Tasks and steering messages show the sending conversation's title. A missing or duplicate title adds a short Terminal ID. Messages from another Project add the Project name. Messages from a paired device also show its name.
+Tasks and steering messages show the sender's Agent Name. The receiving Anvil derives it from the sender's Terminal ID, so a sender cannot choose its name. A client without a Terminal shows a short ID, and a name that another Terminal in the sender's Project also has adds a short Terminal ID. Messages from another Project add the Project name. Messages from a paired device also show its name.
 
 Use `anvil_reply` with the incoming request ID to answer its sender. The sender reads the answer with `agent_wait` or `agent_read` on the original task ID. A reply needs no reverse pairing. An active turn can answer a steering request without ending its other work. If the turn settles without an explicit reply, steering reports `delivered`, not the unrelated turn's answer. Interruption also reports `delivered` after acceptance.
 

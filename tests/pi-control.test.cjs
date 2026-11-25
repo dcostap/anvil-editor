@@ -45,7 +45,7 @@ test("interactive Pi connects, receives each task once, and reports completion o
     for await (const chunk of req) body += chunk;
     latest = JSON.parse(body);
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ commands }));
+    res.end(JSON.stringify({ name: "brave-otter", commands }));
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   try {
@@ -58,27 +58,33 @@ test("interactive Pi connects, receives each task once, and reports completion o
     await until(() => latest && servers.length);
     assert.equal(servers[0].name, "anvil");
     assert.equal(servers[0].config.url, `http://127.0.0.1:${server.address().port}/mcp`);
-    const prompt = {systemPromptOptions: {sections: {}}};
-    await handlers.get("before_agent_start")(prompt, ctx);
+    let prompt;
+    for (const deadline = Date.now() + 10000; !prompt?.systemPromptOptions.sections.anvil.includes("brave-otter");) {
+      if (Date.now() > deadline) throw new Error("Pi did not learn its Agent Name");
+      prompt = {systemPromptOptions: {sections: {}}};
+      await handlers.get("before_agent_start")(prompt, ctx);
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
     assert.ok(prompt.systemPromptOptions.sections.anvil.includes("An Anvil Agent is an agent running inside Anvil."));
+    assert.ok(prompt.systemPromptOptions.sections.anvil.includes("Your Agent Name is brave-otter."));
     // Removing the View leaves the host endpoint available to this running Pi.
     await fs.mkdir(path.join(dir, "machine", "agents"), {recursive: true});
     await fs.rename(path.join(dir, "control", "terminals", "terminal.json"), path.join(dir, "machine", "agents", "terminal.json"));
     commands = [{ id: "task-a", action: "send", text: "Review this change", from: "other-terminal",
-      sender: {terminal: "other-terminal", title: "Watcher", project: "C:\\Projects\\Alpha"} }];
+      sender: {terminal: "other-terminal", name: "calm-heron", project: "C:\\Projects\\Alpha"} }];
     await until(() => latest.receipts?.some(r => r.id === "task-a"));
     assert.equal(latest.receipts.find(r => r.id === "task-a").status, "accepted");
     assert.equal(sent.length, 1);
-    assert.match(sent[0].content, /^Anvil agent task from Watcher\n/);
+    assert.match(sent[0].content, /^Anvil agent task from calm-heron\n/);
     assert.ok(sent[0].content.endsWith("Review this change"));
     assert.equal(sent[0].details.from, "other-terminal");
     commands = [{id: "steer-task", action: "send", text: "Check the tests too", from: "other-terminal",
-      sender: {terminal: "other-terminal", title: "Watcher", project: "C:\\Projects\\Alpha", other_project: true, machine: "Workstation"}}];
+      sender: {terminal: "other-terminal", name: "calm-heron", project: "C:\\Projects\\Alpha", other_project: true, machine: "Workstation"}}];
     await until(() => latest.receipts?.some(r => r.id === "steer-task"));
     assert.equal(latest.receipts.find(r => r.id === "steer-task").task, "task-a");
     assert.equal(sent[1].customType, "anvil-steering");
     assert.equal(deliveries[1].deliverAs, "steer");
-    assert.match(sent[1].content, /from Watcher in Alpha @ Workstation/);
+    assert.match(sent[1].content, /from calm-heron in Alpha @ Workstation/);
     assert.ok(sent[1].content.includes("steer-task"));
     await tools.get("anvil_reply").execute("call", {request: "steer-task", text: "Tests passed"});
     await until(() => latest.receipts?.some(r => r.id === "steer-task" && r.result === "Tests passed"));
@@ -92,12 +98,12 @@ test("interactive Pi connects, receives each task once, and reports completion o
     assert.equal(sent.length, 2, "A repeated command must not send the message twice");
     idle = false; // The user has started a separate turn.
     commands = [{id: "steer-a", action: "send", text: "Use this constraint", from: "other-terminal",
-      sender: {terminal: "123456789abc", title: "Watcher", ambiguous: true, other_project: true, project: "C:\\Projects\\Alpha"}}];
+      sender: {terminal: "123456789abc", name: "calm-heron", ambiguous: true, other_project: true, project: "C:\\Projects\\Alpha"}}];
     await until(() => latest.receipts?.some(r => r.id === "steer-a"));
     assert.equal(latest.receipts.find(r => r.id === "steer-a").status, "awaiting_reply");
     assert.equal(latest.receipts.find(r => r.id === "steer-a").task, undefined);
     assert.equal(sent[2].customType, "anvil-steering");
-    assert.match(sent[2].content, /^Anvil agent steering from Watcher \(12345678\) in Alpha\n/);
+    assert.match(sent[2].content, /^Anvil agent steering from calm-heron \(12345678\) in Alpha\n/);
     assert.equal(sent[2].details.from, "other-terminal");
     assert.equal(deliveries[2].deliverAs, "steer");
     idle = true;
