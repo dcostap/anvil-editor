@@ -201,7 +201,7 @@ test.describe("TextView selection scrolling", function()
     test.equal(view.scroll.y, 0)
   end)
 
-  test.it("allows fitting Buffers to end-scroll when the caret enters bottom context", function(context)
+  test.it("does not end-scroll fitting Buffers when the caret enters bottom context", function(context)
     config.scroll_past_end = true
     config.scroll_context_lines = 28
 
@@ -210,11 +210,32 @@ test.describe("TextView selection scrolling", function()
     view.size.y = style.padding.y * 2 + lh * 30
 
     view:scroll_to_make_visible(29, 1, true)
+    view:clamp_scroll_position()
 
-    local effective_context = view:get_visible_scroll_context_lines()
-    local _, cursor_y = view:get_line_screen_position(29)
-    test.ok(view.scroll.y > 0, "expected a fitting buffer near the bottom context to scroll")
-    test.equal(cursor_y + lh, view.position.y + view.size.y - effective_context * lh)
+    test.equal(view.scroll.to.y, 0)
+  end)
+
+  test.it("limits blank space past the end to the rows that do not fit", function(context)
+    config.scroll_past_end = true
+    config.scroll_context_lines = 28
+
+    local view, buffer = open_editor(context, numbered_lines(34))
+    local lh = view:get_line_height()
+    view.size.y = style.padding.y * 2 + lh * 30
+    local _, first_y = view:get_line_screen_position(1)
+    local _, last_y = view:get_line_screen_position(#buffer.lines)
+    local viewport_bottom = view.position.y + view:get_vertical_viewport_height()
+    local overflow = last_y + lh - viewport_bottom
+    test.ok(overflow > 0 and first_y >= view.position.y, "expected the buffer to overflow by a few rows")
+
+    view:scroll_to_make_visible(#buffer.lines, 1, true)
+    view:clamp_scroll_position()
+    view.scroll.y = view.scroll.to.y
+
+    _, last_y = view:get_line_screen_position(#buffer.lines)
+    local blank = viewport_bottom - (last_y + lh)
+    test.ok(blank > 0, "expected some blank space past the end")
+    test.ok(blank <= overflow + 0.5, "expected blank space past the end to be at most the overflow")
   end)
 
   test.it("keeps mouse-originated clicks near the buffer end from forcing bottom context scrolling", function(context)

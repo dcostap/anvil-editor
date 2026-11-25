@@ -1256,6 +1256,18 @@ function TextView:get_scroll_past_end_context_lines()
 end
 
 
+---Get the maximum vertical scroll when scroll-past-end is enabled.
+---Blank space past the end never exceeds the content that does not fit, so a
+---fitting buffer never scrolls and the space grows with the overflow.
+---@param content_bottom number Bottom of the final row in content pixels
+---@return number max_scroll Maximum vertical scroll in pixels
+function TextView:get_scroll_past_end_max_scroll(content_bottom)
+  local overflow = math.max(0, content_bottom - self:get_vertical_viewport_height())
+  local context_height = self:get_line_height() * self:get_scroll_past_end_context_lines()
+  return overflow + math.min(context_height, overflow)
+end
+
+
 ---Get scrollable height for a buffer with the given visual row count.
 ---@param line_count integer Visual row count
 ---@return number height Total scrollable height in pixels
@@ -1266,9 +1278,7 @@ function TextView:get_scrollable_size_for_line_count(line_count)
   local text_height = lh * line_count + style.padding.y * 2
   local content_height = text_height + h_scroll
   if config.scroll_past_end then
-    local pad = self:get_scroll_past_end_context_lines()
-    local last_line_y = style.padding.y + lh * math.max(0, line_count - 1)
-    local max_scroll = math.max(0, last_line_y - self:get_vertical_viewport_height() + lh * (pad + 1))
+    local max_scroll = self:get_scroll_past_end_max_scroll(style.padding.y + lh * line_count)
     return math.max(self.size.y, max_scroll + self.size.y)
   end
   if content_height <= self.size.y then
@@ -1287,13 +1297,9 @@ function TextView:get_scrollable_size()
     local text_height = cache.heights:total() + style.padding.y * 2
     local content_height = text_height + h_scroll
     if config.scroll_past_end then
-      local pad = self:get_scroll_past_end_context_lines()
       local last_line_y = style.padding.y + self:get_visual_row_y_offset(cache.row_count)
       local last_row_height = self:get_visual_row_height(cache.row_count)
-      -- Only the final row contributes its specialized height here; the
-      -- configurable context is still made of ordinary visual rows.
-      local context_height = last_row_height + self:get_line_height() * pad
-      local max_scroll = math.max(0, last_line_y - self:get_vertical_viewport_height() + context_height)
+      local max_scroll = self:get_scroll_past_end_max_scroll(last_line_y + last_row_height)
       return math.max(self.size.y, max_scroll + self.size.y)
     end
     return content_height <= self.size.y and self.size.y or content_height
