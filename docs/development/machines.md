@@ -244,7 +244,9 @@ A rename moves the record to the new name.
 
 ### Remote Terminals
 
-On Windows, the server has a Terminal service (`core.serve_terminal`). `terminal.list {project}` gives the running Terminal Sessions of a Project, newest first, with the record fields that the Sidebar shows. A session with a `.closed` marker is not listed.
+On Windows, the server has a Terminal service (`core.serve_terminal`). `terminal.list {project, known, wait}` gives the running Terminal Sessions of a Project, newest first, with the record fields that the Sidebar shows, and the list's `revision`. A session with a `.closed` marker is not listed.
+
+With `wait` and the current revision as `known`, the reply waits until the Project's list changes. A directory watch on `terminal-sessions` wakes the waits, so a waiting Client costs no traffic. A host that ends without a record write shows only at the next change in that folder, as in the shell's scan. The `terminal.list.wait` feature tells the Client that the server waits.
 
 `terminal.attach {id, cols, rows, cell_width, cell_height}` connects the server to the session's host as one more Client (`terminal_link.connect`). The reply gives the `link`, the `session_id`, the `shell_pid` and the host's size. `terminal.start {project, cwd, shell, scrollback_lines, cols, rows, cell_width, cell_height}` starts a new host in a Project folder and attaches the device as its Controller (`terminal_link.launch`).
 
@@ -274,7 +276,7 @@ When the Machine no longer has it, a new shell starts in the saved folder, as a 
 
 A failed start shows its error in the View. These Terminals cannot move to another Project. Programs in them reach the Machine's Anvil, so the View publishes no control endpoint.
 
-The shell's scan reads only this PC's records. So the Project process lists its Machine's sessions every 2 seconds (`machine_terminal.sessions`), and its Pane report sends them as `terminals`. The Sidebar model adds them to the Project's Terminal Sessions, so they show agent status, age groups and attention as local sessions do.
+The shell's scan reads only this PC's records. So the Project process lists its Machine's sessions (`machine_terminal.sessions`), and its Pane report sends them as `terminals`. Each list waits on the Machine until a change, and the Client sends at most one list each 2 seconds. A server without `terminal.list.wait` answers at once, so it gets a list each 2 seconds. The Sidebar model adds them to the Project's Terminal Sessions, so they show agent status, age groups and attention as local sessions do.
 
 A Dormant Project on a Machine lists none. A visible Terminal Tab takes the place of its session row. A session in Pane history keeps its session row, so selecting another session does not hide it. A Sidebar click restores the existing View or attaches to the listed session.
 
