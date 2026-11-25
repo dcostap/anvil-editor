@@ -86,7 +86,7 @@ function files.new(server)
   -- `files` counts the files. `changes` is the sequence to pass to `files.changes`. `ignored = true` also
   -- lists the files that the ignore rules hide.
   local function list(client, id, params)
-    local root = server.project_root(params.root)
+    local root = server.content_root(params.root)
     if not root then return server.fail(client, id, "not_a_project", "The root is not a Project of this Machine") end
     local state = root_state(root)
     core.add_thread(function()
@@ -109,7 +109,7 @@ function files.new(server)
   -- `files.changes {root, since}` waits until a change after `since`. Its reply gives the changed paths and the
   -- new sequence. `reset = true` means that the Client must list the Project again.
   local function changes(client, id, params)
-    local root = server.project_root(params.root)
+    local root = server.content_root(params.root)
     if not root then return server.fail(client, id, "not_a_project", "The root is not a Project of this Machine") end
     if type(params.since) ~= "number" then return server.fail(client, id, "invalid_request", "since must be a number") end
     local state = root_state(root)
@@ -163,9 +163,16 @@ function files.new(server)
 
   -- Returns the disk path of a path that a change can name, or nothing after it sends the error.
   -- A change cannot move or delete a Project root, or a folder that holds one.
-  local function change_path(client, id, path, root_ok)
-    local checked, code, message = server.check_path(path)
+  local function change_path(client, id, path, root_ok, recursive)
+    local checked, code, message, disk = server.check_path(path)
     if not checked then return server.fail(client, id, code, message) end
+    if recursive then
+      for _, private in ipairs(server.private) do
+        if common.path_belongs_to(private, disk) then
+          return server.fail(client, id, "private", "The folder contains private Machine state")
+        end
+      end
+    end
     if not root_ok and (server.project_root(checked) or server.holds_project(checked)) then
       return server.fail(client, id, "project_root", "A Project root cannot move or be deleted")
     end
@@ -185,7 +192,7 @@ function files.new(server)
 
   -- `files.move {from, to}` and `files.copy {from, to}` fail when `to` exists.
   local function move(client, id, params)
-    local from = change_path(client, id, params.from)
+    local from = change_path(client, id, params.from, false, true)
     local to = from and change_path(client, id, params.to)
     if not to then return end
     local parent = common.dirname(to)
@@ -197,7 +204,7 @@ function files.new(server)
   end
 
   local function copy(client, id, params)
-    local from = change_path(client, id, params.from, true)
+    local from = change_path(client, id, params.from, true, true)
     local to = from and change_path(client, id, params.to)
     if to then finish(client, id, file_ops.copy(from, to)) end
   end
@@ -209,7 +216,7 @@ function files.new(server)
     end
     local paths = {}
     for i, path in ipairs(params.paths) do
-      paths[i] = change_path(client, id, path)
+      paths[i] = change_path(client, id, path, false, true)
       if not paths[i] then return end
     end
     if file_ops.trashes(params.trash == true) then

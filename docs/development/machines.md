@@ -204,7 +204,9 @@ Code that names this Project to the Sidebar or to other Projects uses `machine_p
 
 `core.open_project_in_same_window` and `core.open_project_in_new_window` give a folder of this process's Machine its key (`machine_project.folder_key`). A Pane moves only between Projects of the same Machine, or between Projects of this PC. On a Machine, the target Project must hold each file of the Pane: each Buffer's file, each Image View's image and each File Tree's folder.
 
-A Project on a Machine adds only its own folders as Project Paths, so they are Vendored. External folders are refused. `machine:open_project` lists the paired Machines, then the chosen Machine's Projects (`projects.list`).
+`machine:open_project` lists the paired Machines, then the chosen Machine's Projects (`projects.list`). On connection and reconnection, `projects.paths {project}` reads the Project Paths from the Machine's saved Workspace. The Client uses their labels, roles and read-only settings. File Search lists each external root through the Machine, not the Client's disk. External roots do not become Sidebar Projects or Terminal roots.
+
+Change Project Paths on the Machine. Reopen the remote Project to load the new configuration. A Client cannot grant itself access by sending a folder name. The server protects its Workspace storage from remote file operations. Servers without `projects.paths` retain the Client's Workspace behavior.
 
 A Project on a Machine skips its Project module, Git, Git file changes and the symbol index until their services exist. The guard would show an error for each. Run the `launch-machine-project` shell probe after changes.
 

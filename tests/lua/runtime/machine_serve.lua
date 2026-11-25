@@ -104,6 +104,31 @@ test.describe("Machine server", function()
     test.ok(test.remove_tree(context.root))
   end)
 
+  test.it("serves the extra search root from the Machine's saved Workspace", function(context)
+    local extra = context.root .. PATHSEP .. "library"
+    test.ok(common.mkdirp(extra))
+    write_file(extra .. PATHSEP .. "core.odin", "package core")
+    local slots = context.user .. PATHSEP .. "storage" .. PATHSEP .. "ws"
+    test.ok(common.mkdirp(slots))
+    write_file(slots .. PATHSEP .. "project-1", "return " .. common.serialize({path = context.project,
+      project_paths = {entries = {{path = "../library", role = "external", label = "odin"}}}}))
+    local client = connect(context.discovery)
+    call(client, "hello", {protocol = 1, token = context.discovery.token})
+    local reply = call(client, "projects.paths", {project = context.project})
+    test.ok(reply.result)
+    test.ok(common.path_equals(reply.result.entries[1].path, extra))
+    test.equal(reply.result.entries[1].label, "odin")
+    local list, names = call(client, "files.list", {root = extra})
+    test.equal(list.result.files, 1)
+    test.equal(names, "core.odin")
+    local _, text = call(client, "files.read", {path = extra .. PATHSEP .. "core.odin"})
+    test.equal(text, "package core")
+    test.equal(call(client, "files.read", {path = context.root .. PATHSEP .. "secret.txt"}).error.code, "outside_project")
+    test.ok(os.remove(slots .. PATHSEP .. "project-1"))
+    test.equal(call(client, "files.read", {path = extra .. PATHSEP .. "core.odin"}).error.code, "outside_project")
+    client.socket:close()
+  end)
+
   test.it("reads a Project file after hello with the server's token", function(context)
     local client = connect(context.discovery)
     local hello = call(client, "hello", {protocol = 1, token = context.discovery.token})
@@ -579,6 +604,11 @@ test.describe("Machine server", function()
     local client = owner(context)
     local discovery = machine_server.discovery_path(user)
     test.equal(call(client, "files.read", {path = discovery}).error.code, "private")
+    local slots = user .. PATHSEP .. "storage" .. PATHSEP .. "ws"
+    test.ok(common.mkdirp(slots))
+    test.equal(call(client, "files.read", {path = slots .. PATHSEP .. "project-1"}).error.code, "private")
+    test.equal(call(client, "files.move", {from = common.dirname(slots), to = context.root .. PATHSEP .. "moved"}).error.code, "private")
+    test.equal(call(client, "files.copy", {from = user, to = context.root .. PATHSEP .. "copy"}).error.code, "private")
     if PLATFORM == "Windows" then
       -- Ask this volume for the actual short name. Some volumes do not assign one.
       local process = require "core.process"

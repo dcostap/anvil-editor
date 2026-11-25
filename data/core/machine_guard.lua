@@ -165,8 +165,7 @@ local function wrap(owner, owner_name, name, check)
 end
 
 -- `project_roots` lists the Project's paths, in the Machine's spelling.
-function machine_guard.enable(project_roots)
-  machine_guard.disable()
+function machine_guard.set_roots(project_roots)
   roots = {}
   for _, root in ipairs(project_roots) do roots[#roots + 1] = assert(normalize(root), "A Project root must be absolute") end
   own_folders, all_own_folders = {}, {}
@@ -180,6 +179,11 @@ function machine_guard.enable(project_roots)
     end
   end
 
+end
+
+function machine_guard.enable(project_roots)
+  machine_guard.disable()
+  machine_guard.set_roots(project_roots)
   wrap(io, "io", "open", first_path)
   wrap(io, "io", "lines", first_path_if_any)
   wrap(io, "io", "input", first_path_if_any)

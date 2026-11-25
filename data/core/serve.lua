@@ -16,6 +16,7 @@ local PROTOCOL = 1
 local FEATURES = {"projects.list", "files.list", "files.changes", "files.stat", "files.list_dir", "files.mkdir", "files.move", "files.copy", "files.delete", "search.start", "search.read", "search.cancel", "files.read", "files.write", "files.save_result", "pairing.start", "devices.list", "devices.revoke", "sharing.get", "sharing.set"}
 -- Terminal hosts use ConPTY, so only a Windows Machine has Terminal Sessions.
 local SERVICES = {"core.serve_files", "core.serve_search", "core.serve_layout"}
+FEATURES[#FEATURES + 1] = "projects.paths"
 FEATURES[#FEATURES + 1] = "layout.get"
 FEATURES[#FEATURES + 1] = "layout.set"
 if PLATFORM == "Windows" then
@@ -347,6 +348,61 @@ local function is_private(disk)
   return false
 end
 
+-- Read only host-owned Workspace slots. Never accept a list of roots from a Client.
+local path_states = {}
+local function slot_path(key)
+  return USERDIR .. PATHSEP .. "storage" .. PATHSEP .. "ws" .. PATHSEP .. common.encode_filename_component(key)
+end
+
+local function load_paths(root)
+  local selected = require("core.workspace_slots").matching(root, function(_, key)
+    local chunk = loadfile(slot_path(key), "t", {})
+    if chunk then
+      local ok, workspace = pcall(chunk)
+      if ok then return workspace end
+    end
+  end)[1]
+  local workspace = selected and selected.workspace or {}
+  local saved = workspace.project_paths or {}
+  local state = {entries = {}, root_read_only = saved.root_read_only or nil}
+  local roots = {}
+  local function add(entry)
+    if type(entry) ~= "table" or type(entry.path) ~= "string" or entry.path == "" then return end
+    local path = common.normalize_path(common.is_absolute_path(entry.path) and entry.path or root .. PATHSEP .. entry.path)
+    local disk = machine.final_path(disk_path(path))
+    local info = disk and system.get_file_info(disk)
+    if not info or info.type ~= "dir" or is_private(disk) then return end
+    if contains(root, path) and not contains(machine.final_path(disk_path(root)), disk) then return end
+    state.entries[#state.entries + 1] = {path = path, role = entry.role, label = entry.label,
+      read_only = entry.read_only, rank_penalty = entry.rank_penalty, filetree_style = entry.filetree_style}
+    if not contains(root, path) then roots[#roots + 1] = path end
+  end
+  for _, entry in ipairs(saved.entries or saved) do add(entry) end
+  for _, path in ipairs(workspace.directories or {}) do add({path = path, role = "external"}) end
+  local slot = selected and slot_path(selected.key)
+  local info = slot and system.get_file_info(slot)
+  path_states[root] = info and {roots = roots, slot = slot, size = info.size, modified = info.modified} or nil
+  return state
+end
+
+local function content_roots()
+  local roots = {}
+  for _, project in ipairs(projects()) do
+    local path = project.path
+    roots[#roots + 1] = path
+    local state = path_states[path]
+    if state then
+      local info = system.get_file_info(state.slot)
+      if not info or state.modified ~= info.modified or state.size ~= info.size then
+        load_paths(path)
+        state = path_states[path]
+      end
+      for _, extra in ipairs(state and state.roots or {}) do roots[#roots + 1] = extra end
+    end
+  end
+  return roots
+end
+
 -- Returns the absolute Machine path, or nil, an error code and a message.
 local function check_path(path)
   if type(path) ~= "string" or not common.is_absolute_path(path) then
@@ -360,8 +416,7 @@ local function check_path(path)
       or path:match("[ .]\\") or path:match("[ .]$") or common.path_has_windows_reserved_filename(path)) then
     return nil, "invalid_path", "Invalid Windows path"
   end
-  for _, project in ipairs(projects()) do
-    local root = project.path
+  for _, root in ipairs(content_roots()) do
     if contains(root, path) then
       local disk = resolved_disk(disk_path(path))
       if not disk then return nil, "invalid_path", "Cannot resolve the path" end
@@ -377,8 +432,8 @@ end
 -- True when a Project root is inside the path, so a change of the path changes that Project too.
 local function holds_project(path)
   local disk = resolved_disk(disk_path(path))
-  for _, project in ipairs(projects()) do
-    if contains(disk, machine.final_path(disk_path(project.path))) or contains(path, project.path) then return true end
+  for _, root in ipairs(content_roots()) do
+    if contains(disk, machine.final_path(disk_path(root))) or contains(path, root) then return true end
   end
   return false
 end
@@ -563,6 +618,11 @@ local function handle(client, id, body, bytes)
     return fail(client, id, "forbidden", "This device has View access")
   end
   if request.method == "projects.list" then return list_projects(client, id) end
+  if request.method == "projects.paths" then
+    local root = project_root(params.project)
+    if not root then return fail(client, id, "not_a_project", "Unknown Project") end
+    return reply(client, id, {result = load_paths(root)})
+  end
   if request.method == "files.read" then return read_file(client, id, params) end
   if request.method == "files.write" then return write_file_request(client, id, params, bytes) end
   if request.method == "files.save_result" then return save_result(client, id, params) end
@@ -663,7 +723,7 @@ local function start(listed)
     discovery = directory .. PATHSEP .. "server.json", owner_check = system.get_time(), on_close = {},
     private = {}}
   local user = system.absolute_path(USERDIR) or USERDIR
-  for _, name in ipairs({"machine", "machines", "control"}) do
+  for _, name in ipairs({"machine", "machines", "control", "storage" .. PATHSEP .. "ws"}) do
     server.private[#server.private + 1] = assert(resolved_disk(user .. PATHSEP .. name), "Cannot resolve credential folder")
   end
   server.devices = load_devices(server.devices_path)
@@ -679,6 +739,12 @@ local function start(listed)
     end
   end
   local service_context = {reply = reply, fail = fail, check_path = check_path, disk_path = disk_path,
+    content_root = function(path)
+      if type(path) ~= "string" then return end
+      for _, root in ipairs(content_roots()) do
+        if common.path_equals(root, path) then return check_path(root) end
+      end
+    end,
     project_root = project_root, holds_project = holds_project, log = log,
     private = server.private, on_close = function(fn) server.on_close[#server.on_close + 1] = fn end}
   for _, module in ipairs(SERVICES) do

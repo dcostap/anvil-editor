@@ -92,6 +92,7 @@ end
 ---@param path string
 ---@param options? { role: string?, label: string?, read_only: boolean? }
 function M.add(path, options)
+  if require("core.machine_project").paths then return nil, "Change Project Paths on the Machine" end
   options = options or {}
   if type(path) ~= "string" or path == "" then return nil, "No folder" end
   path = normalize(path)
@@ -173,6 +174,7 @@ end
 ---@param options? { select: string?, rename: boolean? } `select` is a path or an entry ID to select.
 ---`rename` puts keyboard focus in its label.
 function M.open(options)
+  if require("core.machine_project").paths then return core.error("Change Project Paths on the Machine") end
   return require("plugins.project_paths.dialog").open(options)
 end
 

@@ -75,7 +75,7 @@ Each piece of state also has one owner:
 | State | Owner | Notes |
 |---|---|---|
 | Known Project paths | Machine | Saved on the Machine. Clients read this list. |
-| Project configuration: extra Project Paths and the search and index settings | Machine | The indexes and searches run with no UI, so they need this. Today, extra Project Paths are Workspace state (`data/core/project_paths.lua`). |
+| Project configuration: extra Project Paths and the search and index settings | Machine | The Machine reads extra Project Paths from its saved Workspace and serves them to Clients. |
 | Terminal records and saved screens | Machine | As today |
 | Loaded state, Windows, Panes and Workspace layout | Client | Each Client saves its own |
 | Buffers, unsaved text and recovery records | Client | See [Recovery](#recovery) |
