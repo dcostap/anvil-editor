@@ -175,7 +175,7 @@ Most Dialogs need only the controls above. When you need a new one:
 
 - **A node that only draws**, such as a preview: extend `layout.Node`. Give `content_width()` and `content_height(w)`, and draw in `draw_node(dialog)`. `self.x`, `self.y`, `self.w` and `self.h` hold its rect.
 - **A control that takes input**: extend `core.ui.control`. Give its natural size in `measure()`, and draw in `draw(focused)`. Set `focusable = true` to take Tab focus. The comment at the top of `control.lua` lists the input methods.
-- Draw its parts with `surface.draw(name, x, y, w, h, radius)`. Draw a focus ring with `ui.draw_ring` when `focused` is true.
+- Draw its parts with `surface.draw(name, x, y, w, h, radius)`. Draw a focus ring with `ui.draw_ring` when `focused` is true. The ring shows after a key and hides after a click, so do not draw focus rings another way. A Text Field rim stays, because it shows where typed text goes.
 - **A control with a popup**, such as a list: set the control's `overlay` to the popup while it is open, as `Select` does. The Dialog draws the overlay above the card and gives it the pointer first. The popup gives `contains`, `draw` and the mouse methods. Place it with `core.popup`, so it stays inside the Root Panel. Close it in `cancel()` and `on_blur()`.
 - For a fill with a fixed alpha, use `ui.tint(color, alpha)`. It keeps one table for each color and alpha, so a frame makes no new tables.
 - Add it to the UI Gallery, so it shows in each Color Theme.

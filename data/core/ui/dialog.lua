@@ -89,6 +89,11 @@ function Dialog:is_focused(control)
   return self.is_open and self.focused == control
 end
 
+---Whether the focused control shows its focus ring. A key shows it and a click hides it, as in most GUIs.
+function Dialog:shows_focus_ring()
+  return self.is_open and self.ring_visible
+end
+
 ------------------------------------------------------------------------------------------------------------------
 -- Open and close
 
@@ -111,6 +116,7 @@ function Dialog:open(focus)
   -- Focus stays on the Dialog while it is open. A focus request waits in core.next_active_view.
   self.force_focus = true
   self.focused = nil
+  self.ring_visible = core.focus_feedback_source ~= "pointer"
   self:layout()
   self:focus(focus or self:focusables()[1])
   core.log_quiet("Dialog opened: %s", self.title)
@@ -208,6 +214,7 @@ end
 
 function Dialog:on_modal_key_pressed(key, event)
   if keymap.is_modifier_key(key) then return "keymap" end
+  self.ring_visible = true
   local stroke = keymap.stroke_for_event(key, event)
   for _, name in ipairs(keymap.map[stroke] or {}) do
     if type(name) == "string" then
@@ -295,6 +302,7 @@ function Dialog:on_modal_mouse_moved(x, y)
 end
 
 function Dialog:on_modal_mouse_pressed(button, x, y, clicks)
+  self.ring_visible = false
   local open = overlay(self)
   if open then
     if open:contains(x, y) then
@@ -504,6 +512,7 @@ function Dialog:draw_dialog()
   -- The card settles into place from a slightly smaller size.
   local transformed = p < 0.999
   if transformed then renderer.push_transform(r.x + r.w / 2, r.y, 0.97 + 0.03 * p, p) end
+  ui.focus_ring_visible = self.ring_visible
   surface.draw("dialog", r.x, r.y, r.w, r.h, m.radius)
   core.push_clip_rect(r.x, r.y, r.w, r.h)
   self.title_text:draw_node(self)
@@ -518,6 +527,7 @@ function Dialog:draw_dialog()
     if open then open:draw() end
     draw_tooltip(self)
   end
+  ui.focus_ring_visible = true
 end
 
 ------------------------------------------------------------------------------------------------------------------
