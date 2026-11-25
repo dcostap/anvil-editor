@@ -272,6 +272,9 @@ end
 
 command.add(function() return system.is_hosted_surface() end, {
   ["core:unload_project"] = command.palette(function() return core.unload_project() end),
+  ["core:restart_all_windows"] = command.palette(function()
+    return system.restart_all_windows()
+  end),
   ["core:focus_project_sidebar"] = command.palette(function()
     return system.focus_project_sidebar(true)
   end),

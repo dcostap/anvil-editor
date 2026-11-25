@@ -77,16 +77,7 @@ end
 ---@param T any Object or class to check
 ---@return boolean is_extended True if T inherits from this class
 function Object:is_extended_by(T)
-  local mt = getmetatable(T)
-  while mt do
-    if mt == self then
-      return true
-    end
-    local _mt = getmetatable(T)
-    if mt == _mt then break end
-    mt = _mt
-  end
-  return false
+  return Object.extends(T, self)
 end
 
 

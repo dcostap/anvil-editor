@@ -109,6 +109,7 @@ bool anvil_hosted_surface_toggle_sidebar(void);
 bool anvil_hosted_surface_toggle_alt_navigation(void);
 /* Asks the shell to close every Window and keep them for the next start. */
 bool anvil_hosted_surface_close_all_windows(void);
+bool anvil_hosted_surface_restart_all_windows(void);
 /* Asks the shell to open the Window that closed last. */
 bool anvil_hosted_surface_reopen_closed_window(void);
 bool anvil_hosted_surface_focus_sidebar(bool focused);

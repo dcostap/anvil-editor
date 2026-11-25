@@ -3,10 +3,11 @@
 -- Window A holds Project and Other; Window B holds Replacement.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if not action or not action:match("^windows%-close") then return end
+local restart = action == "windows-close-restart"
 local dirty = action == "windows-close-dirty" or action == "windows-close-cleanup-cancel"
-  or action == "windows-close-all-cancel"
+  or action == "windows-close-all-cancel" or restart
 local terminals = action == "windows-close-terminals-keep" or action == "windows-close-terminals-end"
-  or action == "windows-close-all-terminals"
+  or action == "windows-close-all-terminals" or restart
 local core, common = require "core", require "core.common"
 local command = require "core.command"
 local ffi = require "ffi"
@@ -65,14 +66,18 @@ local function windows(pid)
  end)
  user32.EnumWindows(cb, 0); cb:free(); return found, count
 end
+local function window_title(window)
+ local text = ffi.new("wchar_t[128]")
+ local length = user32.GetWindowTextW(window, text, 128)
+ local label = {}; for i=0,length-1 do label[#label+1] = string.char(text[i] < 128 and text[i] or 63) end
+ return table.concat(label)
+end
 local function dialog(pid, title)
  local found
  local cb = ffi.cast("int (__stdcall *)(void *, intptr_t)", function(window)
   local owner = ffi.new("unsigned long[1]"); user32.GetWindowThreadProcessId(window, owner)
   if tonumber(owner[0]) == pid and user32.IsWindowVisible(window) ~= 0 then
-   local text = ffi.new("wchar_t[128]"); local length = user32.GetWindowTextW(window, text, 128)
-   local label = {}; for i=0,length-1 do label[#label+1] = string.char(text[i] < 128 and text[i] or 63) end
-   if table.concat(label) == title then found = window; return 0 end
+   if window_title(window) == title then found = window; return 0 end
   end
   return 1
  end)
@@ -99,7 +104,7 @@ local names = {[root .. "/Project"] = "a", [root .. "/Replacement"] = "b", [root
 
 if path:match("/driver$") then
  core.add_background_thread(function()
-  local subject
+  local subject, restarted_shell
   local handles = {}
   local terminal_states = {}
   local ok, err = pcall(function()
@@ -337,6 +342,52 @@ if path:match("/driver$") then
     return finish_b()
    end
 
+   if restart then
+    local initial = {a = a, b = b, c = c}
+    local hosts = {open(a.host_pid), open(b.host_pid), open(c.host_pid)}
+    terminal_states = {a.terminal, b.terminal, c.terminal}
+    local function first_prompt()
+     for _, name in ipairs {"b", "c", "a"} do
+      if load("nag-" .. name .. "-1") then return name end
+     end
+    end
+    save("command-b", "core:restart_all_windows")
+    local first = wait(first_prompt, 10, "Restart All Windows did not ask about unsaved changes")
+    save("answer-" .. first .. "-1", "cancel")
+    wait(function() return load("cancelled-" .. first .. "-1") end, 5)
+    assert(subject:running() and count() == 2 and running(pa) and running(pb) and running(pc),
+     "Cancel closed a Window or Project")
+
+    save("command-" .. first, "core:restart_all_windows")
+    wait(function()
+     for name in pairs(initial) do
+      local prompt = name .. (name == first and "-2" or "-1")
+      if load("nag-" .. prompt) and not load("answer-" .. prompt) then save("answer-" .. prompt, "discard") end
+     end
+     return not subject:running()
+    end, 20, "Restart All Windows did not close the original shell")
+    assert(subject:returncode() == 0, "the original shell ended with a failure")
+    local new_pid
+    for name, state in pairs(initial) do
+     local restored = wait(function() return load(name .. "-restarted") end, 20, "Restart did not restore Project " .. name)
+     assert(restored.shell_pid ~= shell and restored.pid ~= state.pid, "Restart did not start a new process")
+     assert(restored.window_id == state.window_id, "Restart moved a Project to another Window")
+     assert(restored.host_pid == state.host_pid, "Restart did not reattach the same Terminal host")
+     if not new_pid then new_pid = restored.shell_pid; restarted_shell = open(new_pid) end
+     assert(restored.shell_pid == new_pid, "Restart started more than one shell")
+    end
+    local restored, n = windows(new_pid)
+    assert(n == 2 and restored[a.window_id] and restored[b.window_id], "Restart did not restore both Windows")
+    wait(function() return window_title(restored[a.window_id]) == "Other" end, 10,
+     "Restart did not restore the Selected Project")
+    save("finish-restart", true)
+    wait(function() return not running(hosts[1]) and not running(hosts[2]) and not running(hosts[3]) end, 10)
+    terminal_states = {}
+    for _, window in pairs(restored) do user32.PostMessageW(window, 0x10, 0, 0) end
+    wait(function() return not running(restarted_shell) end, 10)
+    return
+   end
+
    if action == "windows-close-all-terminals" then
     -- Close All Windows asks once for the Terminal Sessions of every Window.
     local ta, tb, tc = open(a.host_pid), open(b.host_pid), open(c.host_pid)
@@ -425,12 +476,8 @@ if path:match("/driver$") then
      local state = wait(function() return load(name .. "-ready") end, 20, "a reopened Project did not start")
      assert(state.window_id == a.window_id, "a reopened Project opened in another Window")
     end
-    wait(function()
-     local text = ffi.new("wchar_t[128]")
-     local length = user32.GetWindowTextW(reopened, text, 128)
-     local label = {}; for i=0,length-1 do label[#label+1] = string.char(text[i] < 128 and text[i] or 63) end
-     return table.concat(label) == "Other"
-    end, 10, "Reopen Closed Window did not select the Window's Selected Project")
+    wait(function() return window_title(reopened) == "Other" end, 10,
+     "Reopen Closed Window did not select the Window's Selected Project")
     -- The list is empty now, so a second request opens nothing.
     save("command-b", "core:reopen_closed_window")
     coroutine.yield(1)
@@ -453,6 +500,7 @@ if path:match("/driver$") then
    error("unknown Window Close probe " .. action)
   end)
   save("release-cleanup", true)
+  if not ok and restarted_shell then kernel.TerminateProcess(restarted_shell, 1) end
   for _, state in ipairs(terminal_states) do
    local view = require("plugins.terminal").from_state(state)
    local deadline = system.get_time() + 20
@@ -485,6 +533,19 @@ elseif names[path] then
   coroutine.yield(.2)
   local editor
   local terminal
+  if restart and load(name .. "-ready") then
+   terminal = wait(function()
+    for _, view in ipairs(require("plugins.terminal").open_views()) do
+     view:service_session(true)
+     if view.state == "running" then return view end
+    end
+   end, 15, "Restart did not restore the Terminal View")
+   save(name .. "-restarted", {pid=tonumber(kernel.GetCurrentProcessId()), shell_pid=system.get_window_process_id(),
+    window_id=system.get_anvil_window_id(), host_pid=terminal.session:stats().host_pid})
+   wait(function() return load("finish-restart") end, 30)
+   terminal:end_session()
+   return
+  end
   if terminals then
    terminal = require("plugins.terminal").open {shell="cmd.exe /D /Q", cwd=path, placement="new"}
    wait(function()
@@ -493,7 +554,8 @@ elseif names[path] then
    end, 30, "Terminal did not start idle")
   end
   if dirty then
-   editor = core.open_file(path .. "/edited.txt"); core.set_active_view(editor)
+   editor = core.open_file(path .. "/edited.txt", restart and {placement = "new"} or nil)
+   core.set_active_view(editor)
    editor.buffer:insert(1, 1, "DIRTY_" .. name .. "_")
   end
   save(name .. "-ready", {pid=tonumber(kernel.GetCurrentProcessId()), shell_pid=system.get_window_process_id(),
@@ -515,12 +577,13 @@ elseif names[path] then
     os.remove(root .. "/command-" .. name .. ".lua")
     assert(command.perform(requested), requested .. " did not run")
    end
-   local visible = core.nag_view.visible and core.nag_view:get_title() == (terminals and "Running Terminals" or "Unsaved Changes")
+   local visible = core.nag_view.visible and core.nag_view:get_title() ==
+    (terminals and not restart and "Running Terminals" or "Unsaved Changes")
    if visible and not pending then asked = asked + 1; pending = true; save("nag-" .. name .. "-" .. asked, true) end
    local answer = pending and load("answer-" .. name .. "-" .. asked)
    if answer then
     pending = false
-    if terminals then
+    if terminals and not restart then
      for i, option in ipairs(core.nag_view.options) do
       if option.action == answer then
        core.nag_view:change_hovered(i)

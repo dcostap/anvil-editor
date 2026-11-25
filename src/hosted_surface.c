@@ -1285,6 +1285,12 @@ bool anvil_hosted_surface_close_all_windows(void) {
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
+bool anvil_hosted_surface_restart_all_windows(void) {
+  if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
+  send_message(ANVIL_SURFACE_MSG_RESTART_ALL_WINDOWS, NULL, 0);
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
 bool anvil_hosted_surface_reopen_closed_window(void) {
   if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
   send_message(ANVIL_SURFACE_MSG_REOPEN_CLOSED_WINDOW, NULL, 0);
@@ -1889,6 +1895,7 @@ bool anvil_hosted_surface_simple_mode_saved(bool enabled) { (void)enabled; retur
 bool anvil_hosted_surface_toggle_sidebar(void) { return false; }
 bool anvil_hosted_surface_toggle_alt_navigation(void) { return false; }
 bool anvil_hosted_surface_close_all_windows(void) { return false; }
+bool anvil_hosted_surface_restart_all_windows(void) { return false; }
 bool anvil_hosted_surface_reopen_closed_window(void) { return false; }
 bool anvil_hosted_surface_focus_sidebar(bool focused) { (void)focused; return false; }
 bool anvil_hosted_surface_peek(uint32_t project_id, uint32_t pane, int direction, int row_top, int row_bottom,
