@@ -20,7 +20,10 @@ if (!file) {
 fs.appendFileSync(file, JSON.stringify({ type: "message" }) + "\n");
 // Like Pi, load each extension and send it the events of a run that is in a tool call.
 const handlers = {};
-const pi = { on: (name, handler) => { (handlers[name] = handlers[name] || []).push(handler); return () => {}; } };
+const pi = {
+  on: (name, handler) => { (handlers[name] = handlers[name] || []).push(handler); return () => {}; },
+  registerTool: () => {},
+};
 for (let i = 0; i + 1 < args.length; i++) {
   if (args[i] !== "--extension") continue;
   const factory = require(args[i + 1]);

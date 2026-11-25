@@ -657,7 +657,8 @@ test.describe("Machine server", function()
     write_file(disk_file, text)
     context.project_link = context.root .. PATHSEP .. "alias"
     local process = require "core.process"
-    local proc = assert(process.start({"cmd.exe", "/d", "/c", "mklink", "/J", context.project_link, context.project}))
+    local proc = assert(process.start({"cmd.exe", "/d", "/c", "mklink", "/J",
+      common.normalize_path(context.project_link), common.normalize_path(context.project)}))
     while proc:running() do coroutine.yield(0.01) end
     test.equal(proc:wait(process.WAIT_DEADLINE), 0)
     context.project = context.project_link
@@ -696,7 +697,8 @@ test.describe("Machine server", function()
     test.skip_if(PLATFORM ~= "Windows", "This fixture uses a Windows junction")
     local process = require "core.process"
     local link = context.project .. PATHSEP .. "linked"
-    local proc = assert(process.start({"cmd.exe", "/d", "/c", "mklink", "/J", link, context.user}))
+    local proc = assert(process.start({"cmd.exe", "/d", "/c", "mklink", "/J",
+      common.normalize_path(link), common.normalize_path(context.user)}))
     while proc:running() do coroutine.yield(0.01) end
     test.equal(proc:wait(process.WAIT_DEADLINE), 0)
     local client = owner(context)

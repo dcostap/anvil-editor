@@ -1355,7 +1355,7 @@ test.describe("Terminal View", function()
     local view = terminal.open({ focus = true })
     local event = { ctrl = true, modifiers = 2, scancode = 14 }
     test.ok(view:on_key_pressed("k", event))
-    core.set_active_view(context.previous_active_view)
+    panes.place(function() return Editor(Buffer()) end, { placement = "new", focus = true })
     view:sync_focus()
     test.equal(context.sessions[1].keys[#context.sessions[1].keys][3], "release")
   end)
@@ -2560,7 +2560,7 @@ test.describe("Terminal View", function()
     local view = terminal.open()
     local session = context.sessions[1]
     view:update()
-    core.set_active_view(context.previous_active_view)
+    panes.place(function() return Editor(Buffer()) end, { placement = "new", focus = true })
     view:update()
 
     test.same({ true, false }, session.focus_events)

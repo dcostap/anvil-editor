@@ -2191,6 +2191,8 @@ function M.reset_for_tests()
       end
     end
   end
+  -- A closed View keeps no focus, so the next focus change does not save its Buffer.
+  if seen[core.active_view] then core.clear_active_view() end
   M.groups = {}
   M.panes_by_id = {}
   M.groups_by_id = {}
