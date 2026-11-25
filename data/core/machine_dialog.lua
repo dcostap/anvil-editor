@@ -1,9 +1,7 @@
--- The Machines Dialog. "This PC" shows how other devices reach this PC's Machine server, makes pairing codes
--- and lists the paired devices. "Other Machines" lists the Machines that this PC paired with, and pairs with a new
--- one. Each change applies at once.
+-- Connect to a Machine or share this PC. Pairing and Project selection stay inside the Dialog.
 
 local core = require "core"
-local command = require "core.command"
+local machine_project = require "core.machine_project"
 local common = require "core.common"
 local json = require "core.json"
 local style = require "core.style"
@@ -25,34 +23,12 @@ function MachineDialog:__tostring() return "MachineDialog" end
 -- The rows that each list shows before it scrolls.
 local VISIBLE_ROWS = 4
 
--- The pages of the Dialog, one at a time. The node is as tall as its tallest page, so the card does not move when
--- the page changes.
-local Pages = layout.Node:extend()
-
-function Pages:content_width()
-  local widest = 0
-  for _, page in ipairs(self.children) do widest = math.max(widest, page:width()) end
-  return widest
-end
-
-function Pages:content_height(w)
-  local tallest = 0
-  for _, page in ipairs(self.children) do tallest = math.max(tallest, page:height(w)) end
-  return tallest
-end
-
-function Pages:place(x, y, w, h)
-  Pages.super.place(self, x, y, w, h)
-  for _, page in ipairs(self.children) do
-    if page.visible then page:place(x, y, w, page:height(w)) end
-  end
-end
 -- The port of a Machine address without one. The Machine server uses it unless it starts with `--port`.
 local DEFAULT_PORT = 7690
 -- How often the open Dialog asks this PC's server for its devices, in seconds.
 local DEVICES_INTERVAL = 2
 
-local LEVELS = { full = "Full control", view = "View" }
+local LEVELS = { full = "Full control", view = "View only" }
 
 local function server_file()
   return USERDIR .. PATHSEP .. "machine" .. PATHSEP .. "server.json"
@@ -71,7 +47,11 @@ end
 local function parse_address(text)
   text = text:match("^%s*(.-)%s*$")
   local host, port = text:match("^([^%s:/]+):(%d+)$")
-  if host then return host, tonumber(port) end
+  if host then
+    port = tonumber(port)
+    if port >= 1 and port <= 65535 then return host, port end
+    return
+  end
   if text:match("^[^%s:/]+$") then return text, DEFAULT_PORT end
 end
 
@@ -82,10 +62,9 @@ end
 
 function MachineDialog:new()
   MachineDialog.super.new(self, { title = "Machines", width = 600 })
-  self.page = "this"
   self.page_control = Segmented({
-    options = { { value = "this", label = "This PC" }, { value = "others", label = "Other Machines" } },
-    value = "this",
+    options = { { value = "others", label = "Connect to a Machine" }, { value = "this", label = "Share this PC" } },
+    value = "others",
     on_change = function(page)
       self:show_page(page)
       return true
@@ -101,11 +80,18 @@ function MachineDialog:new()
       local address = self:shared_address()
       if address then system.set_clipboard(address) end
     end })
+  self.lan_button = Button({ label = "Share on Local Network", size = "small",
+    on_click = function() self:toggle_lan() end })
+  self.copy_lan_button = Button({ label = "Copy Address", size = "small", visible = false,
+    on_click = function()
+      local address = self:lan_address()
+      if address then system.set_clipboard(address) end
+    end })
   self.level_control = Segmented({
     options = { { value = "full", label = LEVELS.full }, { value = "view", label = LEVELS.view } },
     value = "full",
   })
-  self.code_button = Button({ label = "Make Code", on_click = function() self:make_code() end })
+  self.code_button = Button({ label = "Create Pairing Code", kind = "primary", on_click = function() self:make_code() end })
   self.copy_code_button = Button({ label = "Copy Code", size = "small", visible = false,
     on_click = function()
       local code = self:active_code()
@@ -133,67 +119,96 @@ function MachineDialog:new()
     on_activate = function() self:open_project() end,
   })
   self.open_button = Button({
-    label = "Open Project", icon = ui.icons.open_in_new, size = "small",
+    label = "Browse Projects", kind = "primary",
     on_click = function() self:open_project() end,
   })
   self.forget_button = Button({
     label = "Forget", icon = ui.icons.remove, kind = "danger", size = "small",
     on_click = function() self:forget() end,
   })
-  self.address_field = TextField({ width = 280, placeholder = "host or host:port",
-    on_change = function() self:update_buttons() end })
-  self.code_field = TextField({ width = 140, on_change = function() self:update_buttons() end })
-  self.pair_button = Button({ label = "Pair", on_click = function() self:pair() end })
+  local function pair_input_changed()
+    self.pair_error = nil
+    self:update_buttons()
+  end
+  self.address_field = TextField({ grow = 1, placeholder = "Hostname or host:port", on_change = pair_input_changed,
+    on_submit = function(text) return parse_address(text) ~= nil, "Enter a hostname, optionally followed by :port." end })
+  self.code_field = TextField({ width = 140, placeholder = "6-digit code", on_change = pair_input_changed,
+    on_submit = function() return self:valid_code(), "Enter the six-digit code from the other Machine." end })
+  self.pair_button = Button({ label = "Pair Machine", kind = "primary", on_click = function() self:pair() end })
 
-  self.done_button = Button({ label = "Done", kind = "primary", min_width = 88, on_click = function() self:close() end })
-
-  self.access_row = layout.Field { title = "Address", description = "",
+  self.access_row = layout.Field { title = "Tailnet", description = "", stacked = true,
     control = layout.Row { self.access_button, self.copy_address_button } }
+  self.lan_row = layout.Field { title = "Local network", description = "", stacked = true,
+    control = layout.Row { self.lan_button, self.copy_lan_button } }
   self.code_text = layout.Text { role = "title", wrap = false }
   self.code_timer = layout.Text { role = "meta", wrap = false }
   self.code_row = layout.Row { visible = false, self.code_text, layout.Spacer { grow = 1 }, self.code_timer,
     self.copy_code_button }
   self.pair_status = layout.Text {}
+  self.devices_group = layout.Group { title = "Devices with access to this PC", self.device_list,
+    layout.Row { justify = "end", self.revoke_button } }
   self.this_page = layout.Column {
     layout.Group {
-      title = "Pair Another Device",
       self.access_row,
-      layout.Field { title = "Code", control = layout.Row { gap = 8, self.level_control, self.code_button } },
+      self.lan_row,
+      layout.Field { title = "New pairing code", stacked = true,
+        control = layout.Row { self.level_control, layout.Spacer {grow=1}, self.code_button } },
       self.code_row,
     },
-    layout.Group {
-      title = "Devices",
-      self.device_list,
-      layout.Row { justify = "end", self.revoke_button },
-    },
+    self.devices_group,
   }
+  self.add_button = Button { label = "Pair another Machine", on_click = function() self:show_page("pair") end }
   self.others_page = layout.Column {
     layout.Group {
       title = "Paired Machines",
       self.machine_list,
-      layout.Row { gap = 8, justify = "end", self.open_button, self.forget_button },
+      layout.Row { self.forget_button, layout.Spacer {grow=1}, self.open_button },
     },
-    layout.Group {
-      title = "Pair a Machine",
-      layout.Field { title = "Address", control = self.address_field },
-      layout.Field { title = "Code", control = layout.Row { gap = 8, self.code_field, self.pair_button } },
-      self.pair_status,
-    },
+    layout.Row { self.add_button },
   }
+  self.pair_back = Button { label = "Back", on_click = function() self:show_page("others") end }
+  self.pair_page = layout.Column {
+    layout.Group { title = "Pair a Machine", layout.Field { title = "Machine address", stacked = true, control = self.address_field },
+      layout.Field { title = "Code from the other Machine", control = self.code_field } },
+    self.pair_status, layout.Row { self.pair_back, layout.Spacer {grow=1}, self.pair_button },
+  }
+  self.project_list = List { row_height = row_h, max_rows = 8, draw_row = function(project, x, y, w, h)
+    local font, pad = ui.font(), ui.metrics().pad_x
+    local name = ui.fit_text(font, project.scratch and "Scratch" or common.basename(project.path), w - 2 * pad)
+    common.draw_text(font, style.dialog_text, name, "left", x + pad, y, w - 2 * pad, h)
+    local remaining = w - 3 * pad - font:get_width(name)
+    if remaining > 0 then
+      local small = ui.role_font("description")
+      common.draw_text(small, style.dialog_text_muted, ui.fit_text(small, common.dirname(project.path) or "", remaining),
+        "right", x + w - pad - remaining, y, remaining, h)
+    end
+  end, on_activate = function() self:select_project() end }
+  self.project_filter = TextField { placeholder = "Find a Project", on_change = function(query)
+    local rows = {}
+    for _, project in ipairs(self.browsing and self.browsing.rows or {}) do
+      if query == "" or common.fuzzy_match(project.path, query, true) then rows[#rows + 1] = project end
+    end
+    self.project_list.empty = "No matching Projects"
+    self.project_list:set_rows(rows)
+    self.select_button.enabled = #rows > 0
+  end }
+  self.project_group = layout.Group { title = "Projects", self.project_filter, self.project_list }
+  self.select_button = Button { label = "Open Project", kind = "primary", on_click = function() self:select_project() end }
+  self.projects_page = layout.Column { self.project_group, layout.Row {
+    Button { label = "Back", on_click = function() self:show_page("others") end }, layout.Spacer {grow=1}, self.select_button } }
   self.body = layout.Column {
     layout.Row { self.page_control },
-    Pages { self.this_page, self.others_page },
+    self.this_page, self.others_page, self.pair_page, self.projects_page,
   }
-  self.footer = layout.Row { justify = "end", self.done_button }
 
   self.owner = MachineClient.new(server_file(), function()
     self:update_buttons()
     self:refresh_devices()
+    self:check_lan()
   end)
   self.clients = {}
   self:refresh_machines()
-  self:check_access()
-  self:show_page("this")
+  self:show_page("others")
   -- Clients report no changes, so the open Dialog looks again each second. It also asks for the devices, so a
   -- device that pairs with the code shows at once.
   core.add_thread(function()
@@ -211,12 +226,22 @@ function MachineDialog:new()
 end
 
 function MachineDialog:show_page(page)
+  if page == "others" and #self.machine_list.rows == 0 then page = "pair" end
   self.page = page
-  self.page_control:set_value(page)
+  self.browsing = nil
   local this = page == "this"
-  self.this_page.visible, self.others_page.visible = this, not this
-  if this then self:refresh_devices() end
+  self.page_control:set_value(this and "this" or "others")
+  self.this_page.visible, self.others_page.visible = this, page == "others"
+  self.pair_page.visible, self.projects_page.visible = page == "pair", page == "projects"
+  self.pair_back.visible = #self.machine_list.rows > 0
+  if this then self:refresh_devices(); self:check_access(); self:check_lan() end
   self:update_buttons()
+  if self.is_open then self:focus(self:page_focus()) end
+end
+
+function MachineDialog:page_focus()
+  return self.page == "pair" and self.address_field or self.page == "others" and self.machine_list
+    or self.page == "projects" and self.project_list or self.page_control
 end
 
 function MachineDialog:update_buttons()
@@ -229,11 +254,16 @@ function MachineDialog:update_buttons()
   self.access_button.enabled = not self.changing_access
   self.access_button.label = state == "on" and "Stop Sharing" or "Share on Tailnet"
   self.copy_address_button.visible = self:shared_address() ~= nil
+  self.lan_button.enabled = ready and self.lan ~= nil and not self.changing_lan
+  self.lan_button.label = self.lan and self.lan.lan and "Stop Sharing" or "Share on Local Network"
+  self.copy_lan_button.visible = self:lan_address() ~= nil
   local machine = self.machine_list:selected_row()
-  self.open_button.enabled = machine ~= nil
+  self.devices_group.visible = #self.device_list.rows > 0
+  self.open_button.enabled = machine and self.clients[machine.machine].state == "ready" or false
   self.forget_button.enabled = machine ~= nil
   self.pair_button.enabled = not self.pairing and parse_address(self.address_field:get_text()) ~= nil
-    and self:entered_code() ~= ""
+    and self:valid_code()
+  self:update_status()
   core.redraw = true
 end
 
@@ -272,6 +302,38 @@ function MachineDialog:toggle_access()
   return true
 end
 
+-- The address that devices on the local network pair with, while sharing is on.
+function MachineDialog:lan_address()
+  local lan = self.lan
+  if not (lan and lan.lan) or self.changing_lan then return end
+  local host = os.getenv("COMPUTERNAME") or os.getenv("HOSTNAME")
+  return host and (host:lower() .. ":" .. tostring(lan.port))
+end
+
+function MachineDialog:check_lan()
+  if not (self.owner and self.owner.state == "ready") then return end
+  self.owner:request("sharing.get", {}, nil, function(err, result)
+    if not err then self.lan = result end
+    self:update_buttons()
+  end)
+end
+
+function MachineDialog:toggle_lan()
+  if not (self.owner and self.owner.state == "ready" and self.lan) or self.changing_lan then return false end
+  self.changing_lan = true
+  self.owner:request("sharing.set", { lan = not self.lan.lan }, nil, function(err, result)
+    self.changing_lan = false
+    if err then
+      self.lan = { lan = false, error = err.message or err.code }
+    else
+      self.lan = result
+    end
+    self:update_buttons()
+  end)
+  self:update_buttons()
+  return true
+end
+
 function MachineDialog:make_code()
   local level = self.level_control.value
   self.owner:request("pairing.start", { level = level }, nil, function(err, result)
@@ -282,7 +344,7 @@ function MachineDialog:make_code()
         made = os.time() }
       core.log_quiet("Machines Dialog: made a pairing code for %s access", level)
     end
-    core.redraw = true
+    self:update_buttons()
   end)
 end
 
@@ -332,7 +394,9 @@ function MachineDialog:refresh_machines(select)
   local records = MachineClient.records()
   local clients = {}
   for _, record in ipairs(records) do
-    clients[record.machine] = self.clients[record.machine] or MachineClient.new(record.path)
+    clients[record.machine] = self.clients[record.machine] or MachineClient.new(record.path, function()
+      if self.owner then self:update_buttons() end
+    end)
   end
   for machine, client in pairs(self.clients) do
     if not clients[machine] then client:close() end
@@ -351,8 +415,40 @@ end
 function MachineDialog:open_project()
   local record = self.machine_list:selected_row()
   if not record then return false end
+  local client = self.clients[record.machine]
+  if not client then return false end
+  self:show_page("projects")
+  self.project_group.title:set_text("Projects @ " .. machine_label(record))
+  self.project_filter:set_text("")
+  self.project_filter.visible = false
+  self.project_list.empty = "Loading Projects…"
+  self.project_list:set_rows({})
+  self.select_button.enabled = false
+  local request = { machine = record.machine }
+  self.browsing = request
+  client:request("projects.list", {}, nil, function(err, result)
+    if not self.owner or self.browsing ~= request then return end
+    local rows = {}
+    for _, project in ipairs(result and result.projects or {}) do
+      if type(project.path) == "string" then rows[#rows + 1] = project end
+    end
+    self.project_list.empty = err and (err.message or err.code) or "No Projects on this Machine"
+    request.rows = rows
+    self.project_filter.visible = #rows > 1
+    self.project_list:set_rows(rows)
+    self.select_button.enabled = #rows > 0
+  end)
+  return true
+end
+
+function MachineDialog:select_project()
+  local project = self.project_list:selected_row()
+  if not (self.browsing and project) then return false end
+  if not system.is_hosted_surface() then return core.error("A Project on a Machine opens only in the Anvil shell") end
+  local key = machine_project.key(self.browsing.machine, project.path)
+  if not core.open_project_in_same_window(key) then core.error("Cannot open %s", project.path); return false end
   self:close()
-  return command.perform("machine:open_project", record.machine)
+  return true
 end
 
 -- Forgets the selected Machine. With Full control, this PC also removes itself from the Machine's devices.
@@ -363,6 +459,7 @@ function MachineDialog:forget()
   local function done()
     MachineClient.forget(record.machine)
     self:refresh_machines()
+    if self.page == "others" then self:show_page("others") end
   end
   if client and client.state == "ready" and client.level == "full" then
     client:request("devices.revoke", { device = record.device }, nil, done)
@@ -376,22 +473,27 @@ function MachineDialog:entered_code()
   return (self.code_field:get_text():gsub("%s", ""))
 end
 
+function MachineDialog:valid_code()
+  return self:entered_code():match("^%d%d%d%d%d%d$") ~= nil
+end
+
 function MachineDialog:pair()
   local host, port = parse_address(self.address_field:get_text())
   local code = self:entered_code()
-  if not host or code == "" or self.pairing then return false end
+  if not self.pair_button.enabled or self.page ~= "pair" then return false end
   self.pairing, self.pair_error = true, nil
   local name = os.getenv("COMPUTERNAME") or os.getenv("HOSTNAME") or "Anvil"
   core.log_quiet("Machines Dialog: pair with %s:%d", host, port)
   MachineClient.pair(host, port, code, name, function(err, path)
     self.pairing = false
+    if not self.owner then return end
     if err then
       self.pair_error = err.message or err.code
     else
       self.address_field:set_text("")
       self.code_field:set_text("")
       self:refresh_machines(common.basename(path):match("^(%x+)%.json$"))
-      self:focus(self.machine_list)
+      if self.page == "pair" then self:show_page("others") end
     end
     self:update_buttons()
   end)
@@ -401,15 +503,24 @@ end
 
 -- Enter in the address field moves to the code. Enter in the code field pairs. A focus change only keeps the text.
 function MachineDialog:confirm()
+  if self.focused == self.project_filter then return self:select_project() end
   if self.focused == self.address_field then
-    self.address_field:submit()
+    if not self.address_field:submit() or not parse_address(self.address_field:get_text()) then return false end
     return self:focus(self.code_field)
   end
   if self.focused == self.code_field then
-    self.code_field:submit()
+    if not self.code_field:submit() then return false end
     return self:pair()
   end
   return MachineDialog.super.confirm(self)
+end
+
+function MachineDialog:cancel()
+  if self.page == "projects" or self.page == "pair" and self.pair_back.visible then
+    self:show_page("others")
+    return true
+  end
+  return MachineDialog.super.cancel(self)
 end
 
 function MachineDialog:perform(name)
@@ -482,12 +593,32 @@ function MachineDialog:access_text()
   return status.message or "Tailscale failed", style.dialog_danger
 end
 
+-- The text of the Local network row and its color.
+function MachineDialog:lan_text()
+  local lan = self.lan
+  if self.changing_lan then return "Changing", style.dialog_text_muted end
+  if not lan then return "", style.dialog_text_muted end
+  if lan.error then return lan.error, style.dialog_danger end
+  if lan.lan then return self:lan_address() or "Shared", style.dialog_text end
+  return "Off", style.dialog_text
+end
+
 -- Update the address, the pairing code and its time, and the pairing state.
-function MachineDialog:on_update()
+function MachineDialog:update_status()
+  if self.page == "pair" then
+    local status = self.pairing and "Pairing…" or self.pair_error
+    self.pair_status.visible = status ~= nil
+    self.pair_status:set_text(status or "")
+    self.pair_status.color = self.pair_error and style.dialog_danger or style.dialog_text_muted
+  end
+  if self.page ~= "this" then return end
   local text, color = self:access_text()
   local access = self.access_row.description
   access:set_text(text)
   access.color = color
+  text, color = self:lan_text()
+  self.lan_row.description:set_text(text)
+  self.lan_row.description.color = color
   local code = self:active_code()
   self.code_row.visible = code ~= nil
   self.copy_code_button.visible = code ~= nil and code.code ~= nil
@@ -503,10 +634,6 @@ function MachineDialog:on_update()
     self.code_text.color = nil
     self.code_timer:set_text(string.format("%s · %d:%02d", LEVELS[code.level] or "", math.floor(left / 60), left % 60))
   end
-  local status = self.pairing and "Pairing" or self.pair_error
-  self.pair_status.visible = status ~= nil
-  self.pair_status:set_text(status or "")
-  self.pair_status.color = self.pair_error and not self.pairing and style.dialog_danger or style.dialog_text_muted
 end
 
 ------------------------------------------------------------------------------------------------------------------
@@ -514,16 +641,22 @@ end
 
 local M = { Dialog = MachineDialog }
 
----Open the Dialog. `pair` shows the pairing fields of "Other Machines".
----@param options? { pair: boolean? }
+---Open the Dialog at the pairing form, the paired list, or the Projects of a known Machine.
+---@param options? { pair: boolean?, browse: boolean?, machine: string? }
 function M.open(options)
   options = options or {}
   local open = require("core.ui.dialog").current()
   local instance = (open and open:is(MachineDialog)) and open or MachineDialog()
-  if options.pair then instance:show_page("others") end
-  local focus = options.pair and instance.address_field or instance.page_control
+  if options.pair then instance:show_page("pair") end
+  if options.browse then instance:show_page("others") end
+  local focus = instance:page_focus()
   instance:open(focus)
   instance:focus(focus)
+  if options.machine then
+    for index, record in ipairs(instance.machine_list.rows) do
+      if record.machine == options.machine then instance.machine_list:select(index); instance:open_project(); break end
+    end
+  end
   return instance
 end
 

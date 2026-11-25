@@ -42,16 +42,22 @@ test.describe("Machines Dialog", function()
   test.before_each(function(context)
     context.run = access.run
     context.set_clipboard = system.set_clipboard
+    context.hosted, context.select = system.is_hosted_surface, system.select_project
     system.set_clipboard = function(text) context.clipboard = text end
     context.project = USERDIR .. PATHSEP .. "machine-dialog-" .. math.floor(system.get_time() * 1000000)
     test.ok(common.mkdirp(context.project))
-    context.server, context.discovery = machine_server.start(USERDIR, { context.project })
+    local second = context.project .. PATHSEP .. "second"
+    test.ok(common.mkdirp(second))
+    -- The server shares on another loopback address, so the tests open no port to the network.
+    context.server, context.discovery = machine_server.start(USERDIR,
+      { "--test-lan-address", "127.0.0.2", context.project, second })
     context.owner = MachineClient.new(machine_server.discovery_path(USERDIR))
   end)
 
   test.after_each(function(context)
     access.run = context.run
     system.set_clipboard = context.set_clipboard
+    system.is_hosted_surface, system.select_project = context.hosted, context.select
     local open = dialog.current()
     if open then open:close() end
     context.owner:close()
@@ -64,6 +70,7 @@ test.describe("Machines Dialog", function()
   test.it("makes a pairing code that pairs a device, then revokes the device", function(context)
     access.run = function(_, on_done) on_done(nil, "missing") end
     local open = open_dialog("machine:manage")
+    open.page_control:choose("this")
     test.ok(not test.not_nil(open.copy_code_button).visible)
     open.level_control:set_value("view")
     open.code_button:activate()
@@ -112,6 +119,7 @@ test.describe("Machines Dialog", function()
       end
     end
     local open = open_dialog("machine:manage")
+    open.page_control:choose("this")
     wait_until(function() return open:access_text() == "Only this PC" end, "The Dialog does not show the access")
     test.ok(not test.not_nil(open.copy_address_button).visible)
 
@@ -130,6 +138,29 @@ test.describe("Machines Dialog", function()
     for _, line in ipairs(commands) do test.is_nil(line:find("unexpected", 1, true), line) end
   end)
 
+  test.it("shares this PC on the local network, and stops", function(context)
+    access.run = function(_, on_done) on_done(nil, "missing") end
+    local open = open_dialog("machine:manage")
+    open.page_control:choose("this")
+    wait_until(function() return open:lan_text() == "Off" end, "The Dialog does not show the local network")
+    test.ok(not test.not_nil(open.copy_lan_button).visible)
+
+    open.lan_button:activate()
+    -- Other devices on the network use this address to pair.
+    local host = (os.getenv("COMPUTERNAME") or os.getenv("HOSTNAME") or ""):lower()
+    local address = host .. ":" .. context.discovery.port
+    wait_until(function() return open:lan_text() == address end, "Sharing did not turn on")
+    wait_until(function() return context.owner.state == "ready" end, "The owner did not connect")
+    test.equal(select(2, call(context.owner, "sharing.get", {})).lan, true)
+    test.ok(open.copy_lan_button:activate())
+    test.equal(context.clipboard, address)
+
+    open.lan_button:activate()
+    wait_until(function() return open:lan_text() == "Off" end, "Sharing did not stop")
+    test.equal(select(2, call(context.owner, "sharing.get", {})).lan, false)
+    test.ok(not open.copy_lan_button.visible)
+  end)
+
   test.it("pairs with a Machine from its address and code, then forgets it", function(context)
     access.run = function(_, on_done) on_done(nil, "missing") end
     wait_until(function() return context.owner.state == "ready" end, "The owner did not connect")
@@ -137,9 +168,16 @@ test.describe("Machines Dialog", function()
 
     local open = open_dialog("machine:pair")
     test.equal(open.focused, open.address_field)
+    type_into(open, open.address_field, "127.0.0.1:99999")
+    test.not_ok(open:confirm())
+    test.equal(open.focused, open.address_field)
+    open.address_field:select_all()
     type_into(open, open.address_field, "127.0.0.1:" .. context.discovery.port)
     test.ok(open:confirm())
     test.equal(open.focused, open.code_field)
+    type_into(open, open.code_field, "12")
+    test.not_ok(open:confirm())
+    open.code_field:select_all()
     type_into(open, open.code_field, pairing.code)
     test.ok(open:confirm())
     wait_until(function() return #open.machine_list.rows == 1 end, "The paired Machine does not show")
@@ -147,6 +185,29 @@ test.describe("Machines Dialog", function()
     test.equal(record.host, "127.0.0.1")
     test.equal(record.port, context.discovery.port)
     wait_until(function() return open.clients[record.machine].state == "ready" end, "The Machine is not online")
+
+    test.ok(open.open_button:activate())
+    test.equal(dialog.current(), open)
+    wait_until(function() return open.project_list and open.project_list:selected_row() end, "No Machine Projects")
+    test.ok(common.path_equals(open.project_list:selected_row().path, context.project))
+    test.ok(open:cancel())
+    test.equal(dialog.current(), open)
+
+    test.ok(open.machine_list:activate())
+    wait_until(function() return open.project_list:selected_row() end, "Projects did not reopen")
+    type_into(open, open.project_filter, "second")
+    test.equal(#open.project_list.rows, 1)
+    local opened
+    system.is_hosted_surface = function() return true end
+    system.select_project = function(key) opened = key; return true end
+    test.ok(open:confirm())
+    test.is_nil(dialog.current())
+    local machine, path = require("core.machine_project").parse(opened)
+    test.equal(machine, record.machine)
+    test.ok(common.path_equals(path, context.project .. PATHSEP .. "second"))
+    system.is_hosted_surface, system.select_project = context.hosted, context.select
+    open = open_dialog("machine:manage")
+    wait_until(function() return open.clients[record.machine].state == "ready" end, "Machine did not reconnect")
 
     -- With Full control, Forget also removes this PC from the Machine's devices.
     open.machine_list:select(1)
