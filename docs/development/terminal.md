@@ -12,6 +12,8 @@ That host can drop Pi's mouse mode when Pi sets raw input during startup. A widt
 
 The editor answers. Do not go back to an earlier ConPTY. Typed input then appears above the visible prompt.
 
+ConPTY asks only when the shell prints a prompt, not after a resize. A width change while a shell waits at its prompt can leave ConPTY one row away from the Terminal View. The next command line and its output then appear on the wrong row until the next prompt. A Controller handoff between Clients of different sizes causes two width changes, so shared Sessions show this more often. This is a known limitation. A fix needs Ghostty to reflow like ConPTY, or ConPTY to ask again after a resize. `ui/terminal_sessions.lua` checks that output arrives, not on which row.
+
 Run `ui/terminal_mouse_wheel.lua`, `ui/terminal_resize_prompt.lua` and the standalone smoke test after ConPTY updates. The resize test has a known PSReadLine 2.4.5 failure. See [known test failures](../../tests/README.md#known-failures); keep it enabled.
 
 Middle-click scrolling uses Terminal history when the active screen has history. With no history, it sends wheel input through the normal wheel route. Reaching a history boundary does not send application input.

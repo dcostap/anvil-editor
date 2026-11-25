@@ -232,7 +232,13 @@ test.describe("Terminal Session restoration", function()
     -- Both Clients belong to this process. Closing one must not close the other's shell.
     other:close()
     test.ok(wait_for(view, function() return own_status().clients == 1 end))
-    mark(view, "after_other_close")
+    -- The width changes can leave ConPTY one row away from this screen, so the output can share a row.
+    -- The caret keeps the typed command from matching its output.
+    test.ok(view.session:write("echo after^_other_close\r"))
+    test.ok(wait_for(view, function()
+      local capture = view.session:text_capture()
+      return capture and capture.text:find("after_other_close", 1, true) ~= nil
+    end), "shell did not print after_other_close")
     view:on_close()
     local host = context.processes[1][1]
     test.ok(wait_for(view, function() return context.kernel.WaitForSingleObject(host, 0) == 0 end),
