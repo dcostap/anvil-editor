@@ -191,6 +191,44 @@ test.describe("Markdown layout stability", function()
     test.not_nil(view:get_line_render(100))
   end)
 
+  test.it("refreshes many link lines after a heading edit with one wrapped rebuild", function(context)
+    local buffer, lines = fixture("heading-link-refresh-layout")
+    for line = #lines + 1, 600 do
+      lines[line] = string.rep("More ordinary paragraph content. ", 8)
+    end
+    -- Separate task lines each form one link-dependent range.
+    for line = 3, 600, 3 do lines[line] = "- [ ] task " .. line end
+    buffer:insert(1, 1, table.concat(lines, "\n"))
+    local view = make_editor(context, buffer, 420, 400)
+    core.set_active_view(view)
+    buffer:set_selection(1, #buffer.lines[1])
+    prepare(view)
+    local before = position(view, 300, 1)
+
+    view:on_text_input("x")
+    -- An idle UI gives a slice enough time to finish this note's rebuild.
+    local co_max_time = core.co_max_time
+    core.co_max_time = 1
+    local rebuilds = 0
+    local reconstruct = wrapping.reconstruct_breaks_async
+    wrapping.reconstruct_breaks_async = function(...)
+      rebuilds = rebuilds + 1
+      return reconstruct(...)
+    end
+    local link_index = markdown.vault_index.index_for_path(buffer.abs_filename)
+    local ok, err = pcall(link_index.notify, link_index, "buffer-updated",
+      { buffer = buffer, path = buffer.abs_filename })
+    wrapping.reconstruct_breaks_async = reconstruct
+    core.co_max_time = co_max_time
+    test.ok(ok, err)
+    test.ok(rebuilds <= 1, string.format("the refresh started %d wrapped rebuilds", rebuilds))
+    ready(model.peek(buffer))
+    wrapping.complete_async_reconstruction(view)
+    prepare(view)
+    same_position(position(view, 300, 1), before, "heading link refresh")
+    test.not_nil(view:get_line_render(300))
+  end)
+
   test.it("keeps fenced code visible after the edited Markdown parse publishes", function(context)
     local buffer, lines = fixture("local-fence-publication-layout")
     for line = #lines + 1, 600 do

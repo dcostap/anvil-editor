@@ -7706,12 +7706,10 @@ local function bind_link_index(view)
     end
     local invalidate_opts = dependent_lines > linewrapping.MAX_SYNC_WRAP_LINES
       and { defer_wrapped_reconstruction = true, update_visible = true } or nil
-    for _, range in ipairs(ranges) do
-      -- Keep the committed rows for unrelated text. A full wrapped rebuild
-      -- made each edited heading reconstruct the complete document when its
-      -- vault target changed.
-      view:invalidate_line_render(PROVIDER_ID, range.line1, range.line2, invalidate_opts)
-    end
+    -- Keep the committed rows for unrelated text. A full wrapped rebuild
+    -- made each edited heading reconstruct the complete document when its
+    -- vault target changed.
+    view:invalidate_line_render_ranges(PROVIDER_ID, ranges, invalidate_opts)
     view:invalidate_visual_metric_ranges(PROVIDER_ID, ranges)
     core.log_quiet(
       "Markdown Live Preview refreshed %d link-dependent range(s) after vault %s%s in %.1fms",
