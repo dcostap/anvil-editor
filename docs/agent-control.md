@@ -216,7 +216,13 @@ Each message to the agent has a `request` ID. The agent answers with `action: "s
 
 A Pi sends to an External Agent with `agent_send` and `agent` set to its name. The result has a `task`: the message's request ID. When the agent answers with `reply_to` set to it, Pi receives the answer as an Anvil reply, as from another Pi. An External Agent sends to a Pi with `agent_send`, a `terminal`, and `from_agent` set to its own name. Pi sees the message from "External Agent agy", and its `anvil_reply` goes into the agent's thread with `reply_to` set to the task. Anvil follows such a reply for one hour.
 
-Run `external_agents:open` in the Command Palette to open an External Agent View in a new Pane. It shows the thread and whether the agent listens. Type in its field and press Enter to post a message from you. A failed post keeps the text and marks the field. Click a message and use Copy to copy its text. The View waits on the Machine for changes, so new messages show at once. It restores with the Workspace. A View device can read a thread but cannot post.
+Run `external_agents:open` in the Command Palette to open an External Agent View in a new Pane. It shows the thread and whether the agent listens. Messages from one author within five minutes share one header. Code between ``` lines shows in the code font. An answer to a Pi names the Pi, as in `agy → brave-otter`.
+
+Type in the message box and press Enter to post a message from you. Shift+Enter starts a new line. The box grows to eight lines, then scrolls. Up and Down move between its lines, and Undo and Redo work in it. A failed post keeps the text and marks the box. An unsent message stays with the Workspace.
+
+A dot marks each message that the agent has not received yet, and the status line counts them. A message counts as received when a wait of the agent returns it. Click a message and use Copy, or right-click it and choose Copy Message, to copy its text.
+
+The View waits on the Machine for changes, so new messages show at once. It keeps its Pane, as a busy Terminal does: another View, such as a Terminal from the Sidebar, opens in a new Pane. It restores with the Workspace. A View device can read a thread but cannot post.
 
 A thread keeps its last 200 messages, each at most 32 KB. A Project has at most 16 External Agents. An agent name uses letters, digits, `.`, `_` and `-`, at most 64 characters.
 

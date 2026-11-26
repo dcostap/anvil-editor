@@ -1388,24 +1388,29 @@ local function scenario_is_ready()
     return false
   end
   if benchmark.scenario == "external-agent-view" then
-    -- An External Agent thread with fixed messages from the user, the agent and a Pi. The scene reads no Machine.
+    -- An External Agent thread with fixed messages: grouped messages, a code block, an answer to a Pi, an unread
+    -- message, a long word that wraps, and a two-line draft. The scene reads no Machine.
     local external_agents = require "plugins.external_agents"
     if core.active_view and core.active_view:is(external_agents.View) then return true end
     config.transitions = false
     local view = external_agents.open("agy")
     view.closed = true
     local now = os.time()
-    view.messages = {
+    view:receive({ listening = true, read = 5, cursor = 6, seq = 6, messages = {
       { seq = 1, time = now - 600, from = { kind = "user", machine = "Laptop" },
         text = "Check why the parser tests fail on Windows." },
-      { seq = 2, time = now - 540, from = { kind = "self" },
-        text = "The tests compare paths with forward slashes. I asked brave-otter to change the fixture." },
-      { seq = 3, time = now - 300, from = { kind = "agent", name = "brave-otter" },
-        text = "Done. All 214 parser tests pass: https://example.com/a-very-long-link-without-spaces-that-must-wrap-inside-the-word" },
-      { seq = 4, time = now - 60, from = { kind = "self" }, text = "Thanks. The suite is green.\nNext I look at the slow startup." },
-    }
-    view.status = "listening"
-    view.field:on_text("Also check the release build")
+      { seq = 2, time = now - 590, from = { kind = "user", machine = "Laptop" },
+        text = "They passed yesterday." },
+      { seq = 3, time = now - 540, from = { kind = "agent", name = "brave-otter" }, request = "r1",
+        text = "Which fixture compares the paths?" },
+      { seq = 4, time = now - 500, from = { kind = "self" }, reply_to = "r1",
+        text = "The path test builds its expected value like this:\n```lua\nlocal expected = root .. \"/src/main.c\"\n```\nUse PATHSEP instead: https://example.com/a-very-long-link-without-spaces-that-must-wrap-inside-the-word" },
+      { seq = 5, time = now - 60, from = { kind = "self" }, text = "Thanks. The suite is green." },
+      { seq = 6, time = now - 20, from = { kind = "user", machine = "Laptop" }, text = "Also check the release build." },
+    } })
+    view.field:on_text("And the installer.")
+    view.field:on_text("\n")
+    view.field:on_text("Then stop.")
     return false
   end
   if benchmark.scenario == "file-types-dialog" then

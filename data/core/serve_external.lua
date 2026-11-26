@@ -1,7 +1,8 @@
 -- The External Agent service of the Machine server (`core.serve`). An External Agent runs outside Anvil's Terminal
 -- Sessions, such as Antigravity's agent. It has a name in a Project and a thread of messages. Its first waiting read
 -- with `listen` creates it. Full control Clients post to the thread. The agent reads the messages of others.
--- Threads stay in `USERDIR/machine/external`, so a server restart keeps them and the agents' cursors.
+-- `read` is the last message that the agent has received. Threads stay in `USERDIR/machine/external`, so a server
+-- restart keeps them.
 local common = require "core.common"
 local json = require "core.lsp.json"
 local net = require "net"
@@ -53,7 +54,9 @@ function M.new(server, directory)
         and common.path_equals(saved.project, root) and type(saved.agents) == "table" then
       for _, agent in ipairs(saved.agents) do
         if M.valid_name(agent.name) and type(agent.seq) == "number" and type(agent.messages) == "table" then
-          state.agents[agent.name] = {name = agent.name, seq = agent.seq, messages = agent.messages, last_listen = 0}
+          state.agents[agent.name] = {name = agent.name, seq = agent.seq, messages = agent.messages, last_listen = 0,
+            read = type(agent.read) == "number" and agent.read or 0}
+          state.agents[agent.name].shown_read = state.agents[agent.name].read
         end
       end
     end
@@ -90,7 +93,18 @@ function M.new(server, directory)
     end
     -- A listening agent's cursor passes its own messages, so the next wait does not find them again.
     if wait.listen and #messages < MAX_PAGE then cursor = math.max(cursor, agent.seq) end
-    return {agent = agent.name, messages = messages, cursor = cursor, seq = agent.seq, listening = listening(agent)}
+    return {agent = agent.name, messages = messages, cursor = cursor, seq = agent.seq, listening = listening(agent),
+      read = agent.read}
+  end
+
+  -- Sends a read's result. The messages of a listening read reach the agent, so they count as read.
+  local function deliver(wait, result)
+    local agent = wait.agent
+    if wait.listen and not wait.reply_to and result.cursor > agent.read then
+      agent.read, result.read = result.cursor, result.cursor
+      dirty[wait.state] = true
+    end
+    server.reply(wait.client, wait.id, {result = result})
   end
 
   local function finish(wait, result)
@@ -98,10 +112,11 @@ function M.new(server, directory)
       if item == wait then table.remove(waits, i); break end
     end
     if wait.listen then wait.agent.listeners = wait.agent.listeners - 1 end
-    server.reply(wait.client, wait.id, {result = result})
+    deliver(wait, result)
   end
 
-  -- Answers each wait that now has messages. `changed` also answers the waits of Views, for a listening change.
+  -- Answers each wait that now has messages. `changed` also answers the waits of Views, for a change of the
+  -- agent's listening or read state.
   local function wake(agent, changed)
     for i = #waits, 1, -1 do
       local wait = waits[i]
@@ -124,7 +139,7 @@ function M.new(server, directory)
       local count = 0
       for _ in pairs(state.agents) do count = count + 1 end
       if count >= MAX_AGENTS then return server.fail(client, id, "busy", "This Project has too many External Agents") end
-      agent = {name = params.agent, seq = 0, messages = {}, last_listen = 0}
+      agent = {name = params.agent, seq = 0, messages = {}, last_listen = 0, read = 0, shown_read = 0}
       state.agents[agent.name] = agent
       dirty[state] = true
       server.log("External Agent %s registered in %s", agent.name, root)
@@ -132,11 +147,11 @@ function M.new(server, directory)
     local after = type(params.after) == "number" and params.after >= 0 and math.floor(params.after) or 0
     -- A lost thread file starts again at 1. Its old cursor must not hide the new messages.
     if after > agent.seq then after = 0 end
-    local wait = {client = client, id = id, agent = agent, after = after, listen = params.listen == true,
+    local wait = {client = client, id = id, agent = agent, state = state, after = after, listen = params.listen == true,
       reply_to = type(params.reply_to) == "string" and params.reply_to or nil}
     if wait.listen then agent.last_listen = system.get_time() end
     local result = page(agent, wait)
-    if #result.messages > 0 or params.wait ~= true then return server.reply(client, id, {result = result}) end
+    if #result.messages > 0 or params.wait ~= true then return deliver(wait, result) end
     local count = 0
     for _, item in ipairs(waits) do if item.client == client then count = count + 1 end end
     if count >= MAX_WAITS then return server.fail(client, id, "busy", "Too many waiting reads") end
@@ -175,7 +190,7 @@ function M.new(server, directory)
   local function save(state)
     local agents = json.array()
     for _, agent in pairs(state.agents) do
-      agents[#agents + 1] = {name = agent.name, seq = agent.seq, messages = agent.messages}
+      agents[#agents + 1] = {name = agent.name, seq = agent.seq, read = agent.read, messages = agent.messages}
     end
     local temporary = state.path .. ".tmp"
     local file = io.open(temporary, "wb")
@@ -203,12 +218,14 @@ function M.new(server, directory)
         local wait = waits[i]
         if wait and now >= wait.deadline then finish(wait, page(wait.agent, wait)) end
       end
-      -- An agent that stopped reading stops listening. The Views of its thread learn it at once.
+      -- An agent that stopped reading stops listening. The Views of its thread learn it, and what it read, at once.
       for _, state in pairs(projects) do
         for _, agent in pairs(state.agents) do
           local now_listening = listening(agent)
-          if agent.shown_listening ~= nil and agent.shown_listening ~= now_listening then wake(agent, true) end
-          agent.shown_listening = now_listening
+          if agent.shown_read ~= agent.read or agent.shown_listening ~= nil and agent.shown_listening ~= now_listening then
+            wake(agent, true)
+          end
+          agent.shown_listening, agent.shown_read = now_listening, agent.read
         end
       end
       if next(dirty) then

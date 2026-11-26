@@ -96,6 +96,26 @@ test.describe("External Agents on a Machine", function()
     test.ok(list.agents[1].listening)
   end)
 
+  test.it("tells a waiting View when the agent reads a message", function(context)
+    local project = context.project
+    local _, first = call(context.owner, "external.read", {project = project, agent = "agy", listen = true})
+    test.equal(first.read, 0)
+    test.is_nil(call(context.owner, "external.post", {project = project, agent = "agy", text = "Unread for now",
+      from = {kind = "user"}}))
+    local _, shown = call(context.owner, "external.read", {project = project, agent = "agy"})
+    test.equal(shown.read, 0, "A View's read must not mark messages as read")
+
+    local view = begin(context.owner, "external.read", {project = project, agent = "agy", wait = true,
+      after = shown.cursor})
+    local _, received = call(context.owner, "external.read", {project = project, agent = "agy", listen = true,
+      after = first.cursor})
+    test.equal(#received.messages, 1)
+    test.equal(received.read, received.cursor)
+    local _, woken = finish(view, "external.read")
+    test.equal(#woken.messages, 0)
+    test.equal(woken.read, received.cursor)
+  end)
+
   test.it("refuses unknown agents, other Projects and invalid messages", function(context)
     local err = call(context.owner, "external.read", {project = context.project, agent = "agy"})
     test.equal(err.code, "not_found")
