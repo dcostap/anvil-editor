@@ -96,6 +96,8 @@ Otherwise it sends a `conflict` error with the current `version` and bytes. Requ
 
 A write can carry a `save` ID. `files.save_result {save}` gives the version that the save wrote. The server keeps the last 1024 results in memory, so a restarted server answers `unknown_save`.
 
+`files.put_temp {name}` writes the request's bytes to a new file `name` in a new folder under the Machine's `TEMP/anvil-pastes`, and gives its `path`. It needs Full control. Each call removes folders older than seven days. A remote Terminal uses it for pasted images and dropped files. Run `ui/machine_terminal.lua` after changes.
+
 An error reply is `{"error": {"code": ..., "message": ...}}`. The server ignores unknown fields. The server polls its sockets.
 
 Path checks use the resolved disk names of Project roots, files and credential folders. A link cannot grant access outside its Project. For a new file, the server checks the nearest existing parent.

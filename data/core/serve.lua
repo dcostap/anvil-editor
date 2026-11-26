@@ -13,7 +13,7 @@ local net = require "net"
 local core = {threads = {}, background_threads = 0}
 package.loaded.core = core
 local PROTOCOL = 1
-local FEATURES = {"projects.list", "files.list", "files.changes", "files.stat", "files.list_dir", "files.mkdir", "files.move", "files.copy", "files.delete", "search.start", "search.read", "search.cancel", "files.read", "files.write", "files.save_result", "pairing.start", "devices.list", "devices.revoke", "sharing.get", "sharing.set"}
+local FEATURES = {"projects.list", "files.list", "files.changes", "files.stat", "files.list_dir", "files.mkdir", "files.move", "files.copy", "files.delete", "search.start", "search.read", "search.cancel", "files.read", "files.write", "files.save_result", "files.put_temp", "pairing.start", "devices.list", "devices.revoke", "sharing.get", "sharing.set"}
 -- Terminal hosts use ConPTY, so only a Windows Machine has Terminal Sessions.
 local SERVICES = {"core.serve_files", "core.serve_search", "core.serve_layout", "core.serve_external"}
 FEATURES[#FEATURES + 1] = "projects.paths"
@@ -32,7 +32,7 @@ end
 local MAX_CLIENTS, MAX_REQUEST_JSON, MAX_FILE, HELLO_TIMEOUT = 32, 64 * 1024, 16 * 1024 * 1024, 10
 local MAX_SAVES, PAIRING_TIME, PAIRING_ATTEMPTS, MAX_NAME = 1024, 300, 5, 100
 -- A View device only reads. These methods need Full control.
-local FULL_CONTROL = {["layout.set"] = true, ["files.write"] = true, ["files.mkdir"] = true, ["files.move"] = true,
+local FULL_CONTROL = {["layout.set"] = true, ["files.write"] = true, ["files.put_temp"] = true, ["files.mkdir"] = true, ["files.move"] = true,
   ["files.copy"] = true, ["files.delete"] = true, ["pairing.start"] = true, ["devices.list"] = true, ["devices.revoke"] = true,
   ["terminal.start"] = true, ["sharing.set"] = true, ["external.post"] = true}
 -- Tailscale Serve and other forwarders need a port that stays the same across restarts.
@@ -523,6 +523,36 @@ local function save_result(client, id, params)
   reply(client, id, {result = {version = version}})
 end
 
+-- Pasted and dropped files stay this many seconds. Each new one removes the older ones.
+local TEMP_SECONDS = 7 * 24 * 3600
+
+-- `files.put_temp {name}` keeps the bytes in a new file named `name` in this Machine's temporary folder, and gives
+-- its `path`. A Terminal on a Client types that path for a pasted image or a dropped file, because the Client's own
+-- paths do not exist here.
+local function put_temp(client, id, params, bytes)
+  local name = type(params.name) == "string" and params.name:match("[^/\\]+$")
+  name = name and (name:gsub("[%c<>:\"|?*]", "_"))
+  if not name or name == "" or name:match("^%.+$") or #name > 128 then
+    return fail(client, id, "invalid_request", "The file needs a name")
+  end
+  if not bytes or #bytes == 0 then return fail(client, id, "invalid_request", "The file is empty") end
+  local root = (os.getenv("TEMP") or os.getenv("TMP") or os.getenv("TMPDIR") or "/tmp") .. PATHSEP .. "anvil-pastes"
+  local now = os.time()
+  for _, old in ipairs(system.list_dir(root) or {}) do
+    local info = system.get_file_info(root .. PATHSEP .. old)
+    if info and info.type == "dir" and now - (info.modified or now) > TEMP_SECONDS then
+      common.rm(root .. PATHSEP .. old, true)
+    end
+  end
+  local folder = root .. PATHSEP .. os.date("%Y%m%d-%H%M%S") .. "-" .. net.random_token():sub(1, 8)
+  local path = folder .. PATHSEP .. name
+  local file = common.mkdirp(folder) and io.open(path, "wb")
+  local ok = file and file:write(bytes)
+  if file then file:close() end
+  if not ok then return fail(client, id, "write_failed", "The Machine could not write " .. name) end
+  reply(client, id, {result = {path = path}})
+end
+
 -- `pairing.start {level}` makes a new pairing code. It replaces an earlier code.
 local function start_pairing(client, id, params)
   if params.level ~= "view" and params.level ~= "full" then
@@ -627,6 +657,7 @@ local function handle(client, id, body, bytes)
   if request.method == "files.read" then return read_file(client, id, params) end
   if request.method == "files.write" then return write_file_request(client, id, params, bytes) end
   if request.method == "files.save_result" then return save_result(client, id, params) end
+  if request.method == "files.put_temp" then return put_temp(client, id, params, bytes) end
   if request.method == "pairing.start" then return start_pairing(client, id, params) end
   if request.method == "devices.list" then return list_devices(client, id) end
   if request.method == "devices.revoke" then return revoke_device(client, id, params) end

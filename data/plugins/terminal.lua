@@ -1944,9 +1944,59 @@ local function shell_path(path)
   return path
 end
 
--- A drop types its paths, or else its text, at the prompt. It never opens a file here.
+-- A Terminal on a Machine runs its program there, so this PC's files and clipboard image do not reach it. The
+-- Machine keeps a copy of each file in its temporary folder, and the Terminal types those paths in order, as Pi does
+-- for a pasted image. Each file is {name, bytes}.
+function TerminalView:paste_on_machine(files)
+  local machine, paths, waiting = fs.machine, {}, #files
+  local function sent(index, err, result)
+    if err then
+      local supported = false
+      for _, name in ipairs(machine.features or {}) do supported = supported or name == "files.put_temp" end
+      core.warn("Terminal: %s did not reach the Machine: %s", files[index].name,
+        supported and (err.message or err.code) or "Update Anvil on the Machine to paste files")
+    else
+      paths[index] = shell_path(result.path)
+    end
+    waiting = waiting - 1
+    if waiting > 0 then return end
+    local typed = {}
+    for i = 1, #files do typed[#typed + 1] = paths[i] end
+    core.log_quiet("Terminal session %s Machine paste: files=%d sent=%d", tostring(self.log_id), #files, #typed)
+    if #typed > 0 then self:paste(table.concat(typed, " ")) end
+  end
+  for index, file in ipairs(files) do
+    machine:request("files.put_temp", {name = file.name}, file.bytes, function(err, result) sent(index, err, result) end)
+  end
+  return true
+end
+
+-- Sends the clipboard image to the Machine and types its path. Returns false when the clipboard has no image.
+function TerminalView:paste_image_on_machine()
+  local data, format = require("core.clipboard_image")()
+  if not data then return false end
+  return self:paste_on_machine({{name = "clipboard-" .. os.date("%Y%m%d-%H%M%S") .. "." .. format.extension, bytes = data}})
+end
+
+-- A drop types its paths, or else its text, at the prompt. It never opens a file here. A Terminal on a Machine
+-- gets copies of the dropped files there.
 function TerminalView:on_drop(drop)
   local text = drop.text
+  if #drop.files > 0 and fs.machine then
+    local files = {}
+    for _, path in ipairs(drop.files) do
+      local info = system.get_file_info(path)
+      local file = info and info.type == "file" and info.size <= require("core.machine_client").MAX_FILE and io.open(path, "rb")
+      if file then
+        files[#files + 1] = {name = common.basename(path), bytes = file:read("*a")}
+        file:close()
+      else
+        core.warn("Terminal: only files up to 16 MiB can go to the Machine: %s", path)
+      end
+    end
+    core.log_quiet("Terminal session %s drop on a Machine: files=%d sent=%d", tostring(self.log_id), #drop.files, #files)
+    return #files == 0 or self:paste_on_machine(files)
+  end
   if #drop.files > 0 then
     local paths = {}
     for i, path in ipairs(drop.files) do paths[i] = shell_path(path) end
@@ -3304,12 +3354,24 @@ end, {
   end,
 })
 
+-- Alt+V pastes an image in Pi. On a Machine, Pi would read the Machine's clipboard, so Anvil sends this PC's image.
+-- Without an image, the key goes on to the program.
+command.add(function()
+  local view = core.active_view
+  return view and view.terminal_view == true and fs.machine ~= nil, view
+end, {
+  ["terminal:paste_image"] = function(view) return view:paste_image_on_machine() end,
+})
+
 command.add(function()
   local view = core.active_view
   return view and view.terminal_view == true, view
 end, {
   ["terminal:paste"] = function(view)
-    return view:paste(system.get_clipboard())
+    local text = system.get_clipboard()
+    -- Without text, a local program reads the clipboard image itself. A program on a Machine cannot.
+    if (not text or text == "") and fs.machine then return view:paste_image_on_machine() end
+    return view:paste(text)
   end,
   ["terminal:copy"] = function(view)
     if not view.session then return false end
@@ -3373,6 +3435,7 @@ keymap.add({
   ["ctrl+shift+c"] = "terminal:copy",
   ["ctrl+v"] = "terminal:paste",
   ["ctrl+shift+v"] = "terminal:paste",
+  ["alt+v"] = "terminal:paste_image",
   ["ctrl+alt+f"] = "terminal:find",
   ["f3"] = "terminal:find_next",
   ["shift+f3"] = "terminal:find_previous",

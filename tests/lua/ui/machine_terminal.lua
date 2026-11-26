@@ -179,6 +179,33 @@ test.describe("Terminal on a Machine", function()
     end, "The Machine kept the closed shell")
   end)
 
+  test.it("types the path of a copy on the Machine for a dropped file", function(context)
+    local view = open(context, {})
+    wait_text(view, "ANVIL_ECHO_READY:project")
+    local source = context.root .. PATHSEP .. "here" .. PATHSEP .. "shot.png"
+    test.ok(common.mkdirp(common.dirname(source)))
+    local file = assert(io.open(source, "wb"))
+    file:write("picture bytes\0\255")
+    file:close()
+
+    test.ok(view:on_drop({ files = { source }, text = "" }))
+    -- The shell shows the typed path before Enter. Its lines can wrap.
+    local function flat() return (text_of(view):gsub("[\r\n]", "")) end
+    wait_until(view, function() return flat():find("shot.png", 1, true) end, "No path was typed:\n" .. text_of(view))
+    test.ok(view:write_input("\r"))
+    local path
+    wait_until(view, function()
+      path = flat():match('ECHO:"?(.-shot%.png)')
+      return path
+    end, "The shell did not read the path:\n" .. text_of(view))
+    test.ok(path:find("anvil-pastes", 1, true), "The path must name the Machine's copy, not this PC's file: " .. path)
+    local copy = io.open(path, "rb")
+    test.ok(copy, "The Machine has no file at " .. path)
+    test.equal(copy:read("*a"), "picture bytes\0\255")
+    copy:close()
+    common.rm(common.dirname(path), true)
+  end)
+
   test.it("closes a busy session without a question while another device shows it, and keeps its shell", function(context)
     -- The shell's child process keeps the session busy.
     config.plugins.terminal.shell = [[cmd.exe /d /c ping -n 600 127.0.0.1]]

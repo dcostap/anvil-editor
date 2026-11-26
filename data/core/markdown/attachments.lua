@@ -162,24 +162,13 @@ function attachments.import_file(view, source, opts)
   return true, { path = target, text = text, copied = copied }
 end
 
-local CLIPBOARD_IMAGE_FORMATS = {
-  { mime = "image/png", extension = "png" },
-  { mime = "image/jpeg", extension = "jpg" },
-  { mime = "image/bmp", extension = "bmp" },
-}
-
 function attachments.paste_provider()
   return {
     on_clipboard_paste = function(_, view)
-      if type(system.get_clipboard_data) ~= "function" then return false end
       local text = system.get_clipboard and system.get_clipboard()
       if text and text ~= "" then return false end
-      local data, format
-      for _, candidate in ipairs(CLIPBOARD_IMAGE_FORMATS) do
-        data = system.get_clipboard_data(candidate.mime)
-        if data and #data > 0 then format = candidate break end
-      end
-      if not format then return false end
+      local data, format = require("core.clipboard_image")()
+      if not data then return false end
 
       local temp_dir = USERDIR .. PATHSEP .. ".markdown-clipboard-"
         .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
