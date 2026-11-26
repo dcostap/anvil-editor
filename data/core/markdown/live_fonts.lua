@@ -34,6 +34,14 @@ function live_fonts.body_line_height(view)
   return math.floor(live_fonts.body(view):get_height() * config.line_height)
 end
 
+-- Icon glyphs fill one Mono cell, so they need a larger size than the body text.
+function live_fonts.icon(view)
+  return live_fonts.scaled(
+    view, style.menu_icon_font,
+    math.floor(live_fonts.body(view):get_size() * 1.4 + 0.5)
+  )
+end
+
 function live_fonts.heading(view, level)
   local size = level == 1 and 32
     or level == 2 and 24

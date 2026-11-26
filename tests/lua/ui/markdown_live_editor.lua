@@ -3783,6 +3783,24 @@ test.describe("Markdown Live Preview", function()
     test.equal(visible_render_text(view, 1), "> [!note]+ Custom title")
   end)
 
+  test.it("shows the callout type as the title when the header has none", function()
+    local view, buffer = make_view("> [!note]\n> body\n\nplain", "callout-default-title.md")
+    view.size.x = 600
+    view:set_wrapping_enabled(true)
+    buffer:set_selection(4, 1)
+    refresh(view)
+    local drawn = {}
+    local old_draw_text = renderer.draw_text
+    renderer.draw_text = function(font, text, x, ...)
+      drawn[#drawn + 1] = text
+      return x + font:get_width(text)
+    end
+    local ok, err = pcall(function() view:draw_line_text(1, 0, 0) end)
+    renderer.draw_text = old_draw_text
+    if not ok then error(err, 0) end
+    test.ok(table.concat(drawn):find("Note", 1, true) ~= nil, table.concat(drawn, "|"))
+  end)
+
   test.it("normalizes callout aliases case-insensitively and gives unknown types note appearance", function()
     local view, buffer = make_view(
       "> [!TLDR] Summary\n\n> [!Important] Important\n\n> [!CITE] Citation\n\n> [!custom-kind] Custom\n\nplain",

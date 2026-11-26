@@ -2065,9 +2065,9 @@ function callout_runtime.content_inset(view, callout, control_text)
   local rail_width = math.max(2, math.floor(3 * SCALE))
   local padding = math.max(4, math.floor(9 * SCALE))
   if control_text == nil then
-    control_text = (callout.icon or "") .. (callout.fold and " ▾" or "")
+    control_text = (callout.icon or "") .. (callout.fold and callouts.fold_icons.expanded or "")
   end
-  local lane = body_font:get_width(control_text)
+  local lane = live_fonts.icon(view):get_width(control_text)
     + body_font:get_width("  ")
   return card_offset + rail_width + padding + lane,
     card_offset + rail_width + padding
@@ -2817,10 +2817,10 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
         local fold = owner and owner.callout_folds
           and owner.callout_folds[callout.semantic_id]
         local collapsed = fold and fold.collapsed or callout.fold == "-"
-        return collapsed and "▸" or "▾"
+        return collapsed and callouts.fold_icons.collapsed or callouts.fold_icons.expanded
       end)()
     ) or nil
-    local control_text = callout.icon .. (chevron and (" " .. chevron) or "")
+    local control_text = callout.icon .. (chevron or "")
     local content_width, control_x_offset = callout_runtime.content_inset(
       view, callout, control_text
     )
@@ -2831,6 +2831,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       source_col1 = source_col1,
       source_col2 = source_col2,
       text = line == callout.line1 and control_text or "",
+      font = live_fonts.icon(view),
       width = content_width,
       text_x_offset = control_x_offset,
       color = callout.palette and callout.palette.accent or style.accent,
