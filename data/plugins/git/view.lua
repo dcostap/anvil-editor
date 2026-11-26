@@ -485,7 +485,7 @@ function GitView:pane_view(name)
         view.get_gutter_width = graph_gutter_width
         view.draw_line_gutter = draw_graph_gutter
       else
-        view.get_gutter_width = function() return 0 end
+        view.get_gutter_width = function() return style.padding.x end
         view.draw_line_gutter = function(v) return v:get_line_height() end
       end
       view.get_line_hint = commit_line_hint
@@ -1333,8 +1333,19 @@ function GitView:activate_selected(callback, opts)
   local details_path = details_record and changed_file_path(details_record)
   local tab = self:model_tab()
   if tab.kind == "file_history" then
-    self.model:load_history_preview(tab, callback or function() core.redraw = true end)
-    return tab
+    local open_opts = { focus = not (opts and opts.preserve_focus) }
+    if not tab.preview_loading and not tab.preview_error
+        and (tab.preview_left_text ~= nil or tab.preview_right_text ~= nil) then
+      local diff, err = self:open_history_diff_view(tab, open_opts)
+      return diff and tab, err
+    end
+    local loading = self.model:load_history_preview(tab, function(model, err)
+      if not err and core.active_view == active and not tab.disposed then
+        self:open_history_diff_view(tab, open_opts)
+      end
+      if callback then callback(model, err) end
+    end)
+    return loading and tab
   end
   if tab.kind == "commit_diff" then
     local active = core.active_view

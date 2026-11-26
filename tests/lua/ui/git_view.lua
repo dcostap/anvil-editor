@@ -809,11 +809,17 @@ test.describe("Git View command", function()
     tab.preview_left_name = "a:src/app.lua"
     tab.preview_right_name = "a:src/app.lua"
     tab.preview_generation_value = 1
-    local initial_diff = history_view:open_history_diff_view(tab)
-    test.not_nil(initial_diff)
+    history_view:focus_pane_view("history-list")
+    test.ok(command.perform("core:activate_point_of_interest"))
+    local initial_diff = test.not_nil(tab.history_diff_view)
     local history_pane = panes.pane_for_view(history_view)
     local diff_pane = panes.pane_for_view(initial_diff)
     test.ok(history_pane ~= diff_pane)
+    panes.focus(history_pane)
+    history_view:focus_pane_view("history-list")
+    test.ok(command.perform("core:activate_point_of_interest"))
+    test.equal(panes.active(), diff_pane)
+    test.equal(diff_pane.current_view, initial_diff)
     local _, split = layout.find(history_pane.group.root, history_pane)
     test.equal(split.ratio, 0.3)
     file_at_calls = 0
