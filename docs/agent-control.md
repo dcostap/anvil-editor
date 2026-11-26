@@ -216,6 +216,10 @@ Each message to the agent has a `request` ID. The agent answers with `action: "s
 
 A Pi sends to an External Agent with `agent_send` and `agent` set to its name. The result has a `task`: the message's request ID. When the agent answers with `reply_to` set to it, Pi receives the answer as an Anvil reply, as from another Pi. An External Agent sends to a Pi with `agent_send`, a `terminal`, and `from_agent` set to its own name. Pi sees the message from "External Agent agy", and its `anvil_reply` goes into the agent's thread with `reply_to` set to the task. Anvil follows such a reply for one hour.
 
+Run `project:open_chat` to see new Pi final answers and External Agent messages in the current Project. The Machine keeps the latest 200 messages. It does not import earlier transcripts, tool output, or thinking. A remote Project needs Full control for this View.
+
+Choose **Reply** on a result or in its context menu. The composer shows the recipient and the start of the result. Enter sends the reply; Escape clears the recipient without deleting the draft. A Pi reply goes into the same Terminal and conversation as user input. If Pi is busy, the reply steers that turn. A replacement conversation cannot receive it. An External Agent receives the question in its own thread. Neither action broadcasts a message to other agents.
+
 Run `external_agents:open` in the Command Palette to open an External Agent View in a new Pane. Its header shows whether the agent listens. The thread shows in cards, in time order. A card starts with a message and holds the answers to it, under it and indented. A later answer, after other messages, starts a card that quotes the first line of its question. Messages from one author within five minutes share one header. Code between ``` lines shows in the code font.
 
 Type in the message box and press Enter to post a message from you. Shift+Enter starts a new line. The box grows to eight lines, then scrolls. Up and Down move between its lines, and Undo and Redo work in it. A failed post keeps the text and marks the box. An unsent message stays with the Workspace.

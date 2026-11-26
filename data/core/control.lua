@@ -441,6 +441,7 @@ function M:exchange(terminal, report)
       assert(receipt.result == nil or type(receipt.result) == "string" and #receipt.result <= 8192, "Invalid reply")
       peer.receipts[receipt.id] = receipt
       peer.commands[receipt.id] = nil
+      if self.chat_receipt then self.chat_receipt(terminal, peer.instance, receipt) end
     end
   end
   for _, task in ipairs(report.tasks) do
@@ -472,7 +473,15 @@ function M:exchange(terminal, report)
   for token, query in pairs(peer.transcripts) do
     if system.get_time() < query.deadline then requests[#requests + 1] = {id = token, options = query.options} end
   end
-  return {name = agent_name.for_terminal(terminal), commands = protocol_json.array(commands),
+  local ack
+  if self.chat_result and report.chat_result then
+    local result = report.chat_result
+    check(id, result.id, "Result ID")
+    assert(type(result.text) == "string" and #result.text <= 32768, "Invalid chat result")
+    self.chat_result(terminal, peer.instance, result)
+    ack = result.id
+  end
+  return {chat_ack = ack, name = agent_name.for_terminal(terminal), commands = protocol_json.array(commands),
     transcript_requests = requests, transcript_acks = acks}
 end
 

@@ -17,7 +17,7 @@ local FEATURES = {"projects.list", "files.list", "files.changes", "files.stat", 
 -- Terminal hosts use ConPTY, so only a Windows Machine has Terminal Sessions.
 local SERVICES = {"core.serve_files", "core.serve_search", "core.serve_layout", "core.serve_external"}
 FEATURES[#FEATURES + 1] = "projects.paths"
-for _, name in ipairs({"external.list", "external.read", "external.post"}) do FEATURES[#FEATURES + 1] = name end
+for _, name in ipairs({"external.list", "external.read", "external.post", "chat.read", "chat.reply"}) do FEATURES[#FEATURES + 1] = name end
 FEATURES[#FEATURES + 1] = "layout.get"
 FEATURES[#FEATURES + 1] = "layout.set"
 if PLATFORM == "Windows" then
@@ -34,7 +34,7 @@ local MAX_SAVES, PAIRING_TIME, PAIRING_ATTEMPTS, MAX_NAME = 1024, 300, 5, 100
 -- A View device only reads. These methods need Full control.
 local FULL_CONTROL = {["layout.set"] = true, ["files.write"] = true, ["files.put_temp"] = true, ["files.mkdir"] = true, ["files.move"] = true,
   ["files.copy"] = true, ["files.delete"] = true, ["pairing.start"] = true, ["devices.list"] = true, ["devices.revoke"] = true,
-  ["terminal.start"] = true, ["sharing.set"] = true, ["external.post"] = true}
+  ["terminal.start"] = true, ["sharing.set"] = true, ["external.post"] = true, ["chat.read"] = true, ["chat.reply"] = true}
 -- Tailscale Serve and other forwarders need a port that stays the same across restarts.
 local DEFAULT_PORT, OWNER_CHECK_SECONDS = 7690, 1
 if PLATFORM == "Windows" then

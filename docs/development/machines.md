@@ -296,6 +296,14 @@ Run `runtime/machine_terminal.lua`, `ui/machine_terminal.lua` and `ui/project_si
 
 Run `runtime/machine_serve.lua`, `runtime/machine_client.lua`, `runtime/machine_buffer.lua`, `anvil:machine-frame` and `anvil:launch-mode` after changes. Tests that need a fixed port must try ports until one opens: Windows reserves whole port ranges, and `get_port()` returns the requested port. Pass one file to each `--test-args`: the runner reads only the first path.
 
+## Project chat
+
+`chat.read {project, after, wait}` returns a page of Project messages. It takes the same cursor as `external.read`. `chat.reply {project, parent, text}` uses the selected message's `request` as its parent. The server derives the destination from its stored message, not from a name supplied by the Client. Both methods require Full control.
+
+The Machine accepts settled Pi text from the Terminal's authenticated loopback endpoint. It acknowledges result IDs to prevent duplicates on retry. A reply to Pi succeeds when the same conversation accepts the user message. A lost receipt leaves delivery uncertain. Check the conversation before retrying. External Agent replies use the agent's existing post and wait protocol.
+
+Run `tests/pi-control.test.cjs`, `runtime/machine_terminal.lua`, `runtime/machine_external.lua`, and `ui/external_agent_view.lua` after changes. Use the `project-chat` render scenario for a selected reply target and a draft.
+
 ## Companion (Android)
 
 `android/` is the Companion's Gradle project (`io.github.dcostap.anvil`). It is a Client of the Machine server. See [Machines](../machines.md).

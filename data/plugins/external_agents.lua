@@ -24,6 +24,7 @@ local TextView = require "core.textview"
 local View = require "core.view"
 
 local plugin = {}
+local PROJECT_CHAT = "Project Chat" -- Not a valid External Agent name.
 -- The thread keeps at most this many messages. A full page asks for the next page at once.
 local MAX_SHOWN, PAGE = 500, 100
 -- The message box grows up to this many lines, then scrolls.
@@ -440,7 +441,8 @@ function ExternalAgentView:new(agent)
   self.unread = 0
   self.stick = true
   self.content_h, self.last_max = 0, 0
-  self.field = MessageBox("Message " .. agent)
+  self.project_chat = agent == PROJECT_CHAT
+  self.field = MessageBox(self.project_chat and "Choose a message to reply to" or "Message " .. agent)
   self.status_dot = StatusDot {}
   self.badge = Badge { tone = "warning" }
   self.empty = EmptyState { icon = ui.icons.inbox, title = "No messages yet" }
@@ -460,12 +462,13 @@ end
 -- An unsent message stays with the Workspace.
 function ExternalAgentView:get_state()
   local draft = self.field:get_text()
-  return { agent = self.agent, draft = draft ~= "" and draft or nil }
+  return { agent = self.agent, draft = draft ~= "" and draft or nil, target = self.target }
 end
 
 function ExternalAgentView.from_state(state)
-  if type(state) ~= "table" or not valid_name(state.agent) then return end
+  if type(state) ~= "table" or state.agent ~= PROJECT_CHAT and not valid_name(state.agent) then return end
   local view = ExternalAgentView(state.agent)
+  if view.project_chat then view.target = state.target end
   if type(state.draft) == "string" then view.field:set_text(state.draft) end
   return view
 end
@@ -476,7 +479,7 @@ function ExternalAgentView:read_thread()
   local loaded = false
   while not self.closed do
     local done, err, result
-    plugin.request("external.read", { agent = self.agent, after = self.read_cursor, wait = loaded },
+    plugin.request(self.project_chat and "chat.read" or "external.read", { agent = self.agent, after = self.read_cursor, wait = loaded },
       function(e, r) done, err, result = true, e, r end)
     while not done and not self.closed do coroutine.yield(0.05) end
     if self.closed then return end
@@ -519,7 +522,7 @@ function ExternalAgentView:receive(result)
   for _, message in ipairs(self.messages) do
     if self:is_unread(message) then self.unread = self.unread + 1 end
   end
-  self.status, self.error = result.listening and "listening" or "idle", nil
+  self.status, self.error = self.project_chat and "connected" or result.listening and "listening" or "idle", nil
   self.laid_out = nil
   self:status_changed()
 end
@@ -530,6 +533,7 @@ function ExternalAgentView:is_unread(message)
 end
 
 local STATUS = {
+  connected = { "Connected", "success" },
   connecting = { "Connecting", "neutral" },
   listening = { "Listening", "success" },
   idle = { "Not listening", "warning" },
@@ -550,6 +554,21 @@ end
 function ExternalAgentView:send()
   local text = self.field:get_text():gsub("^%s*\n", ""):gsub("%s+$", "")
   if not text:find("%S") then return false end
+  if self.project_chat then
+    if not self.target or self.sending then return false end
+    local draft, target = self.field:get_text(), self.target
+    self.sending = true
+    plugin.request("chat.reply", {parent = target.id, text = text}, function(err)
+      self.sending = false
+      if err then self.field:set_error(err.message or err.code)
+      elseif self.target == target and self.field:get_text() == draft then
+        self.field:set_text("")
+        self.target = nil
+      end
+      core.redraw = true
+    end)
+    return true
+  end
   local draft = self.field:get_text()
   self.field:set_text("")
   plugin.request("external.post", { agent = self.agent, text = text, from = { kind = "user" } }, function(err)
@@ -636,7 +655,8 @@ function ExternalAgentView:layout(width)
   local cards, card, previous, y = {}, nil, nil, 0
   for _, message in ipairs(self.messages) do
     local from = message.from or EMPTY
-    message.author = message.author or table.concat({ from.kind or "", from.name or "", from.machine or "" }, "\0")
+    message.author = message.author or table.concat({ from.kind or "", from.name or "", from.machine or "",
+      from.terminal or "", from.instance or "" }, "\0")
     message.label = message.label or self:author(message)
     message.when = message.when or time_text(message.time)
     local asked = message.reply_to and self.requests[message.reply_to]
@@ -686,7 +706,7 @@ function ExternalAgentView:layout(width)
 end
 
 function ExternalAgentView:footer_h()
-  return self.field.h + ui.metrics().gap + ui.metrics().row_pad_x
+  return self.field.h + ui.metrics().gap + ui.metrics().row_pad_x + (self.target and ui.metrics().control_h or 0)
 end
 
 function ExternalAgentView:get_scrollable_size()
@@ -774,6 +794,12 @@ function ExternalAgentView:copy_message(message)
   core.redraw = true
 end
 
+function ExternalAgentView:reply_to(message)
+  self.target = {id = message.request, label = "Reply to " .. message.from.name .. " · " .. first_line(message.text)}
+  self.field:set_error(nil)
+  self:focus_text(nil)
+end
+
 ---Gives the keyboard's Copy and Select All to a message's text, or to the message box when `text` is nil. The
 ---text that loses them also loses its selection.
 function ExternalAgentView:focus_text(text)
@@ -790,6 +816,14 @@ end
 function ExternalAgentView:on_mouse_pressed(button, x, y, clicks)
   if ExternalAgentView.super.on_mouse_pressed(self, button, x, y, clicks) then return true end
   if button ~= "left" then return true end
+  local hit = self:message_at(x, y)
+  if self.project_chat and hit and (hit.pi or hit.external) then
+    local cx, cy, size = self:copy_rect(hit)
+    if x < cx and x >= cx - ui.font():get_width("Reply") - ui.metrics().gap and y >= cy and y < cy + size then
+      self:reply_to(hit)
+      return true
+    end
+  end
   local copy = self:over_copy(x, y)
   if copy then
     self:copy_message(copy)
@@ -890,6 +924,9 @@ function ExternalAgentView:context_menu(x, y)
   if not message then return end
   local icons = require("core.context_menu").icons
   local items = {}
+  if self.project_chat and (message.pi or message.external) then
+    items[#items + 1] = {label = "Reply", command = "external_agents:reply"}
+  end
   local text = message.text_view
   if text and text == self.text_focus and text:get_selected_text() then
     items[#items + 1] = { label = "Copy", icon = icons.copy, command = "external_agents:copy" }
@@ -908,6 +945,11 @@ end
 -- The keymap's commands for the editor do not run in this View, so its keys come here.
 function ExternalAgentView:on_key_pressed(key, event)
   if keymap.is_modifier_key(key) then return false end
+  if key == "escape" and self.target then
+    self.target = nil
+    self.field:set_error(nil)
+    return true
+  end
   if key == "return" or key == "keypad enter" then
     if keymap.modkeys.shift then
       self.field.scrolled = false
@@ -977,6 +1019,11 @@ function ExternalAgentView:draw_message(message, left, top, width)
   local text = self:text_of(message)
   text:place(x, y, text_width(message, width))
   text:draw()
+  if self.project_chat and (message.pi or message.external) and (message.header or message == self.hovered) then
+    local cx, cy = self:copy_rect(message)
+    local font = ui.font()
+    renderer.draw_text(font, "Reply", cx - font:get_width("Reply") - m.gap, cy, style.dialog_text_strong)
+  end
   if message == self.hovered then self:draw_copy(message) end
 end
 
@@ -1056,7 +1103,7 @@ end
 
 function ExternalAgentView:draw_send()
   local x, y, size = self:send_rect()
-  local ready = self.field:get_text():find("%S") ~= nil
+  local ready = self.field:get_text():find("%S") ~= nil and (not self.project_chat or self.target and not self.sending)
   local amount = ui.approach(self, "send_hover", ready and self.send_hovered and 1 or 0, 18)
   local pushed = ui.push_look(x, y, size, size, 1, ready and 1 or ui.DISABLED_OPACITY)
   local base = ready and "lit" or "raised"
@@ -1087,6 +1134,11 @@ function ExternalAgentView:draw()
   core.pop_clip_rect()
 
   self:draw_header()
+  if self.target then
+    local font = ui.role_font("description")
+    renderer.draw_text(font, ui.fit_text(font, self.field.error or self.target.label, width), x,
+      self.field.y - ui.metrics().gap - font:get_height(), self.field.error and style.dialog_danger or style.dialog_text_muted)
+  end
   self.field:draw(core.active_view == self)
   self:draw_send()
   self:draw_scrollbar()
@@ -1113,6 +1165,7 @@ command.add(function()
   return view and view:is(ExternalAgentView) and view.menu_message ~= nil, view
 end, {
   ["external_agents:copy_message"] = function(view) view:copy_message(view.menu_message) end,
+  ["external_agents:reply"] = function(view) view:reply_to(view.menu_message) end,
 })
 
 command.add(function()
@@ -1124,6 +1177,8 @@ end, {
 })
 
 command.add(nil, {
+  ["project:open_chat"] = command.palette(function() return plugin.open(PROJECT_CHAT) end,
+    {keywords = {"agent", "Pi", "conversation", "reply"}, opens_view = true}),
   ["external_agents:open"] = command.palette(function()
     plugin.request("external.list", {}, function(err, result)
       if err then return core.warn("External Agents: %s", err.message or err.code) end

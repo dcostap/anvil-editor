@@ -64,12 +64,6 @@ function terminal.new(server)
         and not system.get_file_info(closed_marker(id)) then return record end
   end
   local agents, observe = require("core.serve_agents").new(server, live_record)
-  core.add_thread(function()
-    for _, name in ipairs(system.list_dir(USERDIR .. "/terminal-sessions") or {}) do
-      local record = live_record(name:match("^(%x+)%.lua$"))
-      if record then observe(record) end
-    end
-  end)
 
   local function find_record(client, id, params)
     local record = read_record(params.id)

@@ -45,13 +45,15 @@ function M.new(server, directory)
   local projects, waits, dirty = {}, {}, {}
 
   local function project(root)
-    if projects[root] then return projects[root] end
-    local state = {root = root, agents = {}, path = directory .. PATHSEP .. file_key(root) .. ".json"}
+    local key = common.path_compare_key(root)
+    if projects[key] then return projects[key] end
+    local state = {root = root, agents = {}, chat = {messages = {}, seq = 0, last_listen = 0}, path = directory .. PATHSEP .. file_key(root) .. ".json"}
     local file = io.open(state.path, "rb")
     local ok, saved = pcall(json.decode, file and file:read("*a") or "")
     if file then file:close() end
     if ok and type(saved) == "table" and saved.version == 1 and type(saved.project) == "string"
         and common.path_equals(saved.project, root) and type(saved.agents) == "table" then
+      if type(saved.chat) == "table" then state.chat = saved.chat end
       for _, agent in ipairs(saved.agents) do
         if M.valid_name(agent.name) and type(agent.seq) == "number" and type(agent.messages) == "table" then
           state.agents[agent.name] = {name = agent.name, seq = agent.seq, messages = agent.messages, last_listen = 0,
@@ -60,7 +62,7 @@ function M.new(server, directory)
         end
       end
     end
-    projects[root] = state
+    projects[key] = state
     return state
   end
 
@@ -86,7 +88,7 @@ function M.new(server, directory)
       if wait.reply_to then matches = message.reply_to == wait.reply_to
       else matches = message.seq > wait.after and not (wait.listen and message.from.kind == "self") end
       if matches then
-        if #messages >= MAX_PAGE then break end
+        if #messages >= (wait.limit or MAX_PAGE) then break end
         messages[#messages + 1] = message
         cursor = math.max(cursor, message.seq)
       end
@@ -127,12 +129,12 @@ function M.new(server, directory)
     end
   end
 
-  local function read(client, id, params)
+  local function read(client, id, params, chat)
     local root = server.project_root(params.project)
     if not root then return server.fail(client, id, "outside_project", "Unknown Project") end
-    if not M.valid_name(params.agent) then return server.fail(client, id, "invalid_request", "Invalid agent name") end
+    if chat ~= true and not M.valid_name(params.agent) then return server.fail(client, id, "invalid_request", "Invalid agent name") end
     local state = project(root)
-    local agent = state.agents[params.agent]
+    local agent = chat == true and state.chat or state.agents[params.agent]
     if not agent then
       if not params.listen then return server.fail(client, id, "not_found", "No External Agent " .. params.agent) end
       if client.level ~= "full" then return server.fail(client, id, "forbidden", "This device has View access") end
@@ -149,6 +151,7 @@ function M.new(server, directory)
     if after > agent.seq then after = 0 end
     local wait = {client = client, id = id, agent = agent, state = state, after = after, listen = params.listen == true,
       reply_to = type(params.reply_to) == "string" and params.reply_to or nil}
+    if chat == true then wait.limit, wait.listen, wait.reply_to = 4, false, nil end
     if wait.listen then agent.last_listen = system.get_time() end
     local result = page(agent, wait)
     if #result.messages > 0 or params.wait ~= true then return deliver(wait, result) end
@@ -161,7 +164,26 @@ function M.new(server, directory)
     waits[#waits + 1] = wait
   end
 
-  local function post(client, id, params)
+  local function append(state, message)
+    local chat = state.chat
+    chat.seq = chat.seq + 1
+    message.seq, message.time = chat.seq, os.time()
+    chat.messages[#chat.messages + 1] = message
+    if #chat.messages > MAX_MESSAGES then table.remove(chat.messages, 1) end
+    dirty[state] = true
+    wake(chat, true)
+  end
+
+  server.chat_result = function(root, terminal, instance, result)
+    local state = project(root)
+    local key = terminal .. ":" .. instance .. ":" .. result.id
+    for _, m in ipairs(state.chat.messages) do if m.request == key then return end end
+    append(state, {pi = true, from = {kind = "agent", terminal = terminal, instance = instance,
+      name = require("core.agent_name").for_terminal(terminal)}, request = key, text = result.text,
+      reply_to = type(result.reply_to) == "string" and result.reply_to or nil})
+  end
+
+  local function post(client, id, params, parent)
     local root = server.project_root(params.project)
     if not root then return server.fail(client, id, "outside_project", "Unknown Project") end
     if not M.valid_name(params.agent) then return server.fail(client, id, "invalid_request", "Invalid agent name") end
@@ -181,6 +203,9 @@ function M.new(server, directory)
       if params.expect_reply == false then message.expect_reply = false end
     end
     agent.messages[#agent.messages + 1] = message
+    append(state, {from = from.kind == "self" and {kind = "agent", name = agent.name} or from,
+      external = from.kind == "self" and agent.name or nil, text = message.text,
+      request = message.request or net.random_token(), reply_to = type(parent) == "table" and parent.request or message.reply_to})
     if #agent.messages > MAX_MESSAGES then table.remove(agent.messages, 1) end
     dirty[state] = true
     wake(agent)
@@ -195,7 +220,7 @@ function M.new(server, directory)
     local temporary = state.path .. ".tmp"
     local file = io.open(temporary, "wb")
     if not file then return server.log("External Agents: cannot write %s", temporary) end
-    file:write(json.encode {version = 1, project = state.root, agents = agents})
+    file:write(json.encode {version = 1, project = state.root, agents = agents, chat = state.chat})
     file:close()
     if not system.replace_file(temporary, state.path) then server.log("External Agents: cannot replace %s", state.path) end
   end
@@ -238,6 +263,31 @@ function M.new(server, directory)
   end)
 
   return {
+    ["chat.read"] = function(client, id, params) return read(client, id, params, true) end,
+    ["chat.reply"] = function(client, id, params)
+      local root = server.project_root(params.project)
+      if not root then return server.fail(client, id, "outside_project", "Unknown Project") end
+      if type(params.text) ~= "string" or #params.text > MAX_TEXT or not params.text:find("%S") then
+        return server.fail(client, id, "invalid_request", "A reply needs 1 to 32768 bytes")
+      end
+      local state = project(root)
+      for _, m in ipairs(state.chat.messages) do
+        if m.request == params.parent and type(params.parent) == "string" then
+          if m.external then return post(client, id, {project = root, agent = m.external, text = params.text}, m) end
+          if m.pi and server.chat_deliver then
+            local request = net.random_token()
+            local ok, err = pcall(server.chat_deliver, root, m, request, params.text, function(accepted, reason)
+              if not accepted then return server.fail(client, id, "not_connected", reason) end
+              append(state, {from = clean_from(nil, client), request = request, reply_to = m.request, text = params.text})
+              server.reply(client, id, {result = {task = request}})
+            end)
+            if not ok then return server.fail(client, id, "not_connected", tostring(err)) end
+            return
+          end
+        end
+      end
+      return server.fail(client, id, "not_found", "This result is no longer available for reply")
+    end,
     ["external.list"] = function(client, id, params)
       local root = server.project_root(params.project)
       if not root then return server.fail(client, id, "outside_project", "Unknown Project") end

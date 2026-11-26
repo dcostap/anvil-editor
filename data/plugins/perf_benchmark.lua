@@ -1387,16 +1387,29 @@ local function scenario_is_ready()
     core.active_view:show_key({ id = "j" }, 4)
     return false
   end
-  if benchmark.scenario == "external-agent-view" then
+  if benchmark.scenario == "external-agent-view" or benchmark.scenario == "project-chat" then
     -- An External Agent thread with fixed messages: a question with two lines, a Pi's question and its Markdown
     -- answer with a code block, a list and a long link that wraps, a late answer that quotes its question, a queued message, and a
     -- two-line draft. The scene reads no Machine.
     local external_agents = require "plugins.external_agents"
     if core.active_view and core.active_view:is(external_agents.View) then return true end
     config.transitions = false
-    local view = external_agents.open("agy")
+    local project_chat = benchmark.scenario == "project-chat"
+    local view = external_agents.open(project_chat and "Project Chat" or "agy")
     view.closed = true
     local now = os.time()
+    if project_chat then
+      view:receive({seq = 3, cursor = 3, messages = {
+        {seq = 1, request = "result1", time = now - 60, pi = true, from = {kind = "agent", name = "brave-otter"},
+          text = "The **Android build** passed. I tested pairing with a new Machine."},
+        {seq = 2, time = now - 30, request = "question", reply_to = "result1", from = {kind = "user"}, text = "What about reconnect?"},
+        {seq = 3, time = now, request = "result2", reply_to = "question", pi = true, from = {kind = "agent", name = "brave-otter"},
+          text = "Reconnect works after locking the phone."},
+      }})
+      view:reply_to(view.messages[3])
+      view.field:on_text("Did the draft survive?")
+      return false
+    end
     view:receive({ listening = true, read = 5, cursor = 6, seq = 6, messages = {
       { seq = 1, time = now - 600, from = { kind = "user", machine = "Laptop" }, request = "u1",
         text = "Check why the parser tests fail on Windows." },

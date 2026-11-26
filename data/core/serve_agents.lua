@@ -8,6 +8,7 @@ local M = {}
 
 function M.new(server, live_record)
   local projects, registered = {}, {}
+  local pending = {}
   local directory = USERDIR .. "/machine/agents"
   net.private_directory(directory)
   local function forget(id, item)
@@ -28,6 +29,17 @@ function M.new(server, live_record)
     if not listener then
       local control = require("core.control").new(project)
       control.headless = true
+      control.chat_receipt = function(terminal, instance, receipt)
+        local item = pending[receipt.id]
+        if item and item.terminal == terminal and item.instance == instance then
+          pending[receipt.id] = nil
+          item.finish(receipt.status == "accepted", receipt.error or "Pi refused the reply")
+        end
+      end
+      control.chat_result = function(terminal, instance, result)
+        local record = live_record(terminal)
+        if record and common.path_equals(record.project_path, project) then server.chat_result(project, terminal, instance, result) end
+      end
       projects[project] = false
       local ok, opened = pcall(require("core.control_server").open, control)
       if not ok then projects[project] = nil; error(opened) end
@@ -42,11 +54,38 @@ function M.new(server, live_record)
     registered[id] = item
     return item
   end
+  server.chat_deliver = function(project, message, request, text, finish)
+    local target = message.from
+    local record, item = live_record(target.terminal), registered[target.terminal]
+    assert(record and item and common.path_equals(record.project_path, project)
+      and common.path_equals(item.server.control.project, project), "The original Pi conversation is not connected")
+    local control = item.server.control
+    control:queue_agent_command(target, {action = "human", id = request, instance = target.instance,
+      text = text, answer_time = message.time})
+    pending[request] = {terminal = target.terminal, instance = target.instance, finish = finish,
+      control = control, deadline = system.get_time() + 10}
+  end
   core.add_thread(function()
     local next_check = 0
     while true do
       for _, listener in pairs(projects) do if listener then listener:poll() end end
       if system.get_time() >= next_check then
+        for id, delivery in pairs(pending) do
+          local peer = delivery.control.peers[delivery.terminal]
+          if not peer or peer.instance ~= delivery.instance or system.get_time() >= delivery.deadline then
+            if peer then peer.commands[id] = nil end
+            pending[id] = nil
+            delivery.finish(false, "Pi did not confirm this reply. Check the original conversation before retrying.")
+          end
+        end
+        -- A locally opened Terminal need not attach through the Machine service.
+        for _, name in ipairs(system.list_dir(USERDIR .. "/terminal-sessions") or {}) do
+          local id = name:match("^(%x+)%.lua$")
+          if id and not registered[id] then
+            local record = live_record(id)
+            if record then observe(record) end
+          end
+        end
         for id, item in pairs(registered) do
           local record = live_record(id)
           if not record or not common.path_equals(record.project_path, item.server.control.project) then forget(id, item) end

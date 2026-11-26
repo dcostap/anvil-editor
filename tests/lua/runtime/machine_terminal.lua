@@ -227,6 +227,32 @@ test.describe("Remote Terminal Session", function()
     post("/agent", report)
     wait_until(function() return transcript end, "Missing conversation reply")
     test.equal(transcript, "conversation on the host")
+    report.chat_result = {id = "normal-turn", text = "Build passed"}
+    test.equal(post("/agent", report).chat_ack, "normal-turn")
+    post("/agent", report) -- A lost acknowledgement must not duplicate the answer.
+    local err, feed = call(context.owner, "chat.read", {project = context.project})
+    test.is_nil(err)
+    test.equal(#feed.messages, 1)
+    local args = {project = context.project, parent = feed.messages[1].request, text = "Which build?"}
+    local failure, question
+    require("core").add_thread(function() failure, question = call(context.owner, "chat.reply", args) end)
+    local received_question
+    wait_until(function()
+      for _, c in ipairs(post("/agent", report).commands) do if c.action == "human" then received_question = c end end
+      return received_question
+    end, "The original conversation did not receive the question")
+    test.equal(received_question.action, "human")
+    test.equal(received_question.instance, report.instance)
+    report.receipts = {{id = received_question.id, status = "accepted"}}
+    report.chat_result = {id = "next-turn", text = "Android", reply_to = received_question.id}
+    post("/agent", report)
+    wait_until(function() return failure or question end, "No receipt for chat reply")
+    test.is_nil(failure)
+    local _, updated = call(context.owner, "chat.read", {project = context.project})
+    test.equal(updated.messages[3].reply_to, updated.messages[2].request)
+    report.instance, report.chat_result = "replacement", nil
+    post("/agent", report)
+    test.equal(call(context.owner, "chat.reply", args).code, "not_connected")
   end)
 
   test.it("keeps the shell when a device closes it while another device shows it", function(context)

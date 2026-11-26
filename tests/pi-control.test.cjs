@@ -38,6 +38,7 @@ test("interactive Pi connects, receives each task once, and reports completion o
     getThinkingLevel: () => "off",
     appendEntry(customType, data) { entries.push({ type: "custom", customType, data }); },
     sendMessage(message, options) { sent.push(message); deliveries.push(options); idle = false; },
+    sendUserMessage(text) { assert.equal(text, "Check reconnect too"); idle = false; },
   };
   const server = http.createServer(async (req, res) => {
     assert.equal(req.headers.authorization, "Bearer test-secret");
@@ -45,7 +46,7 @@ test("interactive Pi connects, receives each task once, and reports completion o
     for await (const chunk of req) body += chunk;
     latest = JSON.parse(body);
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ name: "brave-otter", commands }));
+    res.end(JSON.stringify({ name: "brave-otter", commands, chat_ack: latest.chat_result?.id }));
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   try {
@@ -142,6 +143,13 @@ test("interactive Pi connects, receives each task once, and reports completion o
     commands = [answer, {...answer, id: "reply-other", reply_to: "other"}];
     await until(() => latest.receipts?.some(r => r.id === "reply-other"));
     assert.equal(sent.length, 7, "A repeated reply command must not send the message twice");
+    commands = [{id: "human-question", action: "human", text: "Check reconnect too", instance: latest.instance}];
+    await until(() => latest.receipts?.some(r => r.id === "human-question"));
+    assert.equal(latest.receipts.find(r => r.id === "human-question").status, "accepted");
+    await handlers.get("message_end")({message: {role: "assistant", stopReason: "stop", content: [{type: "text", text: "Reconnect works"}]}}, ctx);
+    await handlers.get("agent_settled")({aborted:false}, ctx);
+    await until(() => latest.chat_result?.text === "Reconnect works");
+    assert.equal(latest.chat_result.reply_to, "human-question");
     assert.equal(deliveries[6].deliverAs, "steer");
     // An External Agent names itself. A notice asks for no reply.
     commands = [{id: "notice-a", action: "send", text: "Build finished", expect_reply: false,

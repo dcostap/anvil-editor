@@ -17,6 +17,8 @@ module.exports = function (pi) {
   const inspect = require("./pi-inspection.cjs")(pi);
   let ctx, stopped = true, timer, controller, connection, inFlight;
   let active, lastMessage;
+  const results = [];
+  let humanRequest;
   let instance, agentName;
   const receipts = new Map(), tasks = new Map();
   const reports = new Map();
@@ -42,6 +44,13 @@ module.exports = function (pi) {
       if (command.action === "interrupt") {
         save();
         ctx.abort();
+      } else if (command.action === "human") {
+        if (command.instance !== instance || endpoint !== hostDiscovery) throw new Error("Conversation changed");
+        if (typeof command.text !== "string" || !command.text.trim() || Buffer.byteLength(command.text) > 32768) throw new Error("Invalid reply");
+        save();
+        const context = command.answer_time ? `In reply to your answer at ${new Date(command.answer_time * 1000).toISOString()}:\n\n` : "";
+        pi.sendUserMessage(context + command.text, {deliverAs: "steer"});
+        humanRequest = command.id;
       } else if (command.action === "send" || command.action === "reply") {
         if (typeof command.text !== "string" || !command.text.trim() || command.text.length > 32768) {
           throw new Error("Invalid task text");
@@ -136,6 +145,7 @@ module.exports = function (pi) {
       const response = await fetch(next.url + "/agent", { method: "POST", redirect: "error",
         headers: { Authorization: "Bearer " + next.token, "Content-Type": "application/json" },
         body: JSON.stringify({ instance, session: ctx.sessionManager.getSessionFile(),
+          chat_result: file === hostDiscovery ? results[0] : undefined,
           model: ctx.model && { provider: ctx.model.provider, id: ctx.model.id },
           thinking: pi.getThinkingLevel(), busy: !ctx.isIdle(),
           capabilities: {transcript: true, activity: true}, activity: inspect.activity(ctx),
@@ -145,6 +155,7 @@ module.exports = function (pi) {
           tasks: changed("task", currentTasks) }), signal: controller.signal });
       if (!response.ok) throw new Error("Anvil connection unavailable");
       const data = await response.json();
+      if (file === hostDiscovery && results[0] && data.chat_ack === results[0].id) results.shift();
       for (const [key, text] of changes) reported.set(key, text);
       if (!stopped) {
         if (typeof data.name === "string") agentName = data.name.replace(/[^a-z-]/g, "").slice(0, 64);
@@ -186,6 +197,7 @@ module.exports = function (pi) {
     if (context.mode !== "tui" || typeof pi.registerMcpServer !== "function") return;
     ctx = context;
     instance = randomUUID();
+    results.length = 0; humanRequest = null;
     receipts.clear(); tasks.clear(); persisted.clear(); reports.clear(); active = null; lastMessage = null;
     const entries = ctx.sessionManager.getBranch();
     for (const entry of entries) {
@@ -212,9 +224,18 @@ module.exports = function (pi) {
     } else return { systemPrompt: event.systemPrompt + "\n\n" + text };
   });
   pi.on("message_end", event => {
-    if (active && event.message.role === "assistant") lastMessage = event.message;
+    if (event.message.role === "assistant") lastMessage = event.message;
   });
   pi.on("agent_settled", event => {
+    if (!event.aborted && lastMessage?.stopReason === "stop") {
+      const text = lastMessage.content.filter(p => p.type === "text").map(p => p.text).join("\n");
+      if (text.trim()) {
+        if (results.length === 32) results.shift();
+        const bytes = Buffer.from(text);
+        results.push({id: randomUUID(), text: bytes.length <= 32768 ? text : bytes.subarray(0, 32760).toString("utf8") + "…", reply_to: humanRequest});
+      }
+    }
+    humanRequest = null;
     for (const r of receipts.values()) if (r.status === "awaiting_reply") r.status = "accepted";
     if (active) {
       active.status = event.aborted ? "interrupted" : lastMessage?.stopReason === "error" ? "failed" : "completed";
@@ -226,6 +247,7 @@ module.exports = function (pi) {
       active.finished = Date.now();
       active = null;
     }
+    lastMessage = null;
     save();
   });
   pi.on("session_shutdown", async () => {

@@ -162,6 +162,22 @@ test.describe("External Agent View on a Machine", function()
     system.set_clipboard(clipboard or "")
   end)
 
+  test.it("replies from a Project result to its author's own thread", function(context)
+    -- A Project chat opens even when there is no Pi Terminal in the Project.
+    local project_view = external_agents.open("Project Chat")
+    context.view = project_view
+    wait_until(function() return #project_view.messages == 1 and project_view.messages[1].y end, "No Project result")
+    local answer = project_view.messages[1]
+    local cx, cy, h = project_view:copy_rect(answer)
+    project_view:on_mouse_pressed("left", cx - 2, cy + h / 2, 1)
+    project_view:on_text_input("Check Android")
+    test.ok(project_view:send(), "Reply did not choose the message's author")
+    wait_until(function() return #project_view.messages == 2 end, "Missing question in Project chat")
+    local thread = request(context, "external.read", {agent = "agy"})
+    test.equal(thread.messages[2].text, "Check Android")
+    test.equal(project_view.messages[2].reply_to, answer.request)
+  end)
+
   test.it("keeps its Pane when the user opens another View there", function(context)
     local view = external_agents.open("agy")
     context.view = view
