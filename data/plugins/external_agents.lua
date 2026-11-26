@@ -4,12 +4,16 @@
 -- same thread as the Machine itself.
 local core = require "core"
 local command = require "core.command"
+local common = require "core.common"
 local keymap = require "core.keymap"
 local LineInput = require "core.line_input"
 local Object = require "core.object"
 local panes = require "core.panes"
 local style = require "core.style"
 local ui = require "core.ui"
+local Badge = require "core.ui.badge"
+local EmptyState = require "core.ui.empty_state"
+local StatusDot = require "core.ui.status_dot"
 local surface = require "core.ui.surface"
 local View = require "core.view"
 
@@ -110,6 +114,8 @@ function MessageBox:new(placeholder)
   self.input = LineInput("", true)
   self.placeholder = placeholder
   self.x, self.y, self.w, self.h, self.scroll = 0, 0, 0, 0, 0
+  -- Room on the right for a button.
+  self.trail = 0
 end
 
 function MessageBox:get_text() return self.input.text end
@@ -141,7 +147,7 @@ local function pad_y() return math.floor((ui.metrics().field_h - ui.font():get_h
 
 -- The box's lines for its width. The text, the width and the font size key the cache.
 function MessageBox:lines()
-  local font, width = ui.font(), math.max(1, self.w - 2 * pad_x())
+  local font, width = ui.font(), math.max(1, self.w - pad_x() - math.max(pad_x(), self.trail))
   local cache = self.cache
   if not cache or cache.text ~= self.input.text or cache.width ~= width or cache.size ~= font:get_size() then
     cache = {text = self.input.text, width = width, size = font:get_size(),
@@ -306,12 +312,17 @@ function ExternalAgentView:new(agent)
   self.agent = agent
   self.scrollable = true
   self.messages, self.requests, self.read_cursor = {}, {}, 0
+  -- The thread in cards, from `layout`. Each card holds a message and the messages that answer it.
+  self.cards = {}
   -- "connecting", "listening", "idle", "unknown" (the agent never waited) or "offline".
   self.status = "connecting"
   self.unread = 0
   self.stick = true
   self.content_h, self.last_max = 0, 0
   self.field = MessageBox("Message " .. agent)
+  self.status_dot = StatusDot {}
+  self.badge = Badge { tone = "warning" }
+  self.empty = EmptyState { icon = ui.icons.inbox, title = "No messages yet" }
   core.add_thread(function() self:read_thread() end)
 end
 
@@ -385,26 +396,25 @@ function ExternalAgentView:receive(result)
   self:status_changed()
 end
 
+-- A message to the agent that its waits have not given it yet.
 function ExternalAgentView:is_unread(message)
   return self.read ~= nil and message.seq > self.read and (message.from or EMPTY).kind ~= "self"
 end
 
 local STATUS = {
-  connecting = { "Connecting", "dim" },
-  listening = { "Listening", "good" },
-  idle = { "Not listening", "warn" },
-  unknown = { "Not connected yet", "warn" },
-  offline = { "Offline", "error" },
+  connecting = { "Connecting", "neutral" },
+  listening = { "Listening", "success" },
+  idle = { "Not listening", "warning" },
+  unknown = { "Not connected yet", "warning" },
+  offline = { "Offline", "danger" },
 }
 
 function ExternalAgentView:status_changed()
   local state = STATUS[self.status] or STATUS.offline
-  local text = state[1]
-  if self.status == "offline" and self.error then text = text .. ": " .. self.error end
-  if self.unread > 0 and (self.status == "listening" or self.status == "idle") then
-    text = string.format("%s · %d unread", text, self.unread)
-  end
-  self.status_text, self.status_color = text, state[2]
+  local label = state[1]
+  if self.status == "offline" and self.error then label = label .. ": " .. self.error end
+  self.status_dot:set(state[2], label)
+  self.badge:set_label(self.unread .. " queued")
   core.redraw = true
 end
 
@@ -427,18 +437,22 @@ end
 ------------------------------------------------------------------------------------------------------------------
 -- Layout
 
-local function pad() return ui.metrics().row_pad_x end
-local function header_h() return ui.font():get_height() + 2 * ui.metrics().gap end
+-- The thread and the message box are at most this wide, at scale 1, so that lines stay easy to read.
+local MAX_WIDTH = 760
+
+local function header_h() local m = ui.metrics() return m.control_h + m.gap end
+local function avatar_size() return ui.font():get_height() + 2 * ui.metrics().text_gap end
+-- The author's name is centred on the avatar.
+local function name_top() return math.floor((avatar_size() - ui.role_font("strong"):get_height()) / 2) end
+-- An answer sits this far right of its question.
+local function indent() return avatar_size() + ui.metrics().gap end
 local function code_pad() return ui.metrics().gap end
+local function send_size() return ui.metrics().control_xs_h end
+local function send_inset() return math.floor((ui.metrics().field_h - send_size()) / 2) end
 
 function ExternalAgentView:author(message)
   local from = message.from or EMPTY
-  if from.kind == "self" then
-    -- An answer to a Pi names the Pi.
-    local asked = message.reply_to and self.requests[message.reply_to]
-    local to = asked and (asked.from or EMPTY).kind == "agent" and asked.from.name
-    return to and self.agent .. " → " .. to or self.agent
-  end
+  if from.kind == "self" then return self.agent end
   local name = from.kind == "user" and "You" or from.name or "Agent"
   return from.machine and name .. " @ " .. from.machine or name
 end
@@ -486,7 +500,21 @@ function ExternalAgentView:parts(message, width)
   return cache
 end
 
--- Places each message: `y` from the thread's top, its height, and whether it continues the message before it.
+-- The column of the thread and the message box: its left edge and its width.
+function ExternalAgentView:column()
+  local w = math.max(1, math.min(self.size.x - 2 * ui.metrics().row_pad_x, math.floor(MAX_WIDTH * SCALE)))
+  return self.position.x + math.floor((self.size.x - w) / 2), w
+end
+
+-- The first line of a question, for the quote above its late answer.
+local function first_line(text)
+  return ((text or ""):match("^%s*```[^\n]*\n?(.*)$") or text or ""):match("^%s*([^\n]*)") or ""
+end
+
+-- Puts the messages in cards, in time order. A card starts with a message, and holds the answers to it and the
+-- messages that its authors add within GROUP_SECONDS. An answer to a question in an earlier card starts a card
+-- that quotes the question. Each message gets `y` from the thread's top, its height, its `depth` (1 for an answer)
+-- and whether it shows its author.
 function ExternalAgentView:layout(width)
   local m = ui.metrics()
   local font_size = ui.font():get_size()
@@ -495,42 +523,85 @@ function ExternalAgentView:layout(width)
   if key and key.width == width and key.size == font_size and key.count == #self.messages and key.last == last then
     return
   end
-  local y, previous = 0, nil
+  local inner = width - 2 * m.pad_x
+  local avatar, step = avatar_size(), indent()
+  local name_h = name_top() + ui.role_font("strong"):get_height()
+  local cards, card, previous, y = {}, nil, nil, 0
   for _, message in ipairs(self.messages) do
     local from = message.from or EMPTY
     message.author = message.author or table.concat({ from.kind or "", from.name or "", from.machine or "" }, "\0")
-    message.continued = previous ~= nil and previous.author == message.author and type(message.time) == "number"
-      and type(previous.time) == "number" and message.time - previous.time < GROUP_SECONDS
-    if previous then y = y + (message.continued and m.gap or m.section_gap) end
     message.label = message.label or self:author(message)
     message.when = message.when or time_text(message.time)
+    local asked = message.reply_to and self.requests[message.reply_to]
+    local answers = card ~= nil and asked ~= nil and asked.card == card
+    local continues = card ~= nil and previous.author == message.author and (not asked or answers)
+      and type(message.time) == "number" and type(previous.time) == "number"
+      and message.time - previous.time < GROUP_SECONDS
+    if answers or continues then
+      y = y + (continues and m.gap or m.pad_x)
+    else
+      if card then
+        card.h = y + m.pad_x - card.y
+        y = y + m.pad_x + m.section_gap
+      end
+      card = { y = y, messages = {}, root = message.author }
+      cards[#cards + 1] = card
+      y = y + m.pad_x
+      if asked then
+        card.quote = asked.label .. ": " .. first_line(asked.text)
+        card.quote_y = y
+        y = y + ui.role_font("meta"):get_height() + m.gap
+      end
+    end
+    message.card = card
+    message.depth = message.author == card.root and 0 or 1
+    message.header = not continues
+    message.x = message.depth * step + step
     message.y = y
-    message.h = (message.continued and 0 or ui.bold_font():get_height() + m.text_gap) + self:parts(message, width).h
+    local body = self:parts(message, math.max(1, inner - message.x)).h
+    message.h = message.header and math.max(avatar, name_h + m.text_gap + body) or body
+    -- The thread line runs from the question's avatar to each answer's avatar.
+    if message.header and message.depth == 1 then
+      card.rail_from = card.rail_from or card.messages[1].y + avatar + m.text_gap
+      card.rail_to = y + math.floor(avatar / 2)
+    end
+    card.messages[#card.messages + 1] = message
     y = y + message.h
     previous = message
   end
+  if card then
+    card.h = y + m.pad_x - card.y
+    y = y + m.pad_x
+  end
+  self.cards = cards
   self.content_h = y
   self.laid_out = { width = width, size = font_size, count = #self.messages, last = last }
 end
 
 function ExternalAgentView:footer_h()
-  return self.field.h + 2 * pad()
+  return self.field.h + ui.metrics().gap + ui.metrics().row_pad_x
 end
 
 function ExternalAgentView:get_scrollable_size()
-  return header_h() + 2 * pad() + self.content_h + self:footer_h()
+  return header_h() + 2 * ui.metrics().row_pad_x + self.content_h + self:footer_h()
 end
 
 function ExternalAgentView:max_scroll()
   return math.max(0, self:get_scrollable_size() - self.size.y)
 end
 
+function ExternalAgentView:send_rect()
+  local field, size, inset = self.field, send_size(), send_inset()
+  return field.x + field.w - inset - size, field.y + field.h - inset - size, size
+end
+
 function ExternalAgentView:update()
   -- The thread follows new messages while it shows its end.
   self.stick = self.stick or self.scroll.to.y >= self.last_max - 1
-  local width = self.size.x - 2 * pad()
+  local x, width = self:column()
+  self.field.trail = send_size() + send_inset() + ui.metrics().text_gap
   local box_h = self.field:height_for(width)
-  self.field:set_rect(self.position.x + pad(), self.position.y + self.size.y - pad() - box_h, width, box_h)
+  self.field:set_rect(x, self.position.y + self.size.y - ui.metrics().row_pad_x - box_h, width, box_h)
   self:layout(width)
   self.last_max = self:max_scroll()
   if self.stick then self.scroll.to.y = self.last_max end
@@ -541,14 +612,25 @@ end
 ------------------------------------------------------------------------------------------------------------------
 -- Input
 
+-- The top of the thread on the screen.
+function ExternalAgentView:thread_top()
+  return self.position.y + header_h() + ui.metrics().row_pad_x - self.scroll.y
+end
+
 function ExternalAgentView:message_at(x, y)
   local top, bottom = self.position.y + header_h(), self.position.y + self.size.y - self:footer_h()
-  if y < top or y >= bottom or x < self.position.x or x >= self.position.x + self.size.x then return end
-  local offset = y - (top + pad() - self.scroll.y)
+  local left, width = self:column()
+  if y < top or y >= bottom or x < left or x >= left + width then return end
+  local offset = y - self:thread_top()
   local gap = ui.metrics().gap
   for _, message in ipairs(self.messages) do
-    if offset >= message.y - gap / 2 and offset < message.y + message.h + gap / 2 then return message end
+    if message.y and offset >= message.y - gap / 2 and offset < message.y + message.h + gap / 2 then return message end
   end
+end
+
+function ExternalAgentView:over_send(x, y)
+  local sx, sy, size = self:send_rect()
+  return x >= sx and x < sx + size and y >= sy and y < sy + size
 end
 
 function ExternalAgentView:on_mouse_wheel(y)
@@ -559,6 +641,7 @@ end
 function ExternalAgentView:on_mouse_pressed(button, x, y, clicks)
   if ExternalAgentView.super.on_mouse_pressed(self, button, x, y, clicks) then return true end
   if button ~= "left" then return true end
+  if self:over_send(x, y) then return self:send() or true end
   if self.field:contains(x, y) then
     self.field.scrolled = false
     return self.field:on_mouse_pressed(x, y, clicks or 1)
@@ -573,7 +656,17 @@ end
 function ExternalAgentView:on_mouse_moved(x, y, dx, dy)
   if ExternalAgentView.super.on_mouse_moved(self, x, y, dx, dy) then return true end
   if self.field:on_mouse_moved(x, y) then return true end
-  self.cursor = self.field:contains(x, y) and "ibeam" or "arrow"
+  local over_send = self:over_send(x, y)
+  local hovered = not self.field:contains(x, y) and self:message_at(x, y) or nil
+  if over_send ~= self.send_hovered or hovered ~= self.hovered then core.redraw = true end
+  self.send_hovered, self.hovered = over_send, hovered
+  self.cursor = over_send and "hand" or self.field:contains(x, y) and "ibeam" or "arrow"
+end
+
+function ExternalAgentView:on_mouse_left()
+  ExternalAgentView.super.on_mouse_left(self)
+  self.send_hovered, self.hovered = false, nil
+  core.redraw = true
 end
 
 function ExternalAgentView:on_mouse_released(button, x, y)
@@ -610,8 +703,9 @@ end
 
 function ExternalAgentView:context_menu_point()
   local message = self.selected
-  if not message then return end
-  return self.position.x + pad(), self.position.y + header_h() + pad() - self.scroll.y + message.y
+  if not message or not message.y then return end
+  local x = self:column()
+  return x + ui.metrics().pad_x + message.x, self:thread_top() + message.y
 end
 
 -- The keymap's commands for the editor do not run in this View, so its keys come here.
@@ -646,74 +740,153 @@ end
 ------------------------------------------------------------------------------------------------------------------
 -- Drawing
 
-function ExternalAgentView:draw_message(message, x, y, width)
+-- The tone of each kind of author: the agent, a Pi, or the user.
+local AUTHOR_TONES = { self = "info", agent = "success" }
+
+-- A round avatar with the first letter of `name`, in the colors of a Badge.
+local function draw_avatar(name, tone, x, y)
+  local size = avatar_size()
+  local color = tone and ui.tone_color(tone) or style.dialog_text
+  local fill = tone and ui.tint(color, 0.16) or ui.tint(style.dialog_text_strong, 0.1)
+  renderer.draw_rounded_rect(x, y, size, size, size / 2, fill)
+  local letter = (name:match("^[%z\1-\127\194-\244][\128-\191]*") or "?"):upper()
+  common.draw_text(ui.role_font("strong"), color, letter, "center", x, y, size, size)
+end
+
+local function draw_lines(font, lines, x, y, color)
+  local font_h = font:get_height()
+  for _, line in ipairs(lines) do
+    renderer.draw_text(font, line, x, y, color)
+    y = y + font_h
+  end
+end
+
+function ExternalAgentView:draw_message(message, left, top, width)
   local m = ui.metrics()
-  local font, bold, meta = ui.font(), ui.bold_font(), ui.role_font("meta")
-  if message == self.selected then
-    renderer.draw_rect(self.position.x, y - m.gap / 2, self.size.x, message.h + m.gap, style.line_highlight)
+  local y = top + message.y
+  if message == self.selected or message == self.hovered then
+    -- The pointer shows a lighter version of the selection.
+    local hx = left + message.depth * indent() - m.text_gap * 2
+    local hy, hw, hh = y - m.gap / 2, left + width + m.text_gap * 2 - hx, message.h + m.gap
+    local pushed = ui.push_look(hx, hy, hw, hh, 1, message == self.selected and 1 or 0.5)
+    surface.draw("selected", hx, hy, hw, hh, m.small_radius)
+    ui.pop_look(pushed)
   end
-  if self:is_unread(message) then
-    -- A dot in the margin marks a message that the agent has not received yet.
-    local dot = math.max(2, math.floor(font:get_height() / 4))
-    local line_y = message.continued and y or y + bold:get_height() + m.text_gap
-    renderer.draw_rect(x - math.floor((pad() + dot) / 2), line_y + math.floor((font:get_height() - dot) / 2), dot, dot,
-      style.accent)
-  end
-  if not message.continued then
+  local x = left + message.x
+  if message.header then
     local from = message.from or EMPTY
-    renderer.draw_text(bold, message.label, x, y, from.kind == "self" and style.accent or style.text)
-    renderer.draw_text(meta, message.when, x + bold:get_width(message.label) + m.gap,
-      y + bold:get_height() - meta:get_height(), style.dim)
-    y = y + bold:get_height() + m.text_gap
+    draw_avatar(message.label, AUTHOR_TONES[from.kind], left + message.depth * indent(), y)
+    local strong, meta = ui.role_font("strong"), ui.role_font("meta")
+    y = y + name_top()
+    renderer.draw_text(strong, message.label, x, y, style.dialog_text_strong)
+    local mx = x + strong:get_width(message.label) + m.gap
+    local my = y + strong:get_height() - meta:get_height()
+    mx = renderer.draw_text(meta, message.when, mx, my, style.dialog_text_muted)
+    if self:is_unread(message) then
+      renderer.draw_text(meta, "Queued", mx + m.gap, my, ui.tone_color("warning"))
+    end
+    y = y + strong:get_height() + m.text_gap
   end
-  for i, part in ipairs(self:parts(message, width).parts) do
+  local text_w = width - message.x
+  for i, part in ipairs(self:parts(message, math.max(1, text_w)).parts) do
     if i > 1 then y = y + m.text_gap end
     if part.code then
-      renderer.draw_rounded_rect(x, y, width, part.h, m.small_radius, style.markdown_live_code_background,
-        style.markdown_live_code_background)
-      local code_font = style.code_font
-      local ly = y + code_pad()
-      for _, line in ipairs(part.lines) do
-        renderer.draw_text(code_font, line, x + code_pad(), ly, style.text)
-        ly = ly + code_font:get_height()
-      end
+      surface.draw("well", x, y, text_w, part.h, m.small_radius)
+      draw_lines(style.code_font, part.lines, x + code_pad(), y + code_pad(), style.dialog_text)
     else
-      local ly = y
-      for _, line in ipairs(part.lines) do
-        renderer.draw_text(font, line, x, ly, style.text)
-        ly = ly + font:get_height()
-      end
+      draw_lines(ui.font(), part.lines, x, y, style.dialog_text)
     end
     y = y + part.h
   end
 end
 
+function ExternalAgentView:draw_card(card, x, top, width)
+  local m = ui.metrics()
+  local y = top + card.y
+  surface.draw("group", x, y, width, card.h, m.group_radius)
+  local left, inner = x + m.pad_x, width - 2 * m.pad_x
+  local line = ui.tint(style.dialog_text_muted, 0.35)
+  if card.quote then
+    local font = ui.role_font("meta")
+    local qy = top + card.quote_y
+    renderer.draw_rect(left, qy, m.ring, font:get_height(), line)
+    local qx = left + m.ring + m.gap
+    renderer.draw_text(font, ui.fit_text(font, card.quote, left + inner - qx), qx, qy, style.dialog_text_muted)
+  end
+  if card.rail_from then
+    local avatar = avatar_size()
+    local rx = left + math.floor((avatar - m.border) / 2)
+    renderer.draw_rect(rx, top + card.rail_from, m.border, card.rail_to - card.rail_from + m.border, line)
+    for _, message in ipairs(card.messages) do
+      if message.header and message.depth == 1 then
+        local ey = top + message.y + math.floor(avatar / 2)
+        renderer.draw_rect(rx, ey, left + indent() - m.text_gap - rx, m.border, line)
+      end
+    end
+  end
+  for _, message in ipairs(card.messages) do self:draw_message(message, left, top, inner) end
+end
+
+function ExternalAgentView:draw_header()
+  local m = ui.metrics()
+  local y, h = self.position.y, header_h()
+  local x, width = self:column()
+  renderer.draw_rect(self.position.x, y + h - m.border, self.size.x, m.border, style.dialog_line)
+  local avatar = avatar_size()
+  draw_avatar(self.agent, AUTHOR_TONES.self, x, y + math.floor((h - avatar) / 2))
+  local strong = ui.role_font("strong")
+  local nx = x + avatar + m.gap
+  local name = ui.fit_text(strong, self.agent, width - avatar - m.gap)
+  local dot_x = renderer.draw_text(strong, name, nx, y + math.floor((h - strong:get_height()) / 2),
+    style.dialog_text_strong) + m.section_gap
+  local right = x + width
+  if self.unread > 0 then
+    local badge_w = self.badge:width()
+    right = right - badge_w - m.gap
+    self.badge:place(x + width - badge_w, y, badge_w, h)
+    self.badge:draw_node()
+  end
+  if right > dot_x then
+    self.status_dot:place(dot_x, y, math.min(self.status_dot:width(), right - dot_x), h)
+    self.status_dot:draw_node()
+  end
+end
+
+function ExternalAgentView:draw_send()
+  local x, y, size = self:send_rect()
+  local ready = self.field:get_text():find("%S") ~= nil
+  local amount = ui.approach(self, "send_hover", ready and self.send_hovered and 1 or 0, 18)
+  local pushed = ui.push_look(x, y, size, size, 1, ready and 1 or ui.DISABLED_OPACITY)
+  local base = ready and "lit" or "raised"
+  surface.draw_faded(base, base .. "_hover", amount, x, y, size, size, size / 2)
+  common.draw_text(ui.small_icon_font(), surface.get(base).text, ui.icons.arrow_up, "center", x, y, size, size)
+  ui.pop_look(pushed)
+end
+
 function ExternalAgentView:draw()
   self:draw_background(style.background)
-  local x, y, w, h = self.position.x, self.position.y, self.size.x, self.size.y
-  local m = ui.metrics()
-  local font = ui.font()
-  local p, top_h, bottom_h = pad(), header_h(), self:footer_h()
-  local width = w - 2 * p
+  local y, h = self.position.y, self.size.y
+  local top_h, bottom_h = header_h(), self:footer_h()
+  local x, width = self:column()
+  if not self.status_dot.label then self:status_changed() end
 
   -- The clip keeps the thread out of the header and the footer, which stay in place while it scrolls.
-  core.push_clip_rect(x, y + top_h, w, h - top_h - bottom_h)
-  local top = y + top_h + p - self.scroll.y
-  for _, message in ipairs(self.messages) do
-    local my = top + message.y
-    if my + message.h > y + top_h - m.gap and my < y + h - bottom_h + m.gap then
-      self:draw_message(message, x + p, my, width)
-    end
+  core.push_clip_rect(self.position.x, y + top_h, self.size.x, h - top_h - bottom_h)
+  if #self.messages == 0 then
+    local empty_h = self.empty:height(width)
+    self.empty:place(x, y + top_h + math.floor((h - top_h - bottom_h - empty_h) / 2), width, empty_h)
+    self.empty:draw_node()
+  end
+  local top = self:thread_top()
+  for _, card in ipairs(self.cards) do
+    local card_y = top + card.y
+    if card_y + card.h > y + top_h and card_y < y + h - bottom_h then self:draw_card(card, x, top, width) end
   end
   core.pop_clip_rect()
 
-  if not self.status_text then self:status_changed() end
-  local dot = math.floor(font:get_height() / 3)
-  local cy = y + math.floor(top_h / 2)
-  renderer.draw_rect(x + p, cy - math.floor(dot / 2), dot, dot, style[self.status_color] or style.dim)
-  renderer.draw_text(font, ui.fit_text(font, self.status_text, width - dot - m.gap), x + p + dot + m.gap,
-    cy - math.floor(font:get_height() / 2), style.dim)
+  self:draw_header()
   self.field:draw(core.active_view == self)
+  self:draw_send()
   self:draw_scrollbar()
 end
 

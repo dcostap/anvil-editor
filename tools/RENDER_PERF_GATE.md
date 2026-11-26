@@ -490,7 +490,7 @@ It has no baseline. Run it with `--report-only` and look at the captured screens
 Use `--scenario context-menu-query` for the Markdown Context Menu with a typed query, which finds an item of a submenu.
 It has no baseline. Run it with `--report-only` and look at the captured screenshot.
 
-Use `--scenario external-agent-view` for an External Agent View with grouped messages, a code block, an answer to a Pi, an unread message, a long word and a two-line draft in its message box.
+Use `--scenario external-agent-view` for an External Agent View with grouped messages, an answer to a Pi with a code block and a long word, a late answer that quotes its question, a queued message and a two-line draft in its message box.
 It has no baseline. Run it with `--report-only` and look at the captured screenshot.
 
 Use `--scenario image-zoom` on both renderers to measure the Image Overlay while it zooms and pans on each frame.

@@ -99,6 +99,32 @@ test.describe("External Agent View on a Machine", function()
     restored:on_close()
   end)
 
+  test.it("puts answers under their question, and quotes the question of a late answer", function(context)
+    local view = external_agents.View("agy")
+    context.view = view
+    view.closed = true
+    local now = os.time()
+    view:receive({ listening = true, cursor = 5, seq = 5, messages = {
+      { seq = 1, time = now, from = { kind = "user" }, request = "u1", text = "Run the tests" },
+      { seq = 2, time = now, from = { kind = "self" }, reply_to = "u1", text = "Running them" },
+      { seq = 3, time = now, from = { kind = "agent", name = "brave-otter" }, request = "p1", text = "Which fixture?" },
+      { seq = 4, time = now, from = { kind = "self" }, reply_to = "u1", text = "All green" },
+      { seq = 5, time = now, from = { kind = "self" }, reply_to = "p1", text = "paths.lua" },
+    } })
+    view:layout(600)
+    local cards = view.cards
+    test.equal(#cards, 4, "Each question and each late answer must start a card")
+    test.same({ cards[1].messages[1].text, cards[1].messages[2].text }, { "Run the tests", "Running them" })
+    test.equal(cards[1].messages[1].depth, 0)
+    test.equal(cards[1].messages[2].depth, 1, "An answer must sit under its question")
+    test.equal(cards[2].messages[1].text, "Which fixture?")
+    test.is_nil(cards[2].quote)
+    -- The thread keeps time order, so a late answer quotes its question.
+    test.equal(cards[3].messages[1].text, "All green")
+    test.equal(cards[3].quote, "You: Run the tests")
+    test.equal(cards[4].quote, "brave-otter: Which fixture?")
+  end)
+
   test.it("keeps its Pane when the user opens another View there", function(context)
     local view = external_agents.open("agy")
     context.view = view

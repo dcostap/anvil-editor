@@ -1388,8 +1388,9 @@ local function scenario_is_ready()
     return false
   end
   if benchmark.scenario == "external-agent-view" then
-    -- An External Agent thread with fixed messages: grouped messages, a code block, an answer to a Pi, an unread
-    -- message, a long word that wraps, and a two-line draft. The scene reads no Machine.
+    -- An External Agent thread with fixed messages: a question with two lines, a Pi's question and its answer with
+    -- a code block and a long word that wraps, a late answer that quotes its question, a queued message, and a
+    -- two-line draft. The scene reads no Machine.
     local external_agents = require "plugins.external_agents"
     if core.active_view and core.active_view:is(external_agents.View) then return true end
     config.transitions = false
@@ -1397,16 +1398,17 @@ local function scenario_is_ready()
     view.closed = true
     local now = os.time()
     view:receive({ listening = true, read = 5, cursor = 6, seq = 6, messages = {
-      { seq = 1, time = now - 600, from = { kind = "user", machine = "Laptop" },
+      { seq = 1, time = now - 600, from = { kind = "user", machine = "Laptop" }, request = "u1",
         text = "Check why the parser tests fail on Windows." },
-      { seq = 2, time = now - 590, from = { kind = "user", machine = "Laptop" },
+      { seq = 2, time = now - 590, from = { kind = "user", machine = "Laptop" }, request = "u2",
         text = "They passed yesterday." },
       { seq = 3, time = now - 540, from = { kind = "agent", name = "brave-otter" }, request = "r1",
         text = "Which fixture compares the paths?" },
       { seq = 4, time = now - 500, from = { kind = "self" }, reply_to = "r1",
         text = "The path test builds its expected value like this:\n```lua\nlocal expected = root .. \"/src/main.c\"\n```\nUse PATHSEP instead: https://example.com/a-very-long-link-without-spaces-that-must-wrap-inside-the-word" },
-      { seq = 5, time = now - 60, from = { kind = "self" }, text = "Thanks. The suite is green." },
-      { seq = 6, time = now - 20, from = { kind = "user", machine = "Laptop" }, text = "Also check the release build." },
+      { seq = 5, time = now - 60, from = { kind = "self" }, reply_to = "u2", text = "Fixed. The suite is green again." },
+      { seq = 6, time = now - 20, from = { kind = "user", machine = "Laptop" }, request = "u3",
+        text = "Also check the release build." },
     } })
     view.field:on_text("And the installer.")
     view.field:on_text("\n")
