@@ -1399,13 +1399,16 @@ local function scenario_is_ready()
     view.closed = true
     local now = os.time()
     if project_chat then
+      local agent = {kind = "agent", name = "brave-otter", terminal = "example-terminal", instance = "example-conversation"}
       view:receive({seq = 3, cursor = 3, messages = {
-        {seq = 1, request = "result1", time = now - 60, pi = true, from = {kind = "agent", name = "brave-otter"},
+        {seq = 1, request = "result1", time = now - 60, pi = true, from = agent,
           text = "The **Android build** passed. I tested pairing with a new Machine."},
-        {seq = 2, time = now - 30, request = "question", reply_to = "result1", from = {kind = "user"}, text = "What about reconnect?"},
-        {seq = 3, time = now, request = "result2", reply_to = "question", pi = true, from = {kind = "agent", name = "brave-otter"},
+        {seq = 2, time = now - 30, request = "question", reply_to = "result1", from = {kind = "user"}, to = agent,
+          text = "What about reconnect?"},
+        {seq = 3, time = now, request = "result2", reply_to = "question", pi = true, from = agent,
           text = "Reconnect works after locking the phone."},
       }})
+      view:set_recipient(view.messages[1].profile)
       view:reply_to(view.messages[3])
       view.field:on_text("Did the draft survive?")
       return false

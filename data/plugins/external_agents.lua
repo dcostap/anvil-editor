@@ -443,11 +443,10 @@ function ExternalAgentView:new(agent)
   self.stick = true
   self.content_h, self.last_max = 0, 0
   self.project_chat = agent == PROJECT_CHAT
-  self.field = MessageBox(self.project_chat and "Choose a message to reply to" or "Message " .. agent)
+  self.field = MessageBox(self.project_chat and "Message" or "Message " .. agent)
   if self.project_chat then
-    self.agents_button = Button { label = "External Agents", size = "small", on_click = function()
-      self:open_agent_thread()
-    end }
+    self.recipient_button = Button { label = "To: Choose agent", icon = ui.icons.chevron_down, kind = "ghost",
+      size = "small", on_click = function() self:choose_recipient() end }
   end
   self.status_dot = StatusDot {}
   self.badge = Badge { tone = "warning" }
@@ -468,36 +467,60 @@ end
 -- An unsent message stays with the Workspace.
 function ExternalAgentView:get_state()
   local draft = self.field:get_text()
-  return { agent = self.agent, draft = draft ~= "" and draft or nil, target = self.target }
+  return { agent = self.agent, draft = draft ~= "" and draft or nil, target = self.target, recipient = self.recipient }
 end
 
 function ExternalAgentView.from_state(state)
   if type(state) ~= "table" or state.agent ~= PROJECT_CHAT and not valid_name(state.agent) then return end
   local view = ExternalAgentView(state.agent)
-  if view.project_chat then view.target = state.target end
+  if view.project_chat then
+    view.target, view.recipient = state.target, state.recipient
+    view:update_recipient_label()
+  end
   if type(state.draft) == "string" then view.field:set_text(state.draft) end
   return view
 end
 
-function ExternalAgentView:open_agent_thread()
-  local button = self.agents_button
+function ExternalAgentView:update_recipient_label()
+  local recipient = self.target or self.recipient
+  self.recipient_button.label = self.read_only and "External Agents"
+    or "To: " .. (recipient and (recipient.name or "Reply") or "Choose agent")
+end
+
+function ExternalAgentView:set_recipient(recipient)
+  self.recipient, self.target = recipient, nil
+  self:update_recipient_label()
+  self.field:set_error(nil)
+  self:focus_text(nil)
+end
+
+function ExternalAgentView:choose_recipient()
+  local button = self.recipient_button
+  local read_only = self.read_only
   button.enabled = false
-  plugin.request("external.list", {}, function(err, result)
+  plugin.request(read_only and "external.list" or "chat.recipients", {}, function(err, result)
     button.enabled = true
     core.redraw = true
     if self.closed or core.active_view ~= self then return end
-    if err then return core.warn("External Agents: %s", err.message or err.code) end
-    local names = {}
-    for _, agent in ipairs(result.agents or EMPTY) do names[#names + 1] = agent.name end
-    if #names == 0 then
-      return core.warn("No External Agent has connected to this Project. Run anvil:mcp_server and copy the agent setup.")
+    if err then return self.field:set_error(err.message or err.code) end
+    local function select(agent)
+      if read_only then plugin.open(agent.name) else self:set_recipient(agent) end
     end
-    if #names == 1 then return plugin.open(names[1]) end
-    core.global_prompt_bar:enter("External Agent", {
+    local agents = result.agents or EMPTY
+    if #agents == 0 then
+      return core.warn("No agents are available. Start Pi or run anvil:mcp_server to set up an External Agent.")
+    end
+    if #agents == 1 then return select(agents[1]) end
+    local options = {}
+    for _, agent in ipairs(agents) do
+      options[#options + 1] = {text = agent.name, recipient = agent,
+        info = agent.terminal and "Pi · " .. agent.terminal:sub(1, 8) or "External Agent"}
+    end
+    core.global_prompt_bar:enter(read_only and "External Agent" or "To", {
       text = "",
-      suggest = function(text) return common.fuzzy_match(names, text) end,
+      suggest = function(text) return common.fuzzy_match(options, text) end,
       validate = function(_, option) return option ~= nil end,
-      submit = function(_, option) plugin.open(option.text) end,
+      submit = function(_, option) if not self.closed then select(option.recipient) end end,
     })
   end)
 end
@@ -513,7 +536,11 @@ function ExternalAgentView:read_thread()
     while not done and not self.closed do coroutine.yield(0.05) end
     if self.closed then return end
     if err then
-      self.status = err.code == "not_found" and "unknown" or "offline"
+      if self.project_chat then
+        self.read_only = err.code == "forbidden" or self.read_only
+        self:update_recipient_label()
+      end
+      self.status = self.read_only and "read_only" or err.code == "not_found" and "unknown" or "offline"
       self.error = err.message or err.code
       loaded = false
       self:status_changed()
@@ -526,6 +553,10 @@ function ExternalAgentView:read_thread()
 end
 
 function ExternalAgentView:receive(result)
+  if self.read_only then
+    self.read_only = nil
+    self:update_recipient_label()
+  end
   -- A Machine that lost the thread starts again at 1, and sends the whole new thread.
   if type(result.seq) == "number" and result.seq < self.read_cursor then
     for _, message in ipairs(self.messages) do close_text(message) end
@@ -534,6 +565,14 @@ function ExternalAgentView:receive(result)
   end
   for _, message in ipairs(result.messages or EMPTY) do
     if message.seq > self.read_cursor then
+      if self.project_chat then
+        local from = message.from or EMPTY
+        if type(message.external) == "string" then
+          message.profile = {name = message.external, external = message.external}
+        elseif message.pi and from.terminal and from.instance then
+          message.profile = {name = from.name, terminal = from.terminal, instance = from.instance}
+        end
+      end
       self.messages[#self.messages + 1] = message
       if message.request then self.requests[message.request] = message end
     end
@@ -567,6 +606,7 @@ local STATUS = {
   listening = { "Listening", "success" },
   idle = { "Not listening", "warning" },
   unknown = { "Not connected yet", "warning" },
+  read_only = { "View access", "neutral" },
   offline = { "Offline", "danger" },
 }
 
@@ -584,18 +624,24 @@ function ExternalAgentView:send()
   local text = self.field:get_text():gsub("^%s*\n", ""):gsub("%s+$", "")
   if not text:find("%S") then return false end
   if self.project_chat then
-    if not self.target or self.sending then return false end
+    if self.read_only or self.sending or not (self.target or self.recipient) then return false end
     local draft, target = self.field:get_text(), self.target
+    local method = target and "chat.reply" or "chat.send"
+    local params = target and {parent = target.id, text = text} or {recipient = self.recipient, text = text}
     self.sending = true
-    plugin.request("chat.reply", {parent = target.id, text = text}, function(err)
+    plugin.request(method, params, function(err)
       self.sending = false
       if err then self.field:set_error(err.message or err.code)
-      elseif self.target == target and self.field:get_text() == draft then
-        self.field:set_text("")
-        self.target = nil
+      else
+        if self.field:get_text() == draft then self.field:set_text("") end
+        if target and self.target == target then
+          self.target = nil
+          self:update_recipient_label()
+        end
       end
       core.redraw = true
     end)
+    self.stick = true
     return true
   end
   local draft = self.field:get_text()
@@ -631,7 +677,8 @@ function ExternalAgentView:author(message)
   local from = message.from or EMPTY
   if from.kind == "self" then return self.agent end
   local name = from.kind == "user" and "You" or from.name or "Agent"
-  return from.machine and name .. " @ " .. from.machine or name
+  if from.machine then name = name .. " @ " .. from.machine end
+  return message.to and name .. " → " .. message.to.name or name
 end
 
 local function time_text(time)
@@ -684,8 +731,9 @@ function ExternalAgentView:layout(width)
   local cards, card, previous, y = {}, nil, nil, 0
   for _, message in ipairs(self.messages) do
     local from = message.from or EMPTY
+    local to = message.to or EMPTY
     message.author = message.author or table.concat({ from.kind or "", from.name or "", from.machine or "",
-      from.terminal or "", from.instance or "" }, "\0")
+      from.terminal or "", from.instance or "", to.external or "", to.terminal or "", to.instance or "" }, "\0")
     message.label = message.label or self:author(message)
     message.when = message.when or time_text(message.time)
     local asked = message.reply_to and self.requests[message.reply_to]
@@ -735,7 +783,8 @@ function ExternalAgentView:layout(width)
 end
 
 function ExternalAgentView:footer_h()
-  return self.field.h + ui.metrics().gap + ui.metrics().row_pad_x + (self.target and ui.metrics().control_h or 0)
+  local m = ui.metrics()
+  return self.field.h + m.gap + m.row_pad_x + (self.recipient_button and m.control_sm_h + m.gap or 0)
 end
 
 function ExternalAgentView:get_scrollable_size()
@@ -824,9 +873,19 @@ function ExternalAgentView:copy_message(message)
 end
 
 function ExternalAgentView:reply_to(message)
-  self.target = {id = message.request, label = "Reply to " .. message.from.name .. " · " .. first_line(message.text)}
+  self.target = {id = message.request, name = message.from.name, label = "Reply: " .. first_line(message.text)}
+  self:update_recipient_label()
   self.field:set_error(nil)
   self:focus_text(nil)
+end
+
+-- A profile is the avatar and name in a message header.
+function ExternalAgentView:over_profile(message, x, y)
+  if not (message and message.header and message.profile) then return false end
+  local top = self:thread_top() + message.y
+  if y < top or y >= top + avatar_size() then return false end
+  local left = self:column() + ui.metrics().pad_x
+  return x >= left + message.depth * indent() and x < left + message.x + ui.role_font("strong"):get_width(message.label)
 end
 
 ---Gives the keyboard's Copy and Select All to a message's text, or to the message box when `text` is nil. The
@@ -834,7 +893,7 @@ end
 function ExternalAgentView:focus_text(text)
   if self.text_focus and self.text_focus ~= text then self.text_focus:clear_selection() end
   self.text_focus = text
-  self.agents_focused = false
+  self.recipient_focused = false
   core.redraw = true
 end
 
@@ -846,7 +905,7 @@ end
 function ExternalAgentView:on_mouse_pressed(button, x, y, clicks)
   if ExternalAgentView.super.on_mouse_pressed(self, button, x, y, clicks) then return true end
   if button ~= "left" then return true end
-  local agents = self.agents_button
+  local agents = self.recipient_button
   if agents and agents:contains(x, y) then
     agents.pressed = agents.enabled
     core.redraw = true
@@ -859,6 +918,10 @@ function ExternalAgentView:on_mouse_pressed(button, x, y, clicks)
       self:reply_to(hit)
       return true
     end
+  end
+  if self:over_profile(hit, x, y) then
+    self:set_recipient(hit.profile)
+    return true
   end
   local copy = self:over_copy(x, y)
   if copy then
@@ -890,7 +953,7 @@ end
 
 function ExternalAgentView:on_mouse_moved(x, y, dx, dy)
   if ExternalAgentView.super.on_mouse_moved(self, x, y, dx, dy) then return true end
-  local agents = self.agents_button
+  local agents = self.recipient_button
   local over_agents = agents and agents:contains(x, y)
   if agents and agents.hovered ~= over_agents then
     agents.hovered = over_agents
@@ -917,13 +980,13 @@ function ExternalAgentView:on_mouse_moved(x, y, dx, dy)
   local over_copy = self:over_copy(x, y) ~= nil
   if over_copy ~= self.copy_hovered then core.redraw = true end
   self.copy_hovered = over_copy
-  self.cursor = (over_agents and agents.enabled or over_send or over_copy) and "hand"
+  self.cursor = (over_agents and agents.enabled or over_send or over_copy or self:over_profile(message, x, y)) and "hand"
     or in_field and "ibeam" or text and text.cursor or "arrow"
 end
 
 function ExternalAgentView:on_mouse_left()
   ExternalAgentView.super.on_mouse_left(self)
-  if self.agents_button then self.agents_button.hovered = false end
+  if self.recipient_button then self.recipient_button.hovered = false end
   if self.hovered_text then self.hovered_text:on_mouse_left() end
   self.send_hovered, self.copy_hovered, self.hovered, self.hovered_text = false, false, nil, nil
   core.redraw = true
@@ -931,7 +994,7 @@ end
 
 function ExternalAgentView:on_mouse_released(button, x, y)
   ExternalAgentView.super.on_mouse_released(self, button, x, y)
-  local agents = self.agents_button
+  local agents = self.recipient_button
   if button == "left" and agents and agents.pressed then
     agents:on_mouse_released(x, y)
     agents.pressed = false
@@ -996,28 +1059,30 @@ end
 -- The keymap's commands for the editor do not run in this View, so its keys come here.
 function ExternalAgentView:on_key_pressed(key, event)
   if keymap.is_modifier_key(key) then return false end
-  if self.agents_button and key == "tab" then
+  if self.recipient_button and key == "tab" then
     local stroke = keymap.stroke_for_event(key, event)
     if stroke == "tab" or stroke == "shift+tab" then
-      local focus = not self.agents_focused
+      local focus = not self.recipient_focused
       self:focus_text(nil)
-      self.agents_focused = focus
+      self.recipient_focused = focus
       return true
     end
   end
-  if self.agents_focused and key == "escape" then
+  if self.recipient_focused and key == "escape" then
     self:focus_text(nil)
     return true
   end
   if key == "escape" and self.target then
     self.target = nil
+    self:update_recipient_label()
     self.field:set_error(nil)
+    core.redraw = true
     return true
   end
   if key == "return" or key == "keypad enter" then
-    if self.agents_focused then
+    if self.recipient_focused then
       if keymap.modkeys.alt then return false end
-      self.agents_button:activate()
+      self.recipient_button:activate()
       return true
     end
     if keymap.modkeys.shift then
@@ -1075,8 +1140,11 @@ function ExternalAgentView:draw_message(message, left, top, width)
     local from = message.from or EMPTY
     draw_avatar(message.label, AUTHOR_TONES[from.kind], left + message.depth * indent(), y)
     local strong, meta = ui.role_font("strong"), ui.role_font("meta")
+    local profile, recipient = message.profile, self.recipient
+    local selected = profile and recipient and profile.external == recipient.external
+      and profile.terminal == recipient.terminal and profile.instance == recipient.instance
     y = y + name_top()
-    renderer.draw_text(strong, message.label, x, y, style.dialog_text_strong)
+    renderer.draw_text(strong, message.label, x, y, selected and ui.tone_color("info") or style.dialog_text_strong)
     local mx = x + strong:get_width(message.label) + m.gap
     local my = y + strong:get_height() - meta:get_height()
     mx = renderer.draw_text(meta, message.when, mx, my, style.dialog_text_muted)
@@ -1151,13 +1219,6 @@ function ExternalAgentView:draw_header()
   local x, width = self:column()
   renderer.draw_rect(self.position.x, y + h - m.border, self.size.x, m.border, style.dialog_line)
   local right = x + width
-  if self.agents_button then
-    local w, bh = self.agents_button:measure()
-    w = math.min(w, width)
-    self.agents_button:place(right - w, y + math.floor((h - bh) / 2), w, bh)
-    self.agents_button:draw(self.agents_focused and core.active_view == self)
-    right = right - w - m.gap
-  end
   local avatar = avatar_size()
   local strong = ui.role_font("strong")
   local nx = x + avatar + m.gap
@@ -1180,13 +1241,31 @@ end
 
 function ExternalAgentView:draw_send()
   local x, y, size = self:send_rect()
-  local ready = self.field:get_text():find("%S") ~= nil and (not self.project_chat or self.target and not self.sending)
+  local ready = self.field:get_text():find("%S") ~= nil
+    and (not self.project_chat or not self.read_only and not self.sending and (self.target or self.recipient))
   local amount = ui.approach(self, "send_hover", ready and self.send_hovered and 1 or 0, 18)
   local pushed = ui.push_look(x, y, size, size, 1, ready and 1 or ui.DISABLED_OPACITY)
   local base = ready and "lit" or "raised"
   surface.draw_faded(base, base .. "_hover", amount, x, y, size, size, size / 2)
   common.draw_text(ui.small_icon_font(), surface.get(base).text, ui.icons.arrow_up, "center", x, y, size, size)
   ui.pop_look(pushed)
+end
+
+function ExternalAgentView:draw_recipient(x, width)
+  local button = self.recipient_button
+  local m = ui.metrics()
+  local w, h = button:measure()
+  w = math.min(w, width)
+  local y = self.field.y - m.gap - h
+  button:place(x, y, w, h)
+  button:draw(self.recipient_focused and core.active_view == self)
+  local label = self.field.error or self.target and self.target.label
+  local room = width - w - m.gap
+  if label and room > 0 then
+    local font = ui.role_font("description")
+    renderer.draw_text(font, ui.fit_text(font, label, room), x + w + m.gap, y + math.floor((h - font:get_height()) / 2),
+      self.field.error and style.dialog_danger or style.dialog_text_muted)
+  end
 end
 
 function ExternalAgentView:draw()
@@ -1211,12 +1290,8 @@ function ExternalAgentView:draw()
   core.pop_clip_rect()
 
   self:draw_header()
-  if self.target then
-    local font = ui.role_font("description")
-    renderer.draw_text(font, ui.fit_text(font, self.field.error or self.target.label, width), x,
-      self.field.y - ui.metrics().gap - font:get_height(), self.field.error and style.dialog_danger or style.dialog_text_muted)
-  end
-  self.field:draw(core.active_view == self and not self.agents_focused)
+  if self.recipient_button then self:draw_recipient(x, width) end
+  self.field:draw(core.active_view == self and not self.recipient_focused)
   self:draw_send()
   self:draw_scrollbar()
 end

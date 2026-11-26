@@ -4,6 +4,7 @@
 -- `read` is the last message that the agent has received. Threads stay in `USERDIR/machine/external`, so a server
 -- restart keeps them.
 local common = require "core.common"
+local agent_name = require "core.agent_name"
 local json = require "core.lsp.json"
 local net = require "net"
 local M = {}
@@ -179,7 +180,7 @@ function M.new(server, directory)
     local key = terminal .. ":" .. instance .. ":" .. result.id
     for _, m in ipairs(state.chat.messages) do if m.request == key then return end end
     append(state, {pi = true, from = {kind = "agent", terminal = terminal, instance = instance,
-      name = require("core.agent_name").for_terminal(terminal)}, request = key, text = result.text,
+      name = agent_name.for_terminal(terminal)}, request = key, text = result.text,
       reply_to = type(result.reply_to) == "string" and result.reply_to or nil})
   end
 
@@ -205,11 +206,34 @@ function M.new(server, directory)
     agent.messages[#agent.messages + 1] = message
     append(state, {from = from.kind == "self" and {kind = "agent", name = agent.name} or from,
       external = from.kind == "self" and agent.name or nil, text = message.text,
+      to = from.kind ~= "self" and {name = agent.name, external = agent.name} or nil,
       request = message.request or net.random_token(), reply_to = type(parent) == "table" and parent.request or message.reply_to})
     if #agent.messages > MAX_MESSAGES then table.remove(agent.messages, 1) end
     dirty[state] = true
     wake(agent)
     server.reply(client, id, {result = {agent = agent.name, seq = message.seq, request = message.request}})
+  end
+
+  local function send_pi(client, id, state, target, text, parent)
+    if not server.chat_deliver then return server.fail(client, id, "not_connected", "Pi is not connected") end
+    local request = net.random_token()
+    local ok, err = pcall(server.chat_deliver, state.root, target, request, text, parent and parent.time,
+      function(accepted, reason)
+        if not accepted then return server.fail(client, id, "not_connected", reason) end
+        append(state, {from = clean_from(nil, client), request = request, text = text,
+          to = {name = agent_name.for_terminal(target.terminal), terminal = target.terminal, instance = target.instance},
+          reply_to = parent and parent.request})
+        server.reply(client, id, {result = {task = request}})
+      end)
+    if not ok then server.fail(client, id, "not_connected", tostring(err)) end
+  end
+
+  local function valid_text(text)
+    return type(text) == "string" and #text <= MAX_TEXT and text:find("%S") ~= nil
+  end
+
+  local function valid_id(id)
+    return type(id) == "string" and #id > 0 and #id <= 128
   end
 
   local function save(state)
@@ -264,26 +288,44 @@ function M.new(server, directory)
 
   return {
     ["chat.read"] = function(client, id, params) return read(client, id, params, true) end,
+    ["chat.recipients"] = function(client, id, params)
+      local root = server.project_root(params.project)
+      if not root then return server.fail(client, id, "outside_project", "Unknown Project") end
+      local recipients = json.array()
+      for name in pairs(project(root).agents) do
+        recipients[#recipients + 1] = {name = name, external = name}
+      end
+      if server.chat_recipients then server.chat_recipients(root, recipients) end
+      server.reply(client, id, {result = {agents = recipients}})
+    end,
+    ["chat.send"] = function(client, id, params)
+      local root = server.project_root(params.project)
+      if not root then return server.fail(client, id, "outside_project", "Unknown Project") end
+      if not valid_text(params.text) then
+        return server.fail(client, id, "invalid_request", "A message needs 1 to 32768 bytes")
+      end
+      local target = params.recipient
+      if type(target) == "table" then
+        if M.valid_name(target.external) and target.terminal == nil then
+          return post(client, id, {project = root, agent = target.external, text = params.text})
+        end
+        if target.external == nil and valid_id(target.terminal) and valid_id(target.instance) then
+          return send_pi(client, id, project(root), target, params.text)
+        end
+      end
+      return server.fail(client, id, "invalid_request", "Choose a chat recipient")
+    end,
     ["chat.reply"] = function(client, id, params)
       local root = server.project_root(params.project)
       if not root then return server.fail(client, id, "outside_project", "Unknown Project") end
-      if type(params.text) ~= "string" or #params.text > MAX_TEXT or not params.text:find("%S") then
+      if not valid_text(params.text) then
         return server.fail(client, id, "invalid_request", "A reply needs 1 to 32768 bytes")
       end
       local state = project(root)
       for _, m in ipairs(state.chat.messages) do
         if m.request == params.parent and type(params.parent) == "string" then
           if m.external then return post(client, id, {project = root, agent = m.external, text = params.text}, m) end
-          if m.pi and server.chat_deliver then
-            local request = net.random_token()
-            local ok, err = pcall(server.chat_deliver, root, m, request, params.text, function(accepted, reason)
-              if not accepted then return server.fail(client, id, "not_connected", reason) end
-              append(state, {from = clean_from(nil, client), request = request, reply_to = m.request, text = params.text})
-              server.reply(client, id, {result = {task = request}})
-            end)
-            if not ok then return server.fail(client, id, "not_connected", tostring(err)) end
-            return
-          end
+          if m.pi then return send_pi(client, id, state, m.from, params.text, m) end
         end
       end
       return server.fail(client, id, "not_found", "This result is no longer available for reply")

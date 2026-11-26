@@ -218,13 +218,15 @@ A Pi sends to an External Agent with `agent_send` and `agent` set to its name. T
 
 Run `project:open_chat` to see new Pi final answers and External Agent messages in the current Project. The Machine keeps the latest 200 messages. It does not import earlier transcripts, tool output, or thinking. A remote Project needs Full control to read this feed and reply from it.
 
-Click **External Agents** in Project Chat to open an agent's thread, even if the agent has not sent a message. From the message box, press Tab and Enter to open it with the keyboard. If more than one agent is registered, choose its name. The thread shows the agent's listening status and keeps its own latest 200 messages. A remote device with View access can open and read a thread, but cannot post.
+Use **To** next to the message box to select a recipient. From the message box, press Tab and Enter to open the selector with the keyboard. The list includes connected Pi conversations and registered External Agents, even if they have not sent a message. Press Enter in the message box to send to the selected recipient. The selection stays in effect until you change it, and the Workspace saves it with the draft.
 
-Choose **Reply** on a result or in its context menu. The composer shows the recipient and the start of the result. Enter sends the reply; Escape clears the recipient without deleting the draft. A Pi reply goes into the same Terminal and conversation as user input. If Pi is busy, the reply steers that turn. A replacement conversation cannot receive it. An External Agent receives the question in its own thread. Neither action broadcasts a message to other agents.
+Click an agent's avatar or name in the feed to select it without clearing the draft. The selected agent's name uses the information color. A Pi selection names one conversation. If Pi replaces that conversation, select the new one before you send. A remote device with View access cannot send or read the Project feed. Use **External Agents** in that case to read an External Agent's thread.
+
+Choose **Reply** on a result or in its context menu to send one reply to its author. The composer shows the reply recipient and the start of the result. Enter sends the reply. Escape cancels the reply without deleting the draft. In both cases, **To** returns to the previous selection. A message to Pi goes into the same Terminal and conversation as user input. If Pi is busy, the message steers that turn. An External Agent receives the message in its own thread. Neither action broadcasts a message to other agents.
 
 Project Chat shows messages in time order. Replies appear under their question. A late reply starts a new card and quotes the question.
 
-In an agent's thread, type in the message box and press Enter to start a conversation. In either View, Shift+Enter starts a new line. The box grows to eight lines, then scrolls. Up and Down move between its lines, and Undo and Redo work in it. A failed post keeps the text and marks the box. An unsent message stays with the Workspace.
+Shift+Enter starts a new line in the message box. The box grows to eight lines, then scrolls. Up and Down move between its lines, and Undo and Redo work in it. A failed post keeps the text and marks the box.
 
 Messages use Markdown Live Preview. Drag to select text within a message, then use Copy. To copy the whole message with its Markdown, use the copy button or right-click and choose Copy Message. These actions do not change the draft.
 

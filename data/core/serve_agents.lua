@@ -1,5 +1,6 @@
 -- A Pi with no editor View uses the Machine's loopback agent endpoint. Never export its credential.
 local core = require "core"
+local agent_name = require "core.agent_name"
 local common = require "core.common"
 local json = require "core.lsp.json"
 local net = require "net"
@@ -54,14 +55,26 @@ function M.new(server, live_record)
     registered[id] = item
     return item
   end
-  server.chat_deliver = function(project, message, request, text, finish)
-    local target = message.from
+  server.chat_recipients = function(project, recipients)
+    local now = system.get_time()
+    for root, listener in pairs(projects) do
+      if listener and common.path_equals(root, project) then
+        for terminal, peer in pairs(listener.control.peers) do
+          if now - peer.seen < 10 then
+            recipients[#recipients + 1] = {name = agent_name.for_terminal(terminal), terminal = terminal,
+              instance = peer.instance}
+          end
+        end
+      end
+    end
+  end
+  server.chat_deliver = function(project, target, request, text, answer_time, finish)
     local record, item = live_record(target.terminal), registered[target.terminal]
     assert(record and item and common.path_equals(record.project_path, project)
       and common.path_equals(item.server.control.project, project), "The original Pi conversation is not connected")
     local control = item.server.control
     control:queue_agent_command(target, {action = "human", id = request, instance = target.instance,
-      text = text, answer_time = message.time})
+      text = text, answer_time = answer_time})
     pending[request] = {terminal = target.terminal, instance = target.instance, finish = finish,
       control = control, deadline = system.get_time() + 10}
   end

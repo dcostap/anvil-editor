@@ -298,7 +298,7 @@ Run `runtime/machine_serve.lua`, `runtime/machine_client.lua`, `runtime/machine_
 
 ## Project chat
 
-`chat.read {project, after, wait}` returns a page of Project messages. It takes the same cursor as `external.read`. `chat.reply {project, parent, text}` uses the selected message's `request` as its parent. The server derives the destination from its stored message, not from a name supplied by the Client. Both methods require Full control.
+`chat.read {project, after, wait}` returns a page of Project messages. It takes the same cursor as `external.read`. `chat.recipients {project}` lists registered External Agents and connected Pi conversations for the Project. `chat.send {project, recipient, text}` sends to an External Agent by `recipient.external`, or to Pi by `recipient.terminal` and `recipient.instance`. `chat.reply {project, parent, text}` uses the selected message's `request` as its parent and derives the destination from that message. All four methods require Full control.
 
 The Machine accepts settled Pi text from the Terminal's authenticated loopback endpoint. It acknowledges result IDs to prevent duplicates on retry. A reply to Pi succeeds when the same conversation accepts the user message. A lost receipt leaves delivery uncertain. Check the conversation before retrying. External Agent replies use the agent's existing post and wait protocol.
 

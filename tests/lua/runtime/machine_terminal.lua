@@ -227,6 +227,11 @@ test.describe("Remote Terminal Session", function()
     post("/agent", report)
     wait_until(function() return transcript end, "Missing conversation reply")
     test.equal(transcript, "conversation on the host")
+    local list_error, recipients = call(context.owner, "chat.recipients", {project = context.project})
+    test.is_nil(list_error)
+    local recipient
+    for _, agent in ipairs(recipients.agents) do if agent.terminal == context.id then recipient = agent end end
+    test.equal(test.not_nil(recipient).instance, report.instance)
     report.chat_result = {id = "normal-turn", text = "Build passed"}
     test.equal(post("/agent", report).chat_ack, "normal-turn")
     post("/agent", report) -- A lost acknowledgement must not duplicate the answer.
@@ -250,9 +255,28 @@ test.describe("Remote Terminal Session", function()
     test.is_nil(failure)
     local _, updated = call(context.owner, "chat.read", {project = context.project})
     test.equal(updated.messages[3].reply_to, updated.messages[2].request)
+    local direct = {project = context.project, recipient = recipient, text = "Run the tests"}
+    local direct_error, sent
+    require("core").add_thread(function() direct_error, sent = call(context.owner, "chat.send", direct) end)
+    local received_direct
+    report.receipts, report.chat_result = {}, nil
+    wait_until(function()
+      for _, c in ipairs(post("/agent", report).commands) do if c.action == "human" then received_direct = c end end
+      return received_direct
+    end, "The chosen conversation did not receive the message")
+    test.equal(received_direct.text, direct.text)
+    test.is_nil(received_direct.answer_time)
+    report.receipts = {{id = received_direct.id, status = "accepted"}}
+    post("/agent", report)
+    wait_until(function() return direct_error or sent end, "No receipt for direct chat message")
+    test.is_nil(direct_error)
+    local _, direct_feed = call(context.owner, "chat.read", {project = context.project, after = updated.cursor})
+    test.equal(direct_feed.messages[1].to.terminal, context.id)
+    test.is_nil(direct_feed.messages[1].reply_to)
     report.instance, report.chat_result = "replacement", nil
     post("/agent", report)
     test.equal(call(context.owner, "chat.reply", args).code, "not_connected")
+    test.equal(call(context.owner, "chat.send", direct).code, "not_connected")
   end)
 
   test.it("keeps the shell when a device closes it while another device shows it", function(context)
