@@ -820,6 +820,7 @@ test.describe("Git View command", function()
     test.ok(command.perform("core:activate_point_of_interest"))
     test.equal(panes.active(), diff_pane)
     test.equal(diff_pane.current_view, initial_diff)
+    test.equal(core.active_view, initial_diff:get_focus_view())
     local _, split = layout.find(history_pane.group.root, history_pane)
     test.equal(split.ratio, 0.3)
     file_at_calls = 0
@@ -843,6 +844,14 @@ test.describe("Git View command", function()
     test.equal(tab.history_diff_view.buffer_view_b:is_wrapping_enabled(), true)
     test.equal(tab.history_diff_view.unified_view:is_wrapping_enabled(), true)
     test.not_nil(panes.pane_for_view(tab.history_diff_view))
+
+    local preview = tab.history_diff_view
+    history_view.model:load_history_preview(tab)
+    wait_until(function()
+      history_view:update()
+      return not tab.history_diff_view_pending
+    end, 1, "unchanged history preview did not settle")
+    test.equal(tab.history_diff_view, preview)
 
     local tab_count = #view.model.tabs
     history_view:on_mouse_pressed(

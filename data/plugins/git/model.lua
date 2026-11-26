@@ -1159,6 +1159,25 @@ function Model:load_history_preview(tab, callback)
     or commit.history_parent_path or right_path
   local context = tab.history_context
   local tracked = context and context.type == "selection" and commit.selection_diff
+  -- A completed Git read need not replace the comparison the user is reading.
+  -- Include full revisions and paths: two commits can have identical displayed text.
+  local function publish_preview()
+    local fragment = tab.preview_right_fragment
+    local inputs = table.pack(left_rev, right_rev, left_path, right_path,
+      tab.preview_left_text, tab.preview_right_text, tab.preview_left_name, tab.preview_right_name,
+      tab.preview_left_source_line, tab.preview_source_line, tab.preview_right_current_path,
+      fragment and fragment.start_line, fragment and fragment.end_line)
+    local previous = tab.preview_inputs
+    if previous then
+      local identical = true
+      for i = 1, inputs.n do
+        if inputs[i] ~= previous[i] then identical = false; break end
+      end
+      if identical then return end
+    end
+    tab.preview_inputs = inputs
+    tab.preview_generation_value = (tab.preview_generation_value or 0) + 1
+  end
   if tracked and commit.kind ~= "local_changes" then
     tab.preview_loading = false
     tab.preview_left_text = tracked.left_text or ""
@@ -1170,7 +1189,7 @@ function Model:load_history_preview(tab, callback)
     tab.preview_left_name = (tracked.left_start_line == 0 and tracked.left_text == "")
       and "File did not exist" or short_rev(left_rev) .. ":" .. left_path
     tab.preview_right_name = short_rev(right_rev) .. ":" .. right_path
-    tab.preview_generation_value = (tab.preview_generation_value or 0) + 1
+    publish_preview()
     if callback then callback(self, nil) end
     if self.on_update then self.on_update(self) end
     return true
@@ -1214,7 +1233,7 @@ function Model:load_history_preview(tab, callback)
         and right_path or short_rev(right_rev) .. ":" .. right_path
       if left_missing then tab.preview_left_name = "File did not exist" end
       if right_missing then tab.preview_right_name = "File did not exist" end
-      tab.preview_generation_value = (tab.preview_generation_value or 0) + 1
+      publish_preview()
     end
     if callback then callback(self, preview_err) end
     if self.on_update then self.on_update(self) end
