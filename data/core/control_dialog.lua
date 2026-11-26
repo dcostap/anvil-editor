@@ -18,18 +18,24 @@ local function field(label, value)
   return Column { gap = 4, Text { text = label, role = "label" }, value }
 end
 
+-- The setup names a stdio bridge, not the endpoint. The bridge reads the discovery file for each request, so the
+-- config stays correct after a restart and holds no token.
 local function copy_setup()
-  local state, _, path = runtime.status()
+  local state = runtime.status()
   if state ~= "ready" then return end
+  local server = {command = "node", args = {DATADIR .. PATHSEP .. "tools" .. PATHSEP .. "agent-sessions" .. PATHSEP .. "anvil-mcp.cjs",
+    "--userdir", system.absolute_path(USERDIR) or USERDIR, "--project", core.root_project().path}}
   system.set_clipboard(table.concat({
-    "Connect this MCP client to Anvil on this computer.",
-    "Discovery file: `" .. path .. "`",
-    "Use a local script to read the discovery file and update this client's active MCP config.",
-    "Add or update the `anvil` entry. Keep all other entries.",
-    "Use Streamable HTTP (`serverUrl` in Antigravity). Append `/mcp` to the `url` from the discovery file.",
-    "Set the `Authorization` header to `Bearer ` followed by the `token` from that file.",
-    "Do not print the token or the discovery file contents. Do not put the token in a shared config.",
-    "Reload the MCP config if needed. Verify the connection by calling Anvil's `workspace_state` tool.",
+    "Connect this agent to Anvil on this computer as an External Agent named `agy`.",
+    "1. Add this `anvil` server to this agent's MCP config, such as Antigravity's `mcp_config.json`. Keep all other entries:",
+    require("core.json").encode {mcpServers = {anvil = server}},
+    "2. Reload the MCP servers. Verify the connection by calling Anvil's `workspace_state` tool.",
+    "3. Add this rule to this agent's global rules:",
+    "You are the External Agent `agy` in Anvil. Between your other steps, and whenever you are idle, call Anvil's "
+      .. "`external_agent` tool with action=wait and agent=agy; then call it again with after=cursor. Treat each "
+      .. "message as a request from the user or from another agent. Answer with action=say and reply_to set to its "
+      .. "request. To ask a Pi in Anvil, use agent_send with from_agent=agy; its answer arrives through wait. "
+      .. "If your MCP client stops a wait for taking too long, pass a smaller timeout_ms.",
   }, "\n"))
   core.log_quiet("Copied MCP agent setup")
 end

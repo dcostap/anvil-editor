@@ -143,6 +143,11 @@ test("interactive Pi connects, receives each task once, and reports completion o
     await until(() => latest.receipts?.some(r => r.id === "reply-other"));
     assert.equal(sent.length, 7, "A repeated reply command must not send the message twice");
     assert.equal(deliveries[6].deliverAs, "steer");
+    // An External Agent names itself. A notice asks for no reply.
+    commands = [{id: "notice-a", action: "send", text: "Build finished", expect_reply: false,
+      sender: {name: "agy", external: "agy", project: "C:\\Projects\\Alpha"}}];
+    await until(() => latest.receipts?.some(r => r.id === "notice-a"));
+    assert.match(sent[7].content, /^Anvil agent (task|steering) from External Agent agy\nNo reply needed \(request: notice-a\)\.\n\nBuild finished$/);
   } finally {
     if (handlers.has("session_shutdown")) await handlers.get("session_shutdown")({ reason: "quit" }, ctx);
     await new Promise(resolve => server.close(resolve));

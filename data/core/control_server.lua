@@ -5,6 +5,7 @@ local net = require "net"
 local json = require "core.lsp.json"
 local Control = require "core.control"
 local common = require "core.common"
+local agent_name = require "core.agent_name"
 local M = {}
 M.__index = M
 local MAX_BODY, MAX_CLIENTS = 512 * 1024, 32
@@ -69,7 +70,32 @@ local function task_pending(value)
   return value.connected and (value.status == "pending" or value.status == "running" or value.status == "awaiting_reply")
 end
 
+-- An External Agent's answer to a request is the thread message that names it. A failed read tries again.
+local function external_reply_route(machine, path, agent, request)
+  local deadline = system.get_time() + 3600
+  return function(_, done, cancelled)
+    if system.get_time() > deadline then return done({connected = true, status = "expired"}) end
+    require("core.machine_agents").request(machine, "external.read", {project = path, agent = agent, reply_to = request},
+      function(ok, value)
+        local message = ok and type(value) == "table" and type(value.messages) == "table" and value.messages[1]
+        done({connected = true, status = message and "completed" or "pending", explicit_reply = message and true,
+          result = message and message.text})
+      end, cancelled)
+  end
+end
+
+-- A Pi's reply to an External Agent goes into the agent's thread.
+local function post_external_reply(source, target, task, text)
+  require("core.machine_agents").request(source.machine, "external.post", {project = source.path, agent = source.external,
+    text = text, reply_to = task, from = {kind = "agent", name = require("core.agent_name").for_terminal(target.terminal),
+      terminal = target.terminal, project = target.project}}, function(ok, err)
+    if not ok then core.log_quiet("Control: could not post a reply to External Agent %s: %s", source.external, tostring(err)) end
+  end, function() return false end)
+end
+
 -- Follow the result from the side that sent the request. A Machine needs no reverse pairing.
+-- `source` is the sending Pi, or an External Agent with `external`, `machine`, `path` and `deadline`.
+-- `target.external` names an External Agent that got the request.
 function M:follow_reply(source, target, task, route)
   self.reply_watches = self.reply_watches or {}
   local watches = self.reply_watches
@@ -80,6 +106,7 @@ function M:follow_reply(source, target, task, route)
   watches[task] = true
   local args = {terminal = target.terminal, instance = target.instance, task = task, include_activity = false}
   local function stopped()
+    if source.external then return not self.listener or system.get_time() > source.deadline end
     local peer = self.control.peers[source.terminal]
     if not self.listener or not peer or peer.instance ~= source.instance or system.get_time() - peer.seen >= 10 then return true end
     for _, waited in ipairs(peer.waited_replies or {}) do if waited == task then return true end end
@@ -94,7 +121,9 @@ function M:follow_reply(source, target, task, route)
         while not done and not stopped() do coroutine.yield(.1) end
         if not value then return end
       else value = self.control:agent_read(args) end
-      if value.explicit_reply == true and type(value.result) == "string" and #value.result <= 8192 then
+      if value.explicit_reply == true and type(value.result) == "string"
+          and #value.result <= (target.external and 32768 or 8192) then
+        if source.external then return post_external_reply(source, target, task, value.result) end
         -- A matching wait already returns the answer to this Pi. Do not send it twice.
         repeat
           if stopped() then return end
@@ -118,6 +147,58 @@ function M:follow_reply(source, target, task, route)
     watches[task] = nil
     if not ok then core.log_quiet("Control: could not forward an agent reply: %s", tostring(err)) end
   end)
+end
+
+local EXTERNAL_METHODS = {wait = "external.read", read = "external.read", say = "external.post", list = "external.list"}
+
+-- External Agent threads belong to the Project's Machine: this PC's own server for a local Project.
+-- `source` is the calling Pi, which gets the agent's answer to its `agent_send`.
+function M:external(client, name, args, source, tool_result)
+  local ok, err = pcall(Control.check, name, args)
+  if not ok then return tool_result(false, err) end
+  local agents = require "core.machine_agents"
+  local machine, path = agents.machine_of(args.project or self.control.project_key, args.project or self.control.project)
+  if not machine then return tool_result(false, "Anvil's Machine server is not running") end
+  if args.agent and not require("core.serve_external").valid_name(args.agent) then
+    return tool_result(false, "An agent name uses letters, digits, '.', '_' and '-'")
+  end
+  local method, params
+  if name == "agent_send" then
+    if args.terminal then return tool_result(false, "Name a terminal or an agent, not both") end
+    local sender = self.control:sender(client.caller, args.from_agent)
+    local terminal = sender.terminal ~= "local" and sender.terminal or nil
+    method, params = "external.post", {agent = args.agent, text = args.text, expect_reply = args.expect_reply,
+      from = {kind = "agent", name = sender.external or terminal and agent_name.for_terminal(terminal) or nil,
+        terminal = terminal, project = sender.project}}
+  else
+    method = EXTERNAL_METHODS[args.action]
+    if args.action ~= "list" and not args.agent then return tool_result(false, "Name the External Agent with agent") end
+    params = {agent = args.agent}
+    if args.action == "wait" then
+      params.listen, params.wait, params.after, params.timeout_ms = true, true, args.after, args.timeout_ms
+    elseif args.action == "read" then
+      params.after = args.after
+    elseif args.action == "say" then
+      if not args.text then return tool_result(false, "say needs text") end
+      params.text, params.reply_to, params.from = args.text, args.reply_to, {kind = "self"}
+    end
+  end
+  params.project = path
+  client.forwarding, client.deadline = true, system.get_time() + 48
+  agents.request(machine, method, params, function(success, value)
+    if not success or type(value) ~= "table" then return tool_result(false, value or "The Machine did not answer") end
+    if name == "agent_send" then
+      value = {agent = args.agent, task = value.request, status = "delivered"}
+      if source and not source.external and args.expect_reply ~= false then
+        self:follow_reply(source, {external = args.agent, project = path}, value.task,
+          external_reply_route(machine, path, args.agent, value.task))
+      end
+    end
+    -- Keep empty lists as JSON arrays for the model.
+    if value.messages then value.messages = json.array(value.messages) end
+    if value.agents then value.agents = json.array(value.agents) end
+    tool_result(true, value)
+  end, function() return client.dead end)
 end
 
 function M:discover(client, callback)
@@ -159,26 +240,35 @@ function M:dispatch(client, body)
   if request.method == "initialize" then
     return result { protocolVersion = protocol_versions[params.protocolVersion] and params.protocolVersion or "2025-06-18",
       capabilities = {tools = {listChanged = false}}, serverInfo = {name = "anvil", version = "1"},
-      instructions = "Control Anvil through stable Pane and Terminal Session IDs. Preserve focus unless asked. Use request_id for safe retries. A timeout does not cancel work. Close approves only the calling agent's own running Terminal; other Views keep normal confirmation. Self-close can stop the agent before the reply arrives." }
+      instructions = "Control Anvil through stable Pane and Terminal Session IDs. Preserve focus unless asked. Use request_id for safe retries. A timeout does not cancel work. Close approves only the calling agent's own running Terminal; other Views keep normal confirmation. Self-close can stop the agent before the reply arrives. An agent that does not run in an Anvil Terminal is an External Agent: it receives messages through external_agent action=wait with its name, called again and again." }
   elseif request.method == "ping" then return result({})
   elseif request.method == "tools/list" then
     if not self.control.headless then return result {tools = Control.tools} end
     local tools = {}
     for _, tool in ipairs(Control.tools) do
-      if require("core.machine_agents").methods[tool.name] then tools[#tools + 1] = tool end
+      if require("core.machine_agents").methods[tool.name] or tool.name == "external_agent" then tools[#tools + 1] = tool end
     end
     return result {tools = tools}
   elseif request.method == "tools/call" then
     local args = params.arguments or {}
     local peer = self.control.peers[client.caller]
     local source = peer and {terminal = client.caller, instance = peer.instance}
+    local agents = require "core.machine_agents"
+    -- An External Agent's own send: the reply goes into its thread, on the Machine of this Project.
+    local external_source
+    if params.name == "agent_send" and type(args) == "table" and type(args.from_agent) == "string" and not args.agent then
+      local machine, path = agents.machine_of(self.control.project_key, self.control.project)
+      external_source = machine and {external = args.from_agent, machine = machine, path = path,
+        deadline = system.get_time() + 3600}
+    end
     local route, sender_project
     local function observe(value)
-      if not source or client.dead or type(value) ~= "table" then return end
+      local follower = external_source or source
+      if not follower or client.dead or type(value) ~= "table" then return end
       if params.name == "agent_send" and value.task then
-        self:follow_reply(source, {terminal = value.terminal, instance = value.instance,
+        self:follow_reply(follower, {terminal = value.terminal, instance = value.instance,
           project = sender_project or self.control.project_key, other_project = route ~= nil}, value.task, route)
-      elseif params.name == "agent_wait" and value.explicit_reply then
+      elseif params.name == "agent_wait" and value.explicit_reply and peer then
         peer.waited_replies = peer.waited_replies or {}
         peer.waited_replies[#peer.waited_replies + 1] = value.task
         if #peer.waited_replies > 256 then table.remove(peer.waited_replies, 1) end
@@ -198,7 +288,9 @@ function M:dispatch(client, body)
     if source and params.name == "agent_wait" then
       client.reply_wait = {task = args.task, terminal = source.terminal, instance = source.instance}
     end
-    local agents = require "core.machine_agents"
+    if params.name == "external_agent" or params.name == "agent_send" and args.agent ~= nil then
+      return self:external(client, params.name, args, external_source or source, tool_result)
+    end
     if self.control.headless and not agents.methods[params.name] then
       return tool_result(false, "This operation needs a loaded editor Project")
     end
@@ -215,7 +307,7 @@ function M:dispatch(client, body)
         end
         client.forwarding, client.deadline = true, system.get_time() + 48
         return agents.route(machine, path, params.name, args, client.caller, tool_result, function() return client.dead end,
-          params.name == "agent_send" and self.control:sender(client.caller) or nil)
+          params.name == "agent_send" and self.control:sender(client.caller, args.from_agent) or nil)
       end
     end
     if args.project and (type(args.project) ~= "string" or not common.path_equals(args.project, self.control.project_key)) then
@@ -229,7 +321,8 @@ function M:dispatch(client, body)
         end
         if not target then return tool_result(false, "Project is not loaded or has no control endpoint") end
         args.project = nil -- The destination already identifies the Project. Never forward twice.
-        params._meta = {anvil_caller = client.caller, sender = params.name == "agent_send" and self.control:sender(client.caller) or nil}
+        params._meta = {anvil_caller = client.caller,
+          sender = params.name == "agent_send" and self.control:sender(client.caller, args.from_agent) or nil}
         sender_project = target.project
         route = function(query, done, cancelled)
           project_request(target, {jsonrpc = "2.0", id = 1, method = "tools/call",

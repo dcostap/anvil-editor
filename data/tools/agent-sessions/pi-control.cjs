@@ -65,11 +65,14 @@ module.exports = function (pi) {
         if (sender) {
           const short = clean(sender.terminal).slice(0, 8);
           label = clean(sender.name) || `Terminal ${short}`;
-          if (sender.name && sender.ambiguous) label += ` (${short})`;
+          if (sender.name && sender.ambiguous && !sender.external) label += ` (${short})`;
+          if (sender.external) label = `External Agent ${label}`;
           if (sender.other_project) label += ` in ${path.win32.basename(clean(sender.project))}`;
           if (sender.machine) label += ` @ ${clean(sender.machine)}`;
         }
-        const reference = isReply ? `In reply to request: ${command.reply_to}.` : `Reply to this request with anvil_reply (request: ${command.id}).`;
+        const reference = isReply ? `In reply to request: ${command.reply_to}.`
+          : command.expect_reply === false ? `No reply needed (request: ${command.id}).`
+          : `Reply to this request with anvil_reply (request: ${command.id}).`;
         pi.sendMessage({ customType: "anvil-" + kind, content: `Anvil agent ${kind} from ${label}\n${reference}\n\n${command.text}`, display: true,
           details: { requestId: command.id, replyTo: command.reply_to, from: command.from, sender } }, { triggerTurn: true, deliverAs: "steer" });
       } else throw new Error("Unknown Pi control operation");

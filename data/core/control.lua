@@ -68,9 +68,10 @@ tool("snooze", "Set or remove Anvil's Snooze for a Terminal's Pane. Omit pane an
   {action = choice("set", "remove"), pane = id, terminal = id,
     seconds = {type = "integer", minimum = 1, maximum = 31536000}, request_id = id},
   {"action", "request_id"}, false)
-tool("agent_send", "Send a message to a specific Pi conversation. Steers active work or starts a turn when idle. Returns a task ID, not a completed answer.",
-  {terminal = id, instance = id, text = string_schema(32768), request_id = id},
-  {"terminal", "instance", "text", "request_id"}, false)
+tool("agent_send", "Send a message to a Pi conversation (terminal) or to an External Agent (agent, its name). Steers active work or starts a turn when idle. Omit instance to use the Terminal's current conversation. A request_id makes retries safe. Set expect_reply=false for a notice that needs no reply. An External Agent sets from_agent to its own name, so the reply reaches its thread. Returns a task ID, not a completed answer.",
+  {terminal = id, agent = string_schema(64), instance = id, text = string_schema(32768), request_id = id,
+    expect_reply = {type = "boolean"}, from_agent = string_schema(64)},
+  {"text"}, false)
 tool("agent_read", "Read Pi status, live activity, parallel tools, session_file, or a saved task result. Omit instance to read the Terminal's current conversation. Activity includes command/path details and start times. Set include_activity=false for status only. Disconnected activity is stale; a finished tool call does not prove its background command finished.",
   {terminal = id, instance = id, task = id, include_activity = {type = "boolean"}}, {"terminal"}, true)
 tool("agent_transcript", "Read a Pi conversation without starting a turn. Omit instance to read the Terminal's current conversation. overview=true gives the first request, last answer, counts, tools, models, tokens and cost. Otherwise returns the latest limit entries (default 10, chronological); before pages older, after or from_start pages newer. query keeps entries that contain its literal text, ignoring case. include_tools adds tool calls and results, each cut to tool_chars (default 400). include_thinking adds thinking text. max_chars is a shared budget (default 12000). Continue cut text with entry_id and offset. Output is compact text; format=json gives fields. Reads use the current branch.",
@@ -86,7 +87,12 @@ tool("agent_interrupt", "Interrupt Pi's active work. Keep its Terminal Session o
   {terminal = id, instance = id, request_id = id}, {"terminal", "instance", "request_id"}, false)
 tool("agent_wait", "Wait up to 30 seconds for a task. Timeout does not cancel it. A question or disconnect ends the wait.",
   {terminal = id, instance = id, task = id, timeout_ms = {type = "integer", minimum = 1, maximum = 30000}},
-  {"terminal", "instance", "task"}, true)
+  {"terminal", "task"}, true)
+tool("external_agent", "Talk with External Agents: agents outside Anvil Terminals, such as Antigravity. As an External Agent, call action=wait with your name. It returns new messages from the user and other agents, or none after timeout_ms (at most 25000). Then call wait again with after=cursor. Keep waiting while you work and when you are idle; otherwise messages wait unread. Answer with action=say; set reply_to to the message's request. To message a Pi, use agent_send with from_agent set to your name; its reply arrives through wait. list shows this Project's External Agents; read returns a page of a thread.",
+  {action = choice("wait", "say", "list", "read"), agent = string_schema(64),
+    after = {type = "integer", minimum = 0, maximum = 1000000000}, text = string_schema(32768), reply_to = id,
+    timeout_ms = {type = "integer", minimum = 0, maximum = 25000}},
+  {"action"}, false)
 local function placement(extra)
   local fields = {pane = id, placement = choice("new", "split"), direction = choice("left", "right", "up", "down"),
     focus = {type = "boolean"}, request_id = id}
@@ -472,7 +478,8 @@ end
 
 function M:peer(args, live)
   local peer = assert(self.peers[args.terminal], "Pi is not connected")
-  -- Only reads omit the instance. Mutations require it, so they never reach a replacement conversation.
+  -- Without an instance, a call uses the Terminal's current conversation. A named instance never reaches a
+  -- replacement conversation.
   if args.instance ~= nil and peer.instance ~= args.instance then
     error(string.format("Instance %s is not this Terminal's current Pi conversation (%s)", args.instance, peer.instance), 0)
   end
@@ -480,9 +487,10 @@ function M:peer(args, live)
   return peer
 end
 
-function M:sender(caller)
+-- `external` names the calling External Agent. Its messages carry its own name.
+function M:sender(caller, external)
   local peer = self.peers[caller]
-  local sender = {terminal = caller, project = self.project_key, instance = peer and peer.instance}
+  local sender = {terminal = caller, project = self.project_key, instance = peer and peer.instance, external = external}
   local name = agent_name.for_terminal(caller)
   for other in pairs(self.peers) do
     if other ~= caller and agent_name.for_terminal(other) == name then sender.ambiguous = true; break end
@@ -505,14 +513,19 @@ function M:queue_agent_command(args, command)
 end
 
 function M:send(args, caller, action, sender)
-  sender = sender or self:sender(caller)
+  assert(args.terminal, "Name a terminal, or an External Agent with agent")
+  sender = sender or self:sender(caller, args.from_agent)
   -- Derive the name here, so a sender from another Project or Machine cannot choose its own.
-  sender.name = sender.terminal ~= "local" and agent_name.for_terminal(sender.terminal) or nil
-  return self:queue_agent_command(args, {action = action, text = args.text, from = caller or "local", sender = sender})
+  -- An External Agent has no Terminal: its message says that it names itself.
+  if type(sender.external) == "string" then sender.name = sender.external
+  else sender.name = sender.terminal ~= "local" and agent_name.for_terminal(sender.terminal) or nil end
+  return self:queue_agent_command(args, {action = action, text = args.text, from = caller or "local", sender = sender,
+    expect_reply = args.expect_reply})
 end
 
 function M:deliver_agent_reply(target, sender, task, text)
-  sender.name = agent_name.for_terminal(sender.terminal)
+  if type(sender.external) == "string" then sender.name = sender.external
+  else sender.name = agent_name.for_terminal(sender.terminal) end
   return self:queue_agent_command(target, {id = "reply-" .. task, action = "reply", text = text, reply_to = task,
     from = sender.terminal, sender = sender})
 end
@@ -603,6 +616,16 @@ function M:transcript_read(query)
 end
 
 function M:agent_wait(args) return self:agent_read(args) end
+
+function M:external_agent() error("External Agents need Anvil's control server", 0) end
+
+-- Checks the arguments of a tool that the control server sends on without a call here.
+function M.check(name, args)
+  for _, definition in ipairs(M.tools) do
+    if definition.name == name then return check(definition.inputSchema, args) end
+  end
+  error("Unknown control tool", 0)
+end
 
 function M:wait_result(args, until_time)
   local value = self:agent_read(args)
