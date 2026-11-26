@@ -136,6 +136,10 @@ Languages without brace blocks keep their indentation. One undo reverts the move
 
 Markdown keeps its indentation. Paste as Plain Text (`core:paste_as_plain_text`) pastes like Paste, but changes no indentation and escapes nothing in a string. Run `ui/smart_indent.lua` after changes.
 
+## Markdown list levels
+
+In Markdown, Tab and Shift+Tab move list items by one list level, not by the Buffer's indent size. A caret moves its item. A selection that starts at an item moves all its lines as one block, so nested items keep their shape. Tab adds four spaces. Shift+Tab moves the item to its parent item's indentation, or four spaces back when no parent item is above it in the same block of lines. The indentation is always spaces, because the semantic grammar reads a tab before a marker as indented code. Other selections use the normal indent step. `shift_markdown_list_levels` in `data/core/commands/text.lua` owns this rule. Run `ui/smart_indent.lua` and `ui/markdown_list_navigation.lua` after changes.
+
 ## Changes Baseline
 
 Changes Baseline checks file identity once before a pending diff, not on each key. Patch export and Revert also check any pending identity before using the baseline. Run `ui/file_changes_baseline.lua` after changes.
