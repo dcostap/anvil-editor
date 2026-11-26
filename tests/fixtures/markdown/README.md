@@ -21,11 +21,6 @@ The normal UI suite runs all imported examples except those IDs. The complete au
 | Examples | Review |
 | --- | --- |
 | 17, 329, 330, 331, 340 | Live Preview keeps typed code-span padding. CommonMark removes one leading and trailing space when both exist. The normal presentation contract checks Anvil's rule. |
-| 353 | Non-breaking spaces incorrectly permit emphasis. |
-| 380, 385 | Word and quotation-mark boundaries incorrectly permit emphasis. |
-| 391, 397 | A space before a bold closer produces italic text. |
-| 392, 398 | Punctuation beside delimiter runs produces unwanted emphasis. |
-| 411, 412, 415, 429 | Adjacent and nested delimiter runs differ from the reference. |
 
 Do not add an ID merely to make a failing test pass. Review its visible behavior first. Separate an intended Anvil rule from a defect. Give an intended rule a normal presentation contract. Keep defects failing in the complete audit. After a fix, remove its review entry so the normal suite also runs it.
 

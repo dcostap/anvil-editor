@@ -1,4 +1,5 @@
 local links = require "core.markdown.links"
+local native = require "treesitter"
 
 local parser = {}
 
@@ -101,36 +102,6 @@ local function parse_code_spans(line, line_no, spans, covered, col_offset)
   end
 end
 
-local function parse_delimited(line, line_no, spans, covered, marker, span_type, col_offset)
-  local i = 1
-  local marker_len = #marker
-  while i <= #line - marker_len + 1 do
-    if line:sub(i, i + marker_len - 1) == marker and not range_is_covered(covered, i, i + marker_len) then
-      local close = line:find(marker, i + marker_len, true)
-      while close and range_is_covered(covered, close, close + marker_len) do
-        close = line:find(marker, close + marker_len, true)
-      end
-      if close and close > i + marker_len then
-        add_span(spans, {
-          type = span_type,
-          line = line_no,
-          col1 = i + col_offset,
-          col2 = close + marker_len + col_offset,
-          marker_ranges = { range(line_no, i + col_offset, i + marker_len + col_offset), range(line_no, close + col_offset, close + marker_len + col_offset) },
-          content_ranges = { range(line_no, i + marker_len + col_offset, close + col_offset) },
-          text = line:sub(i + marker_len, close - 1),
-        })
-        mark_covered(covered, i, close + marker_len)
-        i = close + marker_len
-      else
-        i = i + marker_len
-      end
-    else
-      i = i + 1
-    end
-  end
-end
-
 function parser.parse_inline(line, line_no, base_col)
   local spans = {}
   local covered = {}
@@ -164,13 +135,23 @@ function parser.parse_inline(line, line_no, base_col)
     end
   end
 
-  parse_delimited(line, line_no, spans, covered, "***", "strong_emphasis", col_offset)
-  parse_delimited(line, line_no, spans, covered, "___", "strong_emphasis", col_offset)
-  parse_delimited(line, line_no, spans, covered, "**", "strong", col_offset)
-  parse_delimited(line, line_no, spans, covered, "__", "strong", col_offset)
-  parse_delimited(line, line_no, spans, covered, "~~", "strikethrough", col_offset)
-  parse_delimited(line, line_no, spans, covered, "*", "emphasis", col_offset)
-  parse_delimited(line, line_no, spans, covered, "_", "emphasis", col_offset)
+  if line:find("[*_~]") then
+    table.sort(spans, function(a, b) return a.col1 < b.col1 end)
+    local opaque = {}
+    for _, span in ipairs(spans) do
+      opaque[#opaque + 1] = span.col1 - col_offset
+      opaque[#opaque + 1] = span.col2 - col_offset
+    end
+    for _, pair in ipairs(native.markdown_delimiters(line, opaque)) do
+      local first, last, width = pair[1] + col_offset, pair[2] + col_offset, pair[3]
+      add_span(spans, {
+        type = pair[4], line = line_no, col1 = first, col2 = last + width,
+        marker_ranges = { range(line_no, first, first + width), range(line_no, last, last + width) },
+        content_ranges = { range(line_no, first + width, last) },
+        text = line:sub(pair[1] + width, pair[2] - 1),
+      })
+    end
+  end
 
   table.sort(spans, function(a, b)
     if a.line == b.line then return a.col1 < b.col1 end

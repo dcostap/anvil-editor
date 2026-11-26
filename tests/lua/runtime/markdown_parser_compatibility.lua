@@ -140,6 +140,17 @@ test.describe("Markdown parser compatibility fixtures", function()
     tree:close()
   end)
 
+  test.it("pairs emphasis across soft breaks without crossing link label boundaries", function()
+    local tree, source, _, inlines = parse({ "*é\n", "中* and *[label*](dest)\n" })
+    local emphasis = captures_named(inlines, "span.emphasis")
+    test.equal(#emphasis, 1)
+    test.equal(captured_text(source, emphasis[1]), "*é\n中*")
+    test.equal(emphasis[1].start_line, 1)
+    test.equal(emphasis[1].end_line, 2)
+    test.equal(emphasis[1].end_col, #"中*" + 1)
+    tree:close()
+  end)
+
   test.it("handles delimiter-heavy malformed input without errors", function()
     local parts = {}
     for i = 1, 2000 do parts[i] = (i % 2 == 0) and "*_" or "_*" end

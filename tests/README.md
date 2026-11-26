@@ -67,7 +67,7 @@ meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdown_live_edi
 
 ## Markdown syntax and presentation
 
-The normal suites include source-range contracts, Anvil extension rules, edit/undo/redo checks, and 120 CommonMark reference examples.
+The normal suites include source-range contracts, Anvil extension rules, edit/undo/redo checks, and 132 CommonMark reference examples.
 
 Run the focused files:
 
@@ -78,7 +78,7 @@ meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdown_inline_c
 meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdown_link_labels.lua --print-errorlogs
 ```
 
-The complete standards audit also runs known differences. It currently reports 121 passes and 16 failures: five code-padding differences and 11 emphasis defects. The failures include the trailing-space bold case. They remain failures, not replacement expectations.
+The complete standards audit also runs known differences. It reports 132 passes and five failures because Live Preview keeps typed code-span padding. The audit keeps the reference expectations.
 
 ```sh
 meson test -C build-windows-x86_64 anvil:lua-ui --test-args tests/lua/markdown_spec --print-errorlogs

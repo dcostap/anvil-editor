@@ -3,6 +3,20 @@ local harness = dofile("tests/fixtures/markdown/inline_harness.lua")
 
 local presentation = {
   {
+    "a Unicode symbol after a word cannot open emphasis",
+    "a*©foo*",
+    { { text = "a*©foo*", style = "normal" } },
+  },
+  {
+    "unpaired markers in code cannot consume surrounding emphasis",
+    "*left `* _ ~` right*",
+    {
+      { text = "left ", style = "emphasis" },
+      { text = "* _ ~", style = "code" },
+      { text = " right", style = "emphasis" },
+    },
+  },
+  {
     "nested bold and italic compose",
     "**outer *inner* end**",
     {
@@ -101,6 +115,7 @@ local presentation = {
 -- These check incremental consistency, not CommonMark compliance. The separate
 -- standards audit supplies independent expected text and formatting.
 local edits = {
+  { "a nested run becoming literal", "*foo**bar**baz*", 10, 12, "*foo**barbaz*" },
   { "a space before closing bold", "**test**", 7, " ", "**test **" },
   { "a space before closing italic", "*test*", 6, " ", "*test *" },
   { "a deleted bold closer", "**test**", 7, 9, "**test" },
