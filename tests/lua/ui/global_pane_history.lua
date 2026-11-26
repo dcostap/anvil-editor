@@ -148,6 +148,8 @@ test.describe("Pane History", function()
     visit(one)
     move("forward")
     test.equal(panes.active(), three)
+    move("back")
+    test.equal(panes.active(), one, "Back did not restore the left Pane")
   end)
 
   test.it("goes back to the Pane that the user left in a Pane Group", function()

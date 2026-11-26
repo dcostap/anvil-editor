@@ -138,7 +138,8 @@ function pane_history.timeline(projects, window_id)
     if index then
       current, moved, shown = index, entry.at, entry
     elseif current and place(list[current].path, list[current].id) == place(entry.path, entry.id) then
-      -- Returning from another Window keeps this Window's history position.
+      -- Keep the visit time so moves still resolve, but return to the last focused Pane in this group.
+      list[current].id = entry.id
       moved, shown = entry.at, entry
     else
       if current then add(shown.path, shown.id, moved) end
