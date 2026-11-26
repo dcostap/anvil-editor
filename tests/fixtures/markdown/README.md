@@ -20,9 +20,7 @@ The normal UI suite runs all imported examples except those IDs. The complete au
 
 | Examples | Review |
 | --- | --- |
-| 17, 329 | Live Preview keeps typed code-span padding. CommonMark removes one leading and trailing space when both exist. The normal presentation contract checks Anvil's rule. |
-| 330, 331, 340 | A longer backtick run inside code incorrectly closes a shorter delimiter. |
-| 343 | An HTML-like code fragment consumes text after its closing backtick. |
+| 17, 329, 330, 331, 340 | Live Preview keeps typed code-span padding. CommonMark removes one leading and trailing space when both exist. The normal presentation contract checks Anvil's rule. |
 | 353 | Non-breaking spaces incorrectly permit emphasis. |
 | 380, 385 | Word and quotation-mark boundaries incorrectly permit emphasis. |
 | 391, 397 | A space before a bold closer produces italic text. |

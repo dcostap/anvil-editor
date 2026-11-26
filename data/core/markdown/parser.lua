@@ -57,13 +57,29 @@ local function collect_escaped_ranges(line, covered)
 end
 
 local function parse_code_spans(line, line_no, spans, covered, col_offset)
+  if not line:find("`", 1, true) then return end
+  -- After a failed search, the last run of each width is known. Do not
+  -- scan the same suffix again for an opener with no possible closer.
+  local last_run, scanned_to_end = {}, false
   local i = 1
   while i <= #line do
-    if line:sub(i, i) == "`" then
+    if line:sub(i, i) == "\\" then
+      i = i + 2
+    elseif line:sub(i, i) == "`" then
       local count = 1
       while line:sub(i + count, i + count) == "`" do count = count + 1 end
-      local fence = string.rep("`", count)
-      local close = line:find(fence, i + count, true)
+      local close
+      if not scanned_to_end or (last_run[count] or 0) > i then
+        local cursor = i + count
+        while true do
+          local first, last = line:find("`+", cursor)
+          if not first then scanned_to_end = true; break end
+          local width = last - first + 1
+          if not scanned_to_end then last_run[width] = first end
+          if width == count then close = first; break end
+          cursor = last + 1
+        end
+      end
       if close then
         add_span(spans, {
           type = "code",

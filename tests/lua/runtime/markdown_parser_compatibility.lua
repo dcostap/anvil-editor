@@ -67,6 +67,29 @@ test.describe("Markdown parser compatibility fixtures", function()
     tree:close()
   end)
 
+  test.it("keeps exact multiline code ranges with long backtick delimiters", function()
+    local fence = string.rep("`", 256)
+    local first, last = fence .. "é" .. fence .. "`\n", "中" .. fence
+    local tree, source, _, inlines = parse({ "before " .. first, last .. " after\n" })
+    local code = captures_named(inlines, "span.code")
+    local markers = captures_named(inlines, "marker.code")
+    test.equal(#code, 1)
+    test.equal(captured_text(source, code[1]), first .. last)
+    test.equal(#markers, 2)
+    test.equal(captured_text(source, markers[1]), fence)
+    test.equal(captured_text(source, markers[2]), fence)
+    tree:close()
+  end)
+
+  test.it("keeps code byte ranges on long lines with invalid UTF-8", function()
+    local text = "`" .. string.rep("a", 70000) .. "\255``b`"
+    local tree, source, _, inlines = parse({ text .. "\n" })
+    local code = captures_named(inlines, "span.code")
+    test.equal(#code, 1)
+    test.equal(captured_text(source, code[1]), text)
+    tree:close()
+  end)
+
   test.it("source-ranges frontmatter, tasks, tables, and raw HTML blocks", function()
     local lines = {
       "---\n",

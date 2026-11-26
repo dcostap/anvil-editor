@@ -72,6 +72,16 @@ local presentation = {
     { { text = "==plain== [[Note]] %%text%% **bold**", style = "code" } },
   },
   {
+    "a longer backtick run stays inside code with its padding",
+    "` foo `` bar `",
+    { { text = " foo `` bar ", style = "code" } },
+  },
+  {
+    "HTML-like code ends at the first matching backtick run",
+    '`<a href="`">`',
+    { { text = '<a href="', style = "code" }, { text = '">`', style = "normal" } },
+  },
+  {
     "code keeps typed padding in Live Preview",
     "` padded `",
     { { text = " padded ", style = "code" } },

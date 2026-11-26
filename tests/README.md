@@ -78,7 +78,7 @@ meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdown_inline_c
 meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdown_link_labels.lua --print-errorlogs
 ```
 
-The complete standards audit also runs known differences. It currently reports 120 passes and 17 failures: two code-padding differences and 15 syntax defects. The failures include the trailing-space bold case. They remain failures, not replacement expectations.
+The complete standards audit also runs known differences. It currently reports 121 passes and 16 failures: five code-padding differences and 11 emphasis defects. The failures include the trailing-space bold case. They remain failures, not replacement expectations.
 
 ```sh
 meson test -C build-windows-x86_64 anvil:lua-ui --test-args tests/lua/markdown_spec --print-errorlogs
