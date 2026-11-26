@@ -2373,83 +2373,42 @@ local commands = {
         local content_start, indent_length, task_start = markdown_list_content_start(
           dv.buffer, line1, line_text, true
         )
-        indent_length = indent_length or #(line_text:match("^[\t ]*") or "")
-        local empty_list_item = markdown_empty_list_item(
-          dv.buffer, line1, col1, line_text
-        )
-        local action
         if content_start and col1 == content_start then
-          action = task_start and "remove_task" or "remove_marker"
-        elseif empty_list_item then
-          action = indent_length > 0 and "outdent" or "clear"
-        end
-        if action then
           list_action_count = list_action_count + 1
           list_actions[#list_actions + 1] = {
             idx = idx,
-            line1 = line1,
-            col1 = col1,
-            line2 = line2,
-            col2 = col2,
-            indent_length = indent_length,
+            line = line1,
+            col = col1,
             prefix_start = task_start or (indent_length + 1),
-            action = action,
+            task = task_start ~= nil,
           }
         end
       end
     end
     if selection_count > 0 and list_action_count == selection_count then
       for _, item in ipairs(list_actions) do
-        if item.action == "clear" then
-          local edit = {
-            line1 = item.line1,
-            col1 = 1,
-            line2 = item.line1,
-            col2 = item.col1,
-            text = "",
-            idx = item.idx,
-          }
-          local selections, last_selection = dv.buffer:selections_after_edits(
-            { edit }, { [item.idx] = "start" }, dv.buffer.last_selection
-          )
-          dv.buffer:apply_edits({ edit }, {
-            type = "remove",
-            selections = selections,
-            last_selection = last_selection,
-            merge_cursors = false,
-          })
-          core.log_quiet("Markdown backspace removed empty list marker in %s at %d:%d", dv.buffer:get_name(), item.line1, item.col1)
-        elseif item.action == "remove_task" or item.action == "remove_marker" then
-          local edit = {
-            line1 = item.line1,
-            col1 = item.prefix_start,
-            line2 = item.line1,
-            col2 = item.col1,
-            text = "",
-            idx = item.idx,
-          }
-          local selections, last_selection = dv.buffer:selections_after_edits(
-            { edit }, { [item.idx] = "start" }, dv.buffer.last_selection
-          )
-          dv.buffer:apply_edits({ edit }, {
-            type = "remove",
-            selections = selections,
-            last_selection = last_selection,
-            merge_cursors = false,
-          })
-          core.log_quiet(
-            "Markdown backspace removed %s in %s at %d:%d",
-            item.action == "remove_task" and "task marker" or "list marker",
-            dv.buffer:get_name(), item.line1, item.col1
-          )
-        else
-          local line1, col1, line2, col2 = dv.buffer:indent_text(
-            true, item.line1, item.col1, item.line2, item.col2
-          )
-          local content_col = math.max(1, item.col1 - item.indent_length)
-          dv.buffer:set_selections(item.idx, line1, content_col, line2, content_col)
-          core.log_quiet("Markdown backspace outdented list item in %s at %d:%d", dv.buffer:get_name(), item.line1, item.col1)
-        end
+        local edit = {
+          line1 = item.line,
+          col1 = item.prefix_start,
+          line2 = item.line,
+          col2 = item.col,
+          text = "",
+          idx = item.idx,
+        }
+        local selections, last_selection = dv.buffer:selections_after_edits(
+          { edit }, { [item.idx] = "start" }, dv.buffer.last_selection
+        )
+        dv.buffer:apply_edits({ edit }, {
+          type = "remove",
+          selections = selections,
+          last_selection = last_selection,
+          merge_cursors = false,
+        })
+        core.log_quiet(
+          "Markdown backspace removed %s in %s at %d:%d",
+          item.task and "task marker" or "list marker",
+          dv.buffer:get_name(), item.line, item.col
+        )
       end
       return
     end
