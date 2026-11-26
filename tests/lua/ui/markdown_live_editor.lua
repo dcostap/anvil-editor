@@ -3861,6 +3861,42 @@ test.describe("Markdown Live Preview", function()
     test.equal(body_card.last, true)
   end)
 
+  test.it("pads a wrapped callout line once and keeps its text inside the card", function()
+    local source = "> [!info] A long callout title that wraps across several visual rows inside its card"
+    local view, buffer = make_view(source .. "\nplain", "callout-wrapped-padding.md")
+    view.size.x = 260
+    view:set_wrapping_enabled(true)
+    buffer:set_selection(2, 1)
+    refresh(view)
+
+    local first_row, _, row_count = linewrapping.get_line_idx_col_count(view, 1)
+    test.ok(row_count > 2)
+    local row_height = test.not_nil(view:get_line_render(1).text_row_height)
+    test.ok(view:get_visual_row_height(first_row) > row_height)
+    for row = first_row + 1, first_row + row_count - 2 do
+      test.equal(view:get_visual_row_height(row), row_height)
+    end
+    test.ok(view:get_visual_row_height(first_row + row_count - 1) > row_height)
+
+    local markdown_decoration
+    for _, entry in ipairs(view:decoration_provider_entries()) do
+      if entry.id == "markdown-live" then markdown_decoration = entry.provider break end
+    end
+    local card = test.not_nil(test.not_nil(markdown_decoration):line_background_descriptor(view, 1))
+    local card_right = card.x_offset + card.width
+    local drawn_right = 0
+    local old_draw_text = renderer.draw_text
+    renderer.draw_text = function(font, text, x, ...)
+      drawn_right = math.max(drawn_right, x + font:get_width(text))
+      return x + font:get_width(text)
+    end
+    local ok, err = pcall(function() view:draw_line_text(1, 0, 0) end)
+    renderer.draw_text = old_draw_text
+    if not ok then error(err, 0) end
+    test.ok(drawn_right <= card_right, string.format("text right=%.1f, card right=%.1f", drawn_right, card_right))
+    test.ok(card_right <= view.wrapped_settings.width)
+  end)
+
   test.it("keeps revealed callout source inside the card and styles its marker", function()
     local source = ">[!note] NOTE: A long title whose revealed source wraps across visual rows"
     local view, buffer = make_view(source .. "\nplain", "callout-source-reveal.md")

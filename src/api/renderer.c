@@ -705,6 +705,7 @@ static int f_text_layout_wrap(lua_State *L) {
  *                width, text_x_offset, text_source_col1, text_source_col2.
  *                A fragment without text columns has 0 for both.
  *   layouts      the text layout of each text fragment, false for others.
+ *   right_inset  optional width that the line keeps free at the wrap edge.
  *
  * The x of a source column follows TextView:get_line_render_col_x_cursor:
  * hidden source has no width, a widget has its width, and text in a fragment
@@ -723,7 +724,7 @@ typedef struct {
 typedef struct {
   const char *text;
   size_t text_len, visible_len, start_col;
-  double x_offset, begin_width;
+  double x_offset, begin_width, right_inset;
   size_t first_fragment, fragment_count;
 } WrapLine;
 
@@ -812,6 +813,7 @@ static void wrap_fragment_line(
   lua_Integer col = row_start;
   double col_x = row_start_x;
   lua_Integer visible_end = (lua_Integer)line->visible_len;
+  width -= line->right_inset;
   while (col <= visible_end) {
     // A character is a byte and its continuation bytes.
     lua_Integer next_col = col + 1;
@@ -920,6 +922,9 @@ static int f_wrap_fragment_lines(lua_State *L) {
     line->start_col = start_col < 1 ? 1 : (size_t)start_col;
     line->x_offset = wrap_field_number(L, line_index, "x_offset");
     line->begin_width = wrap_field_number(L, line_index, "begin_width");
+    lua_getfield(L, line_index, "right_inset");
+    line->right_inset = lua_tonumber(L, -1);
+    lua_pop(L, 1);
     lua_getfield(L, line_index, "fragments");
     int records = lua_absindex(L, -1);
     lua_getfield(L, line_index, "layouts");
