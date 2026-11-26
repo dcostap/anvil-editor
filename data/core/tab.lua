@@ -66,7 +66,9 @@ function tab.describe(pane, number)
     return item
   end
   local icon = view_icons.for_view(view)
-  if icon then item.icon = icon.kind == "file" and {kind = "file", path = icon.path} or {kind = "ui", glyph = icon.glyph} end
+  if icon then
+    item.icon = icon.kind == "file" and {kind = "file", path = icon.path} or {kind = icon.kind, glyph = icon.glyph}
+  end
   local path_tree = require "plugins.path_tree"
   local path = require("core.file_context").view_file_path(view)
   -- The file's path as File Search shows it, or its absolute path outside the Project Paths. The Sidebar copies it.

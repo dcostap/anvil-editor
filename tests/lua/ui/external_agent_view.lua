@@ -60,6 +60,7 @@ test.describe("External Agent View on a Machine", function()
     fs.use_local()
     if context.pair_path then test.ok(os.remove(context.pair_path)) end
     core.projects = context.projects
+    if context.cwd then system.chdir(context.cwd) end
     machine_server.stop(context.server)
     test.ok(test.remove_tree(context.root))
   end)
@@ -231,11 +232,31 @@ test.describe("External Agent View on a Machine", function()
     test.equal(result.messages[1].text, "Check the build")
     test.equal(open_project_chat(context), chat, "The command must show the open Project Chat")
     test.equal(chat.recipient.name, "agy")
+  end)
+
+  test.it("restores the Project Chat Pane and its draft from the Workspace", function(context)
+    require "plugins.workspace"
+    context.cwd = system.getcwd()
+    greet(context)
+    local chat = open_project_chat(context)
+    click_external_agents(chat)
+    wait_until(function() return chat.recipient ~= nil end, "The selector did not choose the only agent")
+    local pane_id = panes.pane_for_view(chat).id
     chat:on_text_input("And run the tests")
-    local restored = external_agents.View.from_state(chat:get_state())
-    restored:on_close()
+
+    test.ok(core.set_project(context.root))
+    wait_until(function() return core.workspace_restored end, "The other Project did not open")
+    panes.reset_for_tests()
+    test.ok(core.set_project(context.project))
+    wait_until(function() return core.workspace_restored end, "The Workspace did not load")
+
+    local pane = test.not_nil(panes.find(pane_id), "The Workspace lost the Project Chat Pane")
+    local restored = pane.current_view
+    test.not_ok(restored == chat, "The Workspace must create a new View")
+    test.equal(restored:get_name(), "Project Chat")
     test.equal(restored.recipient.name, "agy")
     test.equal(restored.field:get_text(), "And run the tests")
+    wait_until(function() return #restored.messages > 0 end, "The restored View did not load messages")
   end)
 
   test.it("switches the composer recipient with the picker or a profile click", function(context)

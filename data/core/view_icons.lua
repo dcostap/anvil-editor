@@ -14,6 +14,10 @@ function view_icons.ui(glyph, color)
   return { kind = "ui", glyph = glyph, color = color }
 end
 
+function view_icons.menu(glyph)
+  return { kind = "menu", glyph = glyph }
+end
+
 function view_icons.file(path)
   assert(type(path) == "string" and path ~= "", "View Icon file type path is required")
   return { kind = "file", path = path }
@@ -41,13 +45,16 @@ function view_icons.for_view(view)
   return icon
 end
 
+local function icon_font(icon)
+  return icon.font or (icon.kind == "menu" and style.menu_icon_font or style.icon_font)
+end
+
 function view_icons.width(icon, row_height)
   if not icon then return 0 end
   if icon.kind == "file" then
     return file_icons.size_for_row(row_height)
   end
-  local font = icon.font or style.icon_font
-  return font:get_width(icon.glyph)
+  return icon_font(icon):get_width(icon.glyph)
 end
 
 function view_icons.draw(icon, x, y, row_height, color)
@@ -62,7 +69,7 @@ function view_icons.draw(icon, x, y, row_height, color)
     renderer.draw_text(font, glyph, draw_x, draw_y, color or icon.color or file_color)
     return size
   end
-  local font = icon.font or style.icon_font
+  local font = icon_font(icon)
   local glyph = icon.glyph
   local draw_y = y + math.floor((row_height - font:get_height()) / 2)
   renderer.draw_text(font, glyph, x, draw_y, color or icon.color or style.text)

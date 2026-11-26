@@ -22,9 +22,11 @@ local surface = require "core.ui.surface"
 local syntax = require "core.syntax"
 local TextView = require "core.textview"
 local View = require "core.view"
+local view_icons = require "core.view_icons"
 
 local plugin = {}
 local PROJECT_CHAT = "Project Chat" -- Not a valid External Agent name.
+local CHAT_ICON = view_icons.menu("\u{F0B79}") -- Material Design chat bubble.
 -- The thread keeps at most this many messages. A full page asks for the next page at once.
 local MAX_SHOWN, PAGE = 500, 100
 -- The message box grows up to this many lines, then scrolls.
@@ -456,6 +458,7 @@ function ExternalAgentView:new(agent)
   self.project_chat = agent == PROJECT_CHAT
   self.field = MessageBox(self.project_chat and "Message" or "Message " .. agent)
   if self.project_chat then
+    self.view_icon = CHAT_ICON
     self.recipient_button = Button { label = "To: Choose agent", icon = ui.icons.chevron_down, kind = "ghost",
       size = "small", on_click = function() self:choose_recipient() end }
   end
@@ -476,6 +479,8 @@ function ExternalAgentView:on_close()
 end
 
 -- An unsent message stays with the Workspace.
+function ExternalAgentView:get_module() return "plugins.external_agents" end
+
 function ExternalAgentView:get_state()
   local draft = self.field:get_text()
   return { agent = self.agent, draft = draft ~= "" and draft or nil, target = self.target, recipient = self.recipient }
@@ -491,6 +496,8 @@ function ExternalAgentView.from_state(state)
   if type(state.draft) == "string" then view.field:set_text(state.draft) end
   return view
 end
+
+plugin.from_state = ExternalAgentView.from_state
 
 function ExternalAgentView:update_recipient_label()
   local recipient = self.target or self.recipient
@@ -1126,14 +1133,15 @@ end
 -- The tone of each kind of author: the agent, a Pi, or the user.
 local AUTHOR_TONES = { self = "info", agent = "success" }
 
--- A round avatar with the first letter of `name`, in the colors of a Badge.
-local function draw_avatar(name, tone, x, y)
+-- A round avatar with an icon or the first letter of `name`, in the colors of a Badge.
+local function draw_avatar(name, tone, x, y, glyph)
   local size = avatar_size()
   local color = tone and ui.tone_color(tone) or style.dialog_text
   local fill = tone and ui.tint(color, 0.16) or ui.tint(style.dialog_text_strong, 0.1)
   renderer.draw_rounded_rect(x, y, size, size, size / 2, fill)
-  local letter = (name:match("^[%z\1-\127\194-\244][\128-\191]*") or "?"):upper()
-  common.draw_text(ui.role_font("strong"), color, letter, "center", x, y, size, size)
+  local font = glyph and ui.icon_font() or ui.role_font("strong")
+  glyph = glyph or (name:match("^[%z\1-\127\194-\244][\128-\191]*") or "?"):upper()
+  common.draw_text(font, color, glyph, "center", x, y, size, size)
 end
 
 function ExternalAgentView:draw_message(message, left, top, width)
@@ -1234,7 +1242,8 @@ function ExternalAgentView:draw_header()
   local strong = ui.role_font("strong")
   local nx = x + avatar + m.gap
   if nx >= right then return end
-  draw_avatar(self.agent, AUTHOR_TONES.self, x, y + math.floor((h - avatar) / 2))
+  draw_avatar(self.agent, AUTHOR_TONES.self, x, y + math.floor((h - avatar) / 2),
+    self.project_chat and CHAT_ICON.glyph or nil)
   local name = ui.fit_text(strong, self.agent, right - nx)
   local dot_x = renderer.draw_text(strong, name, nx, y + math.floor((h - strong:get_height()) / 2),
     style.dialog_text_strong) + m.section_gap
