@@ -1,6 +1,8 @@
 local common = require "core.common"
+local command = require "core.command"
 local core = require "core"
 local fs = require "core.fs"
+local MachineClient = require "core.machine_client"
 local machine_server = dofile("tests/fixtures/machine_server.lua")
 local panes = require "core.panes"
 local keymap = require "core.keymap"
@@ -38,24 +40,31 @@ test.describe("External Agent View on a Machine", function()
     test.ok(common.mkdirp(context.project))
     context.projects = core.projects
     core.projects = { Project(context.project) }
-    context.server = machine_server.start(context.user, { context.project })
+    context.server, context.discovery = machine_server.start(context.user, { context.project })
     fs.use_machine(machine_server.discovery_path(context.user), { context.project })
     wait_until(function() return fs.machine.state == "ready" end, "The Machine did not connect")
+  end)
+
+  local function greet(context)
     -- The agent's first wait creates it, as Antigravity's first call does.
     request(context, "external.read", { agent = "agy", listen = true })
     request(context, "external.post", { agent = "agy", text = "Hello from agy", from = { kind = "self" } })
-  end)
+  end
 
   test.after_each(function(context)
-    if context.view then context.view:on_close() end
+    if core.active_view == core.global_prompt_bar then core.global_prompt_bar:exit(false) end
+    if context.view and context.view ~= context.chat then context.view:on_close() end
+    if context.chat then context.chat:on_close() end
     panes.reset_for_tests()
     fs.use_local()
+    if context.pair_path then test.ok(os.remove(context.pair_path)) end
     core.projects = context.projects
     machine_server.stop(context.server)
     test.ok(test.remove_tree(context.root))
   end)
 
   test.it("shows the thread, sends a message and follows the agent's answer", function(context)
+    greet(context)
     local view = external_agents.open("agy")
     context.view = view
     test.ok(view and view:is(external_agents.View), "The command did not open an External Agent View")
@@ -132,6 +141,7 @@ test.describe("External Agent View on a Machine", function()
   end)
 
   test.it("selects a message's text with the mouse and copies it", function(context)
+    greet(context)
     request(context, "external.post", { agent = "agy", text = "Use **bold** text", from = { kind = "self" } })
     local view = external_agents.open("agy")
     context.view = view
@@ -162,9 +172,87 @@ test.describe("External Agent View on a Machine", function()
     system.set_clipboard(clipboard or "")
   end)
 
+  local function open_project_chat(context)
+    test.ok(command.perform("project:open_chat"))
+    local view = core.active_view
+    test.equal(view:get_name(), "Project Chat")
+    context.chat = view
+    return view
+  end
+
+  local function click_external_agents(view)
+    local button = test.not_nil(view.agents_button, "Project Chat does not let the user open an External Agent thread")
+    wait_until(function() return button.w > 0 end, "The External Agents button did not show")
+    local x, y = button.x + button.w / 2, button.y + button.h / 2
+    view:on_mouse_pressed("left", x, y, 1)
+    view:on_mouse_released("left", x, y)
+  end
+
+  test.it("starts a conversation with a silent External Agent from Project Chat", function(context)
+    local chat = open_project_chat(context)
+    click_external_agents(chat)
+    wait_until(function()
+      return core.get_log():find("No External Agent has connected to this Project", 1, true)
+    end, "The user did not get setup guidance")
+    test.equal(core.active_view, chat)
+    request(context, "external.read", { agent = "agy", listen = true })
+    click_external_agents(chat)
+    wait_until(function() return core.active_view:get_name() == "agy" end, "The sole agent's thread did not open")
+    local thread = core.active_view
+    context.view = thread
+    wait_until(function() return thread.status == "listening" end, "The thread did not show the agent's status")
+    test.equal(#chat.messages, 0)
+    thread:on_text_input("Check the build")
+    test.ok(thread:on_key_pressed("return"))
+    wait_until(function() return #chat.messages == 1 and #thread.messages == 1 end, "The first message did not show in both Views")
+    test.equal(chat.messages[1].text, "Check the build")
+    test.equal(thread.unread, 1)
+    local result = request(context, "external.read", { agent = "agy", listen = true })
+    test.equal(result.messages[1].text, "Check the build")
+    wait_until(function() return thread.unread == 0 end, "The thread did not show that the agent read the message")
+    test.equal(open_project_chat(context), chat, "The command must show the open Project Chat")
+    click_external_agents(chat)
+    wait_until(function() return core.active_view == thread end, "The open thread was not reused")
+  end)
+
+  test.it("selects a thread when more than one External Agent is registered", function(context)
+    request(context, "external.read", { agent = "agy", listen = true })
+    request(context, "external.read", { agent = "reviewer", listen = true })
+    local chat = open_project_chat(context)
+    test.ok(chat:on_key_pressed("tab"), "Tab did not focus the External Agents button")
+    test.ok(chat:on_key_pressed("return"))
+    local prompt = core.global_prompt_bar
+    wait_until(function() return core.active_view == prompt end, "The agent picker did not open")
+    prompt:set_text("reviewer")
+    prompt:submit()
+    context.view = core.active_view
+    test.equal(context.view:get_name(), "reviewer")
+  end)
+
+  test.it("opens an External Agent thread with View access even when the Project feed is unavailable", function(context)
+    greet(context)
+    local pairing = request(context, "pairing.start", { level = "view" })
+    local done, err
+    MachineClient.pair("127.0.0.1", context.discovery.port, pairing.code, "Reader", function(e, path)
+      done, err, context.pair_path = true, e, path
+    end)
+    wait_until(function() return done end, "The device did not pair")
+    test.is_nil(err, err and err.message)
+    fs.use_machine(context.pair_path, { context.project })
+    wait_until(function() return fs.machine.state == "ready" end, "The View device did not connect")
+    test.equal(fs.machine.level, "view")
+    local chat = open_project_chat(context)
+    wait_until(function() return chat.error ~= nil end, "The Project feed did not report the access limit")
+    click_external_agents(chat)
+    wait_until(function() return core.active_view:get_name() == "agy" end, "The View device could not open the thread")
+    context.view = core.active_view
+    wait_until(function() return #context.view.messages == 1 end, "The View device could not read the thread")
+    test.equal(context.view.messages[1].text, "Hello from agy")
+  end)
+
   test.it("replies from a Project result to its author's own thread", function(context)
-    -- A Project chat opens even when there is no Pi Terminal in the Project.
-    local project_view = external_agents.open("Project Chat")
+    greet(context)
+    local project_view = open_project_chat(context)
     context.view = project_view
     wait_until(function() return #project_view.messages == 1 and project_view.messages[1].y end, "No Project result")
     local answer = project_view.messages[1]
@@ -190,6 +278,7 @@ test.describe("External Agent View on a Machine", function()
   end)
 
   test.it("writes lines with Shift+Enter, sends them with Enter, and keeps a draft", function(context)
+    greet(context)
     local view = external_agents.open("agy")
     context.view = view
     wait_until(function() return #view.messages == 1 end, "The View did not load the thread")

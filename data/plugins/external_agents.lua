@@ -16,6 +16,7 @@ local panes = require "core.panes"
 local style = require "core.style"
 local ui = require "core.ui"
 local Badge = require "core.ui.badge"
+local Button = require "core.ui.button"
 local EmptyState = require "core.ui.empty_state"
 local StatusDot = require "core.ui.status_dot"
 local surface = require "core.ui.surface"
@@ -443,6 +444,11 @@ function ExternalAgentView:new(agent)
   self.content_h, self.last_max = 0, 0
   self.project_chat = agent == PROJECT_CHAT
   self.field = MessageBox(self.project_chat and "Choose a message to reply to" or "Message " .. agent)
+  if self.project_chat then
+    self.agents_button = Button { label = "External Agents", size = "small", on_click = function()
+      self:open_agent_thread()
+    end }
+  end
   self.status_dot = StatusDot {}
   self.badge = Badge { tone = "warning" }
   self.empty = EmptyState { icon = ui.icons.inbox, title = "No messages yet" }
@@ -471,6 +477,29 @@ function ExternalAgentView.from_state(state)
   if view.project_chat then view.target = state.target end
   if type(state.draft) == "string" then view.field:set_text(state.draft) end
   return view
+end
+
+function ExternalAgentView:open_agent_thread()
+  local button = self.agents_button
+  button.enabled = false
+  plugin.request("external.list", {}, function(err, result)
+    button.enabled = true
+    core.redraw = true
+    if self.closed or core.active_view ~= self then return end
+    if err then return core.warn("External Agents: %s", err.message or err.code) end
+    local names = {}
+    for _, agent in ipairs(result.agents or EMPTY) do names[#names + 1] = agent.name end
+    if #names == 0 then
+      return core.warn("No External Agent has connected to this Project. Run anvil:mcp_server and copy the agent setup.")
+    end
+    if #names == 1 then return plugin.open(names[1]) end
+    core.global_prompt_bar:enter("External Agent", {
+      text = "",
+      suggest = function(text) return common.fuzzy_match(names, text) end,
+      validate = function(_, option) return option ~= nil end,
+      submit = function(_, option) plugin.open(option.text) end,
+    })
+  end)
 end
 
 -- Reads the thread, then waits for each change. The Machine answers a wait when a message arrives, or the agent's
@@ -805,6 +834,7 @@ end
 function ExternalAgentView:focus_text(text)
   if self.text_focus and self.text_focus ~= text then self.text_focus:clear_selection() end
   self.text_focus = text
+  self.agents_focused = false
   core.redraw = true
 end
 
@@ -816,6 +846,12 @@ end
 function ExternalAgentView:on_mouse_pressed(button, x, y, clicks)
   if ExternalAgentView.super.on_mouse_pressed(self, button, x, y, clicks) then return true end
   if button ~= "left" then return true end
+  local agents = self.agents_button
+  if agents and agents:contains(x, y) then
+    agents.pressed = agents.enabled
+    core.redraw = true
+    return true
+  end
   local hit = self:message_at(x, y)
   if self.project_chat and hit and (hit.pi or hit.external) then
     local cx, cy, size = self:copy_rect(hit)
@@ -854,6 +890,12 @@ end
 
 function ExternalAgentView:on_mouse_moved(x, y, dx, dy)
   if ExternalAgentView.super.on_mouse_moved(self, x, y, dx, dy) then return true end
+  local agents = self.agents_button
+  local over_agents = agents and agents:contains(x, y)
+  if agents and agents.hovered ~= over_agents then
+    agents.hovered = over_agents
+    core.redraw = true
+  end
   if self.pressed_text then
     self.pressed_text:on_mouse_moved(x, y, dx, dy)
     self.cursor = "ibeam"
@@ -875,11 +917,13 @@ function ExternalAgentView:on_mouse_moved(x, y, dx, dy)
   local over_copy = self:over_copy(x, y) ~= nil
   if over_copy ~= self.copy_hovered then core.redraw = true end
   self.copy_hovered = over_copy
-  self.cursor = (over_send or over_copy) and "hand" or in_field and "ibeam" or text and text.cursor or "arrow"
+  self.cursor = (over_agents and agents.enabled or over_send or over_copy) and "hand"
+    or in_field and "ibeam" or text and text.cursor or "arrow"
 end
 
 function ExternalAgentView:on_mouse_left()
   ExternalAgentView.super.on_mouse_left(self)
+  if self.agents_button then self.agents_button.hovered = false end
   if self.hovered_text then self.hovered_text:on_mouse_left() end
   self.send_hovered, self.copy_hovered, self.hovered, self.hovered_text = false, false, nil, nil
   core.redraw = true
@@ -887,6 +931,13 @@ end
 
 function ExternalAgentView:on_mouse_released(button, x, y)
   ExternalAgentView.super.on_mouse_released(self, button, x, y)
+  local agents = self.agents_button
+  if button == "left" and agents and agents.pressed then
+    agents:on_mouse_released(x, y)
+    agents.pressed = false
+    core.redraw = true
+    return true
+  end
   self.field:on_mouse_released()
   if self.pressed_text then
     self.pressed_text:on_mouse_released(button, x, y)
@@ -945,12 +996,30 @@ end
 -- The keymap's commands for the editor do not run in this View, so its keys come here.
 function ExternalAgentView:on_key_pressed(key, event)
   if keymap.is_modifier_key(key) then return false end
+  if self.agents_button and key == "tab" then
+    local stroke = keymap.stroke_for_event(key, event)
+    if stroke == "tab" or stroke == "shift+tab" then
+      local focus = not self.agents_focused
+      self:focus_text(nil)
+      self.agents_focused = focus
+      return true
+    end
+  end
+  if self.agents_focused and key == "escape" then
+    self:focus_text(nil)
+    return true
+  end
   if key == "escape" and self.target then
     self.target = nil
     self.field:set_error(nil)
     return true
   end
   if key == "return" or key == "keypad enter" then
+    if self.agents_focused then
+      if keymap.modkeys.alt then return false end
+      self.agents_button:activate()
+      return true
+    end
     if keymap.modkeys.shift then
       self.field.scrolled = false
       return self.field:on_text("\n")
@@ -1081,14 +1150,22 @@ function ExternalAgentView:draw_header()
   local y, h = self.position.y, header_h()
   local x, width = self:column()
   renderer.draw_rect(self.position.x, y + h - m.border, self.size.x, m.border, style.dialog_line)
+  local right = x + width
+  if self.agents_button then
+    local w, bh = self.agents_button:measure()
+    w = math.min(w, width)
+    self.agents_button:place(right - w, y + math.floor((h - bh) / 2), w, bh)
+    self.agents_button:draw(self.agents_focused and core.active_view == self)
+    right = right - w - m.gap
+  end
   local avatar = avatar_size()
-  draw_avatar(self.agent, AUTHOR_TONES.self, x, y + math.floor((h - avatar) / 2))
   local strong = ui.role_font("strong")
   local nx = x + avatar + m.gap
-  local name = ui.fit_text(strong, self.agent, width - avatar - m.gap)
+  if nx >= right then return end
+  draw_avatar(self.agent, AUTHOR_TONES.self, x, y + math.floor((h - avatar) / 2))
+  local name = ui.fit_text(strong, self.agent, right - nx)
   local dot_x = renderer.draw_text(strong, name, nx, y + math.floor((h - strong:get_height()) / 2),
     style.dialog_text_strong) + m.section_gap
-  local right = x + width
   if self.unread > 0 then
     local badge_w = self.badge:width()
     right = right - badge_w - m.gap
@@ -1139,7 +1216,7 @@ function ExternalAgentView:draw()
     renderer.draw_text(font, ui.fit_text(font, self.field.error or self.target.label, width), x,
       self.field.y - ui.metrics().gap - font:get_height(), self.field.error and style.dialog_danger or style.dialog_text_muted)
   end
-  self.field:draw(core.active_view == self)
+  self.field:draw(core.active_view == self and not self.agents_focused)
   self:draw_send()
   self:draw_scrollbar()
 end
@@ -1178,7 +1255,7 @@ end, {
 
 command.add(nil, {
   ["project:open_chat"] = command.palette(function() return plugin.open(PROJECT_CHAT) end,
-    {keywords = {"agent", "Pi", "antigravity", "agy", "conversation", "reply"}, opens_view = true}),
+    {keywords = {"agent", "external agents", "Pi", "antigravity", "agy", "conversation", "message", "reply"}, opens_view = true}),
 })
 
 plugin.break_lines = break_lines

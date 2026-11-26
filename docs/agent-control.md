@@ -216,19 +216,21 @@ Each message to the agent has a `request` ID. The agent answers with `action: "s
 
 A Pi sends to an External Agent with `agent_send` and `agent` set to its name. The result has a `task`: the message's request ID. When the agent answers with `reply_to` set to it, Pi receives the answer as an Anvil reply, as from another Pi. An External Agent sends to a Pi with `agent_send`, a `terminal`, and `from_agent` set to its own name. Pi sees the message from "External Agent agy", and its `anvil_reply` goes into the agent's thread with `reply_to` set to the task. Anvil follows such a reply for one hour.
 
-Run `project:open_chat` to see new Pi final answers and External Agent messages in the current Project. The Machine keeps the latest 200 messages. It does not import earlier transcripts, tool output, or thinking. A remote Project needs Full control for this View.
+Run `project:open_chat` to see new Pi final answers and External Agent messages in the current Project. The Machine keeps the latest 200 messages. It does not import earlier transcripts, tool output, or thinking. A remote Project needs Full control to read this feed and reply from it.
+
+Click **External Agents** in Project Chat to open an agent's thread, even if the agent has not sent a message. From the message box, press Tab and Enter to open it with the keyboard. If more than one agent is registered, choose its name. The thread shows the agent's listening status and keeps its own latest 200 messages. A remote device with View access can open and read a thread, but cannot post.
 
 Choose **Reply** on a result or in its context menu. The composer shows the recipient and the start of the result. Enter sends the reply; Escape clears the recipient without deleting the draft. A Pi reply goes into the same Terminal and conversation as user input. If Pi is busy, the reply steers that turn. A replacement conversation cannot receive it. An External Agent receives the question in its own thread. Neither action broadcasts a message to other agents.
 
 Project Chat shows messages in time order. Replies appear under their question. A late reply starts a new card and quotes the question.
 
-Type in the message box and press Enter to post a message from you. Shift+Enter starts a new line. The box grows to eight lines, then scrolls. Up and Down move between its lines, and Undo and Redo work in it. A failed post keeps the text and marks the box. An unsent message stays with the Workspace.
+In an agent's thread, type in the message box and press Enter to start a conversation. In either View, Shift+Enter starts a new line. The box grows to eight lines, then scrolls. Up and Down move between its lines, and Undo and Redo work in it. A failed post keeps the text and marks the box. An unsent message stays with the Workspace.
 
 Messages use Markdown Live Preview. Drag to select text within a message, then use Copy. To copy the whole message with its Markdown, use the copy button or right-click and choose Copy Message. These actions do not change the draft.
 
-"Queued" marks each message that the agent has not received yet, and the header counts them. A message counts as received when a wait of the agent returns it.
+In an agent's thread, "Queued" marks each message that the agent has not received yet. The header counts them. A message counts as received when a wait of the agent returns it.
 
-The View waits on the Machine for changes, so new messages show at once. It keeps its Pane, as a busy Terminal does: another View, such as a Terminal from the Sidebar, opens in a new Pane. It restores with the Workspace. A View device can read a thread but cannot post.
+Each View waits on the Machine for changes, so new messages show at once. It keeps its Pane, as a busy Terminal does: another View, such as a Terminal from the Sidebar, opens in a new Pane. It restores with the Workspace.
 
 A thread keeps its last 200 messages, each at most 32 KB. A Project has at most 16 External Agents. An agent name uses letters, digits, `.`, `_` and `-`, at most 64 characters.
 
