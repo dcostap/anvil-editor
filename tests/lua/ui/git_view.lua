@@ -832,10 +832,16 @@ test.describe("Git View command", function()
     test.equal(tab.preview_right_text, "b:src/app.lua")
     test.equal(initial_diff, tab.history_diff_view)
     test.not_nil(tab.history_diff_view_pending)
+    initial_diff.buffer_view_a:set_wrapping_enabled(false)
+    initial_diff.buffer_view_b:set_wrapping_enabled(true)
+    initial_diff.unified_view:set_wrapping_enabled(true)
     wait_until(function()
       history_view:update()
       return tab.history_diff_view ~= initial_diff
     end, 1, "history Diff View did not finish refreshing")
+    test.equal(tab.history_diff_view.buffer_view_a:is_wrapping_enabled(), false)
+    test.equal(tab.history_diff_view.buffer_view_b:is_wrapping_enabled(), true)
+    test.equal(tab.history_diff_view.unified_view:is_wrapping_enabled(), true)
     test.not_nil(panes.pane_for_view(tab.history_diff_view))
 
     local tab_count = #view.model.tabs
@@ -875,6 +881,8 @@ test.describe("Git View command", function()
     tab.preview_left_name, tab.preview_right_name = "left", "right"
     tab.preview_generation_value = 1
     local initial_diff = test.not_nil(history_view:open_history_diff_view(tab))
+    initial_diff.buffer_view_a:set_wrapping_enabled(true)
+    initial_diff.buffer_view_b:set_wrapping_enabled(true)
     local diff_pane = panes.pane_for_view(initial_diff)
     local editor = Editor(Buffer(nil, nil, true))
     test.ok(panes.place(function() return editor end, { pane = diff_pane, placement = "current" }))
@@ -895,6 +903,8 @@ test.describe("Git View command", function()
       history_view:update()
       return tab.history_diff_view ~= initial_diff
     end, 1, "history Diff View did not refresh after it was shown again")
+    test.equal(tab.history_diff_view.buffer_view_a:is_wrapping_enabled(), true)
+    test.equal(tab.history_diff_view.buffer_view_b:is_wrapping_enabled(), true)
     test.equal(diff_pane.current_view, tab.history_diff_view)
   end)
 

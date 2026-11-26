@@ -2250,6 +2250,13 @@ function GitView:ensure_history_diff_view(tab)
   if old_pane and old_pane.current_view ~= old_view then return old_view end
 
   local function promote(view)
+    -- Read each setting at placement: the old sides stay interactive while the diff loads.
+    if old_view and not old_view.owned_buffers_disposed then
+      for _, side in ipairs { "buffer_view_a", "buffer_view_b", "unified_view" } do
+        local wrap = old_view[side]:is_wrapping_enabled()
+        if view[side]:is_wrapping_enabled() ~= wrap then view[side]:set_wrapping_enabled(wrap) end
+      end
+    end
     local old_pane = old_view and panes.pane_for_view(old_view)
     if not old_view or not old_pane then
       tab.history_diff_view = view
