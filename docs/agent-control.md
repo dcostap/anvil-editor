@@ -120,7 +120,13 @@ A wait timeout does not cancel work. A disconnect does not mean completion. A re
 
 Tasks and steering messages show the sender's Agent Name. The receiving Anvil derives it from the sender's Terminal ID, so a sender cannot choose its name. A client without a Terminal shows a short ID, and a name that another Terminal in the sender's Project also has adds a short Terminal ID. Messages from another Project add the Project name. Messages from a paired device also show its name.
 
-Use `anvil_reply` with the incoming request ID to answer its sender. The sender reads the answer with `agent_wait` or `agent_read` on the original task ID. A reply needs no reverse pairing. An active turn can answer a steering request without ending its other work. If the turn settles without an explicit reply, steering reports `delivered`, not the unrelated turn's answer. Interruption also reports `delivered` after acceptance.
+Use `anvil_reply` with the incoming request ID to answer its sender. An explicit reply steers the original Pi if it is active, or starts a turn if it is idle. Its transcript shows the reply and the original request ID. A reply does not ask for another reply.
+
+The reply is also the task result. If the original Pi is in `agent_wait` for that task, Anvil returns the result through the wait instead. A caller without a Pi can read the result with `agent_read` or `agent_wait`. A normal final answer remains a task result and does not start a turn in the sender.
+
+Reply during the turn that received the request. Anvil follows replies while the request and the sender's Pi connection are active. A Project follows up to 64 requests at a time. Replies outside those limits are task results only. A Machine reply uses the original route and needs no reverse pairing. Reload existing Pi sessions to receive reply messages.
+
+An active turn can answer a steering request without ending its other work. If the turn settles without an explicit reply, steering reports `delivered`, not the unrelated turn's answer. Interruption also reports `delivered` after acceptance.
 
 ## Tools
 

@@ -90,6 +90,15 @@ test.describe("Pi controls Anvil", function()
       if diagnostic then diagnostic:close() end
       test.equal(result.status, "completed", detail or result.error)
       test.equal(result.result, "ANVIL_PARENT_RESULT", detail)
+      local answer
+      test.ok(wait(function()
+        local transcript = call("agent_transcript", {terminal = ready.terminal, instance = ready.instance, format = "json"})
+        for _, message in ipairs(transcript.messages) do
+          if message.custom_type == "anvil-reply" then answer = message; return true end
+        end
+      end, 30), "The parent did not receive the reply in its transcript")
+      test.contains(answer.text, "ANVIL_EXPLICIT_ANSWER")
+      test.ok(answer.reply_to, "The reply must name its original request")
       test.equal(panes.active(), source, "An agent took the user's focus")
       local count = 0
       for _, pane in ipairs(panes.ordered()) do if not initial[pane.id] then count = count + 1 end end

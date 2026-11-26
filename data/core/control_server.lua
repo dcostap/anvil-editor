@@ -51,6 +51,75 @@ local function reply(client, status, value)
     .. #body .. "\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n" .. body)
 end
 
+local function project_request(target, request, done, cancelled)
+  require("core.http").post(target.url .. "/mcp", "application/json", nil, {
+    body = json.encode(request), decode_json = false,
+    headers = {Authorization = "Bearer " .. target.token, ["Content-Type"] = "application/json"}, timeout = 35,
+    is_cancelled = cancelled,
+    on_redirect = function(response)
+      for key in pairs(response.headers) do if key:lower() == "location" then response.headers[key] = nil end end
+    end,
+    on_done = function(ok, _, body)
+      if ok and type(body) == "string" then body = json.decode(body) end
+      done(ok and type(body) == "table" and body.jsonrpc == "2.0" and body or nil)
+    end})
+end
+
+local function task_pending(value)
+  return value.connected and (value.status == "pending" or value.status == "running" or value.status == "awaiting_reply")
+end
+
+-- Follow the result from the side that sent the request. A Machine needs no reverse pairing.
+function M:follow_reply(source, target, task, route)
+  self.reply_watches = self.reply_watches or {}
+  local watches = self.reply_watches
+  if watches[task] then return end
+  local count = 0
+  for _ in pairs(watches) do count = count + 1 end
+  if count >= 64 then return end
+  watches[task] = true
+  local args = {terminal = target.terminal, instance = target.instance, task = task, include_activity = false}
+  local function stopped()
+    local peer = self.control.peers[source.terminal]
+    if not self.listener or not peer or peer.instance ~= source.instance or system.get_time() - peer.seen >= 10 then return true end
+    for _, waited in ipairs(peer.waited_replies or {}) do if waited == task then return true end end
+    return false
+  end
+  local function follow()
+    while not stopped() do
+      local value
+      if route then
+        local done
+        route(args, function(result) value, done = result, true end, stopped)
+        while not done and not stopped() do coroutine.yield(.1) end
+        if not value then return end
+      else value = self.control:agent_read(args) end
+      if value.explicit_reply == true and type(value.result) == "string" and #value.result <= 8192 then
+        -- A matching wait already returns the answer to this Pi. Do not send it twice.
+        repeat
+          if stopped() then return end
+          local waiting
+          for _, client in ipairs(self.clients) do
+            local wait = client.reply_wait
+            if not client.dead and wait and wait.task == task and wait.terminal == source.terminal
+                and wait.instance == source.instance then waiting = true; break end
+          end
+          if waiting then coroutine.yield(.1) end
+        until not waiting
+        self.control:deliver_agent_reply(source, target, task, value.result)
+        return
+      end
+      if not task_pending(value) then return end
+      coroutine.yield(route and 2 or .1)
+    end
+  end
+  core.add_thread(function()
+    local ok, err = pcall(follow)
+    watches[task] = nil
+    if not ok then core.log_quiet("Control: could not forward an agent reply: %s", tostring(err)) end
+  end)
+end
+
 function M:discover(client, callback)
   client.forwarding, client.deadline = true, system.get_time() + 40
   local handle, err = require("core.worker_pool").named("control", {worker_count = 1}):submit {
@@ -100,7 +169,24 @@ function M:dispatch(client, body)
     end
     return result {tools = tools}
   elseif request.method == "tools/call" then
+    local args = params.arguments or {}
+    local peer = self.control.peers[client.caller]
+    local source = peer and {terminal = client.caller, instance = peer.instance}
+    local route, sender_project
+    local function observe(value)
+      if not source or client.dead or type(value) ~= "table" then return end
+      if params.name == "agent_send" and value.task then
+        self:follow_reply(source, {terminal = value.terminal, instance = value.instance,
+          project = sender_project or self.control.project_key, other_project = route ~= nil}, value.task, route)
+      elseif params.name == "agent_wait" and value.explicit_reply then
+        peer.waited_replies = peer.waited_replies or {}
+        peer.waited_replies[#peer.waited_replies + 1] = value.task
+        if #peer.waited_replies > 256 then table.remove(peer.waited_replies, 1) end
+      end
+    end
     local function tool_result(success, data)
+      if success then observe(data) end
+      client.reply_wait = nil
       -- A text result is for the model. JSON would escape it again, so it has no structured copy.
       if success and type(data) == "string" then
         return result {isError = false, content = {{type = "text", text = data}}}
@@ -108,8 +194,10 @@ function M:dispatch(client, body)
       result {isError = not success, content = {{type = "text", text = success and json.encode(data) or tostring(data)}},
         structuredContent = success and data or {error = tostring(data)}}
     end
-    local args = params.arguments or {}
     if type(args) ~= "table" then return tool_result(false, "Invalid arguments") end
+    if source and params.name == "agent_wait" then
+      client.reply_wait = {task = args.task, terminal = source.terminal, instance = source.instance}
+    end
     local agents = require "core.machine_agents"
     if self.control.headless and not agents.methods[params.name] then
       return tool_result(false, "This operation needs a loaded editor Project")
@@ -121,6 +209,10 @@ function M:dispatch(client, body)
         machine, path = projects.own_id(), self.control.project
       end
       if machine then
+        sender_project = path
+        route = function(query, done, cancelled)
+          agents.route(machine, path, "agent_read", query, source.terminal, function(ok, value) done(ok and value or nil) end, cancelled)
+        end
         client.forwarding, client.deadline = true, system.get_time() + 48
         return agents.route(machine, path, params.name, args, client.caller, tool_result, function() return client.dead end,
           params.name == "agent_send" and self.control:sender(client.caller) or nil)
@@ -138,18 +230,19 @@ function M:dispatch(client, body)
         if not target then return tool_result(false, "Project is not loaded or has no control endpoint") end
         args.project = nil -- The destination already identifies the Project. Never forward twice.
         params._meta = {anvil_caller = client.caller, sender = params.name == "agent_send" and self.control:sender(client.caller) or nil}
-        require("core.http").post(target.url .. "/mcp", "application/json", nil, {
-          body = json.encode(request), decode_json = false,
-          headers = {Authorization = "Bearer " .. target.token, ["Content-Type"] = "application/json"}, timeout = 35,
-          is_cancelled = function() return client.dead end,
-          on_redirect = function(response)
-            for key in pairs(response.headers) do if key:lower() == "location" then response.headers[key] = nil end end
-          end,
-          on_done = function(ok, err, body)
-            if ok and type(body) == "string" then body = json.decode(body) end
-            if ok and type(body) == "table" and body.jsonrpc == "2.0" then reply(client, "200 OK", body)
-            else tool_result(false, "Project control is unavailable") end
-          end})
+        sender_project = target.project
+        route = function(query, done, cancelled)
+          project_request(target, {jsonrpc = "2.0", id = 1, method = "tools/call",
+            params = {name = "agent_read", arguments = query}}, function(body)
+              done(body and body.result and body.result.structuredContent)
+            end, cancelled)
+        end
+        project_request(target, request, function(body)
+          if not body then return tool_result(false, "Project control is unavailable") end
+          if body.result and not body.result.isError then observe(body.result.structuredContent) end
+          client.reply_wait = nil
+          reply(client, "200 OK", body)
+        end, function() return client.dead end)
       end)
     end
     local caller, sender = client.caller, nil
@@ -173,8 +266,7 @@ function M:dispatch(client, body)
           tool_result(true, value)
         end)
       end
-      if ok and params.name == "agent_wait" and value.connected
-          and (value.status == "pending" or value.status == "running" or value.status == "accepted") then
+      if ok and params.name == "agent_wait" and task_pending(value) and not value.waiting_for_user then
         client.waiting = {args = params.arguments, result = tool_result,
           until_time = system.get_time() + (params.arguments.timeout_ms or 30000) / 1000}
         client.deadline = client.waiting.until_time + 5

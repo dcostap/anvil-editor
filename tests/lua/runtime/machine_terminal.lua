@@ -200,8 +200,19 @@ test.describe("Remote Terminal Session", function()
     post("/agent", report)
     test.equal(tool("agent_wait", {instance = state.instance, task = task}).result, "pong")
     local steer = tool("agent_send", {instance = state.instance, request_id = "ask", text = "Check log"}).task
+    local received_steer = post("/agent", report).commands[1]
+    test.equal(received_steer.id, steer)
     report.receipts = {{id = steer, status = "completed", result = "One client remains"}}
     post("/agent", report)
+    local delivered
+    wait_until(function()
+      delivered = post("/agent", {instance = "source-pi", receipts = {}, tasks = {}}, source).commands[1]
+      return delivered ~= nil
+    end, "The source Pi did not receive the reply")
+    test.equal(delivered.action, "reply")
+    test.equal(delivered.reply_to, steer)
+    test.equal(delivered.text, "One client remains")
+    test.equal(delivered.sender.terminal, context.id)
     test.equal(tool("agent_wait", {instance = state.instance, task = steer}).result, "One client remains")
     local interrupt = tool("agent_interrupt", {instance = state.instance, request_id = "interrupt"})
     test.equal(post("/agent", report).commands[1].id, interrupt.task)

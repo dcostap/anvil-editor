@@ -490,20 +490,31 @@ function M:sender(caller)
   return sender
 end
 
-function M:send(args, caller, action, sender)
+function M:queue_agent_command(args, command)
   local peer = self:peer(args, true)
+  local task = command.id or net.random_token()
+  if peer.commands[task] or peer.receipts[task] then return end
   local count = 0
   for _ in pairs(peer.commands) do count = count + 1 end
   assert(count < 16, "Pi command queue is full")
   assert(count < peer.capacity, "Pi control capacity reached; start a new Pi conversation")
-  local task = net.random_token()
   peer.order = (peer.order or 0) + 1
+  command.id, command.order = task, peer.order
+  peer.commands[task] = command
+  return {terminal = args.terminal, instance = peer.instance, task = task, status = "pending"}
+end
+
+function M:send(args, caller, action, sender)
   sender = sender or self:sender(caller)
   -- Derive the name here, so a sender from another Project or Machine cannot choose its own.
   sender.name = sender.terminal ~= "local" and agent_name.for_terminal(sender.terminal) or nil
-  peer.commands[task] = {id = task, action = action, text = args.text,
-    from = caller or "local", sender = sender, order = peer.order}
-  return {terminal = args.terminal, instance = peer.instance, task = task, status = "pending"}
+  return self:queue_agent_command(args, {action = action, text = args.text, from = caller or "local", sender = sender})
+end
+
+function M:deliver_agent_reply(target, sender, task, text)
+  sender.name = agent_name.for_terminal(sender.terminal)
+  return self:queue_agent_command(target, {id = "reply-" .. task, action = "reply", text = text, reply_to = task,
+    from = sender.terminal, sender = sender})
 end
 
 function M:agent_send(args, caller, sender) return self:send(args, caller, "send", sender) end
@@ -538,7 +549,9 @@ function M:agent_read(args)
       result.status, result.related_task = "delivered", receipt.task
     end
     result.result, result.truncated = task and task.result, task and task.truncated
-    if receipt and receipt.result then result.status, result.result, result.truncated = "completed", receipt.result, false end
+    if receipt and receipt.result then
+      result.status, result.result, result.truncated, result.explicit_reply = "completed", receipt.result, false, true
+    end
     result.error = task and task.error or receipt and receipt.error
   end
   return result

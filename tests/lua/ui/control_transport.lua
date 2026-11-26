@@ -325,6 +325,34 @@ test.describe("Anvil Project routing", function()
       result = assert(protocol_json.decode(result))
       test.not_ok(result.result.isError, result.result.content[1].text)
       test.ok(protocol_json.is_array(result.result.structuredContent.messages), "An empty history must remain a JSON array")
+
+      local author = source:add_client("source-pi")
+      local source_report = {instance = "source-one", receipts = {}, tasks = {}}
+      local remote_report = {instance = "pi-one", receipts = {}, tasks = {}}
+      source.control:exchange("source-pi", source_report)
+      done, result, failure = nil, nil, nil
+      http.post(source.url .. "/mcp", "application/json", {jsonrpc = "2.0", id = 9, method = "tools/call",
+        params = {name = "agent_send", arguments = {project = USERDIR .. "/other-project", terminal = "remote-pi",
+          instance = "pi-one", request_id = "cross-project-question", text = "Any update?"}}}, {
+        headers = {Authorization = "Bearer " .. author.token},
+        on_done = function(success, error, body) done, result, failure = true, body, not success and error end})
+      deadline = system.get_time() + 15
+      repeat source:poll(); remote:poll(); coroutine.yield() until done or system.get_time() > deadline
+      test.ok(done and not failure, failure or "Cross-Project send timed out")
+      test.not_ok(result.result.isError, result.result.content[1].text)
+      local task = result.result.structuredContent.task
+      test.equal(remote.control:exchange("remote-pi", remote_report).commands[1].id, task)
+      remote_report.receipts = {{id = task, status = "completed", result = "Yes"}}
+      remote.control:exchange("remote-pi", remote_report)
+      local answer
+      repeat
+        source:poll(); remote:poll()
+        answer = source.control:exchange("source-pi", source_report).commands[1]
+        if not answer then coroutine.yield() end
+      until answer or system.get_time() > deadline
+      test.not_nil(answer, "A cross-Project reply must reach the source Project")
+      test.equal(answer.reply_to, task)
+      test.equal(answer.text, "Yes")
     end)
     source:close(); remote:close()
     for _, name in ipairs {path, ended, reused, stale_terminal, live_terminal} do os.remove(name) end
