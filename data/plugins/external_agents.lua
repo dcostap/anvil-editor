@@ -1178,32 +1178,7 @@ end, {
 
 command.add(nil, {
   ["project:open_chat"] = command.palette(function() return plugin.open(PROJECT_CHAT) end,
-    {keywords = {"agent", "Pi", "conversation", "reply"}, opens_view = true}),
-  ["external_agents:open"] = command.palette(function()
-    plugin.request("external.list", {}, function(err, result)
-      if err then return core.warn("External Agents: %s", err.message or err.code) end
-      local names = {}
-      for _, agent in ipairs(result.agents or EMPTY) do names[#names + 1] = agent.name end
-      if #names == 0 then
-        return core.warn("No External Agent has connected to this Project. Run anvil:mcp_server and copy the agent setup.")
-      end
-      if #names == 1 then return plugin.open(names[1]) end
-      core.global_prompt_bar:enter("External Agent", {
-        text = "",
-        suggest = function(text)
-          local items = {}
-          for _, name in ipairs(names) do
-            if name:lower():find(text:lower(), 1, true) then items[#items + 1] = { text = name } end
-          end
-          return items
-        end,
-        submit = function(text, option)
-          local name = option and option.text or text
-          if valid_name(name) then plugin.open(name) end
-        end,
-      })
-    end)
-  end, { keywords = { "antigravity", "agy", "agent", "chat", "message" }, opens_view = true }),
+    {keywords = {"agent", "Pi", "antigravity", "agy", "conversation", "reply"}, opens_view = true}),
 })
 
 plugin.break_lines = break_lines

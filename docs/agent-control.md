@@ -220,7 +220,7 @@ Run `project:open_chat` to see new Pi final answers and External Agent messages 
 
 Choose **Reply** on a result or in its context menu. The composer shows the recipient and the start of the result. Enter sends the reply; Escape clears the recipient without deleting the draft. A Pi reply goes into the same Terminal and conversation as user input. If Pi is busy, the reply steers that turn. A replacement conversation cannot receive it. An External Agent receives the question in its own thread. Neither action broadcasts a message to other agents.
 
-Run `external_agents:open` in the Command Palette to open an External Agent View in a new Pane. Its header shows whether the agent listens. The thread shows in cards, in time order. A card starts with a message and holds the answers to it, under it and indented. A later answer, after other messages, starts a card that quotes the first line of its question. Messages from one author within five minutes share one header. Code between ``` lines shows in the code font.
+Project Chat shows messages in time order. Replies appear under their question. A late reply starts a new card and quotes the question.
 
 Type in the message box and press Enter to post a message from you. Shift+Enter starts a new line. The box grows to eight lines, then scrolls. Up and Down move between its lines, and Undo and Redo work in it. A failed post keeps the text and marks the box. An unsent message stays with the Workspace.
 
