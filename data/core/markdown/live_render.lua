@@ -2059,15 +2059,19 @@ function callout_runtime.for_line(view, line)
   return best
 end
 
+function callout_runtime.padding_x()
+  return math.max(4, math.floor(9 * SCALE))
+end
+
 function callout_runtime.content_inset(view, callout, control_text)
   local body_font = live_fonts.body(view)
   local card_offset = math.floor((8 + (callout.nesting_depth - 1) * 16) * SCALE)
   local rail_width = math.max(2, math.floor(3 * SCALE))
-  local padding = math.max(4, math.floor(9 * SCALE))
+  local padding = callout_runtime.padding_x()
   if control_text == nil then
-    control_text = (callout.icon or "") .. (callout.fold and " ▾" or "")
+    control_text = (callout.icon or "") .. (callout.fold and callouts.fold_icons.expanded or "")
   end
-  local lane = body_font:get_width(control_text)
+  local lane = live_fonts.icon(view):get_width(control_text)
     + body_font:get_width("  ")
   return card_offset + rail_width + padding + lane,
     card_offset + rail_width + padding
@@ -2817,10 +2821,10 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
         local fold = owner and owner.callout_folds
           and owner.callout_folds[callout.semantic_id]
         local collapsed = fold and fold.collapsed or callout.fold == "-"
-        return collapsed and "▸" or "▾"
+        return collapsed and callouts.fold_icons.collapsed or callouts.fold_icons.expanded
       end)()
     ) or nil
-    local control_text = callout.icon .. (chevron and (" " .. chevron) or "")
+    local control_text = callout.icon .. (chevron or "")
     local content_width, control_x_offset = callout_runtime.content_inset(
       view, callout, control_text
     )
@@ -2831,6 +2835,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       source_col1 = source_col1,
       source_col2 = source_col2,
       text = line == callout.line1 and control_text or "",
+      font = live_fonts.icon(view),
       width = content_width,
       text_x_offset = control_x_offset,
       color = callout.palette and callout.palette.accent or style.accent,
@@ -3378,24 +3383,20 @@ local function prose_render_line(view, line_text, render_line)
         end
       end
     end
+    -- The card pads the top of its first row and the bottom of its last row.
     local padding_y = math.max(2, math.floor(6 * SCALE))
     local owner = view.__markdown_live_owner
     local fold = owner and owner.callout_folds
       and owner.callout_folds[callout.semantic_id]
     local effective_last = fold and fold.collapsed and callout.line1 or callout.line2
     local current_line = render_line.callout_line
-    if callout.line1 == callout.line2 then effective_last = callout.line1 end
-    if current_line == callout.line1 and effective_last == callout.line1 then
+    if current_line == callout.line1 then
       render_line.first_row_content_y_offset = padding_y
-      render_line.metric_height = render_line.text_row_height + padding_y * 2
-    else
-      if current_line == callout.line1 then
-        render_line.first_row_content_y_offset = padding_y
-      end
-      if current_line == effective_last then
-        render_line.metric_height = render_line.text_row_height + padding_y
-      end
     end
+    if current_line == effective_last then
+      render_line.final_row_padding = padding_y
+    end
+    render_line.wrap_right_inset = callout_runtime.padding_x()
   end
   return render_line
 end
@@ -5821,7 +5822,11 @@ function decoration_provider:line_background_descriptor(view, line)
     rail_width = math.max(2, math.floor(3 * SCALE)),
     radius = math.max(3, math.floor(6 * SCALE)),
     x_offset = x_offset,
-    width = math.max(1, image_available_width(view) - x_offset - math.floor(8 * SCALE)),
+    -- The card ends at the wrap width. Its text wraps `padding_x` before that.
+    width = math.max(1, math.min(
+      image_available_width(view),
+      view.wrapped_settings and view.wrapped_settings.width or math.huge
+    ) - x_offset),
     first = line == callout.line1,
     last = line == line2,
   }
@@ -6473,6 +6478,7 @@ local function with_block_spacing(view, line, entry, height, render_line)
   end
   if final_visual_row_for_line(view, line, entry) then
     height = height + (render_line.final_row_spacing or 0)
+      + (render_line.final_row_padding or 0)
   end
   return height
 end
@@ -6682,6 +6688,8 @@ local function remeasure_projected_line(view, line, entry)
   render.position_rows = nil
   render.layout_height = nil
   render.first_row_content_y_offset = nil
+  render.final_row_padding = nil
+  render.wrap_right_inset = nil
   if render.markdown_code_block then
     render.caret_height = render.text_row_height
     render.metric_height = previous.metric_height and view:get_line_height() or nil

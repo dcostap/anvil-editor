@@ -624,6 +624,7 @@ local function prepare_rendered_line(
   return {
     text = text, start_col = start_col, x_offset = line_x_offset,
     begin_width = begin_width, fragments = fragments, layouts = layouts,
+    right_inset = render_line.wrap_right_inset,
   }, begin_width
 end
 

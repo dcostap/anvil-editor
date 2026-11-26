@@ -3,6 +3,23 @@ local anchors = require "core.markdown.anchors"
 local test = require "core.test"
 
 test.describe("Markdown shared parser", function()
+  test.it("uses delimiter boundaries and preserves unmatched runs", function()
+    test.equal(#parser.parse_inline("snake_case_name **bold **"), 0)
+    local spans = parser.parse_inline("*foo**bar* and ~old~")
+    test.equal(#spans, 2)
+    test.equal(spans[1].text, "foo**bar")
+    test.equal(spans[2].type, "strikethrough")
+  end)
+
+  test.it("keeps delimiter byte ranges on empty, malformed, and long input", function()
+    test.equal(#parser.parse_inline(""), 0)
+    local prefix = string.rep("a_", 35000) .. " "
+    local spans = parser.parse_inline(prefix .. "*\255*", 3, 4)
+    test.equal(#spans, 1)
+    test.equal(spans[1].text, "\255")
+    test.equal(spans[1].col1, #prefix + 4)
+    test.equal(spans[1].col2, #prefix + 7)
+  end)
   test.it("parses headings with source ranges", function()
     local parsed = parser.parse("## Heading **strong**\n\nBody")
     local heading = parsed.blocks[1]
@@ -45,6 +62,14 @@ test.describe("Markdown shared parser", function()
     end
     test.equal(code_count, 1)
     test.equal(link_count, 0)
+  end)
+
+  test.it("pairs whole backtick runs and only escapes openers outside code", function()
+    test.equal(#parser.parse_inline("\\`not code`"), 0)
+    local spans = parser.parse_inline("\\``a `` b\\` then ``c`d``")
+    test.equal(#spans, 2)
+    test.equal(spans[1].text, "a `` b\\")
+    test.equal(spans[2].text, "c`d")
   end)
 
   test.it("indexes heading anchors and block ids", function()

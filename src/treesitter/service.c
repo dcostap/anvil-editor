@@ -1,5 +1,6 @@
 #include "service.h"
 #include "memory.h"
+#include "../markdown_delimiters.h"
 
 #include "../custom_events.h"
 
@@ -628,6 +629,97 @@ static TSNode outline_declarator_name(TSNode node) {
   return (TSNode) {0};
 }
 
+typedef struct MarkdownQueryPairs {
+  const AnvilTSSnapshot *snapshot;
+  AnvilTSQueryCaptureCallback callback;
+  void *payload;
+  uint32_t start, end, max, *order;
+  AnvilTSQueryCapture capture;
+  char **error;
+  AnvilTSQueryRun *run;
+} MarkdownQueryPairs;
+
+static bool pairs_stop(void *payload) {
+  MarkdownQueryPairs *p = payload;
+  return query_progress(&(TSQueryCursorState){.payload = p->run});
+}
+
+static TSPoint pair_point(const AnvilTSSnapshot *s, uint32_t byte) {
+  uint32_t lo = 0, hi = s->line_count;
+  while (lo + 1 < hi) {
+    uint32_t mid = lo + (hi - lo) / 2;
+    if (s->line_starts[mid] <= byte) lo = mid; else hi = mid;
+  }
+  return (TSPoint){lo, byte - s->line_starts[lo]};
+}
+
+static bool emit_pair_range(MarkdownQueryPairs *p, const char *name, uint32_t start, uint32_t end) {
+  if (end <= p->start || start >= p->end) return true;
+  if (p->max && *p->order >= p->max) {
+    service_set_error(p->error, "Tree-sitter query capture limit exceeded");
+    return false;
+  }
+  p->capture.name = name;
+  p->capture.name_len = (uint32_t)strlen(name);
+  p->capture.start_byte = start;
+  p->capture.end_byte = end;
+  p->capture.start_point = pair_point(p->snapshot, start);
+  p->capture.end_point = pair_point(p->snapshot, end);
+  p->capture.order = (*p->order)++;
+  return p->callback(&p->capture, p->payload);
+}
+
+static bool emit_markdown_pair(void *payload, uint32_t open, uint32_t close, uint32_t width, char marker) {
+  MarkdownQueryPairs *p = payload;
+  const char *name = marker == '~' ? "span.strikethrough" : width == 2 ? "span.strong" : "span.emphasis";
+  return emit_pair_range(p, name, open, close + width) &&
+    emit_pair_range(p, "marker.emphasis", open, open + width) &&
+    emit_pair_range(p, "marker.emphasis", close, close + width);
+}
+
+/* The grammar supplies opaque inline constructs and label scopes. Resolve
+ * runs from source, since a grammar node can split a run at the wrong byte. */
+static bool markdown_scope(TSNode root, const TSRange *ranges, uint32_t count, MarkdownQueryPairs *p) {
+  MarkdownDelimiters d = {.text = p->snapshot->bytes, .start = ts_node_start_byte(root),
+    .end = ts_node_end_byte(root), .emit = emit_markdown_pair, .stop = pairs_stop, .payload = p};
+  if (d.end > p->snapshot->byte_len) return false;
+  const char *s = d.text + d.start;
+  size_t len = d.end - d.start;
+  if (!memchr(s, '*', len) && !memchr(s, '_', len) && !memchr(s, '~', len)) return true;
+  TSTreeCursor cursor = ts_tree_cursor_new(root);
+  bool more = ts_tree_cursor_goto_first_child(&cursor), ok = true;
+  uint32_t pos = d.start, r = 0;
+  for (;;) {
+    uint32_t stop = d.end, resume = d.end;
+    if (more) {
+      TSNode n = ts_tree_cursor_current_node(&cursor);
+      const char *type = ts_node_type(n);
+      bool transparent = !ts_node_is_named(n) || !strcmp(type, "emphasis_delimiter") ||
+        !strcmp(type, "emphasis") || !strcmp(type, "strong_emphasis") || !strcmp(type, "strikethrough") ||
+        !strcmp(type, "ERROR");
+      if (transparent && ts_tree_cursor_goto_first_child(&cursor)) continue;
+      stop = transparent ? pos : ts_node_start_byte(n);
+      resume = transparent ? pos : ts_node_end_byte(n);
+    }
+    while (pos < stop && r < count) {
+      if (ranges[r].end_byte <= pos) { r++; continue; }
+      if (ranges[r].start_byte >= stop) break;
+      if (pos < ranges[r].start_byte) pos = ranges[r].start_byte;
+      uint32_t end = ranges[r].end_byte < stop ? ranges[r].end_byte : stop;
+      if (!(ok = markdown_delimiters_feed(&d, pos, end))) break;
+      pos = end;
+    }
+    pos = resume;
+    if (!more || !ok) break;
+    while (!ts_tree_cursor_goto_next_sibling(&cursor)) {
+      if (!ts_tree_cursor_goto_parent(&cursor)) { more = false; break; }
+    }
+  }
+  ts_tree_cursor_delete(&cursor);
+  markdown_delimiters_free(&d);
+  return ok;
+}
+
 bool anvil_ts_query_captures_in_tree_with_cursor(
   TSTree *tree,
   const AnvilTSSnapshot *snapshot,
@@ -670,6 +762,8 @@ bool anvil_ts_query_captures_in_tree_with_cursor(
 
   bool ok = true;
   uint32_t order = 0;
+  TSRange *ranges = NULL;
+  uint32_t range_count = 0;
   TSQueryMatch match;
   char *predicate_error = NULL;
   while (ts_query_cursor_next_match(cursor, &match)) {
@@ -686,6 +780,17 @@ bool anvil_ts_query_captures_in_tree_with_cursor(
       uint32_t name_len = 0;
       const char *name = ts_query_capture_name_for_id(query, capture->index, &name_len);
       TSNode node = capture->node;
+      if (name_len == 19 && !memcmp(name, "markdown.delimiters", 19)) {
+        if (!ranges) ranges = ts_tree_included_ranges(tree, &range_count);
+        MarkdownQueryPairs pairs = {snapshot, callback, payload, byte_start, byte_end,
+          max_captures, &order, {.match_id = match.id, .pattern_index = match.pattern_index}, error, &run};
+        if (!(ok = markdown_scope(node, ranges, range_count, &pairs))) {
+          if (!error || !*error) service_set_error(error, run.cancelled ? "Tree-sitter query cancelled" :
+            run.timed_out ? "Tree-sitter query timed out" : "failed to resolve Markdown delimiters");
+          goto done;
+        }
+        continue;
+      }
       if (name_len == 15 && memcmp(name, "name.declarator", 15) == 0) {
         node = outline_declarator_name(node);
         name = "name";
@@ -721,6 +826,7 @@ bool anvil_ts_query_captures_in_tree_with_cursor(
   }
 
 done:
+  anvil_ts_memory_free(ranges);
   if (predicate_error) {
     service_set_error(error, predicate_error);
     free(predicate_error);

@@ -39,6 +39,8 @@ The result contains an `operation` ID. Poll `operation_read` until its status be
 
 Use `agent_send` to steer active work or start a turn when Pi is idle. Steering reaches Pi after the current assistant turn finishes its tool calls, before the next model request. It does not cancel running tools. Messages retain their source Terminal and appear as agent messages, not human messages.
 
+`agent_send` needs only `terminal` and `text`. Without `instance`, the message goes to the Terminal's current conversation. A named `instance` never reaches a replacement conversation. Without `request_id`, a retry sends the message again; pass one when a retry must not repeat the work. Set `expect_reply: false` for a notice. Pi then sees "No reply needed" instead of the request to reply. `agent_wait` also takes the task without an instance.
+
 Use `agent_read` or `agent_wait` with the returned task ID. Completion follows Pi's `agent_settled` event, after retries and automatic recovery. Results include the final assistant text and a truncation flag when necessary.
 
 ### Read another Pi
@@ -120,7 +122,13 @@ A wait timeout does not cancel work. A disconnect does not mean completion. A re
 
 Tasks and steering messages show the sender's Agent Name. The receiving Anvil derives it from the sender's Terminal ID, so a sender cannot choose its name. A client without a Terminal shows a short ID, and a name that another Terminal in the sender's Project also has adds a short Terminal ID. Messages from another Project add the Project name. Messages from a paired device also show its name.
 
-Use `anvil_reply` with the incoming request ID to answer its sender. The sender reads the answer with `agent_wait` or `agent_read` on the original task ID. A reply needs no reverse pairing. An active turn can answer a steering request without ending its other work. If the turn settles without an explicit reply, steering reports `delivered`, not the unrelated turn's answer. Interruption also reports `delivered` after acceptance.
+Use `anvil_reply` with the incoming request ID to answer its sender. An explicit reply steers the original Pi if it is active, or starts a turn if it is idle. Its transcript shows the reply and the original request ID. A reply does not ask for another reply.
+
+The reply is also the task result. If the original Pi is in `agent_wait` for that task, Anvil returns the result through the wait instead. A caller without a Pi can read the result with `agent_read` or `agent_wait`. A normal final answer remains a task result and does not start a turn in the sender.
+
+Reply during the turn that received the request. Anvil follows replies while the request and the sender's Pi connection are active. A Project follows up to 64 requests at a time. Replies outside those limits are task results only. A Machine reply uses the original route and needs no reverse pairing. Reload existing Pi sessions to receive reply messages.
+
+An active turn can answer a steering request without ending its other work. If the turn settles without an explicit reply, steering reports `delivered`, not the unrelated turn's answer. Interruption also reports `delivered` after acceptance.
 
 ## Tools
 
@@ -138,7 +146,8 @@ Use `anvil_reply` with the incoming request ID to answer its sender. The sender 
 | `terminal` | Read terminal text, send literal input, or close a Terminal View. |
 | `pi_start` | Start an independent interactive Pi with explicit model choices. |
 | `operation_read` | Read launch or diff progress and readiness. |
-| `agent_send` | Steer active work or start a turn when idle. |
+| `agent_send` | Steer active work or start a turn when idle. Message an External Agent. |
+| `external_agent` | Wait for messages as an External Agent, answer them, or list and read External Agent threads. |
 | `agent_read` | Read agent status, live activity, a receipt, or a task result. |
 | `agent_transcript` | Read paged conversation text, summaries, and optional tool messages. |
 | `agent_wait` | Wait for completion, a question, a disconnect, or a timeout. |
@@ -175,7 +184,7 @@ For `terminal_start`, readiness describes the shell, not the optional program. R
 
 ## Identity and limits
 
-Targets include a Terminal Session ID and a Pi conversation `instance`. A replacement conversation has a new instance. Requests for an old instance fail instead of reaching another conversation.
+Targets include a Terminal Session ID and a Pi conversation `instance`. A replacement conversation has a new instance. Requests for an old instance fail instead of reaching another conversation. A request without an instance uses the current conversation.
 
 Retry receipts belong to the running Project process. Repeating an ID with different arguments fails. After a Project restart, inspect state before submitting mutations again. Do not assume an earlier mutation failed because its response was lost.
 
@@ -189,13 +198,27 @@ Only loaded Projects accept operations. Use `project` to load one. Cross-Project
 
 Run `anvil:mcp_server` in the Command Palette to see the local server status, Project, MCP URL, and discovery file. **Ready** means Anvil is listening and published discovery. It does not mean a client is connected.
 
-Click **Copy Agent Setup** and paste the instructions into an external agent on this computer. The instructions name the discovery file but do not contain the token. Use only a trusted client.
+Click **Copy Agent Setup** and paste the text into a chat with an External Agent on this computer, such as Antigravity's agent. The text is a task for the agent: it adds the MCP config entry and the rule to its own files, loads the server, checks the connection, and starts to wait for messages. If the agent cannot load MCP servers itself, it asks the user to refresh them. The entry starts the stdio bridge `DATADIR/tools/agent-sessions/anvil-mcp.cjs` with Node, the user folder and the Project. The bridge reads the discovery files at each request, so the entry stays correct after Anvil restarts with a new port and token. It contains no token. Use only a trusted client. The Project must be loaded on this computer; a tool call fails with a clear message until it is.
 
-Read `USERDIR/control/<pid>.json` for a loaded Project. It contains `url`, `token`, `project`, `executable`, `pid` and `created`, the process creation time. Connect to `<url>/mcp` through Streamable HTTP. Send `Authorization: Bearer <token>`.
+A client that can read files can also connect directly. Read `USERDIR/control/<pid>.json` for a loaded Project. It contains `url`, `token`, `project`, `executable`, `pid` and `created`, the process creation time. Connect to `<url>/mcp` through Streamable HTTP. Send `Authorization: Bearer <token>`.
 
 The server supports initialization, tool discovery, tool calls, and ping. It returns JSON responses and supports notifications. It does not provide SSE streams or an arbitrary Lua evaluation tool.
 
 Terminal discovery lives in `USERDIR/control/terminals/<session-id>.json`. Credentials follow Terminal ownership and are revoked on detach or close. They are not printed in model instructions or logs.
+
+## External Agents
+
+An External Agent runs outside Anvil's Terminals, such as Antigravity's agent. It talks with the user and with Pi through a thread of messages. The thread belongs to the Project's Machine: `anvil serve` keeps it in `USERDIR/machine/external`. A local Project uses this PC's own server. A Project on another Machine uses that Machine, so another PC shows the same thread.
+
+The agent calls `external_agent` with `action: "wait"` and its name, such as `agy`. The first wait creates the agent. A wait returns the messages that the user and other agents posted after `after`, or none after `timeout_ms` (at most 25 seconds). The agent calls wait again with the returned `cursor`. A wait does not return the agent's own messages. The agent listens while a wait runs, and for 60 seconds after it. Messages that arrive while it does not listen wait in the thread.
+
+Each message to the agent has a `request` ID. The agent answers with `action: "say"`, its `text`, and `reply_to` set to that ID. Messages carry `from`: `kind` is `user`, `agent` or `self`, with the sender's `name` and, for a Pi, its `terminal` and `project`. A message from a paired device also names that device as `machine`. `list` returns the Project's External Agents with their `listening` state. `read` returns a page of a thread without listening.
+
+A Pi sends to an External Agent with `agent_send` and `agent` set to its name. The result has a `task`: the message's request ID. When the agent answers with `reply_to` set to it, Pi receives the answer as an Anvil reply, as from another Pi. An External Agent sends to a Pi with `agent_send`, a `terminal`, and `from_agent` set to its own name. Pi sees the message from "External Agent agy", and its `anvil_reply` goes into the agent's thread with `reply_to` set to the task. Anvil follows such a reply for one hour.
+
+Run `external_agents:open` in the Command Palette to open an External Agent View in a new Pane. It shows the thread and whether the agent listens. Type in its field and press Enter to post a message from you. A failed post keeps the text and marks the field. Click a message and use Copy to copy its text. The View waits on the Machine for changes, so new messages show at once. It restores with the Workspace. A View device can read a thread but cannot post.
+
+A thread keeps its last 200 messages, each at most 32 KB. A Project has at most 16 External Agents. An agent name uses letters, digits, `.`, `_` and `-`, at most 64 characters.
 
 ## Security
 
@@ -207,7 +230,9 @@ Set `ANVIL_CONTROL=0` before starting Anvil to disable its server. Set `ANVIL_PI
 
 ## Checks
 
-`ui/agent_control.lua` tests editor operations and retry behavior. `ui/control_transport.lua` tests MCP authorization and Project routing. `runtime/net_server.lua` tests socket lifecycle and private credential directories.
+`ui/agent_control.lua` tests editor operations and retry behavior. `ui/control_transport.lua` tests MCP authorization, Project routing, and messages between Pi and External Agents. `runtime/net_server.lua` tests socket lifecycle and private credential directories.
+
+`runtime/machine_external.lua` tests External Agent threads on a real Machine server. `ui/external_agent_view.lua` tests the View against a Machine with its own user folder. `node --test tests/anvil-mcp.test.cjs` tests the stdio bridge.
 
 `node --test tests/pi-control.test.cjs` tests delivery, steering, interruption, settlement, reload receipts, conversation pages, and live activity.
 

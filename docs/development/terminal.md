@@ -272,6 +272,8 @@ Pi launches require explicit provider, model, and thinking choices.
 
 Steering reports delivery and names the active Anvil task when one exists.
 
+The sender's control server follows the original task result. It puts an explicit reply in the original Pi's command queue unless a matching `agent_wait` receives it. The reply uses the same Pi message path as `agent_send`, but creates no task and cannot receive a reply. Forwarded requests follow the result through the original Project or Machine route.
+
 `agent_transcript` reads the current Pi branch through bounded, read-only exchange requests. `pi-inspection.cjs` extracts text and tracks live activity without starting model turns or writing session entries. History pages use entry IDs; truncated messages use UTF-16 offsets.
 
 Reads give compact text by default, which the MCP reply sends without JSON escaping; `format: "json"` gives fields. Thinking text appears only with `include_thinking`. System prompts stay excluded.

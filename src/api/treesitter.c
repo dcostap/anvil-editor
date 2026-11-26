@@ -4,6 +4,7 @@
 #include "../treesitter/memory.h"
 #include "../treesitter/snapshot.h"
 #include "../markdown_parser.h"
+#include "../markdown_delimiters.h"
 #include "../worker_pool.h"
 
 #include <SDL3/SDL_timer.h>
@@ -1271,7 +1272,55 @@ static const luaL_Reg markdown_tree_meta[] = {
   { NULL, NULL }
 };
 
+static bool push_delimiter_pair(void *payload, uint32_t open, uint32_t close, uint32_t width, char marker) {
+  lua_State *L = payload;
+  lua_createtable(L, 4, 0);
+  lua_pushinteger(L, open + 1); lua_rawseti(L, -2, 1);
+  lua_pushinteger(L, close + 1); lua_rawseti(L, -2, 2);
+  lua_pushinteger(L, width); lua_rawseti(L, -2, 3);
+  lua_pushstring(L, marker == '~' ? "strikethrough" : width == 2 ? "strong" : "emphasis");
+  lua_rawseti(L, -2, 4);
+  lua_rawseti(L, -2, lua_rawlen(L, -2) + 1);
+  return true;
+}
+
+/* The caller supplies sorted opaque ranges as one-based, half-open pairs. */
+static int f_markdown_delimiters(lua_State *L) {
+  size_t len;
+  const char *text = luaL_checklstring(L, 1, &len);
+  luaL_argcheck(L, len < UINT32_MAX, 1, "text too long");
+  luaL_checktype(L, 2, LUA_TTABLE);
+  size_t count = lua_rawlen(L, 2);
+  luaL_argcheck(L, count % 2 == 0, 2, "expected opaque range pairs");
+  uint32_t prev = 0;
+  for (size_t i = 1; i <= count; i++) {
+    lua_rawgeti(L, 2, i);
+    lua_Integer n = luaL_checkinteger(L, -1);
+    lua_pop(L, 1);
+    luaL_argcheck(L, n > (lua_Integer)prev && (uint64_t)n <= len + 1, 2, "invalid opaque interval");
+    prev = (uint32_t)n - 1;
+  }
+  lua_newtable(L);
+  MarkdownDelimiters d = {.text = text, .end = (uint32_t)len, .emit = push_delimiter_pair, .payload = L};
+  uint32_t start = 0;
+  bool ok = true;
+  for (size_t i = 1; i <= count && ok; i += 2) {
+    lua_rawgeti(L, 2, i);
+    uint32_t stop = (uint32_t)lua_tointeger(L, -1) - 1;
+    lua_pop(L, 1);
+    ok = markdown_delimiters_feed(&d, start, stop);
+    lua_rawgeti(L, 2, i + 1);
+    start = (uint32_t)lua_tointeger(L, -1) - 1;
+    lua_pop(L, 1);
+  }
+  if (ok) ok = markdown_delimiters_feed(&d, start, (uint32_t)len);
+  markdown_delimiters_free(&d);
+  if (!ok) return luaL_error(L, "out of memory resolving Markdown delimiters");
+  return 1;
+}
+
 static const luaL_Reg lib[] = {
+  { "markdown_delimiters", f_markdown_delimiters },
   { "runtime_version", f_runtime_version },
   { "runtime_abi_version", f_runtime_abi_version },
   { "language_ids", f_language_ids },

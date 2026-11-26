@@ -619,6 +619,57 @@ test.describe("smart indentation", function()
     test.same(view:get_selection_state().selections, { 3, 15, 3, 15 })
   end)
 
+  test.it("indents selected Markdown list items by the same level as a caret", function(context)
+    local source = "- parent\n* note\n* important"
+    local expected = "- parent\n    * note\n    * important\n"
+    local buffer, view = new_editor(context, source, "sample.md")
+    core.set_active_view(view)
+    buffer:set_selection_list({ 2, 3, 2, 3, 3, 3, 3, 3 }, 1)
+    test.ok(command.perform("core:indent"))
+    test.equal(text(buffer), expected)
+
+    set_text(buffer, source)
+    buffer:set_selection(2, 1, 3, 7)
+    test.ok(command.perform("core:indent"))
+    test.equal(text(buffer), expected)
+    test.same(view:get_selection_state().selections, { 2, 5, 3, 11 })
+  end)
+
+  test.it("unindents a selected Markdown list block by one level and keeps its shape", function(context)
+    local buffer, view = new_editor(
+      context, "- a\n    - b\n        - c\n    - d", "sample.md"
+    )
+    core.set_active_view(view)
+    buffer:set_selection(2, 5, 4, 8)
+
+    test.ok(command.perform("core:unindent"))
+
+    test.equal(text(buffer), "- a\n- b\n    - c\n- d\n")
+    test.same(view:get_selection_state().selections, { 2, 1, 4, 4 })
+  end)
+
+  test.it("unindents a loose Markdown list item by one list level", function(context)
+    local buffer, view = new_editor(context, "- a\n\n    - b", "sample.md")
+    core.set_active_view(view)
+    buffer:set_selection(3, 7, 3, 7)
+
+    test.ok(command.perform("core:unindent"))
+
+    test.equal(text(buffer), "- a\n\n- b\n")
+    test.same(view:get_selection_state().selections, { 3, 3, 3, 3 })
+  end)
+
+  test.it("keeps a caret before a Markdown marker on the marker after indent", function(context)
+    local buffer, view = new_editor(context, "- first\n    - second", "sample.md")
+    core.set_active_view(view)
+    buffer:set_selection(2, 5, 2, 5)
+
+    test.ok(command.perform("core:indent"))
+
+    test.equal(text(buffer), "- first\n        - second\n")
+    test.same(view:get_selection_state().selections, { 2, 9, 2, 9 })
+  end)
+
   test.it("removes an empty Markdown list marker on the next Enter", function(context)
     local buffer, view = new_editor(context, "- item\nnext", "sample.md")
     core.set_active_view(view)

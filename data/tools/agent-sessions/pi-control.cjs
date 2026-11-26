@@ -42,20 +42,22 @@ module.exports = function (pi) {
       if (command.action === "interrupt") {
         save();
         ctx.abort();
-      } else if (command.action === "send") {
+      } else if (command.action === "send" || command.action === "reply") {
         if (typeof command.text !== "string" || !command.text.trim() || command.text.length > 32768) {
           throw new Error("Invalid task text");
         }
-        const startsTurn = ctx.isIdle();
-        if (startsTurn) {
+        const isReply = command.action === "reply", startsTurn = ctx.isIdle();
+        if (!isReply && startsTurn) {
           active = {id: command.id, text: command.text, from: command.from, status: "running", created: Date.now()};
           tasks.set(command.id, active);
           lastMessage = null;
         }
-        receipt.task = active?.id;
-        const kind = startsTurn ? "task" : "steering";
-        receipt.canReply = true;
-        if (!startsTurn) receipt.status = "awaiting_reply";
+        const kind = isReply ? "reply" : startsTurn ? "task" : "steering";
+        if (!isReply) {
+          receipt.task = active?.id;
+          receipt.canReply = true;
+          if (!startsTurn) receipt.status = "awaiting_reply";
+        }
         save(); // A reload after dispatch must not send this message again.
         const sender = command.sender;
         const clean = s => typeof s === "string" ? s.replace(/[\x00-\x1f\x7f]/g, " ").trim() : "";
@@ -63,12 +65,16 @@ module.exports = function (pi) {
         if (sender) {
           const short = clean(sender.terminal).slice(0, 8);
           label = clean(sender.name) || `Terminal ${short}`;
-          if (sender.name && sender.ambiguous) label += ` (${short})`;
+          if (sender.name && sender.ambiguous && !sender.external) label += ` (${short})`;
+          if (sender.external) label = `External Agent ${label}`;
           if (sender.other_project) label += ` in ${path.win32.basename(clean(sender.project))}`;
           if (sender.machine) label += ` @ ${clean(sender.machine)}`;
         }
-        pi.sendMessage({ customType: "anvil-" + kind, content: `Anvil agent ${kind} from ${label}\nReply to this request with anvil_reply (request: ${command.id}).\n\n${command.text}`, display: true,
-          details: { requestId: command.id, from: command.from, sender } }, { triggerTurn: true, deliverAs: "steer" });
+        const reference = isReply ? `In reply to request: ${command.reply_to}.`
+          : command.expect_reply === false ? `No reply needed (request: ${command.id}).`
+          : `Reply to this request with anvil_reply (request: ${command.id}).`;
+        pi.sendMessage({ customType: "anvil-" + kind, content: `Anvil agent ${kind} from ${label}\n${reference}\n\n${command.text}`, display: true,
+          details: { requestId: command.id, replyTo: command.reply_to, from: command.from, sender } }, { triggerTurn: true, deliverAs: "steer" });
       } else throw new Error("Unknown Pi control operation");
     } catch (error) {
       receipt.status = "failed";
@@ -84,7 +90,7 @@ module.exports = function (pi) {
   }
 
   pi.registerTool({name: "anvil_reply", label: "Reply to Anvil request",
-    description: "Answer a specific incoming Anvil task or steering message. Use its request ID; do not address a Terminal.",
+    description: "Reply to an incoming Anvil task or steering message by request ID. Anvil sends it back to the original Pi or returns it to a waiting caller.",
     parameters: {type: "object", required: ["request", "text"], properties: {request: {type: "string"}, text: {type: "string"}}},
     async execute(_id, {request, text}) {
       const receipt = receipts.get(request);
@@ -92,7 +98,7 @@ module.exports = function (pi) {
       if (typeof text !== "string" || !text.trim() || Buffer.byteLength(text) > 8192) throw new Error("Reply needs 1 to 8192 bytes");
       if (receipt.result !== undefined && receipt.result !== text) throw new Error("This request already has a reply");
       receipt.result = text; receipt.status = "completed"; save();
-      return {content: [{type: "text", text: "Reply recorded for the sender."}], details: {request}};
+      return {content: [{type: "text", text: "Reply recorded as the task result."}], details: {request}};
     }});
 
   async function exchangeAt(file, primary) {

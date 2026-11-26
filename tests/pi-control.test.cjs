@@ -129,6 +129,25 @@ test("interactive Pi connects, receives each task once, and reports completion o
     await until(() => latest?.tasks?.some(t => t.id === "task-a" && t.status === "completed"));
     assert.equal(latest.tasks.find(t => t.id === "task-b").status, "interrupted");
     assert.equal(sent.length, 5, "Reload must retain task and steering receipts");
+    const answer = {id: "reply-original", action: "reply", reply_to: "original", text: "Tests passed",
+      from: "other-terminal", sender: {terminal: "other-terminal", name: "calm-heron"}};
+    commands = [answer];
+    await until(() => latest.receipts?.some(r => r.id === answer.id));
+    assert.equal(sent[5].customType, "anvil-reply");
+    assert.equal(sent[5].details.replyTo, "original");
+    assert.match(sent[5].content, /^Anvil agent reply from calm-heron\nIn reply to request: original\.\n\nTests passed$/);
+    assert.deepEqual(deliveries[5], {triggerTurn: true, deliverAs: "steer"});
+    assert.ok(!latest.tasks?.some(t => t.id === answer.id));
+    await assert.rejects(tools.get("anvil_reply").execute("call", {request: answer.id, text: "Thanks"}), /No such Anvil request/);
+    commands = [answer, {...answer, id: "reply-other", reply_to: "other"}];
+    await until(() => latest.receipts?.some(r => r.id === "reply-other"));
+    assert.equal(sent.length, 7, "A repeated reply command must not send the message twice");
+    assert.equal(deliveries[6].deliverAs, "steer");
+    // An External Agent names itself. A notice asks for no reply.
+    commands = [{id: "notice-a", action: "send", text: "Build finished", expect_reply: false,
+      sender: {name: "agy", external: "agy", project: "C:\\Projects\\Alpha"}}];
+    await until(() => latest.receipts?.some(r => r.id === "notice-a"));
+    assert.match(sent[7].content, /^Anvil agent (task|steering) from External Agent agy\nNo reply needed \(request: notice-a\)\.\n\nBuild finished$/);
   } finally {
     if (handlers.has("session_shutdown")) await handlers.get("session_shutdown")({ reason: "quit" }, ctx);
     await new Promise(resolve => server.close(resolve));

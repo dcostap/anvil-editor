@@ -1387,6 +1387,27 @@ local function scenario_is_ready()
     core.active_view:show_key({ id = "j" }, 4)
     return false
   end
+  if benchmark.scenario == "external-agent-view" then
+    -- An External Agent thread with fixed messages from the user, the agent and a Pi. The scene reads no Machine.
+    local external_agents = require "plugins.external_agents"
+    if core.active_view and core.active_view:is(external_agents.View) then return true end
+    config.transitions = false
+    local view = external_agents.open("agy")
+    view.closed = true
+    local now = os.time()
+    view.messages = {
+      { seq = 1, time = now - 600, from = { kind = "user", machine = "Laptop" },
+        text = "Check why the parser tests fail on Windows." },
+      { seq = 2, time = now - 540, from = { kind = "self" },
+        text = "The tests compare paths with forward slashes. I asked brave-otter to change the fixture." },
+      { seq = 3, time = now - 300, from = { kind = "agent", name = "brave-otter" },
+        text = "Done. All 214 parser tests pass: https://example.com/a-very-long-link-without-spaces-that-must-wrap-inside-the-word" },
+      { seq = 4, time = now - 60, from = { kind = "self" }, text = "Thanks. The suite is green.\nNext I look at the slow startup." },
+    }
+    view.status = "listening"
+    view.field:on_text("Also check the release build")
+    return false
+  end
   if benchmark.scenario == "file-types-dialog" then
     -- The File Types Dialog with checked, clear and Another Anvil rows. The rows are fixed, so the scene
     -- does not read or change this machine's registry.

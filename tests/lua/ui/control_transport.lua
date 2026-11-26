@@ -56,9 +56,12 @@ test.describe("Anvil MCP Server Dialog", function()
     test.equal(open.url.text, endpoint.url .. "/mcp")
     test.ok(open.copy:activate())
     local text = system.get_clipboard()
-    test.contains(text, open.discovery.text)
-    test.contains(text, "serverUrl")
-    test.contains(text, "Authorization")
+    local config = json.decode(text:match("\n(%b{})\n"))
+    local args = config.mcpServers.anvil.args
+    test.ok(system.get_file_info(args[1]), "The setup must name the installed MCP bridge")
+    test.equal(args[3], system.absolute_path(USERDIR))
+    test.equal(args[5], endpoint.project)
+    test.contains(text, "external_agent")
     test.not_ok(text:find(endpoint.token, 1, true), "The clipboard must not contain the token")
 
     runtime.stop()
@@ -325,9 +328,144 @@ test.describe("Anvil Project routing", function()
       result = assert(protocol_json.decode(result))
       test.not_ok(result.result.isError, result.result.content[1].text)
       test.ok(protocol_json.is_array(result.result.structuredContent.messages), "An empty history must remain a JSON array")
+
+      local author = source:add_client("source-pi")
+      local source_report = {instance = "source-one", receipts = {}, tasks = {}}
+      local remote_report = {instance = "pi-one", receipts = {}, tasks = {}}
+      source.control:exchange("source-pi", source_report)
+      done, result, failure = nil, nil, nil
+      http.post(source.url .. "/mcp", "application/json", {jsonrpc = "2.0", id = 9, method = "tools/call",
+        params = {name = "agent_send", arguments = {project = USERDIR .. "/other-project", terminal = "remote-pi",
+          instance = "pi-one", request_id = "cross-project-question", text = "Any update?"}}}, {
+        headers = {Authorization = "Bearer " .. author.token},
+        on_done = function(success, error, body) done, result, failure = true, body, not success and error end})
+      deadline = system.get_time() + 15
+      repeat source:poll(); remote:poll(); coroutine.yield() until done or system.get_time() > deadline
+      test.ok(done and not failure, failure or "Cross-Project send timed out")
+      test.not_ok(result.result.isError, result.result.content[1].text)
+      local task = result.result.structuredContent.task
+      test.equal(remote.control:exchange("remote-pi", remote_report).commands[1].id, task)
+      remote_report.receipts = {{id = task, status = "completed", result = "Yes"}}
+      remote.control:exchange("remote-pi", remote_report)
+      local answer
+      repeat
+        source:poll(); remote:poll()
+        answer = source.control:exchange("source-pi", source_report).commands[1]
+        if not answer then coroutine.yield() end
+      until answer or system.get_time() > deadline
+      test.not_nil(answer, "A cross-Project reply must reach the source Project")
+      test.equal(answer.reply_to, task)
+      test.equal(answer.text, "Yes")
     end)
     source:close(); remote:close()
     for _, name in ipairs {path, ended, reused, stale_terminal, live_terminal} do os.remove(name) end
     assert(ok, err)
+  end)
+end)
+
+-- Seam: External Agents through MCP, with their threads on this PC's own Machine server.
+test.describe("External Agents through MCP", function()
+  local machine_server = dofile("tests/fixtures/machine_server.lua")
+  local common = require "core.common"
+  local agent_name = require "core.agent_name"
+
+  test.before_each(function(context)
+    context.project = USERDIR .. PATHSEP .. "external-agents-" .. math.floor(system.get_time() * 1000000)
+    test.ok(common.mkdirp(context.project))
+    context.machine = machine_server.start(USERDIR, {context.project})
+    context.server = require("core.control_server").open(require("core.control").new(context.project))
+    context.pi = context.server:add_client("pi-terminal")
+    core.add_thread(function()
+      while context.server.listener do context.server:poll(); coroutine.yield(.01) end
+    end)
+  end)
+
+  test.after_each(function(context)
+    context.server:close()
+    machine_server.stop(context.machine)
+    test.ok(test.remove_tree(context.project))
+  end)
+
+  local function wait_until(predicate, message)
+    local deadline = system.get_time() + 30
+    while system.get_time() < deadline do
+      if predicate() then return end
+      coroutine.yield(.02)
+    end
+    test.fail(message)
+  end
+
+  local function begin(context, name, args, token)
+    local request = {}
+    http.post(context.server.url .. "/mcp", "application/json", {jsonrpc = "2.0", id = 1, method = "tools/call",
+      params = {name = name, arguments = args}}, {headers = {Authorization = "Bearer " .. (token or context.server.token)},
+      on_done = function(ok, err, body) request.done, request.ok, request.body, request.error = true, ok, body, err end})
+    return request
+  end
+
+  local function finish(request)
+    wait_until(function() return request.done end, "MCP response timed out")
+    test.ok(request.ok, request.error)
+    local result = request.body.result
+    test.not_ok(result.isError, result.content[1].text)
+    return result.structuredContent
+  end
+
+  local function tool(context, name, args, token) return finish(begin(context, name, args, token)) end
+
+  local function pi_commands(context, report)
+    report = report or {}
+    report.instance, report.receipts, report.tasks = "pi-one", report.receipts or {}, {}
+    return context.server.control:exchange("pi-terminal", report).commands
+  end
+
+  test.it("carries a Pi's message to a waiting External Agent and its answer back", function(context)
+    pi_commands(context)
+    local first = tool(context, "external_agent", {action = "wait", agent = "agy", timeout_ms = 0})
+    test.equal(#first.messages, 0)
+    local waiting = begin(context, "external_agent", {action = "wait", agent = "agy", after = first.cursor})
+    local sent = tool(context, "agent_send", {agent = "agy", text = "Check the tests"}, context.pi.token)
+    test.equal(sent.status, "delivered")
+    local page = finish(waiting)
+    test.equal(page.messages[1].text, "Check the tests")
+    test.equal(page.messages[1].request, sent.task)
+    test.equal(page.messages[1].from.name, agent_name.for_terminal("pi-terminal"))
+
+    tool(context, "external_agent", {action = "say", agent = "agy", text = "All green", reply_to = sent.task})
+    local reply
+    wait_until(function()
+      reply = pi_commands(context)[1]
+      return reply ~= nil
+    end, "The Pi did not receive the External Agent's answer")
+    test.equal(reply.action, "reply")
+    test.equal(reply.reply_to, sent.task)
+    test.equal(reply.text, "All green")
+    test.equal(reply.sender.name, "agy")
+    test.equal(reply.sender.external, "agy")
+
+    local listed = tool(context, "external_agent", {action = "list"})
+    test.equal(listed.agents[1].name, "agy")
+    test.ok(listed.agents[1].listening)
+  end)
+
+  test.it("names an External Agent's message to a Pi and puts the Pi's reply in its thread", function(context)
+    pi_commands(context)
+    local first = tool(context, "external_agent", {action = "wait", agent = "agy", timeout_ms = 0})
+    -- No instance or request ID: the message goes to the Terminal's current conversation.
+    local sent = tool(context, "agent_send", {terminal = "pi-terminal", text = "Status?", from_agent = "agy"})
+    local received = pi_commands(context)[1]
+    test.equal(received.id, sent.task)
+    test.equal(received.sender.name, "agy")
+    test.equal(received.sender.external, "agy")
+    local notice = tool(context, "agent_send", {terminal = "pi-terminal", text = "FYI", expect_reply = false})
+    test.equal(pi_commands(context, {receipts = {{id = sent.task, status = "accepted", task = sent.task}}})[1].expect_reply,
+      false)
+    test.not_equal(notice.task, sent.task)
+
+    pi_commands(context, {receipts = {{id = sent.task, status = "completed", result = "Busy with the parser"}}})
+    local page = tool(context, "external_agent", {action = "wait", agent = "agy", after = first.cursor})
+    test.equal(page.messages[1].text, "Busy with the parser")
+    test.equal(page.messages[1].reply_to, sent.task)
+    test.equal(page.messages[1].from.name, agent_name.for_terminal("pi-terminal"))
   end)
 end)

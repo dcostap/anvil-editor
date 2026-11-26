@@ -8624,10 +8624,12 @@ function TextView:draw_line_text(line, x, y)
         local col2 = fragment.source_col2 or col1
         local from = math.max(col1, row_start)
         local to = math.min(col2, row_end)
-        local anchored_widget = col1 == col2
-          and fragment.widget and fragment.widget.draw
-          and col1 >= row_start
+        -- An empty source range, such as a default callout title, belongs to
+        -- the row that holds its column.
+        local anchored = col1 == col2 and col1 >= row_start
           and (col1 < row_end or (last_row and col1 == row_end))
+        local anchored_widget = anchored
+          and fragment.widget and fragment.widget.draw
         if anchored_widget and not fragment.hidden then
           local width = fragment.width or fragment.widget.width or 0
           -- Column mapping places the anchor caret after this widget; drawing
@@ -8639,7 +8641,7 @@ function TextView:draw_line_text(line, x, y)
             self, fragment, anchor_x, content_y, content_height,
             "wrapped anchored widget"
           )
-        elseif from < to and not fragment.hidden then
+        elseif (from < to or anchored) and not fragment.hidden then
           local font = render_fragment_font(self, fragment)
           font:set_tab_size(indent_size)
           if fragment.widget and fragment.widget.draw and from == col1 and to == col2 then
@@ -8656,7 +8658,8 @@ function TextView:draw_line_text(line, x, y)
             local visible_to = math.min(to, text_col2)
             local text_from = math.min(#text + 1, visible_from - text_col1 + 1)
             local text_to = math.min(#text, visible_to - text_col1)
-            local segment = text_to >= text_from and text:sub(text_from, text_to) or ""
+            local segment = anchored and text
+              or text_to >= text_from and text:sub(text_from, text_to) or ""
             if segment ~= "" then
               local color = render_fragment_color(fragment)
               local segment_y = content_y

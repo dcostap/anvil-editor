@@ -19,7 +19,17 @@ const server = http.createServer(async (req, res) => {
       throw new Error("Pi did not receive Anvil instructions");
     }
     let name, args, answer;
-    if (!user.includes("ANVIL_PARENT_TASK")) {
+    if (user.includes("ANVIL_EXPLICIT_ANSWER")) {
+      answer = "ANVIL_PARENT_RESULT";
+    } else if (user.includes("ANVIL_EXPLICIT_TASK")) {
+      if (messages.some(m => m.role === "tool" && text(m.content).includes("Reply recorded"))) {
+        answer = "ANVIL_CHILD_RESULT";
+      } else {
+        const request = user.match(/Reply to this request with anvil_reply \(request: ([a-f0-9]+)\)\.\s*ANVIL_EXPLICIT_TASK/)?.[1];
+        if (!request) throw new Error("No request ID for the explicit reply");
+        name = "anvil_reply"; args = {request, text: "ANVIL_EXPLICIT_ANSWER"};
+      }
+    } else if (!user.includes("ANVIL_PARENT_TASK")) {
       if (!user.includes("ANVIL_CHILD_TASK")) throw new Error("Unknown test task: " + user.slice(-500));
       answer = "ANVIL_CHILD_RESULT";
     } else {
@@ -37,6 +47,8 @@ const server = http.createServer(async (req, res) => {
       } else if (data.operation && data.status === "starting") {
         name = "operation_read"; args = {operation: data.operation};
         await new Promise(resolve => setTimeout(resolve, 250));
+      } else if (call.function.name.endsWith("agent_send") && data.task) {
+        answer = "ANVIL_PARENT_RESULT";
       } else if (data.terminal && data.instance && data.task && data.status !== "completed") {
         if (data.status === "failed" || data.status === "interrupted") throw new Error(JSON.stringify(data));
         name = "agent_wait"; args = {terminal: data.terminal, instance: data.instance, task: data.task, timeout_ms: 10000};
@@ -47,12 +59,14 @@ const server = http.createServer(async (req, res) => {
         if (!/ assistant\]\nANVIL_CHILD_RESULT/.test(data) || !/ anvil-task from [^\]]+\]\n/.test(data)) {
           throw new Error("Pi did not receive the child's conversation: " + data);
         }
-        answer = "ANVIL_PARENT_RESULT";
+        name = "agent_send";
+        args = {terminal: JSON.parse(call.function.arguments).terminal,
+          instance: data.match(/^instance ([^\n]+)/)[1], text: "ANVIL_EXPLICIT_TASK", request_id: "explicit-reply"};
       }
       else throw new Error("Unexpected tool result: " + JSON.stringify(data));
     }
     const delta = answer ? {role: "assistant", content: answer} : {role: "assistant", tool_calls: [{index: 0,
-      id: "call_" + messages.length, type: "function", function: {name: "mcp__anvil__" + name, arguments: JSON.stringify(args)}}]};
+      id: "call_" + messages.length, type: "function", function: {name: name === "anvil_reply" ? name : "mcp__anvil__" + name, arguments: JSON.stringify(args)}}]};
     res.writeHead(200, {"content-type": "text/event-stream"});
     const send = (delta, finish) => res.write("data: " + JSON.stringify({id: "scripted", object: "chat.completion.chunk",
       created: 1, model: "scripted", choices: [{index: 0, delta, finish_reason: finish}]}) + "\n\n");

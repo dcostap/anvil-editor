@@ -691,6 +691,10 @@ Successful input ends this state, even if the user then deletes that input. Rest
 **Anvil Agent**:
 An Anvil Agent is an agent running inside Anvil.
 
+**External Agent**:
+An agent that runs outside Anvil's Terminal Sessions, such as Antigravity's agent, and talks with the user and Anvil Agents through Anvil's MCP server. It has a name that it chooses, unique in its Project, and one thread of messages on the Project's Machine.
+_Avoid_: outside agent, remote agent, agy session
+
 **Agent Session**:
 A coding agent's saved conversation, such as a Pi session. When a Terminal Session revives after its shell ended, it resumes the Agent Session that its agent had open.
 _Avoid_: agent conversation, Pi session file

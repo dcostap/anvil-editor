@@ -54,7 +54,10 @@ function conversationEntry(entry, options, toolChars) {
     if (state.capped) result.capped = true;
     if (message.role === "custom") {
       result.custom_type = message.customType;
-      if (message.customType === "anvil-task" || message.customType === "anvil-steering") result.from = message.details?.from;
+      if (message.customType === "anvil-task" || message.customType === "anvil-steering" || message.customType === "anvil-reply") {
+        result.from = message.details?.from;
+        result.reply_to = message.details?.replyTo;
+      }
     }
     if (message.role === "assistant") result.stop_reason = message.stopReason;
   }

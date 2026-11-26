@@ -14,11 +14,14 @@ local canonical_types = {
   quote = "quote", cite = "quote",
 }
 
+-- Material Design glyphs from the bundled Nerd Font, drawn with `live_fonts.icon`.
 local icons = {
-  note = "✎", abstract = "≡", info = "i", todo = "☑",
-  tip = "✦", success = "✓", question = "?", warning = "!",
-  failure = "×", danger = "⚡", bug = "●", example = "◆", quote = "❝",
+  note = "\u{F0CB6}", abstract = "\u{F0A38}", info = "\u{F02FD}", todo = "\u{F0134}",
+  tip = "\u{F0238}", success = "\u{F012C}", question = "\u{F0625}", warning = "\u{F002A}",
+  failure = "\u{F0156}", danger = "\u{F140B}", bug = "\u{F0A30}", example = "\u{F0279}",
+  quote = "\u{F027E}",
 }
+callouts.fold_icons = { collapsed = " \u{F0142}", expanded = " \u{F0140}" }
 
 local function quote_prefix_ranges(text)
   local ranges, col = {}, 1

@@ -490,6 +490,9 @@ It has no baseline. Run it with `--report-only` and look at the captured screens
 Use `--scenario context-menu-query` for the Markdown Context Menu with a typed query, which finds an item of a submenu.
 It has no baseline. Run it with `--report-only` and look at the captured screenshot.
 
+Use `--scenario external-agent-view` for an External Agent View with fixed messages from the user, the agent and a Pi, a long word that wraps, and typed text in its field.
+It has no baseline. Run it with `--report-only` and look at the captured screenshot.
+
 Use `--scenario image-zoom` on both renderers to measure the Image Overlay while it zooms and pans on each frame.
 The zoom goes from fit to the largest scale and back. Compare the frame times and the final screenshots of the two renderers.
 The software renderer must draw only the visible part of a zoomed image. `anvil:image-scale` checks that function.

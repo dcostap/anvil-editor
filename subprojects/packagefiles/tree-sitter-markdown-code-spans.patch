@@ -1,0 +1,106 @@
+diff --git a/tree-sitter-markdown-inline/src/scanner.c b/tree-sitter-markdown-inline/src/scanner.c
+index 51cdada..506f90f 100644
+--- a/tree-sitter-markdown-inline/src/scanner.c
++++ b/tree-sitter-markdown-inline/src/scanner.c
+@@ -1,4 +1,5 @@
+ #include "tree_sitter/parser.h"
++#include <string.h>
+ 
+ #ifdef _MSC_VER
+ #define UNUSED __pragma(warning(suppress : 4101))
+@@ -58,7 +59,7 @@ static bool error(TSLexer *lexer) {
+ typedef struct {
+     // Parser state flags
+     uint8_t state;
+-    uint8_t code_span_delimiter_length;
++    uint32_t code_content_length;
+     uint8_t latex_span_delimiter_length;
+     // The number of characters remaining in the currrent emphasis delimiter
+     // run.
+@@ -70,7 +71,8 @@ typedef struct {
+ static unsigned serialize(Scanner *s, char *buffer) {
+     unsigned size = 0;
+     buffer[size++] = (char)s->state;
+-    buffer[size++] = (char)s->code_span_delimiter_length;
++    memcpy(buffer + size, &s->code_content_length, sizeof(s->code_content_length));
++    size += sizeof(s->code_content_length);
+     buffer[size++] = (char)s->latex_span_delimiter_length;
+     buffer[size++] = (char)s->num_emphasis_delimiters_left;
+     return size;
+@@ -80,13 +82,14 @@ static unsigned serialize(Scanner *s, char *buffer) {
+ // `serizalize` and `deserialize` should be fully symmetric.
+ static void deserialize(Scanner *s, const char *buffer, unsigned length) {
+     s->state = 0;
+-    s->code_span_delimiter_length = 0;
++    s->code_content_length = 0;
+     s->latex_span_delimiter_length = 0;
+     s->num_emphasis_delimiters_left = 0;
+-    if (length > 0) {
++    if (length == 3 + sizeof(s->code_content_length)) {
+         size_t size = 0;
+         s->state = (uint8_t)buffer[size++];
+-        s->code_span_delimiter_length = (uint8_t)buffer[size++];
++        memcpy(&s->code_content_length, buffer + size, sizeof(s->code_content_length));
++        size += sizeof(s->code_content_length);
+         s->latex_span_delimiter_length = (uint8_t)buffer[size++];
+         s->num_emphasis_delimiters_left = (uint8_t)buffer[size++];
+     }
+@@ -138,9 +141,34 @@ static bool parse_leaf_delimiter(TSLexer *lexer, uint8_t *delimiter_length,
+ 
+ static bool parse_backtick(Scanner *s, TSLexer *lexer,
+                            const bool *valid_symbols) {
+-    return parse_leaf_delimiter(lexer, &s->code_span_delimiter_length,
+-                                valid_symbols, '`', CODE_SPAN_START,
+-                                CODE_SPAN_CLOSE);
++    if (!valid_symbols[CODE_SPAN_START]) return false;
++    uint32_t width = 0;
++    while (lexer->lookahead == '`') {
++        width++;
++        lexer->advance(lexer, false);
++    }
++    lexer->mark_end(lexer);
++    uint32_t content = 0;
++    while (!lexer->eof(lexer)) {
++        if (lexer->lookahead != '`') {
++            content++;
++            lexer->advance(lexer, false);
++            continue;
++        }
++        uint32_t run = 0;
++        while (lexer->lookahead == '`') {
++            run++;
++            lexer->advance(lexer, false);
++        }
++        if (run == width) {
++            s->code_content_length = content;
++            lexer->result_symbol = CODE_SPAN_START;
++            return true;
++        }
++        content += run;
++    }
++    lexer->result_symbol = UNCLOSED_SPAN;
++    return valid_symbols[UNCLOSED_SPAN];
+ }
+ 
+ static bool parse_dollar(Scanner *s, TSLexer *lexer,
+@@ -344,6 +372,20 @@ static bool scan(Scanner *s, TSLexer *lexer, const bool *valid_symbols) {
+         return error(lexer);
+     }
+ 
++    // The opener already found the matching run. Nothing between the two
++    // delimiters is Markdown, including HTML tags and other backtick runs.
++    if (s->code_content_length && valid_symbols[CODE_SPAN_CLOSE]) {
++        for (uint32_t n = s->code_content_length; n; n--) {
++            if (lexer->eof(lexer)) return false;
++            lexer->advance(lexer, true);
++        }
++        if (lexer->lookahead != '`') return false;
++        do { lexer->advance(lexer, false); } while (lexer->lookahead == '`');
++        s->code_content_length = 0;
++        lexer->result_symbol = CODE_SPAN_CLOSE;
++        return true;
++    }
++
+     // Decide which tokens to consider based on the first non-whitespace
+     // character
+     switch (lexer->lookahead) {

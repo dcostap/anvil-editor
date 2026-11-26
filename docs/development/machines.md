@@ -44,6 +44,10 @@ Machine replies carry untrusted names and paths. `json.decode` stops at the firs
 
 The server keeps at most 16 searches. A new search ends the oldest. A read that waits for an ended search gets `not_found`.
 
+`core.serve_external` keeps the threads of External Agents, one file for each Project in `USERDIR/machine/external`. `external.read {project, agent, after, wait, listen, reply_to, timeout_ms}` gives the messages after `after`, the `cursor`, the thread's last `seq` and `listening`. `listen` is the agent's own read: it creates the agent, skips the agent's own messages, and marks the agent as listening. `reply_to` gives the messages that answer one request. With `wait`, an empty read waits at most 25 seconds for a message. A change of `listening` also answers the waits of other readers, so a View shows it at once.
+
+`external.post {project, agent, text, from, reply_to, expect_reply}` adds a message and answers the waits. A message from anyone but the agent gets a `request` ID. `external.list {project}` gives the agents. Posting and creating an agent need Full control. Run `runtime/machine_external.lua` after changes.
+
 Run `runtime/machine_serve.lua` and the `launch-machine-server` shell probe after changes. It listens on loopback only. At start it writes `USERDIR/machine/server.json` with its port, token, process ID, Machine ID and epoch.
 
 The folder is private. The Machine ID is in `USERDIR/machine/id` and stays across restarts. Each start gets a new epoch and a new token.

@@ -35,6 +35,7 @@ local core_plugins = {
   intellij_find = true,
   keyboard_input_checker = true,
   keyboard_map = true,
+  external_agents = true,
   anvil_language_json = true,
   anvil_language_rust = true,
   selection_surround = true,

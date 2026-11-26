@@ -758,6 +758,86 @@ local function markdown_parent_list_indent(buffer, line, indent_length)
   end
 end
 
+-- Tab and Shift+Tab move Markdown list items by whole list levels. A caret
+-- moves its item; a selection that starts at an item moves its lines as one
+-- block, so nested items keep their shape. Tab adds four spaces. Shift+Tab
+-- moves to the parent item's indentation, or four spaces back without one.
+-- A literal tab before a marker is parsed as indented code by the semantic
+-- grammar, so the new indentation is always spaces, also in hard-tab Buffers.
+-- Returns false when a selection is not on a list item.
+local function shift_markdown_list_levels(buffer, outdent)
+  local new_indents, moved = {}, 0
+  for _, line1, _, line2 in buffer_multiline_selections(true) do
+    local first = line1
+    while first < line2 and buffer.lines[first]:match("^%s*$") do
+      first = first + 1
+    end
+    local first_text = buffer.lines[first] or ""
+    local content_start, indent_length = markdown_list_content_start(
+      buffer, first, first_text, true
+    )
+    if not content_start then return false end
+    local width = markdown_indent_width(first_text:sub(1, indent_length))
+    local target = width + 4
+    if outdent then
+      local parent = markdown_parent_list_indent(buffer, first, indent_length)
+      target = parent and #parent or math.max(0, width - 4)
+    end
+    for line = first, line2 do
+      local text = buffer.lines[line]
+      if new_indents[line] == nil and not text:match("^%s*$") then
+        local leading = text:match("^[\t ]*")
+        new_indents[line] = string.rep(
+          " ", math.max(0, markdown_indent_width(leading) + target - width)
+        )
+      end
+    end
+    moved = moved + 1
+  end
+  if moved == 0 then return false end
+
+  local edits, old_lengths = {}, {}
+  for line, indent in pairs(new_indents) do
+    local leading = buffer.lines[line]:match("^[\t ]*")
+    old_lengths[line] = #leading
+    if indent ~= leading then
+      edits[#edits + 1] = {
+        line1 = line, col1 = 1, line2 = line, col2 = #leading + 1, text = indent,
+      }
+    end
+  end
+  -- A position in the text keeps its place; one in the old indentation stays
+  -- inside the new one.
+  local selections = {}
+  for i = 1, #buffer.selections, 2 do
+    local line, col = buffer.selections[i], buffer.selections[i + 1]
+    local indent = new_indents[line]
+    if indent then
+      local old_length = old_lengths[line]
+      if col > old_length then
+        col = col + #indent - old_length
+      else
+        col = math.min(col, #indent + 1)
+      end
+    end
+    selections[i], selections[i + 1] = line, col
+  end
+  if #edits > 0 then
+    buffer:apply_edits(edits, {
+      type = outdent and "remove" or "insert",
+      selections = selections,
+      last_selection = buffer.last_selection,
+      merge_cursors = false,
+    })
+    buffer:merge_cursors()
+  end
+  core.log_quiet(
+    "Markdown %s moved %d list selection(s) in %s",
+    outdent and "unindent" or "indent", moved, buffer:get_name()
+  )
+  return true
+end
+
 local function markdown_marker_only_task_end_col(line_text)
   local text = tostring(line_text or ""):gsub("\n$", "")
   if text:match("^[\t ]*[-%+%*][\t ]+%[[ xX]%]$")
@@ -2293,83 +2373,42 @@ local commands = {
         local content_start, indent_length, task_start = markdown_list_content_start(
           dv.buffer, line1, line_text, true
         )
-        indent_length = indent_length or #(line_text:match("^[\t ]*") or "")
-        local empty_list_item = markdown_empty_list_item(
-          dv.buffer, line1, col1, line_text
-        )
-        local action
         if content_start and col1 == content_start then
-          action = task_start and "remove_task" or "remove_marker"
-        elseif empty_list_item then
-          action = indent_length > 0 and "outdent" or "clear"
-        end
-        if action then
           list_action_count = list_action_count + 1
           list_actions[#list_actions + 1] = {
             idx = idx,
-            line1 = line1,
-            col1 = col1,
-            line2 = line2,
-            col2 = col2,
-            indent_length = indent_length,
+            line = line1,
+            col = col1,
             prefix_start = task_start or (indent_length + 1),
-            action = action,
+            task = task_start ~= nil,
           }
         end
       end
     end
     if selection_count > 0 and list_action_count == selection_count then
       for _, item in ipairs(list_actions) do
-        if item.action == "clear" then
-          local edit = {
-            line1 = item.line1,
-            col1 = 1,
-            line2 = item.line1,
-            col2 = item.col1,
-            text = "",
-            idx = item.idx,
-          }
-          local selections, last_selection = dv.buffer:selections_after_edits(
-            { edit }, { [item.idx] = "start" }, dv.buffer.last_selection
-          )
-          dv.buffer:apply_edits({ edit }, {
-            type = "remove",
-            selections = selections,
-            last_selection = last_selection,
-            merge_cursors = false,
-          })
-          core.log_quiet("Markdown backspace removed empty list marker in %s at %d:%d", dv.buffer:get_name(), item.line1, item.col1)
-        elseif item.action == "remove_task" or item.action == "remove_marker" then
-          local edit = {
-            line1 = item.line1,
-            col1 = item.prefix_start,
-            line2 = item.line1,
-            col2 = item.col1,
-            text = "",
-            idx = item.idx,
-          }
-          local selections, last_selection = dv.buffer:selections_after_edits(
-            { edit }, { [item.idx] = "start" }, dv.buffer.last_selection
-          )
-          dv.buffer:apply_edits({ edit }, {
-            type = "remove",
-            selections = selections,
-            last_selection = last_selection,
-            merge_cursors = false,
-          })
-          core.log_quiet(
-            "Markdown backspace removed %s in %s at %d:%d",
-            item.action == "remove_task" and "task marker" or "list marker",
-            dv.buffer:get_name(), item.line1, item.col1
-          )
-        else
-          local line1, col1, line2, col2 = dv.buffer:indent_text(
-            true, item.line1, item.col1, item.line2, item.col2
-          )
-          local content_col = math.max(1, item.col1 - item.indent_length)
-          dv.buffer:set_selections(item.idx, line1, content_col, line2, content_col)
-          core.log_quiet("Markdown backspace outdented list item in %s at %d:%d", dv.buffer:get_name(), item.line1, item.col1)
-        end
+        local edit = {
+          line1 = item.line,
+          col1 = item.prefix_start,
+          line2 = item.line,
+          col2 = item.col,
+          text = "",
+          idx = item.idx,
+        }
+        local selections, last_selection = dv.buffer:selections_after_edits(
+          { edit }, { [item.idx] = "start" }, dv.buffer.last_selection
+        )
+        dv.buffer:apply_edits({ edit }, {
+          type = "remove",
+          selections = selections,
+          last_selection = last_selection,
+          merge_cursors = false,
+        })
+        core.log_quiet(
+          "Markdown backspace removed %s in %s at %d:%d",
+          item.task and "task marker" or "list marker",
+          dv.buffer:get_name(), item.line, item.col
+        )
       end
       return
     end
@@ -2532,56 +2571,7 @@ local commands = {
 
   ["core:indent"] = function(dv)
     if not can_edit(dv, "indent") then return end
-    local list_indent_edits, list_indent_lines = {}, {}
-    local selection_count, list_indent_count = 0, 0
-    for _, line1, col1, line2, col2 in buffer_multiline_selections(true) do
-      selection_count = selection_count + 1
-      if line1 == line2 and col1 == col2 then
-        local line_text = dv.buffer.lines[line1] or ""
-        local content_start, indent_length = markdown_list_content_start(
-          dv.buffer, line1, line_text, true
-        )
-        if content_start then
-          list_indent_count = list_indent_count + 1
-          if not list_indent_lines[line1] then
-            local indent_end = line_text:find("[^\t ]")
-            indent_end = indent_end and indent_end - 1 or 0
-            -- A literal tab before a Markdown marker is parsed as indented
-            -- code by the semantic grammar. Use the interoperable four-space
-            -- nesting step and expand the existing prefix to spaces even when
-            -- the Buffer otherwise prefers tabs.
-            local indent = markdown_space_indent(line_text, indent_end) .. "    "
-            list_indent_lines[line1] = true
-            list_indent_edits[#list_indent_edits + 1] = {
-              line1 = line1,
-              col1 = 1,
-              line2 = line1,
-              col2 = (indent_end or 0) + 1,
-              text = indent,
-              idx = 0,
-            }
-          end
-        end
-      end
-    end
-    if selection_count > 0 and list_indent_count == selection_count then
-      if #list_indent_edits > 0 then
-        local selections, last_selection = dv.buffer:selections_after_edits(
-          list_indent_edits, nil, dv.buffer.last_selection
-        )
-        dv.buffer:apply_edits(list_indent_edits, {
-          type = "insert",
-          selections = selections,
-          last_selection = last_selection,
-          merge_cursors = false,
-        })
-      end
-      core.log_quiet(
-        "Markdown indent moved %d eligible list item(s) in %s",
-        #list_indent_edits, dv.buffer:get_name()
-      )
-      return
-    end
+    if shift_markdown_list_levels(dv.buffer, false) then return end
     local repair_edits, final_by_idx = {}, {}
     local selection_count, repairable_count = 0, 0
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
@@ -2648,42 +2638,14 @@ local commands = {
 
   ["core:unindent"] = function(dv)
     if not can_edit(dv, "unindent") then return end
+    if shift_markdown_list_levels(dv.buffer, true) then return end
     local undo_idx = dv.buffer.undo_stack.idx
     local indented_lines = {}
     for idx, line1, col1, line2, col2 in buffer_multiline_selections(true) do
-      local line_text = dv.buffer.lines[line1] or ""
-      local content_start = markdown_list_content_start(
-        dv.buffer, line1, line_text, true
+      local l1, c1, l2, c2 = dv.buffer:indent_text(
+        true, line1, col1, line2, col2, indented_lines
       )
-      local keep_list_caret_position = line1 == line2 and col1 == col2
-        and content_start ~= nil
-      local old_indent_length = #(line_text:match("^[\t ]*") or "")
-      local l1, c1, l2, c2
-      local parent_indent = keep_list_caret_position and old_indent_length > 0
-        and markdown_parent_list_indent(dv.buffer, line1, old_indent_length)
-      if keep_list_caret_position and indented_lines[line1] then
-        l1, c1, l2, c2 = line1, col1, line2, col2
-      elseif parent_indent then
-        indented_lines[line1] = true
-        dv.buffer:apply_edits({ {
-          line1 = line1, col1 = 1, line2 = line1,
-          col2 = old_indent_length + 1, text = parent_indent,
-        } }, { type = "remove", merge_cursors = false })
-        l1, c1, l2, c2 = line1, col1, line2, col2
-      elseif keep_list_caret_position and old_indent_length == 0 then
-        l1, c1, l2, c2 = line1, col1, line2, col2
-      else
-        l1, c1, l2, c2 = dv.buffer:indent_text(
-          true, line1, col1, line2, col2, indented_lines
-        )
-      end
       if l1 then
-        if keep_list_caret_position then
-          local new_line_text = dv.buffer.lines[l1] or ""
-          local new_indent_length = #(new_line_text:match("^[\t ]*") or "")
-          c1 = math.max(1, col1 - (old_indent_length - new_indent_length))
-          c2 = c1
-        end
         dv.buffer:set_selections(idx, l1, c1, l2, c2)
       end
     end

@@ -252,14 +252,12 @@ A width change keeps the top of the live screen on the same text. Saved history 
 
 ## Tree-sitter and LuaJIT
 
-Current Anvil Tree-sitter Markdown patch:
+Current Anvil Tree-sitter Markdown patches:
 
-- `subprojects/packagefiles/tree-sitter-markdown-scanner-state-bounds.patch`
-- listed by `diff_files` in `subprojects/tree-sitter-markdown.wrap`
-- prevents the external scanner from closing an empty block stack
-- keeps serialized scanner state within Tree-sitter's fixed buffer
+- `tree-sitter-markdown-scanner-state-bounds.patch` prevents an empty block stack pop and bounds serialized scanner state.
+- `tree-sitter-markdown-code-spans.patch` keeps code literal until a backtick run matches the opening width.
 
-When updating Tree-sitter Markdown, verify this patch still applies. Remove it only after upstream includes equivalent scanner bounds.
+Both patches live in `subprojects/packagefiles`. When updating the wrap, verify both changes or check for equivalent upstream fixes.
 
 The LuaJIT wrap pins a commit, not the `v2.1` branch. A branch refresh can pull an untested compiler change. Upstream commit `b310887` miscompiles some table stores on x64.
 

@@ -3,6 +3,20 @@ local harness = dofile("tests/fixtures/markdown/inline_harness.lua")
 
 local presentation = {
   {
+    "a Unicode symbol after a word cannot open emphasis",
+    "a*©foo*",
+    { { text = "a*©foo*", style = "normal" } },
+  },
+  {
+    "unpaired markers in code cannot consume surrounding emphasis",
+    "*left `* _ ~` right*",
+    {
+      { text = "left ", style = "emphasis" },
+      { text = "* _ ~", style = "code" },
+      { text = " right", style = "emphasis" },
+    },
+  },
+  {
     "nested bold and italic compose",
     "**outer *inner* end**",
     {
@@ -20,6 +34,36 @@ local presentation = {
       { text = " and ", style = "normal", highlight = true },
       { text = "italic", style = "emphasis", highlight = true },
     },
+  },
+  {
+    "approximation signs do not close strikethrough",
+    "~9–12 fps, our `base3` ~7.5 fps. Higher claims (~20–25 fps).",
+    {
+      { text = "~9–12 fps, our ", style = "normal" },
+      { text = "base3", style = "code" },
+      { text = " ~7.5 fps. Higher claims (~20–25 fps).", style = "normal" },
+    },
+  },
+  {
+    "single tildes can strike text beside punctuation",
+    "(~old~), ~new~.",
+    {
+      { text = "(", style = "normal" },
+      { text = "old", style = "normal", strike = true },
+      { text = "), ", style = "normal" },
+      { text = "new", style = "normal", strike = true },
+      { text = ".", style = "normal" },
+    },
+  },
+  {
+    "mismatched tilde runs stay visible",
+    "a ~~one~.",
+    { { text = "a ~~one~.", style = "normal" } },
+  },
+  {
+    "strikethrough keeps UTF-8 text",
+    "~~été~~",
+    { { text = "été", style = "normal", strike = true } },
   },
   {
     "strikethrough keeps nested bold",
@@ -42,6 +86,16 @@ local presentation = {
     { { text = "==plain== [[Note]] %%text%% **bold**", style = "code" } },
   },
   {
+    "a longer backtick run stays inside code with its padding",
+    "` foo `` bar `",
+    { { text = " foo `` bar ", style = "code" } },
+  },
+  {
+    "HTML-like code ends at the first matching backtick run",
+    '`<a href="`">`',
+    { { text = '<a href="', style = "code" }, { text = '">`', style = "normal" } },
+  },
+  {
     "code keeps typed padding in Live Preview",
     "` padded `",
     { { text = " padded ", style = "code" } },
@@ -61,6 +115,7 @@ local presentation = {
 -- These check incremental consistency, not CommonMark compliance. The separate
 -- standards audit supplies independent expected text and formatting.
 local edits = {
+  { "a nested run becoming literal", "*foo**bar**baz*", 10, 12, "*foo**barbaz*" },
   { "a space before closing bold", "**test**", 7, " ", "**test **" },
   { "a space before closing italic", "*test*", 6, " ", "*test *" },
   { "a deleted bold closer", "**test**", 7, 9, "**test" },
