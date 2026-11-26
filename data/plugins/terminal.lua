@@ -748,8 +748,11 @@ function TerminalView:get_cwd()
     or system.getcwd()
 end
 
+-- A busy Terminal keeps its Pane. An existing host can run a command, such as Pi, before its first busy report, so
+-- until then it counts as busy, as for a close.
 function TerminalView:can_open_view(view)
-  return self.busy ~= true or view.terminal_capture_owner == self.terminal_capture_owner
+  local busy = self.busy == true or self.busy == nil and self.existing_host
+  return not busy or view.terminal_capture_owner == self.terminal_capture_owner
 end
 
 function TerminalView:is_disposable(next_view)

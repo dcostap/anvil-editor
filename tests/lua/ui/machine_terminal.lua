@@ -312,6 +312,37 @@ test.describe("Terminal on a Machine", function()
     end, "Closing the reattached View kept its shell running")
   end)
 
+  test.it("keeps an opened session's Pane until its host reports that no command runs", function(context)
+    local ids = {}
+    for i = 1, 2 do
+      local view = open(context, {})
+      wait_text(view, "ANVIL_ECHO_READY:project")
+      ids[i] = view.session_id
+      view:detach_session()
+    end
+    wait_until(context.views[1], function()
+      local listed = 0
+      for _, item in ipairs(require("core.pane_report").build().terminals or {}) do
+        if item.id == ids[1] or item.id == ids[2] then listed = listed + 1 end
+      end
+      return listed == 2
+    end, "The Pane report does not list both sessions")
+
+    -- The Sidebar opens each session in the current Pane. The first one can run Pi, so it must keep its Pane.
+    local first = assert(terminal.open_session(ids[1]))
+    context.views[#context.views + 1] = first
+    test.is_nil(first.busy, "The host reported its state too early for this check")
+    local second = assert(terminal.open_session(ids[2]))
+    context.views[#context.views + 1] = second
+    test.equal(panes.pane_for_view(first).current_view, first, "The second session replaced the first")
+    test.ok(panes.pane_for_view(second) ~= panes.pane_for_view(first))
+    -- A View ends its shell on the Machine only after it attached.
+    wait_text(first, "ANVIL_ECHO_READY")
+    wait_text(second, "ANVIL_ECHO_READY")
+    first:on_close(true)
+    second:on_close(true)
+  end)
+
   test.it("starts a new shell on the Machine when the restored session is gone", function(context)
     local gone = string.rep("0", 32)
     local stale = terminal.from_state({cwd=context.project, shell=ECHO_SHELL, session_id=gone}, nil, "workspace")
