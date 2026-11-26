@@ -86,11 +86,17 @@ test.describe("External Agent View on a Machine", function()
     wait_until(function() return #view.messages == 3 end, "The View did not show the agent's answer")
     test.equal(view.messages[3].text, "Build is green")
 
-    -- Copy takes the selected message when the field has no selection.
+    -- After a click in a message, Copy takes its selection, or the whole message without one.
     local clipboard = system.get_clipboard()
-    view.selected = view.messages[3]
+    local text = view:text_of(view.messages[3])
+    view:focus_text(text)
     test.ok(view:perform("copy"))
     test.equal(system.get_clipboard(), "Build is green")
+    text.buffer:set_selection(1, 1, 1, 6)
+    test.ok(view:perform("copy"))
+    test.equal(system.get_clipboard(), "Build")
+    view:copy_message(view.messages[2])
+    test.equal(system.get_clipboard(), "Check the build")
     system.set_clipboard(clipboard or "")
 
     test.equal(external_agents.open("agy"), view, "A second open must show the open View")
@@ -123,6 +129,37 @@ test.describe("External Agent View on a Machine", function()
     test.equal(cards[3].messages[1].text, "All green")
     test.equal(cards[3].quote, "You: Run the tests")
     test.equal(cards[4].quote, "brave-otter: Which fixture?")
+  end)
+
+  test.it("selects a message's text with the mouse and copies it", function(context)
+    request(context, "external.post", { agent = "agy", text = "Use **bold** text", from = { kind = "self" } })
+    local view = external_agents.open("agy")
+    context.view = view
+    wait_until(function() return #view.messages == 2 end, "The View did not load the thread")
+    local text
+    wait_until(function()
+      text = view.messages[2].text_view
+      return text and text.text_h ~= nil
+    end, "The View did not draw the message")
+    local x, y = text.position.x + 1, text.position.y + text:get_line_height()
+    test.ok(view:on_mouse_pressed("left", x, y, 1))
+    local stop = text:get_line_screen_position(1, 4)
+    view:on_mouse_moved(stop, y, stop - x, 0)
+    view:on_mouse_released("left", stop, y)
+    local clipboard = system.get_clipboard()
+    test.ok(view:perform("copy"))
+    test.equal(system.get_clipboard(), "Use", "Copy must use the dragged range, not the whole message")
+    local cx, cy, size = view:copy_rect(view.messages[2])
+    cx, cy = cx + size / 2, cy + size / 2
+    view:on_mouse_moved(cx, cy, 0, 0)
+    view:on_mouse_pressed("left", cx, cy, 1)
+    view:on_mouse_released("left", cx, cy)
+    test.equal(system.get_clipboard(), "Use **bold** text", "The copy button must ignore the partial selection")
+    -- Typing goes back to the message box, and the message loses its selection.
+    view:on_text_input("x")
+    test.equal(view.field:get_text(), "x")
+    test.is_nil(text:get_selected_text())
+    system.set_clipboard(clipboard or "")
   end)
 
   test.it("keeps its Pane when the user opens another View there", function(context)

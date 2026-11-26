@@ -220,7 +220,9 @@ Run `external_agents:open` in the Command Palette to open an External Agent View
 
 Type in the message box and press Enter to post a message from you. Shift+Enter starts a new line. The box grows to eight lines, then scrolls. Up and Down move between its lines, and Undo and Redo work in it. A failed post keeps the text and marks the box. An unsent message stays with the Workspace.
 
-"Queued" marks each message that the agent has not received yet, and the header counts them. A message counts as received when a wait of the agent returns it. Click a message and use Copy, or right-click it and choose Copy Message, to copy its text.
+Messages use Markdown Live Preview. Drag to select text within a message, then use Copy. To copy the whole message with its Markdown, use the copy button or right-click and choose Copy Message. These actions do not change the draft.
+
+"Queued" marks each message that the agent has not received yet, and the header counts them. A message counts as received when a wait of the agent returns it.
 
 The View waits on the Machine for changes, so new messages show at once. It keeps its Pane, as a busy Terminal does: another View, such as a Terminal from the Sidebar, opens in a new Pane. It restores with the Workspace. A View device can read a thread but cannot post.
 

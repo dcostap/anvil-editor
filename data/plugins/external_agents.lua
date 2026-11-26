@@ -3,10 +3,14 @@
 -- it. The thread lives on the Project's Machine (`core.serve_external`), so a Project on another Machine shows the
 -- same thread as the Machine itself.
 local core = require "core"
+local Buffer = require "core.buffer"
 local command = require "core.command"
 local common = require "core.common"
+local Editor = require "core.editor"
 local keymap = require "core.keymap"
 local LineInput = require "core.line_input"
+local live = require "core.markdown.live_render"
+local markdown_model = require "core.markdown.model"
 local Object = require "core.object"
 local panes = require "core.panes"
 local style = require "core.style"
@@ -15,6 +19,8 @@ local Badge = require "core.ui.badge"
 local EmptyState = require "core.ui.empty_state"
 local StatusDot = require "core.ui.status_dot"
 local surface = require "core.ui.surface"
+local syntax = require "core.syntax"
+local TextView = require "core.textview"
 local View = require "core.view"
 
 local plugin = {}
@@ -97,12 +103,6 @@ local function break_lines(font, text, width)
     if stop >= #text then return lines end
     pos = stop + 1
   end
-end
-
-local function line_texts(font, text, width)
-  local lines = break_lines(font, text, width)
-  for i, line in ipairs(lines) do lines[i] = text:sub(line[1] + 1, line[2]) end
-  return lines
 end
 
 ------------------------------------------------------------------------------------------------------------------
@@ -300,6 +300,127 @@ function MessageBox:draw(focused)
 end
 
 ------------------------------------------------------------------------------------------------------------------
+-- Message text: a read-only Editor with the Live Preview of Markdown. A message shows, selects and copies as a note
+-- does, with its lists, tables, links and highlighted code.
+
+local MessageText = Editor:extend()
+local TEXT_LISTENER = "external-agents"
+
+function MessageText:__tostring() return "MessageText" end
+
+---`on_change` runs when a parse changes how the text shows, and so its height.
+function MessageText:new(text, on_change)
+  -- The text has no file, so it has no path for links to resolve against.
+  local buffer = Buffer()
+  buffer:set_syntax(syntax.get("message.md"), "external-agent")
+  buffer:insert(1, 1, text)
+  buffer:clear_undo_redo()
+  buffer:clean()
+  buffer.read_only = true
+  -- The text belongs to no tab, so it skips the Editor's Buffer registry.
+  TextView.new(self, buffer)
+  self:become_selection_mirror_owner()
+  self.scrollable = false
+  self.hide_scrollbars = true
+  self.show_current_line_highlight = false
+  self.wrap_continuation_flush = true
+  self:set_wrapping_enabled(true)
+  live.attach(self)
+  self.model = markdown_model.get(buffer)
+  self.model:add_listener(TEXT_LISTENER, function()
+    self.measured = nil
+    on_change()
+  end)
+end
+
+-- The text is read-only, so a selection shows no Markdown syntax.
+function MessageText:get_line_render_selection_state() return { selections = {}, last_selection = 1 } end
+function MessageText:get_gutter_width() return 0, 0 end
+function MessageText:draw_line_gutter() return self:get_line_height() end
+function MessageText:draw_line_highlight() end
+function MessageText:draw_scrollbar() end
+function MessageText:draw_background() end
+function MessageText:draw_content_left_edge() end
+function MessageText:draw_soft_wrap_continuation_indicators() end
+function MessageText:compute_wrap_width() return math.max(1, self.size.x) end
+-- An Editor also records Navigation History. This text is not in a Pane.
+function MessageText:update() TextView.update(self) end
+
+---Wraps the text to `width` and returns its height. The height stays until the width, the font or the parse
+---changes.
+function MessageText:measure(width)
+  local key = self.measured
+  local font = self:get_font()
+  if key and key.width == width and key.font == font then return key.height end
+  self.size.x = width
+  self:update_wrap_cache()
+  local bottom = self:get_visual_row_y_offset(self:get_scrollable_line_count() + 1)
+  local height = math.max(self:get_line_height(), bottom - self:get_visual_row_y_offset(1))
+  self.measured = { width = width, font = font, height = height }
+  return height
+end
+
+---Places the text with its first row at (`x`, `top`), wrapped to `width`. Returns its height.
+function MessageText:place(x, top, width)
+  local height = self:measure(width)
+  -- A Text View draws its first row one padding below its top.
+  self.position.x, self.position.y = x, top - style.padding.y
+  self.size.y = height + 2 * style.padding.y
+  self.scroll.x, self.scroll.y, self.scroll.to.x, self.scroll.to.y = 0, 0, 0, 0
+  self.text_h = height
+  return height
+end
+
+-- Draws only the text of the rows that show. The full frame of a Text View, with its caret, overlays and line
+-- packets, costs more than a thread can spend on each message.
+function MessageText:draw()
+  core.push_clip_rect(self.position.x, self.position.y, self.size.x, self.size.y)
+  local x = self:get_content_offset() + self:get_gutter_width()
+  local drawn = {}
+  for entry in self:iter_visible_visual_rows() do
+    if not drawn[entry.line] then
+      drawn[entry.line] = true
+      local _, y = self:get_line_screen_position(entry.line)
+      self:draw_line_body_in_region(entry.line, x, y)
+    end
+  end
+  core.pop_clip_rect()
+end
+
+function MessageText:contains(x, y)
+  local top = self.position.y + style.padding.y
+  return x >= self.position.x and x < self.position.x + self.size.x and y >= top and y < top + (self.text_h or 0)
+end
+
+function MessageText:get_text()
+  return self.buffer:get_text(1, 1, math.huge, math.huge)
+end
+
+---The selected text, or nil when nothing is selected.
+function MessageText:get_selected_text()
+  local line1, col1, line2, col2 = self.buffer:get_selection(true)
+  if line1 == line2 and col1 == col2 then return nil end
+  return self.buffer:get_text(line1, col1, line2, col2)
+end
+
+function MessageText:clear_selection()
+  local line, col = self.buffer:get_selection()
+  self.buffer:set_selection(line, col)
+end
+
+function MessageText:on_close()
+  self.model:remove_listener(TEXT_LISTENER)
+  live.detach(self)
+  TextView.on_close(self)
+  self.buffer:on_close()
+end
+
+local function close_text(message)
+  if message.text_view then message.text_view:on_close() end
+  message.text_view = nil
+end
+
+------------------------------------------------------------------------------------------------------------------
 -- The View
 
 local ExternalAgentView = View:extend()
@@ -331,7 +452,10 @@ function ExternalAgentView:supports_text_input() return true end
 -- A thread stays in its Pane, as a busy Terminal does. Another View, such as a Terminal from the Sidebar, opens in a
 -- new Pane.
 function ExternalAgentView:can_open_view() return false end
-function ExternalAgentView:on_close() self.closed = true end
+function ExternalAgentView:on_close()
+  self.closed = true
+  for _, message in ipairs(self.messages) do close_text(message) end
+end
 
 -- An unsent message stays with the Workspace.
 function ExternalAgentView:get_state()
@@ -372,7 +496,9 @@ end
 function ExternalAgentView:receive(result)
   -- A Machine that lost the thread starts again at 1, and sends the whole new thread.
   if type(result.seq) == "number" and result.seq < self.read_cursor then
+    for _, message in ipairs(self.messages) do close_text(message) end
     self.messages, self.requests, self.read_cursor = {}, {}, 0
+    self:focus_text(nil)
   end
   for _, message in ipairs(result.messages or EMPTY) do
     if message.seq > self.read_cursor then
@@ -383,6 +509,8 @@ function ExternalAgentView:receive(result)
   while #self.messages > MAX_SHOWN do
     local removed = table.remove(self.messages, 1)
     if removed.request then self.requests[removed.request] = nil end
+    if self.text_focus == removed.text_view then self:focus_text(nil) end
+    close_text(removed)
   end
   if type(result.cursor) == "number" then self.read_cursor = math.max(self.read_cursor, result.cursor) end
   -- A Machine without read states sends no `read`. Its thread then shows no unread messages.
@@ -446,7 +574,8 @@ local function avatar_size() return ui.font():get_height() + 2 * ui.metrics().te
 local function name_top() return math.floor((avatar_size() - ui.role_font("strong"):get_height()) / 2) end
 -- An answer sits this far right of its question.
 local function indent() return avatar_size() + ui.metrics().gap end
-local function code_pad() return ui.metrics().gap end
+-- Each message keeps room on its right for its copy button.
+local function copy_size() return ui.metrics().control_xs_h end
 local function send_size() return ui.metrics().control_xs_h end
 local function send_inset() return math.floor((ui.metrics().field_h - send_size()) / 2) end
 
@@ -462,42 +591,20 @@ local function time_text(time)
   return os.date(os.date("%Y%m%d", time) == os.date("%Y%m%d") and "%H:%M" or "%d %b %H:%M", time)
 end
 
--- The parts of a message's text: prose, and code between ``` fence lines.
-local function split_parts(text)
-  local parts, lines, code = {}, {}, false
-  local function flush()
-    if #lines > 0 then parts[#parts + 1] = { code = code, text = table.concat(lines, "\n") } end
-    lines = {}
+-- The text of a message, made when the thread first shows it.
+function ExternalAgentView:text_of(message)
+  if not message.text_view then
+    message.text_view = MessageText(message.text or "", function()
+      self.laid_out = nil
+      core.redraw = true
+    end)
   end
-  for line in (text:gsub("%s+$", "") .. "\n"):gmatch("(.-)\r?\n") do
-    if line:match("^%s*```") then
-      flush()
-      code = not code
-    else
-      lines[#lines + 1] = line
-    end
-  end
-  flush()
-  return parts
+  return message.text_view
 end
 
--- The parts of a message, with their lines for `width`. The width and the font size key the cache.
-function ExternalAgentView:parts(message, width)
-  local font = ui.font()
-  local cache = message.layout
-  if not cache or cache.width ~= width or cache.size ~= font:get_size() then
-    local parts, height = split_parts(message.text or ""), 0
-    for i, part in ipairs(parts) do
-      local part_font = part.code and style.code_font or font
-      local inner = part.code and width - 2 * code_pad() or width
-      part.lines = line_texts(part_font, part.text, math.max(1, inner))
-      part.h = #part.lines * part_font:get_height() + (part.code and 2 * code_pad() or 0)
-      height = height + part.h + (i > 1 and ui.metrics().text_gap or 0)
-    end
-    cache = { width = width, size = font:get_size(), parts = parts, h = height }
-    message.layout = cache
-  end
-  return cache
+-- The width of a message's text in a card with `inner` width.
+local function text_width(message, inner)
+  return math.max(1, inner - message.x - copy_size() - ui.metrics().text_gap)
 end
 
 -- The column of the thread and the message box: its left edge and its width.
@@ -558,7 +665,7 @@ function ExternalAgentView:layout(width)
     message.header = not continues
     message.x = message.depth * step + step
     message.y = y
-    local body = self:parts(message, math.max(1, inner - message.x)).h
+    local body = self:text_of(message):measure(text_width(message, inner))
     message.h = message.header and math.max(avatar, name_h + m.text_gap + body) or body
     -- The thread line runs from the question's avatar to each answer's avatar.
     if message.header and message.depth == 1 then
@@ -603,6 +710,11 @@ function ExternalAgentView:update()
   local box_h = self.field:height_for(width)
   self.field:set_rect(x, self.position.y + self.size.y - ui.metrics().row_pad_x - box_h, width, box_h)
   self:layout(width)
+  local top, bottom = self:thread_top(), self.position.y + self.size.y
+  for _, message in ipairs(self.messages) do
+    local y = top + message.y
+    if message.text_view and y + message.h > self.position.y and y < bottom then message.text_view:update() end
+  end
   self.last_max = self:max_scroll()
   if self.stick then self.scroll.to.y = self.last_max end
   self.stick = false
@@ -628,9 +740,46 @@ function ExternalAgentView:message_at(x, y)
   end
 end
 
+-- The text under (x, y), and the message under it.
+function ExternalAgentView:text_at(x, y)
+  local message = self:message_at(x, y)
+  local text = message and message.text_view
+  return text and text:contains(x, y) and text or nil, message
+end
+
 function ExternalAgentView:over_send(x, y)
   local sx, sy, size = self:send_rect()
   return x >= sx and x < sx + size and y >= sy and y < sy + size
+end
+
+-- The copy button of a message, at its top right.
+function ExternalAgentView:copy_rect(message)
+  local x, width = self:column()
+  local size = copy_size()
+  return x + width - ui.metrics().pad_x - size, self:thread_top() + message.y, size
+end
+
+-- The message whose copy button is under (x, y). The button shows on the message under the pointer.
+function ExternalAgentView:over_copy(x, y)
+  local message = self.hovered
+  if not message then return nil end
+  local cx, cy, size = self:copy_rect(message)
+  return x >= cx and x < cx + size and y >= cy and y < cy + size and message or nil
+end
+
+---Copies the whole text of `message`.
+function ExternalAgentView:copy_message(message)
+  system.set_clipboard(message.text or "")
+  self.copied, self.copied_time = message, system.get_time()
+  core.redraw = true
+end
+
+---Gives the keyboard's Copy and Select All to a message's text, or to the message box when `text` is nil. The
+---text that loses them also loses its selection.
+function ExternalAgentView:focus_text(text)
+  if self.text_focus and self.text_focus ~= text then self.text_focus:clear_selection() end
+  self.text_focus = text
+  core.redraw = true
 end
 
 function ExternalAgentView:on_mouse_wheel(y)
@@ -641,68 +790,116 @@ end
 function ExternalAgentView:on_mouse_pressed(button, x, y, clicks)
   if ExternalAgentView.super.on_mouse_pressed(self, button, x, y, clicks) then return true end
   if button ~= "left" then return true end
+  local copy = self:over_copy(x, y)
+  if copy then
+    self:copy_message(copy)
+    return true
+  end
   if self:over_send(x, y) then return self:send() or true end
   if self.field:contains(x, y) then
+    self:focus_text(nil)
     self.field.scrolled = false
     return self.field:on_mouse_pressed(x, y, clicks or 1)
   end
-  -- A click selects a message, so Copy takes its text.
-  local message = self:message_at(x, y)
-  self.selected = message ~= self.selected and message or nil
-  core.redraw = true
+  -- A press in a message's text selects in it, as in an Editor.
+  local text = self:text_at(x, y)
+  self:focus_text(text)
+  if text then
+    self.pressed_text = text
+    if not text:on_mouse_pressed(button, x, y, clicks or 1) then
+      -- Normal Editors start selection through the keymap. This embedded Editor has no keymap focus.
+      local line, col = text:resolve_screen_position(x, y)
+      local snap = clicks == 2 and "word" or clicks == 3 and "lines" or nil
+      text.buffer:set_selection(text:mouse_selection(text.buffer, snap, line, col, line, col))
+      text:begin_line_render_interaction("mouse-selection")
+      text.mouse_selecting = { line, col, snap }
+    end
+  end
   return true
 end
 
 function ExternalAgentView:on_mouse_moved(x, y, dx, dy)
   if ExternalAgentView.super.on_mouse_moved(self, x, y, dx, dy) then return true end
+  if self.pressed_text then
+    self.pressed_text:on_mouse_moved(x, y, dx, dy)
+    self.cursor = "ibeam"
+    return true
+  end
   if self.field:on_mouse_moved(x, y) then return true end
+  local in_field = self.field:contains(x, y)
+  local text, message
+  if not in_field then text, message = self:text_at(x, y) end
+  if text ~= self.hovered_text then
+    if self.hovered_text then self.hovered_text:on_mouse_left() end
+    self.hovered_text = text
+  end
+  -- The text shows its own pointer looks, such as a link's hand.
+  if text then text:on_mouse_moved(x, y, dx, dy) end
   local over_send = self:over_send(x, y)
-  local hovered = not self.field:contains(x, y) and self:message_at(x, y) or nil
-  if over_send ~= self.send_hovered or hovered ~= self.hovered then core.redraw = true end
-  self.send_hovered, self.hovered = over_send, hovered
-  self.cursor = over_send and "hand" or self.field:contains(x, y) and "ibeam" or "arrow"
+  if over_send ~= self.send_hovered or message ~= self.hovered then core.redraw = true end
+  self.send_hovered, self.hovered = over_send, message
+  local over_copy = self:over_copy(x, y) ~= nil
+  if over_copy ~= self.copy_hovered then core.redraw = true end
+  self.copy_hovered = over_copy
+  self.cursor = (over_send or over_copy) and "hand" or in_field and "ibeam" or text and text.cursor or "arrow"
 end
 
 function ExternalAgentView:on_mouse_left()
   ExternalAgentView.super.on_mouse_left(self)
-  self.send_hovered, self.hovered = false, nil
+  if self.hovered_text then self.hovered_text:on_mouse_left() end
+  self.send_hovered, self.copy_hovered, self.hovered, self.hovered_text = false, false, nil, nil
   core.redraw = true
 end
 
 function ExternalAgentView:on_mouse_released(button, x, y)
   ExternalAgentView.super.on_mouse_released(self, button, x, y)
   self.field:on_mouse_released()
+  if self.pressed_text then
+    self.pressed_text:on_mouse_released(button, x, y)
+    self.pressed_text = nil
+  end
 end
 
 function ExternalAgentView:on_text_input(text)
+  -- Typing always goes to the message box.
+  self:focus_text(nil)
   self.field.scrolled = false
   self.field:on_text(text)
 end
 
----Performs an editor line command, without its "core:" prefix. Copy takes the selected message when the box has
----no selection.
+---Performs an editor line command, without its "core:" prefix. After a click in a message, Copy takes its
+---selection, or the whole message when nothing is selected, and Select All selects the message.
 function ExternalAgentView:perform(name)
-  local first, last = self.field.input:selection()
-  if name == "copy" and first == last and self.selected then
-    system.set_clipboard(self.selected.text or "")
+  local text = self.text_focus
+  if text and name == "copy" then
+    system.set_clipboard(text:get_selected_text() or text:get_text())
+    return true
+  elseif text and name == "select_all" then
+    text.buffer:set_selection(1, 1, math.huge, math.huge)
+    core.redraw = true
     return true
   end
+  self:focus_text(nil)
   self.field.scrolled = false
   return self.field:perform(name)
 end
 
 function ExternalAgentView:context_menu(x, y)
-  if x and y then
-    self.selected = self:message_at(x, y)
-    core.redraw = true
-  end
-  if not self.selected then return end
+  if x and y then self.menu_message = self:message_at(x, y) end
+  local message = self.menu_message
+  if not message then return end
   local icons = require("core.context_menu").icons
-  return { { label = "Copy Message", icon = icons.copy, command = "external_agents:copy_message" } }
+  local items = {}
+  local text = message.text_view
+  if text and text == self.text_focus and text:get_selected_text() then
+    items[#items + 1] = { label = "Copy", icon = icons.copy, command = "external_agents:copy" }
+  end
+  items[#items + 1] = { label = "Copy Message", icon = icons.copy, command = "external_agents:copy_message" }
+  return items
 end
 
 function ExternalAgentView:context_menu_point()
-  local message = self.selected
+  local message = self.menu_message
   if not message or not message.y then return end
   local x = self:column()
   return x + ui.metrics().pad_x + message.x, self:thread_top() + message.y
@@ -719,9 +916,8 @@ function ExternalAgentView:on_key_pressed(key, event)
     if keymap.modkeys.alt then return false end
     return self:send() or true
   end
-  if key == "escape" and self.selected then
-    self.selected = nil
-    core.redraw = true
+  if key == "escape" and self.text_focus then
+    self:focus_text(nil)
     return true
   end
   if key == "pageup" or key == "pagedown" then
@@ -753,22 +949,13 @@ local function draw_avatar(name, tone, x, y)
   common.draw_text(ui.role_font("strong"), color, letter, "center", x, y, size, size)
 end
 
-local function draw_lines(font, lines, x, y, color)
-  local font_h = font:get_height()
-  for _, line in ipairs(lines) do
-    renderer.draw_text(font, line, x, y, color)
-    y = y + font_h
-  end
-end
-
 function ExternalAgentView:draw_message(message, left, top, width)
   local m = ui.metrics()
   local y = top + message.y
-  if message == self.selected or message == self.hovered then
-    -- The pointer shows a lighter version of the selection.
+  if message == self.hovered then
     local hx = left + message.depth * indent() - m.text_gap * 2
     local hy, hw, hh = y - m.gap / 2, left + width + m.text_gap * 2 - hx, message.h + m.gap
-    local pushed = ui.push_look(hx, hy, hw, hh, 1, message == self.selected and 1 or 0.5)
+    local pushed = ui.push_look(hx, hy, hw, hh, 1, 0.5)
     surface.draw("selected", hx, hy, hw, hh, m.small_radius)
     ui.pop_look(pushed)
   end
@@ -787,17 +974,28 @@ function ExternalAgentView:draw_message(message, left, top, width)
     end
     y = y + strong:get_height() + m.text_gap
   end
-  local text_w = width - message.x
-  for i, part in ipairs(self:parts(message, math.max(1, text_w)).parts) do
-    if i > 1 then y = y + m.text_gap end
-    if part.code then
-      surface.draw("well", x, y, text_w, part.h, m.small_radius)
-      draw_lines(style.code_font, part.lines, x + code_pad(), y + code_pad(), style.dialog_text)
-    else
-      draw_lines(ui.font(), part.lines, x, y, style.dialog_text)
-    end
-    y = y + part.h
+  local text = self:text_of(message)
+  text:place(x, y, text_width(message, width))
+  text:draw()
+  if message == self.hovered then self:draw_copy(message) end
+end
+
+local COPY_ICON = require("core.context_menu").icons.copy
+-- A copied message shows a check this long, in seconds.
+local COPIED_SECONDS = 1.5
+
+function ExternalAgentView:draw_copy(message)
+  local x, y, size = self:copy_rect(message)
+  local copied = self.copied == message and system.get_time() - self.copied_time < COPIED_SECONDS
+  if copied then core.redraw = true end
+  local amount = ui.approach(self, "copy_hover", self.copy_hovered and 1 or 0, 18)
+  if amount > 0 then
+    local pushed = ui.push_look(x, y, size, size, 1, amount)
+    surface.draw("ghost_hover", x, y, size, size, ui.metrics().small_radius)
+    ui.pop_look(pushed)
   end
+  common.draw_text(ui.small_icon_font(), copied and ui.tone_color("success") or style.dialog_text_muted,
+    copied and ui.icons.check or COPY_ICON, "center", x, y, size, size)
 end
 
 function ExternalAgentView:draw_card(card, x, top, width)
@@ -824,7 +1022,11 @@ function ExternalAgentView:draw_card(card, x, top, width)
       end
     end
   end
-  for _, message in ipairs(card.messages) do self:draw_message(message, left, top, inner) end
+  local first = self.position.y + header_h() - top
+  local last = self.position.y + self.size.y - self:footer_h() - top
+  for _, message in ipairs(card.messages) do
+    if message.y + message.h > first and message.y < last then self:draw_message(message, left, top, inner) end
+  end
 end
 
 function ExternalAgentView:draw_header()
@@ -908,11 +1110,17 @@ end
 
 command.add(function()
   local view = core.active_view
-  return view and view:is(ExternalAgentView) and view.selected ~= nil, view
+  return view and view:is(ExternalAgentView) and view.menu_message ~= nil, view
 end, {
-  ["external_agents:copy_message"] = function(view)
-    system.set_clipboard(view.selected.text or "")
-  end,
+  ["external_agents:copy_message"] = function(view) view:copy_message(view.menu_message) end,
+})
+
+command.add(function()
+  local view = core.active_view
+  local text = view and view:is(ExternalAgentView) and view.text_focus
+  return text and text:get_selected_text() ~= nil, view
+end, {
+  ["external_agents:copy"] = function(view) system.set_clipboard(view.text_focus:get_selected_text()) end,
 })
 
 command.add(nil, {

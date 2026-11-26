@@ -1388,8 +1388,8 @@ local function scenario_is_ready()
     return false
   end
   if benchmark.scenario == "external-agent-view" then
-    -- An External Agent thread with fixed messages: a question with two lines, a Pi's question and its answer with
-    -- a code block and a long word that wraps, a late answer that quotes its question, a queued message, and a
+    -- An External Agent thread with fixed messages: a question with two lines, a Pi's question and its Markdown
+    -- answer with a code block, a list and a long link that wraps, a late answer that quotes its question, a queued message, and a
     -- two-line draft. The scene reads no Machine.
     local external_agents = require "plugins.external_agents"
     if core.active_view and core.active_view:is(external_agents.View) then return true end
@@ -1405,8 +1405,8 @@ local function scenario_is_ready()
       { seq = 3, time = now - 540, from = { kind = "agent", name = "brave-otter" }, request = "r1",
         text = "Which fixture compares the paths?" },
       { seq = 4, time = now - 500, from = { kind = "self" }, reply_to = "r1",
-        text = "The path test builds its expected value like this:\n```lua\nlocal expected = root .. \"/src/main.c\"\n```\nUse PATHSEP instead: https://example.com/a-very-long-link-without-spaces-that-must-wrap-inside-the-word" },
-      { seq = 5, time = now - 60, from = { kind = "self" }, reply_to = "u2", text = "Fixed. The suite is green again." },
+        text = "The **path test** builds its expected value with a slash:\n\n```lua\nlocal expected = root .. \"/src/main.c\"\n```\n\n- Use `PATHSEP` instead.\n- Run *both* suites after the fix.\n\nSee https://example.com/a-very-long-link-without-spaces-that-must-wrap-inside-the-word" },
+      { seq = 5, time = now - 60, from = { kind = "self" }, reply_to = "u2", text = "Fixed. The suite is **green** again." },
       { seq = 6, time = now - 20, from = { kind = "user", machine = "Laptop" }, request = "u3",
         text = "Also check the release build." },
     } })
