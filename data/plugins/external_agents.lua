@@ -51,7 +51,7 @@ function ExternalAgentView:new(agent)
   ExternalAgentView.super.new(self)
   self.agent = agent
   self.scrollable = true
-  self.messages, self.cursor = {}, 0
+  self.messages, self.read_cursor = {}, 0
   -- "connecting", "listening", "idle", "unknown" (the agent never waited) or "offline".
   self.status = "connecting"
   self.stick = true
@@ -75,7 +75,7 @@ function ExternalAgentView:read_thread()
   local loaded = false
   while not self.closed do
     local done, err, result
-    plugin.request("external.read", { agent = self.agent, after = self.cursor, wait = loaded },
+    plugin.request("external.read", { agent = self.agent, after = self.read_cursor, wait = loaded },
       function(e, r) done, err, result = true, e, r end)
     while not done and not self.closed do coroutine.yield(0.05) end
     if self.closed then return end
@@ -94,14 +94,14 @@ end
 
 function ExternalAgentView:receive(result)
   -- A Machine that lost the thread starts again at 1, and sends the whole new thread.
-  if type(result.seq) == "number" and result.seq < self.cursor then
-    self.messages, self.cursor = {}, 0
+  if type(result.seq) == "number" and result.seq < self.read_cursor then
+    self.messages, self.read_cursor = {}, 0
   end
   for _, message in ipairs(result.messages or EMPTY) do
-    if message.seq > self.cursor then self.messages[#self.messages + 1] = message end
+    if message.seq > self.read_cursor then self.messages[#self.messages + 1] = message end
   end
   while #self.messages > MAX_SHOWN do table.remove(self.messages, 1) end
-  if type(result.cursor) == "number" then self.cursor = math.max(self.cursor, result.cursor) end
+  if type(result.cursor) == "number" then self.read_cursor = math.max(self.read_cursor, result.cursor) end
   self.status, self.error = result.listening and "listening" or "idle", nil
   core.redraw = true
 end

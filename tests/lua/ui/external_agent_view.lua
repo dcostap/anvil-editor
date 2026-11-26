@@ -62,6 +62,8 @@ test.describe("External Agent View on a Machine", function()
     test.equal(view.messages[1].text, "Hello from agy")
     test.equal(view:author(view.messages[1]), "agy")
     test.equal(view.status, "listening")
+    -- The root panel sends View.cursor to the system as the mouse cursor name.
+    test.equal(type(view.cursor), "string", "The View must keep a mouse cursor name")
 
     view.field:on_text("Check the build")
     test.ok(view:send())
