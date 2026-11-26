@@ -3,6 +3,7 @@ local command = require "core.command"
 local core = require "core"
 local fs = require "core.fs"
 local MachineClient = require "core.machine_client"
+local markdown_model = require "core.markdown.model"
 local machine_server = dofile("tests/fixtures/machine_server.lua")
 local panes = require "core.panes"
 local keymap = require "core.keymap"
@@ -138,6 +139,25 @@ test.describe("External Agent View on a Machine", function()
     test.equal(cards[3].messages[1].text, "All green")
     test.equal(cards[3].quote, "You: Run the tests")
     test.equal(cards[4].quote, "brave-otter: Which fixture?")
+  end)
+
+  test.it("keeps the final line of a wrapped Markdown answer inside its card", function(context)
+    local sections = {}
+    for i = 1, 12 do
+      sections[i] = ("## Section %d\n\n- **Result:** %s\n"):format(i, ("a wrapped `value` "):rep(16))
+    end
+    local body = table.concat(sections, "\n") .. "\nFinal result"
+    request(context, "external.read", { agent = "agy", listen = true })
+    request(context, "external.post", { agent = "agy", text = body, from = { kind = "self" } })
+    local view = external_agents.open("agy")
+    context.view = view
+    wait_until(function()
+      local text = view.messages[1] and view.messages[1].text_view
+      if not (text and text.text_h and markdown_model.get(text.buffer).status == "ready") then return false end
+      if text.__async_wrap_reconstruction then return false end
+      local _, y = text:get_line_screen_position(#text.buffer.lines, 1)
+      return text:contains(text.position.x, y + text:get_line_height() - 1)
+    end, "The card clips the final line")
   end)
 
   test.it("selects a message's text with the mouse and copies it", function(context)

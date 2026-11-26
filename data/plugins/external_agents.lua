@@ -10,7 +10,6 @@ local Editor = require "core.editor"
 local keymap = require "core.keymap"
 local LineInput = require "core.line_input"
 local live = require "core.markdown.live_render"
-local markdown_model = require "core.markdown.model"
 local Object = require "core.object"
 local panes = require "core.panes"
 local style = require "core.style"
@@ -306,11 +305,10 @@ end
 -- does, with its lists, tables, links and highlighted code.
 
 local MessageText = Editor:extend()
-local TEXT_LISTENER = "external-agents"
 
 function MessageText:__tostring() return "MessageText" end
 
----`on_change` runs when a parse changes how the text shows, and so its height.
+---`on_change` marks the thread for layout when the measured rows change.
 function MessageText:new(text, on_change)
   -- The text has no file, so it has no path for links to resolve against.
   local buffer = Buffer()
@@ -328,11 +326,25 @@ function MessageText:new(text, on_change)
   self.wrap_continuation_flush = true
   self:set_wrapping_enabled(true)
   live.attach(self)
-  self.model = markdown_model.get(buffer)
-  self.model:add_listener(TEXT_LISTENER, function()
+  self.on_height_change = on_change
+end
+
+function MessageText:invalidate_height()
+  if self.measured then
     self.measured = nil
-    on_change()
-  end)
+    self.on_height_change()
+  end
+end
+
+-- Markdown can publish the wrapped rows after the parse, or after a resize.
+function MessageText:clear_composed_visual_row_cache()
+  TextView.clear_composed_visual_row_cache(self)
+  self:invalidate_height()
+end
+
+function MessageText:invalidate_visual_metrics(...)
+  TextView.invalidate_visual_metrics(self, ...)
+  self:invalidate_height()
 end
 
 -- The text is read-only, so a selection shows no Markdown syntax.
@@ -411,7 +423,6 @@ function MessageText:clear_selection()
 end
 
 function MessageText:on_close()
-  self.model:remove_listener(TEXT_LISTENER)
   live.detach(self)
   TextView.on_close(self)
   self.buffer:on_close()
