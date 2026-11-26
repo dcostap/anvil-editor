@@ -842,6 +842,56 @@ test.describe("Git View command", function()
 
   end)
 
+  test.test("a history Diff View behind another View refreshes only when shown again", function(context)
+    local session, view = open_fake_git_view(context.project)
+    view.model.repo = { root = "C:/repo" }
+    view.model.backend = {
+      WORKING_TREE = real_backend.WORKING_TREE,
+      EMPTY_TREE = real_backend.EMPTY_TREE,
+      diff_endpoint_for_commit = real_backend.diff_endpoint_for_commit,
+      file_at = function(_, rev, relpath, _, callback)
+        callback(rev .. ":" .. relpath, nil)
+        return { cancel = function() end }
+      end,
+    }
+    local tab = {
+      id = "history-hidden-refresh-test",
+      kind = "file_history",
+      title = "History: src/app.lua",
+      closable = true,
+      relpath = "src/app.lua",
+      commits = { { hash = "a", short_hash = "a", subject = "First", parents = {} } },
+      selected_commit = 1,
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    local history_view = git_view.ensure_tab_view(session, tab, true)
+    tab.preview_left_text, tab.preview_right_text = "old", "new"
+    tab.preview_left_name, tab.preview_right_name = "left", "right"
+    tab.preview_generation_value = 1
+    local initial_diff = test.not_nil(history_view:open_history_diff_view(tab))
+    local diff_pane = panes.pane_for_view(initial_diff)
+    local editor = Editor(Buffer(nil, nil, true))
+    test.ok(panes.place(function() return editor end, { pane = diff_pane, placement = "current" }))
+
+    tab.preview_right_text = "newer"
+    tab.preview_generation_value = 2
+    local deadline = system.get_time() + 0.5
+    while system.get_time() < deadline do
+      history_view:update()
+      coroutine.yield(0.01)
+    end
+    test.equal(diff_pane.current_view, editor)
+    test.equal(tab.history_diff_view, initial_diff)
+
+    panes.back(diff_pane)
+    test.equal(diff_pane.current_view, initial_diff)
+    wait_until(function()
+      history_view:update()
+      return tab.history_diff_view ~= initial_diff
+    end, 1, "history Diff View did not refresh after it was shown again")
+    test.equal(diff_pane.current_view, tab.history_diff_view)
+  end)
+
   test.it("commit diff file list renders changed files as a project-relative tree", function(context)
     local session, view = open_fake_git_view(context.project)
     local tab = {

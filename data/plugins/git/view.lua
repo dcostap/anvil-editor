@@ -2233,6 +2233,10 @@ function GitView:ensure_history_diff_view(tab)
       and not pending_view then
     return old_view
   end
+  -- A Diff View behind another View in its Pane's history refreshes when it
+  -- shows again. A refresh now would replace the View in front of it.
+  local old_pane = old_view and panes.pane_for_view(old_view)
+  if old_pane and old_pane.current_view ~= old_view then return old_view end
 
   local function promote(view)
     local old_pane = old_view and panes.pane_for_view(old_view)

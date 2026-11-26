@@ -11,6 +11,7 @@ local panes = require "core.panes"
 local config = require "core.config"
 local style = require "core.style"
 local command = require "core.command"
+local View = require "core.view"
 
 local function join_path(...)
   return table.concat({...}, PATHSEP)
@@ -236,6 +237,17 @@ test.describe("Pane Status Bars", function()
     root:update()
     test.equal(names(right), "text:file")
     test.ok(bar_of(left):get_entry("text:position"), "the newly focused Pane shows no caret position")
+  end)
+
+  test.it("draws and hit-tests safely when the Pane's View changes after the last update", function()
+    local _, right = two_panes()
+    local x, y = entry_center(right, "text:file")
+    root:on_mouse_moved(x, y, 0, 0)
+    local plain = View()
+    test.ok(panes.place(function() return plain end, { pane = right, placement = "current" }))
+    bar_of(right):draw()
+    root:on_mouse_moved(x, y, 0, 0)
+    test.equal(bar_of(right):get_entry("text:file"), nil)
   end)
 
   test.it("focuses the Pane when its bar is clicked", function()

@@ -17,6 +17,7 @@ local Object = require "core.object"
 ---@field pane table Pane this bar belongs to
 ---@field status_bar_pane table Same Pane, for the Root Panel's click focus
 ---@field entries table[] Laid-out chips: { item, x, w, visible_w, styled }
+---@field layout_view core.view|nil View that the chips were laid out for
 ---@field message_entry table|nil Laid-out message chip
 ---@field hovered table|nil Entry under the pointer
 ---@field pressed table|nil Entry that received the current left press
@@ -180,6 +181,7 @@ function PaneStatusBar:layout()
   local focused = self:is_focused()
   local lefts, rights = {}, {}
   self.entries = {}
+  self.layout_view = view
 
   for _, item in ipairs(view and self.controller.items or {}) do
     if item.visible and (focused or item.alignment == item.LEFT) and item.predicate(view) then
@@ -241,6 +243,11 @@ function PaneStatusBar:layout()
   self.pressed = carry(self.pressed)
 end
 
+---Lay out again when another View replaced the Pane's View after the last layout.
+function PaneStatusBar:sync_layout()
+  if self.layout_view ~= self:get_view() then self:layout() end
+end
+
 ---Whether the left chips are replaced by a message or a widget tooltip.
 ---@return boolean
 function PaneStatusBar:left_replaced()
@@ -252,6 +259,7 @@ end
 ---@param y number
 ---@return table|nil entry
 function PaneStatusBar:entry_at(x, y)
+  self:sync_layout()
   if y < self.position.y or y >= self.position.y + self.size.y then return nil end
   local rx = x - self.position.x
   local function hit(entry)
@@ -378,6 +386,7 @@ end
 
 function PaneStatusBar:draw()
   if self.size.y <= 0 then return end
+  self:sync_layout()
   local m = metrics()
   local x0, y0, h = self.position.x, self.position.y, self.size.y
   local view = self:get_view()
