@@ -509,6 +509,66 @@ static bool text_matches_regex(const char *text, uint32_t text_len, const char *
   return rc >= 0;
 }
 
+enum DelimiterNeighbor { NEIGHBOR_TEXT, NEIGHBOR_SPACE, NEIGHBOR_PUNCT };
+
+static enum DelimiterNeighbor delimiter_neighbor(const AnvilTSSnapshot *snapshot, uint32_t at) {
+  if (at >= snapshot->byte_len) return NEIGHBOR_SPACE;
+  const char *s = snapshot->bytes + at;
+  unsigned char c = *s;
+  if (c < 0x80) {
+    if (c == ' ' || (c >= '\t' && c <= '\r')) return NEIGHBOR_SPACE;
+    if ((c >= '!' && c <= '/') || (c >= ':' && c <= '@') ||
+        (c >= '[' && c <= '`') || (c >= '{' && c <= '~')) return NEIGHBOR_PUNCT;
+    return NEIGHBOR_TEXT;
+  }
+  size_t remaining = snapshot->byte_len - at;
+  const char *end = s;
+  SDL_StepUTF8(&end, &remaining);
+  static const char space[] = "\\p{Zs}", punct[] = "[\\p{P}\\p{S}]";
+  if (text_matches_regex(s, end - s, space, sizeof(space) - 1, NULL)) return NEIGHBOR_SPACE;
+  if (text_matches_regex(s, end - s, punct, sizeof(punct) - 1, NULL)) return NEIGHBOR_PUNCT;
+  return NEIGHBOR_TEXT;
+}
+
+static enum DelimiterNeighbor before_delimiter(const AnvilTSSnapshot *snapshot, uint32_t at) {
+  if (!at) return NEIGHBOR_SPACE;
+  uint32_t limit = at > 4 ? at - 4 : 0;
+  at--;
+  while (at > limit && ((unsigned char)snapshot->bytes[at] & 0xc0) == 0x80) at--;
+  return delimiter_neighbor(snapshot, at);
+}
+
+/* The inline grammar nests two single-tilde nodes for ~~text~~. Check both
+ * nodes against the full source runs, not against the neighboring tilde. */
+static bool tilde_run(const AnvilTSSnapshot *s, uint32_t at, uint32_t *start, uint32_t *end) {
+  if (s->bytes[at] != '~') return false;
+  uint32_t left = at, right = at + 1;
+  while (left && s->bytes[left - 1] == '~') {
+    if (right - --left > 3) return false;
+  }
+  uint32_t escape = left;
+  while (escape && s->bytes[escape - 1] == '\\') escape--;
+  left += (left - escape) % 2;
+  if (left > at) return false;
+  while (right < s->byte_len && s->bytes[right] == '~') {
+    if (++right - left > 2) return false;
+  }
+  *start = left;
+  *end = right;
+  return right - left <= 2;
+}
+
+static bool markdown_strike_flanks(const AnvilTSSnapshot *s, uint32_t start, uint32_t end) {
+  uint32_t left, content, close, right;
+  if (end <= start || !tilde_run(s, start, &left, &content) ||
+      !tilde_run(s, end - 1, &close, &right) || content >= close ||
+      content - left != right - close) return false;
+  enum DelimiterNeighbor first = delimiter_neighbor(s, content), last = before_delimiter(s, close);
+  return first != NEIGHBOR_SPACE && last != NEIGHBOR_SPACE &&
+    (first != NEIGHBOR_PUNCT || before_delimiter(s, left) != NEIGHBOR_TEXT) &&
+    (last != NEIGHBOR_PUNCT || delimiter_neighbor(s, right) != NEIGHBOR_TEXT);
+}
+
 static int32_t query_pattern_priority(const TSQuery *query, uint32_t pattern_index) {
   uint32_t step_count = 0;
   const TSQueryPredicateStep *steps = ts_query_predicates_for_pattern(query, pattern_index, &step_count);
@@ -550,6 +610,13 @@ static bool query_match_predicates(
     if (i < step_count && steps[i].type == TSQueryPredicateStepTypeDone) i++;
 
     if (query_step_text_equals(query, op, "set!")) {
+      continue;
+    }
+    if (query_step_text_equals(query, op, "markdown-strike?")) {
+      uint32_t start, end;
+      if (arg_end != arg_start + 1 || steps[arg_start].type != TSQueryPredicateStepTypeCapture ||
+          !capture_text_range(snapshot, match_capture_for_id(match, steps[arg_start].value_id), &start, &end) ||
+          !markdown_strike_flanks(snapshot, start, end)) return false;
       continue;
     }
 

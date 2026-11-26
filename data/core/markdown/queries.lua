@@ -54,8 +54,11 @@ queries.block = [[
 queries.inline = [[
   (emphasis) @span.emphasis
   (strong_emphasis) @span.strong
-  (strikethrough) @span.strikethrough
-  (emphasis_delimiter) @marker.emphasis
+  ((strikethrough . (emphasis_delimiter) @marker.emphasis
+                  (emphasis_delimiter) @marker.emphasis .) @span.strikethrough
+   (#markdown-strike? @span.strikethrough))
+  (emphasis (emphasis_delimiter) @marker.emphasis)
+  (strong_emphasis (emphasis_delimiter) @marker.emphasis)
   (code_span) @span.code
   (code_span_delimiter) @marker.code
   (inline_link) @span.link
