@@ -37,9 +37,9 @@ function M.new(server, live_record)
           item.finish(receipt.status == "accepted", receipt.error or "Pi refused the reply")
         end
       end
-      control.chat_result = function(terminal, instance, result)
+      control.chat_post = function(terminal, instance, message)
         local record = live_record(terminal)
-        if record and common.path_equals(record.project_path, project) then server.chat_result(project, terminal, instance, result) end
+        if record and common.path_equals(record.project_path, project) then server.chat_post(project, terminal, instance, message) end
       end
       projects[project] = false
       local ok, opened = pcall(require("core.control_server").open, control)

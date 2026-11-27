@@ -46,7 +46,7 @@ test("interactive Pi connects, receives each task once, and reports completion o
     for await (const chunk of req) body += chunk;
     latest = JSON.parse(body);
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ name: "brave-otter", commands, chat_ack: latest.chat_result?.id }));
+    res.end(JSON.stringify({ name: "brave-otter", commands, chat_ack: latest.chat?.at(-1)?.id }));
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   try {
@@ -148,8 +148,8 @@ test("interactive Pi connects, receives each task once, and reports completion o
     assert.equal(latest.receipts.find(r => r.id === "human-question").status, "accepted");
     await handlers.get("message_end")({message: {role: "assistant", stopReason: "stop", content: [{type: "text", text: "Reconnect works"}]}}, ctx);
     await handlers.get("agent_settled")({aborted:false}, ctx);
-    await until(() => latest.chat_result?.text === "Reconnect works");
-    assert.equal(latest.chat_result.reply_to, "human-question");
+    await until(() => latest.chat?.some(m => m.text === "Reconnect works"));
+    assert.equal(latest.chat.find(m => m.text === "Reconnect works").reply_to, "human-question");
     assert.equal(deliveries[6].deliverAs, "steer");
     // An External Agent names itself. A notice asks for no reply.
     commands = [{id: "notice-a", action: "send", text: "Build finished", expect_reply: false,
@@ -162,6 +162,100 @@ test("interactive Pi connects, receives each task once, and reports completion o
     if (old === undefined) delete process.env.ANVIL_TERMINAL_AGENT_REPORT;
     else process.env.ANVIL_TERMINAL_AGENT_REPORT = old;
     await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Seam: the Machine's exchange with a live Pi extension. Pi posts each readable message of its conversation once.
+test("Pi posts typed messages, output, answers and agent messages to Project Chat", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "anvil-pi-chat-"));
+  const old = process.env.ANVIL_TERMINAL_AGENT_REPORT;
+  process.env.ANVIL_TERMINAL_AGENT_REPORT = path.join(dir, "terminal-sessions", "chat.agent");
+  const handlers = new Map(), tools = new Map(), posted = [];
+  let commands = [], latest, idle = true, acknowledge = true;
+  const ctx = {mode: "tui", isIdle: () => idle, abort() {}, model: {provider: "local", id: "scripted"},
+    sessionManager: {getSessionFile: () => "chat.jsonl", getBranch: () => []}};
+  const pi = {on(name, fn) {
+      const previous = handlers.get(name);
+      handlers.set(name, async (...args) => { await previous?.(...args); return fn(...args); });
+    }, registerTool(tool) { tools.set(tool.name, tool); }, registerMcpServer() {}, unregisterMcpServer() {},
+    getThinkingLevel: () => "off", appendEntry() {}, sendMessage() { idle = false; }, sendUserMessage() { idle = false; }};
+  const server = http.createServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    latest = JSON.parse(body);
+    // A lost acknowledgement sends the same messages again. The Machine finds them by ID.
+    for (const message of latest.chat || []) if (!posted.some(m => m.id === message.id)) posted.push(message);
+    res.writeHead(200, {"content-type": "application/json"});
+    res.end(JSON.stringify({commands, chat_ack: acknowledge ? latest.chat?.at(-1)?.id : undefined}));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const assistant = (text, stopReason) => handlers.get("message_end")({message: {role: "assistant", stopReason,
+    content: [{type: "thinking", thinking: "HIDDEN"}, {type: "text", text}, ...(stopReason === "toolUse" ? [{type: "toolCall", id: "t", name: "bash", arguments: {}}] : [])]}}, ctx);
+  try {
+    // Project Chat lives on the Machine, so only the host endpoint gets it.
+    await fs.mkdir(path.join(dir, "machine", "agents"), {recursive: true});
+    await fs.writeFile(path.join(dir, "machine", "agents", "chat.json"), JSON.stringify({
+      version: 1, url: `http://127.0.0.1:${server.address().port}`, token: "test-secret"}));
+    require("../data/tools/agent-sessions/pi-control.cjs")(pi);
+    await handlers.get("session_start")({reason: "startup"}, ctx);
+    await until(() => latest);
+
+    acknowledge = false;
+    await handlers.get("input")({text: "Fix the build", source: "interactive"}, ctx);
+    await handlers.get("input")({text: "From an extension", source: "extension"}, ctx);
+    idle = false;
+    await assistant("Checking the log first.", "toolUse");
+    await handlers.get("input")({text: "Also run the tests", source: "interactive", streamingBehavior: "steer"}, ctx);
+    await assistant("Fixed, and the tests pass.", "stop");
+    await until(() => posted.length === 4);
+    await new Promise(resolve => setTimeout(resolve, 600));
+    assert.equal(posted.length, 4, "An unacknowledged message must keep its ID");
+    acknowledge = true;
+    await until(() => latest.chat?.length === 0);
+    const [typed, output, steer, answer] = posted;
+    assert.deepEqual([typed.kind, typed.text], ["user", "Fix the build"]);
+    assert.deepEqual([output.kind, output.text, output.reply_to], ["output", "Checking the log first.", typed.request]);
+    assert.deepEqual([steer.kind, steer.text], ["user", "Also run the tests"]);
+    assert.deepEqual([answer.kind, answer.reply_to], ["answer", steer.request], "An answer must name the last request of its run");
+    assert.ok(!JSON.stringify(posted).includes("HIDDEN"));
+    idle = true;
+    await handlers.get("agent_settled")({aborted: false}, ctx);
+
+    // Project Chat posts its own messages, so Pi does not post them again.
+    commands = [{id: "human-a", action: "human", text: "Which commit?", instance: latest.instance}];
+    await until(() => latest.receipts?.some(r => r.id === "human-a"));
+    await assistant("abc123", "stop");
+    await until(() => posted.length === 5);
+    assert.deepEqual([posted[4].kind, posted[4].reply_to], ["answer", "human-a"]);
+
+    // A task from another agent shows once, from its sender. The reply to it shows once, from the agent that replies.
+    idle = true;
+    commands = [{id: "task-a", action: "send", text: "Review the fix", from: "other",
+      sender: {terminal: "other", instance: "other-pi", name: "calm-heron", project: "C:\\Alpha"}},
+      {id: "reply-x", action: "reply", reply_to: "x", text: "Done", sender: {terminal: "other", name: "calm-heron"}}];
+    await until(() => latest.receipts?.some(r => r.id === "reply-x"));
+    await until(() => posted.length === 6);
+    assert.deepEqual([posted[5].kind, posted[5].text, posted[5].request], ["agent", "Review the fix", "task-a"]);
+    assert.equal(posted[5].from.name, "calm-heron");
+    assert.equal(posted[5].from.terminal, "other");
+    await tools.get("anvil_reply").execute("call", {request: "task-a", text: "Looks right"});
+    await until(() => posted.length === 7);
+    assert.deepEqual([posted[6].kind, posted[6].text, posted[6].reply_to], ["agent", "Looks right", "task-a"]);
+    assert.equal(posted[6].to.name, "calm-heron");
+    assert.ok(!latest.receipts.some(r => r.sender), "Receipts must not carry the chat address");
+    // An External Agent's thread already shows the reply to it.
+    commands = [{id: "notice-a", action: "send", text: "Status?", sender: {name: "agy", external: "agy"}}];
+    await until(() => posted.length === 8);
+    assert.equal(posted[7].from.external, "agy");
+    await tools.get("anvil_reply").execute("call", {request: "notice-a", text: "Green"});
+    await new Promise(resolve => setTimeout(resolve, 600));
+    assert.equal(posted.length, 8);
+  } finally {
+    await handlers.get("session_shutdown")?.({reason: "quit"}, ctx);
+    await new Promise(resolve => server.close(resolve));
+    if (old === undefined) delete process.env.ANVIL_TERMINAL_AGENT_REPORT;
+    else process.env.ANVIL_TERMINAL_AGENT_REPORT = old;
+    await fs.rm(dir, {recursive: true, force: true});
   }
 });
 

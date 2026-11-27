@@ -14,6 +14,9 @@ local MAX_AGENTS, MAX_MESSAGES, MAX_TEXT, MAX_PAGE, MAX_WAITS = 16, 200, 32768, 
 local MAX_WAIT, LISTEN_SECONDS = 25, 60
 local FROM_KINDS = {user = true, agent = true, self = true}
 local FROM_FIELDS = {"name", "terminal", "instance", "project", "machine"}
+-- The kinds of Project Chat messages that a Pi posts. See CONTEXT.md.
+local CHAT_KINDS = {user = true, output = true, answer = true, agent = true}
+local NO_CLIENT = {}
 
 function M.valid_name(name)
   return type(name) == "string" and #name <= 64 and name:match("^[%w][%w%._%-]*$") ~= nil
@@ -175,13 +178,39 @@ function M.new(server, directory)
     wake(chat, true)
   end
 
-  server.chat_result = function(root, terminal, instance, result)
+  -- A Pi posts the readable messages of its conversation: what the user typed, its output and answers, and the
+  -- messages of other agents to it, and its replies to them. Each message has one author that posts it, so a lost
+  -- acknowledgement is the only source of a copy, and `source` finds that copy.
+  server.chat_post = function(root, terminal, instance, post)
     local state = project(root)
-    local key = terminal .. ":" .. instance .. ":" .. result.id
-    for _, m in ipairs(state.chat.messages) do if m.request == key then return end end
-    append(state, {pi = true, from = {kind = "agent", terminal = terminal, instance = instance,
-      name = agent_name.for_terminal(terminal)}, request = key, text = result.text,
-      reply_to = type(result.reply_to) == "string" and result.reply_to or nil})
+    local key = terminal .. ":" .. instance .. ":" .. post.id
+    for _, m in ipairs(state.chat.messages) do if m.source == key or m.request == key then return end end
+    local pi = {kind = "agent", terminal = terminal, instance = instance, name = agent_name.for_terminal(terminal)}
+    local function id(value) return type(value) == "string" and #value <= 128 and value or nil end
+    -- A Pi without kinds posts only answers.
+    local kind = CHAT_KINDS[post.kind] and post.kind or "answer"
+    local message = {kind = kind, source = key, request = id(post.request) or key, text = post.text,
+      reply_to = id(post.reply_to)}
+    if kind == "user" then
+      message.from, message.to = {kind = "user"}, {name = pi.name, terminal = terminal, instance = instance}
+    elseif kind == "agent" and type(post.from) == "table" then
+      -- A message from another agent. A reply goes to its author: an External Agent, or a Pi in this Project.
+      local from = clean_from(post.from, NO_CLIENT)
+      from.kind = "agent"
+      if M.valid_name(post.from.external) then
+        from.name, message.external = post.from.external, post.from.external
+      elseif from.terminal and from.instance and not post.from.other_project and not from.machine then
+        message.pi = true
+      end
+      message.from, message.to = from, {name = pi.name, terminal = terminal, instance = instance}
+    else
+      message.pi, message.from = true, pi
+      if kind == "agent" and type(post.to) == "table" then
+        message.to = clean_from(post.to, NO_CLIENT)
+        message.to.kind = "agent"
+      end
+    end
+    append(state, message)
   end
 
   local function post(client, id, params, parent)
@@ -203,10 +232,19 @@ function M.new(server, directory)
       message.request = "r" .. net.random_token():sub(1, 15)
       if params.expect_reply == false then message.expect_reply = false end
     end
+    -- The agent's answer to an agent is an agent message too, and names that agent.
+    local to, kind = {name = agent.name, external = agent.name}, from.kind
+    if from.kind == "self" then
+      to, kind = nil, "answer"
+      for _, asked in ipairs(agent.messages) do
+        if message.reply_to and asked.request == message.reply_to and asked.from.kind == "agent" then
+          to, kind = asked.from, "agent"
+        end
+      end
+    end
     agent.messages[#agent.messages + 1] = message
-    append(state, {from = from.kind == "self" and {kind = "agent", name = agent.name} or from,
-      external = from.kind == "self" and agent.name or nil, text = message.text,
-      to = from.kind ~= "self" and {name = agent.name, external = agent.name} or nil,
+    append(state, {kind = kind, from = from.kind == "self" and {kind = "agent", name = agent.name} or from,
+      external = from.kind == "self" and agent.name or nil, text = message.text, to = to,
       request = message.request or net.random_token(), reply_to = type(parent) == "table" and parent.request or message.reply_to})
     if #agent.messages > MAX_MESSAGES then table.remove(agent.messages, 1) end
     dirty[state] = true
@@ -220,7 +258,7 @@ function M.new(server, directory)
     local ok, err = pcall(server.chat_deliver, state.root, target, request, text, parent and parent.time,
       function(accepted, reason)
         if not accepted then return server.fail(client, id, "not_connected", reason) end
-        append(state, {from = clean_from(nil, client), request = request, text = text,
+        append(state, {kind = "user", from = clean_from(nil, client), request = request, text = text,
           to = {name = agent_name.for_terminal(target.terminal), terminal = target.terminal, instance = target.instance},
           reply_to = parent and parent.request})
         server.reply(client, id, {result = {task = request}})

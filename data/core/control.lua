@@ -474,12 +474,16 @@ function M:exchange(terminal, report)
     if system.get_time() < query.deadline then requests[#requests + 1] = {id = token, options = query.options} end
   end
   local ack
-  if self.chat_result and report.chat_result then
-    local result = report.chat_result
-    check(id, result.id, "Result ID")
-    assert(type(result.text) == "string" and #result.text <= 32768, "Invalid chat result")
-    self.chat_result(terminal, peer.instance, result)
-    ack = result.id
+  -- A Pi that still runs an extension from before `chat` sends one answer as `chat_result`.
+  local posts = report.chat or report.chat_result and {report.chat_result}
+  if self.chat_post and posts then
+    assert(type(posts) == "table" and #posts <= 16, "Invalid chat messages")
+    for _, message in ipairs(posts) do
+      check(id, message.id, "Chat message ID")
+      assert(type(message.text) == "string" and #message.text <= 32768, "Invalid chat message")
+      self.chat_post(terminal, peer.instance, message)
+      ack = message.id
+    end
   end
   return {chat_ack = ack, name = agent_name.for_terminal(terminal), commands = protocol_json.array(commands),
     transcript_requests = requests, transcript_acks = acks}

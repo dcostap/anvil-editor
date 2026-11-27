@@ -216,13 +216,22 @@ Each message to the agent has a `request` ID. The agent answers with `action: "s
 
 A Pi sends to an External Agent with `agent_send` and `agent` set to its name. The result has a `task`: the message's request ID. When the agent answers with `reply_to` set to it, Pi receives the answer as an Anvil reply, as from another Pi. An External Agent sends to a Pi with `agent_send`, a `terminal`, and `from_agent` set to its own name. Pi sees the message from "External Agent agy", and its `anvil_reply` goes into the agent's thread with `reply_to` set to the task. Anvil follows such a reply for one hour.
 
-Run `project:open_chat` to see new Pi final answers and External Agent messages in the current Project. The Machine keeps the latest 200 messages. It does not import earlier transcripts, tool output, or thinking. A remote Project needs Full control to read this feed and reply from it.
+Run `project:open_chat` to open Project Chat for the current Project. It shows four kinds of messages:
+
+- **User Message:** text that you type in a Pi Terminal, including a steering message, or send from Project Chat.
+- **Agent Output:** text that Pi writes between its tool calls.
+- **Answer:** the text that ends a Pi turn, or an External Agent's message to you.
+- **Agent Message:** a task, steering message or reply from one agent to another.
+
+Project Chat does not show tool calls, tool output or thinking. An Answer folds the Agent Output of its turn. Click **Show updates** above the Answer to see that output. Agent Output that has no Answer yet stays visible, so you can follow the work. Each agent's avatar has its own color: a Pi keeps its color for its Terminal Session, and an External Agent for its name.
+
+Each message has one author that posts it. Pi posts the messages of its own conversation: what you type, its Agent Output and Answers, the Agent Messages that it receives, and its `anvil_reply`. The External Agent service posts each message of an External Agent's thread. Project Chat posts what you send from it. So a reply to an External Agent comes from its thread, and a reply from an External Agent comes from its `say`. The Machine keeps the latest 200 messages. It does not import earlier transcripts. A remote Project needs Full control to read Project Chat and reply from it.
 
 Use **To** next to the message box to select a recipient. From the message box, press Tab and Enter to open the selector with the keyboard. The list includes connected Pi conversations and registered External Agents, even if they have not sent a message. Press Enter in the message box to send to the selected recipient. The selection stays in effect until you change it, and the Workspace saves it with the draft.
 
 Click an agent's avatar or name in the feed to select it without clearing the draft. The selected agent's name uses the information color. A Pi selection names one conversation. If Pi replaces that conversation, select the new one before you send. A remote device with View access cannot send or read the Project feed. Use **External Agents** in that case to read an External Agent's thread.
 
-Choose **Reply** on a result or in its context menu to send one reply to its author. The composer shows the reply recipient and the start of the result. Enter sends the reply. Escape cancels the reply without deleting the draft. In both cases, **To** returns to the previous selection. A message to Pi goes into the same Terminal and conversation as user input. If Pi is busy, the message steers that turn. An External Agent receives the message in its own thread. Neither action broadcasts a message to other agents.
+Choose **Reply** on an agent's message or in its context menu to send one reply to its author. The author is a Pi in this Project or an External Agent. The composer shows the reply recipient and the start of the message. Enter sends the reply. Escape cancels the reply without deleting the draft. In both cases, **To** returns to the previous selection. A message to Pi goes into the same Terminal and conversation as user input. If Pi is busy, the message steers that turn. An External Agent receives the message in its own thread. Neither action broadcasts a message to other agents.
 
 Project Chat shows messages in time order. Replies appear under their question. A late reply starts a new card and quotes the question.
 
