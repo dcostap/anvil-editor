@@ -98,15 +98,21 @@ The client sends `TAKE` with the control generation that it saw last, then the i
 
 Each Client resizes its own screen there. A handoff sends no snapshot. A `ROLE` also counts the attached Clients.
 
-The host sends one to the others when a Client attaches or leaves. The session status reports the count as `clients`. A CLOSE or END from one Client only detaches that Client while another Client is attached.
+The host sends one to the others when a Client attaches or leaves. The session status reports the count as `clients`. A CLOSE or END detaches its Client if another independent View remains.
 
-The last Client's close ends the shell. A control connection without a Client ID cannot end a shell while a Client is attached. New Clients request a connection ID in WELCOME.
+Closing the last independent View ends the shell. A control connection without a Client ID cannot end a shell while a Client is attached. New Clients request a connection ID in WELCOME.
 
-Their final control CLOSE or END names that exact Client and its process, so a delayed disconnect cannot hide the last Close. Another Client in the same process stays attached. Older hosts reject the request flag; the Client then repeats the old handshake without an ID.
+Their final control CLOSE or END names that exact Client and its process. Older hosts reject the request flag; the Client then repeats the old handshake without an ID.
+
+A shared layout gives each Pane an ID. Each copy of a Terminal in that Pane sends its ID to a host that advertises `pane_identity`. The host counts those connections as one View for Close and End. A separate View still protects its shell. A disconnect only detaches, even for the last View. Controller selection, input and screen size still use individual connections. The status field `clients` counts connections. `views` gives the logical count when it differs. Hosts without `pane_identity` keep the connection-based close rule.
+
+When another View makes a close safe without confirmation, that approval permits only Detach. A later count change cannot turn it into End. On local reconnect, the client sends the previous Pane ID before it sends a pending End. After attach, the View sends its first real layout even when its dimensions match the initial placeholder.
+
+Hosts with `pane_attach` accept a known Pane ID in HELLO and use it for the first View count. Older hosts with `pane_identity` bind after attach. A View without a real layout keeps the host grid across reconnects. Its first layout resize ends that behavior.
 
 A saved host uses both its process ID and creation time. If Windows reuses the ID, revival keeps the saved Session and screen. For a process that denies access, the native system process list can prove that the creation time differs.
 
-An identity that cannot be verified stays blocked. A failed Terminal without a native session still appears in agent workspace inspection. So Pane Close asks no question for a session that another device shows, and keeps no Reopen record for it.
+An identity that cannot be verified stays blocked. A failed Terminal without a native session still appears in agent workspace inspection. Pane Close asks no question for a session with another independent View. It keeps no Reopen record for that session.
 
 When the Controller leaves, no other Client gets control until it asks. A Client on the host's own PC takes control when it attaches, if the Controller is also on this PC. A Pane move attaches before the old View's detach arrives, so the target still controls.
 
@@ -258,13 +264,13 @@ See [inline terminal images](../../tools/TERMINAL_IMAGES.md) for supported featu
 
 ## Agent control
 
-`core.control` owns editor operations. `core.control_server` exposes them through authenticated loopback MCP. `core.control_runtime` publishes private discovery files and follows Terminal ownership.
+`core.control` owns editor and agent operations. `core.control_server` exposes them through authenticated loopback MCP. `core.serve_agents` opens Anvil's MCP server in the Machine server: a `control_server` with a hub that holds one headless Control for each Project with a running Pi. The hub answers agent operations and sends editor operations to the private endpoint of the Project process. `core.control_runtime` opens that private endpoint, publishes its discovery files and follows Terminal ownership.
 
 Cross-Project discovery runs in a worker. It uses a Project's discovery file only while its process runs with the file's `pid` and `created` time (`system.process_state`). It deletes the files of ended processes, which a crash or a Windows shutdown leaves.
 
 `src/process_identity.c` owns that check for Terminal hosts too. Do not move editor behavior into the transport or Pi extension.
 
-Interactive Pi gets `data/tools/agent-sessions/pi-control.cjs` through the existing preload. It registers Anvil's MCP server and handles attributed messages, steering, interruption, and settled results. Pi remains a TUI.
+Interactive Pi gets `data/tools/agent-sessions/pi-control.cjs` through the existing preload. It registers Anvil's MCP server from its Machine credential and handles attributed messages, steering, interruption, and settled results. It also reports to the Project process, without registering it, so `pi_start` sees the Pi there. A Pi reports `mcp: true` after it registers the server; `pi_start` is ready only then, and sends its first task through the Machine server. Pi remains a TUI.
 
 Pi launches require explicit provider, model, and thinking choices.
 
@@ -286,7 +292,7 @@ Keep focus by default. A `pane` or `terminal` close request approves only the ca
 
 Self-close can stop the agent before the reply arrives. Use stable Pane, Terminal, and conversation IDs, not navigation numbers. A wait timeout never cancels a task.
 
-Retry keys last for the Project process; Pi persists accepted delivery receipts separately.
+Retry keys last for the process that runs the operation; Pi persists accepted delivery receipts separately. Commands to Pi hold only plain data: a live Control in a command makes each later exchange fail.
 
 The `snooze` control tool sets or removes a Terminal's Snooze. Without a target, it uses the calling agent's Terminal Session. The Sidebar owns the saved times.
 

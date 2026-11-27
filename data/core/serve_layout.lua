@@ -2,22 +2,27 @@ local common = require "core.common"
 local M = {}
 
 -- Keep only layout fields. Never accept serialized Views, shell commands or Buffer contents.
-local function checked(server, root, value)
+local function checked(server, root, value, previous)
   if type(value) ~= "table" or type(value.groups) ~= "table" then return end
   local count = 0
+  local ids = {}
   local function node(n, depth)
     if type(n) ~= "table" or depth > 32 or count >= 128 then return end
+    if n.pane ~= nil then
+      if type(n.pane) ~= "string" or #n.pane ~= 32 or not n.pane:match("^[a-f0-9]+$") or ids[n.pane] then return end
+      ids[n.pane] = true
+    end
     if n.file then
       if type(n.file) ~= "string" or common.is_absolute_path(n.file) then return end
       local path = server.check_path(root .. PATHSEP .. n.file)
       if not path or not common.path_belongs_to(path, root) then return end
       count = count + 1
-      return {file = common.relative_path(root, path)}
+      return {pane = n.pane, file = common.relative_path(root, path)}
     elseif n.terminal then
       if type(n.terminal) ~= "string" or #n.terminal ~= 32 or not n.terminal:match("^%x+$") then return end
       if PLATFORM ~= "Windows" or not require("core.serve_terminal").belongs_to(n.terminal, root) then return end
       count = count + 1
-      return {terminal = n.terminal}
+      return {pane = n.pane, terminal = n.terminal}
     elseif (n.axis == "x" or n.axis == "y") and type(n.ratio) == "number" and n.ratio > 0 and n.ratio < 1 then
       local a, b = node(n.a, depth+1), node(n.b, depth+1)
       if a and b then return {axis=n.axis, ratio=n.ratio, a=a, b=b} end
@@ -31,6 +36,20 @@ local function checked(server, root, value)
   end
   local active = value.active
   if type(active) ~= "number" or active%1 ~= 0 or active < 0 or active > count then return end
+  -- Only the Machine assigns missing IDs. Reuse the previous IDs for legacy leaves with the same contents.
+  local known = {}
+  local function visit(n, assign)
+    if n.axis then visit(n.a,assign); visit(n.b,assign); return end
+    local k = n.file and "file:" .. common.path_compare_key(n.file) or "terminal:" .. n.terminal
+    if not assign and not ids[n.pane] then
+      known[k] = known[k] or {}
+      table.insert(known[k],n.pane)
+    elseif assign and not n.pane then
+      n.pane = known[k] and table.remove(known[k],1) or require("net").random_token():sub(1,32)
+    end
+  end
+  for _,g in ipairs(previous and previous.groups or {}) do visit(g,false) end
+  for _,g in ipairs(groups) do visit(g,true) end
   return {groups=groups, active=active}
 end
 
@@ -44,7 +63,7 @@ function M.new(server)
     if write then
       if p.base ~= state.revision then return server.fail(client,id,"conflict","Layout has changed") end
       if state.revision == 0 and client.device then return server.fail(client,id,"not_ready","Open the Project on its host first") end
-      local layout = checked(server,root,p.layout)
+      local layout = checked(server,root,p.layout,state.layout)
       if not layout then return server.fail(client,id,"invalid_layout","Invalid Machine layout") end
       state = {revision=state.revision+1, layout=layout}
       states[root] = state

@@ -1,4 +1,6 @@
--- A Pi with no editor View uses the Machine's loopback agent endpoint. Never export its credential.
+-- Anvil's MCP server: one loopback endpoint of the Machine server for all its Projects. Each running Pi gets a
+-- Terminal credential in `USERDIR/machine/agents`. Other local clients, such as the stdio bridge, use the owner
+-- credential in `USERDIR/machine/mcp.json`. Never export a credential.
 local core = require "core"
 local agent_name = require "core.agent_name"
 local common = require "core.common"
@@ -7,59 +9,81 @@ local net = require "net"
 local agents = require "core.machine_agents"
 local M = {}
 
+-- Writes a credential file, so a reader never sees half of it.
+local function publish(path, value)
+  local file = assert(io.open(path .. ".tmp", "wb")); file:write(json.encode(value)); file:close()
+  assert(system.replace_file(path .. ".tmp", path))
+end
+
 function M.new(server, live_record)
-  local projects, registered = {}, {}
+  -- One Control for each Project, keyed by its path. It holds the Project's Pi conversations.
+  local controls, registered = {}, {}
   local pending = {}
   local directory = USERDIR .. "/machine/agents"
   net.private_directory(directory)
+  local function control_of(project)
+    local key = common.path_compare_key(project)
+    if controls[key] then return controls[key] end
+    local control = require("core.control").new(project)
+    control.headless = true
+    control.chat_receipt = function(terminal, instance, receipt)
+      local item = pending[receipt.id]
+      if item and item.terminal == terminal and item.instance == instance then
+        pending[receipt.id] = nil
+        item.finish(receipt.status == "accepted", receipt.error or "Pi refused the reply")
+      end
+    end
+    control.chat_post = function(terminal, instance, message)
+      local record = live_record(terminal)
+      if record and common.path_equals(record.project_path, project) then server.chat_post(project, terminal, instance, message) end
+    end
+    controls[key] = control
+    return control
+  end
+  -- The listener opens in the server's first thread step, because it waits for the loopback address.
+  local hub
+  local function open_hub()
+    local ok, opened = pcall(require("core.control_server").open, nil, {
+      -- A Project of a running Terminal, or a Project that this Machine serves.
+      control = function(project)
+        local root = controls[common.path_compare_key(project)] and project or server.project_root(project)
+        return root and control_of(root)
+      end,
+      project_of = function(caller)
+        local item = registered[caller]
+        return item and item.control.project
+      end,
+      tick = function() for _, control in pairs(controls) do control:tick() end end,
+    })
+    if not ok then return server.log("Machine server cannot open Anvil's MCP server: %s", tostring(opened)) end
+    hub = opened
+    publish(USERDIR .. "/machine/mcp.json", {version = 1, url = hub.url, token = hub.token,
+      pid = system.get_process_id(), created = system.get_process_creation_time()})
+    server.log("Machine server opened Anvil's MCP server at %s", hub.url)
+  end
   local function forget(id, item)
-    item.server:remove_client(item.endpoint.token)
-    item.server.control.peers[id] = nil
+    hub:remove_client(item.endpoint.token)
+    item.control.peers[id] = nil
     os.remove(directory .. "/" .. id .. ".json")
     registered[id] = nil
   end
   local function observe(record)
-    if os.getenv("ANVIL_CONTROL") == "0" then return end
+    if not hub then return end
     local id, project = record.session_id, record.project_path
     local item = registered[id]
-    if item and common.path_equals(item.server.control.project, project) then return item end
+    if item and common.path_equals(item.control.project, project) then return item end
     if item then forget(id, item) end
-    while projects[project] == false do coroutine.yield(.01) end
-    if registered[id] then return registered[id] end
-    local listener = projects[project]
-    if not listener then
-      local control = require("core.control").new(project)
-      control.headless = true
-      control.chat_receipt = function(terminal, instance, receipt)
-        local item = pending[receipt.id]
-        if item and item.terminal == terminal and item.instance == instance then
-          pending[receipt.id] = nil
-          item.finish(receipt.status == "accepted", receipt.error or "Pi refused the reply")
-        end
-      end
-      control.chat_result = function(terminal, instance, result)
-        local record = live_record(terminal)
-        if record and common.path_equals(record.project_path, project) then server.chat_result(project, terminal, instance, result) end
-      end
-      projects[project] = false
-      local ok, opened = pcall(require("core.control_server").open, control)
-      if not ok then projects[project] = nil; error(opened) end
-      listener = opened
-      projects[project] = listener
-    end
-    local ep = listener:add_client(id)
-    local path = directory .. "/" .. id .. ".json"
-    local file = assert(io.open(path .. ".tmp", "wb")); file:write(json.encode(ep)); file:close()
-    assert(system.replace_file(path .. ".tmp", path))
-    item = {server = listener, endpoint = ep}
+    local ep = hub:add_client(id)
+    publish(directory .. "/" .. id .. ".json", ep)
+    item = {control = control_of(project), endpoint = ep}
     registered[id] = item
     return item
   end
   server.chat_recipients = function(project, recipients)
     local now = system.get_time()
-    for root, listener in pairs(projects) do
-      if listener and common.path_equals(root, project) then
-        for terminal, peer in pairs(listener.control.peers) do
+    for _, control in pairs(controls) do
+      if common.path_equals(control.project, project) then
+        for terminal, peer in pairs(control.peers) do
           if now - peer.seen < 10 then
             recipients[#recipients + 1] = {name = agent_name.for_terminal(terminal), terminal = terminal,
               instance = peer.instance}
@@ -71,17 +95,18 @@ function M.new(server, live_record)
   server.chat_deliver = function(project, target, request, text, answer_time, finish)
     local record, item = live_record(target.terminal), registered[target.terminal]
     assert(record and item and common.path_equals(record.project_path, project)
-      and common.path_equals(item.server.control.project, project), "The original Pi conversation is not connected")
-    local control = item.server.control
+      and common.path_equals(item.control.project, project), "The original Pi conversation is not connected")
+    local control = item.control
     control:queue_agent_command(target, {action = "human", id = request, instance = target.instance,
       text = text, answer_time = answer_time})
     pending[request] = {terminal = target.terminal, instance = target.instance, finish = finish,
       control = control, deadline = system.get_time() + 10}
   end
   core.add_thread(function()
+    if os.getenv("ANVIL_CONTROL") ~= "0" then open_hub() end
     local next_check = 0
     while true do
-      for _, listener in pairs(projects) do if listener then listener:poll() end end
+      if hub then hub:poll() end
       if system.get_time() >= next_check then
         for id, delivery in pairs(pending) do
           local peer = delivery.control.peers[delivery.terminal]
@@ -101,14 +126,12 @@ function M.new(server, live_record)
         end
         for id, item in pairs(registered) do
           local record = live_record(id)
-          if not record or not common.path_equals(record.project_path, item.server.control.project) then forget(id, item) end
-        end
-        for root, listener in pairs(projects) do
-          if listener and not next(listener.credentials) then listener:close(); projects[root] = nil end
+          if not record or not common.path_equals(record.project_path, item.control.project) then forget(id, item) end
         end
         next_check = system.get_time() + 2
       end
-      coroutine.yield(next(projects) and .02 or .2)
+      -- Pi exchanges every half second. A new connection waits at most one idle step.
+      coroutine.yield(hub and #hub.clients > 0 and .02 or .1)
     end
   end)
   local function call(method, client, id, args)
@@ -128,11 +151,12 @@ function M.new(server, live_record)
       end
       local ok, err = pcall(function()
         local item = observe(record)
+        if not item then return finish(false, "Anvil's MCP server is not open yet") end
         local deadline = system.get_time() + 2
-        while not item.server.control.peers[args.terminal] and system.get_time() < deadline and not client.dead do coroutine.yield(.05) end
-        if not item.server.control.peers[args.terminal] then return finish(false) end
+        while not item.control.peers[args.terminal] and system.get_time() < deadline and not client.dead do coroutine.yield(.05) end
+        if not item.control.peers[args.terminal] then return finish(false) end
         if client.dead then return finish(false) end
-        local control = item.server.control
+        local control = item.control
         local sender = "machine:" .. (client.device or "owner") .. "/" .. tostring(args.sender or "local"):sub(1, 128)
         local info = args.sender_info
         if type(info) == "table" then

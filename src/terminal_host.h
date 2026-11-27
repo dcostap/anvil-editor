@@ -19,12 +19,12 @@ bool anvil_terminal_id_valid(const char *id);
 /* Authentication and handshake. This may wait; recurring reconnects use a worker. */
 bool anvil_terminal_host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
                                  DWORD *shell_pid, const char *id, AnvilTerminalSize *size,
-                                 uint32_t *client_id, DWORD *error);
+                                 const char *pane, uint32_t *client_id, DWORD *error);
 /* Connects as a Client on another device, such as a Machine server's link for a remote Client. `info` names
    the device, and can make the connection view-only. Hosts without `shared = true` refuse it. */
 bool anvil_terminal_host_connect_as(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid, DWORD *shell_pid,
                                     const char *id, AnvilTerminalSize *size, const AnvilTerminalClientInfo *info,
-                                    DWORD *error);
+                                    const char *pane, DWORD *error);
 /* A fresh authenticated control connection needs no snapshot or model resize. */
 bool anvil_terminal_host_control(HANDLE process, DWORD host_pid, const char *id,
                                  uint16_t type, uint32_t client_id, DWORD *error);

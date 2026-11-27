@@ -1,17 +1,29 @@
--- One local endpoint per loaded Project. Discovery follows Terminal Session ownership.
+-- The private endpoint of this Project process. Only the Machine server, which runs Anvil's MCP server, and the Pis
+-- of this Project's Terminal Views call it. Discovery follows Terminal Session ownership.
 local core = require "core"
 local json = require "core.json"
 local M = {}
 local server, starting, stopped, discovery, failure
 local generation = 0
 local sessions = {}
+local checked
 
--- Only publish the information a local client needs to find discovery. Never return the token.
+-- The state of Anvil's MCP server in the Machine server, from its discovery file. Never return the token.
 function M.status()
-  if starting then return "starting" end
-  if server and not failure then return "ready", server.url, discovery end
   if os.getenv("ANVIL_CONTROL") == "0" then return "disabled" end
-  return "unavailable", nil, nil, failure
+  local now = system.get_time()
+  if not checked or now - checked.time >= 1 then
+    local path = USERDIR .. PATHSEP .. "machine" .. PATHSEP .. "mcp.json"
+    local file = io.open(path, "rb")
+    local ok, record = pcall(json.decode, file and file:read(4096) or "")
+    if file then file:close() end
+    checked = {time = now, state = "unavailable", reason = "Anvil's Machine server is not running"}
+    if ok and type(record) == "table" and type(record.url) == "string" and type(record.pid) == "number"
+        and system.process_state(record.pid, type(record.created) == "string" and record.created or nil) == "running" then
+      checked = {time = now, state = "ready", url = record.url, path = path}
+    end
+  end
+  return checked.state, checked.url, checked.path, checked.reason
 end
 
 local function write_json(path, value)

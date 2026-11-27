@@ -1130,7 +1130,7 @@ function M.present(view, opts)
       focus = opts.focus, history_limit = opts.history_limit,
     }
   end
-  local disposable = M.is_disposable(pane, view)
+  local disposable = not opts.keep_history and M.is_disposable(pane, view)
   local disposable_replacement = disposable
     and (not M.constraint(pane) or M.constraint(pane) ~= M.view_constraint(view))
   if current ~= view and (disposable_replacement or not suspendable) then
@@ -1731,7 +1731,7 @@ function M.wake(list)
 end
 
 local function save_closed_pane(pane)
-  local snapshot = { views = {}, history = {}, index = pane.history.index,
+  local snapshot = { views = {}, history = {}, index = pane.history.index, shared_id = pane.shared_id,
     constrained = M.constraint(pane) ~= nil, limit = pane.history.limit }
   local indices = {}
   for _, view in ipairs(collect_owned_views(pane)) do
@@ -1763,7 +1763,7 @@ function M.restore(snapshot, opts)
   local ok, result = pcall(function()
     local owner
     for index, saved in ipairs(snapshot.views) do
-      local view = assert(require(saved.module).from_state(saved.state, opts),
+      local view = assert(require(saved.module).from_state(saved.state, opts, nil, snapshot.shared_id),
         "Cannot restore " .. saved.module)
       if M.pane_for_view(view) then error("Restored View already belongs to a Pane") end
       views[index] = view
@@ -1780,6 +1780,7 @@ function M.restore(snapshot, opts)
     local pane, err = M.create { factory = function() return current end,
       history_limit = snapshot.limit, focus = false }
     assert(pane, err)
+    pane.shared_id = snapshot.shared_id
     pane.history.entries = {}
     pane.history.index = snapshot.index
     local referenced = {}
@@ -1815,6 +1816,11 @@ end
 function M.reopen_last_closed()
   local snapshot = table.remove(closed_panes)
   if not snapshot then return nil, "No closed Pane is available" end
+  if snapshot.shared_id then
+    for _, pane in pairs(M.panes_by_id) do
+      if pane.shared_id == snapshot.shared_id then M.focus(pane); return pane end
+    end
+  end
   return M.restore(snapshot)
 end
 
@@ -1933,7 +1939,7 @@ function M.save_workspace_state(save_view)
     local ok, saved = pcall(save_view, pane.current_view)
     if ok and saved then
       valid[pane] = true
-      local record = { id = pane.id, view = saved, history_limit = pane.history.limit }
+      local record = { id = pane.id, shared_id = pane.shared_id, view = saved, history_limit = pane.history.limit }
       local current_state = capture_navigation_state(pane.current_view)
       if M.constraint(pane) then
         -- Keep the owner when a related capture is current at shutdown.
@@ -2046,7 +2052,7 @@ function M.restore_workspace_state(state, load_view)
     if type(record) == "table" and type(record.id) == "string" and not restored[record.id] then
       local related, owner = {}, nil
       for index, saved in ipairs(record.related_views or {}) do
-        local ok, view = pcall(load_view, saved)
+        local ok, view = pcall(load_view, saved, record.shared_id)
         if ok and view then
           if view.get_pane_constraint or view.owns_pane_constraint then
             owner = M.view_constraint(view) or owner
@@ -2063,7 +2069,7 @@ function M.restore_workspace_state(state, load_view)
       if type(record.history_views) == "table" then
         history_views = {}
         for index, saved in ipairs(record.history_views) do
-          local ok, view = pcall(load_view, saved)
+          local ok, view = pcall(load_view, saved, record.shared_id)
           if ok and view then history_views[index] = view end
         end
       end
@@ -2071,9 +2077,10 @@ function M.restore_workspace_state(state, load_view)
       local selected_view = selected and history_views[selected.view_index]
       local view = selected_view
       local ok = view ~= nil
-      if not view then ok, view = pcall(load_view, record.view) end
+      if not view then ok, view = pcall(load_view, record.view, record.shared_id) end
       if ok and view then
         local pane = create_restored_identity(view, record.id)
+        pane.shared_id = record.shared_id
         if selected and selected_view then
           pane.history.entries = {}
           local referenced = {}

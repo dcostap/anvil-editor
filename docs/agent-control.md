@@ -1,8 +1,8 @@
 # Agent control
 
-Anvil exposes editor operations through an authenticated local MCP server. Interactive Pi sessions connect automatically. Other MCP clients can use the same tools.
+Anvil exposes editor and agent operations through one authenticated local MCP server: Anvil's MCP server. Interactive Pi sessions connect automatically. Other MCP clients can use the same tools.
 
-Each loaded Project owns its operations. The MCP transport does not contain editor behavior. Pi remains an interactive Terminal program, not an RPC-mode agent.
+The Machine server `anvil serve` opens Anvil's MCP server, one for each user folder. It answers agent operations itself: `agent_read`, `agent_send`, `agent_wait`, `agent_transcript`, `agent_interrupt` and `external_agent`. It sends each editor operation to the Project process that has the Project loaded, because that process owns its Panes. The MCP transport does not contain editor behavior. Pi remains an interactive Terminal program, not an RPC-mode agent.
 
 ## Use from Pi
 
@@ -186,7 +186,7 @@ For `terminal_start`, readiness describes the shell, not the optional program. R
 
 Targets include a Terminal Session ID and a Pi conversation `instance`. A replacement conversation has a new instance. Requests for an old instance fail instead of reaching another conversation. A request without an instance uses the current conversation.
 
-Retry receipts belong to the running Project process. Repeating an ID with different arguments fails. After a Project restart, inspect state before submitting mutations again. Do not assume an earlier mutation failed because its response was lost.
+Retry receipts belong to the process that runs the operation: the Machine server for agent operations, and the Project process for editor operations. Repeating an ID with different arguments fails. After a restart, inspect state before submitting mutations again. Do not assume an earlier mutation failed because its response was lost.
 
 Pi persists accepted task receipts in its session. Reload does not replay accepted tasks. An interrupted run remains interrupted. Discovery reconnects when Anvil restarts while Terminal hosts keep running.
 
@@ -196,15 +196,19 @@ Only loaded Projects accept operations. Use `project` to load one. Cross-Project
 
 ## Other MCP clients
 
-Run `anvil:mcp_server` in the Command Palette to see the local server status, Project, MCP URL, and discovery file. **Ready** means Anvil is listening and published discovery. It does not mean a client is connected.
+Run `anvil:mcp_server` in the Command Palette to see the server status, MCP URL, and discovery file. **Ready** means the Machine server runs and published discovery. It does not mean a client is connected.
 
-Click **Copy Agent Setup** and paste the text into a chat with an External Agent on this computer, such as Antigravity's agent. The text is a task for the agent: it adds the MCP config entry and the rule to its own files, loads the server, checks the connection, and starts to wait for messages. If the agent cannot load MCP servers itself, it asks the user to refresh them. The entry starts the stdio bridge `DATADIR/tools/agent-sessions/anvil-mcp.cjs` with Node, the user folder and the Project. The bridge reads the discovery files at each request, so the entry stays correct after Anvil restarts with a new port and token. It contains no token. Use only a trusted client. The Project must be loaded on this computer; a tool call fails with a clear message until it is.
+Click **Copy Agent Setup** and paste the text into a chat with an External Agent on this computer, such as Antigravity's agent. The text is a task for the agent: it adds the MCP config entry and the rule to its own files, loads the server, checks the connection, and starts to wait for messages. If the agent cannot load MCP servers itself, it asks the user to refresh them. The entry starts the stdio bridge `DATADIR/tools/agent-sessions/anvil-mcp.cjs` with Node and the user folder. One entry serves all Projects. The bridge reads the discovery file at each request, so the entry stays correct after a restart with a new port and token. It contains no token. Use only a trusted client.
 
-A client that can read files can also connect directly. Read `USERDIR/control/<pid>.json` for a loaded Project. It contains `url`, `token`, `project`, `executable`, `pid` and `created`, the process creation time. Connect to `<url>/mcp` through Streamable HTTP. Send `Authorization: Bearer <token>`.
+A client without a Terminal names the Project of each call with `project`. `workspace_state` without `project` lists the loaded Projects. Other calls without `project` fail with a clear message. The bridge's optional `--project` argument sets a default `project`. An editor operation needs a loaded Project; a call fails with a clear message until it is loaded.
+
+A client that can read files can also connect directly. Read `USERDIR/machine/mcp.json`. It contains `url`, `token`, `pid` and `created`, the process creation time. Connect to `<url>/mcp` through Streamable HTTP. Send `Authorization: Bearer <token>`.
 
 The server supports initialization, tool discovery, tool calls, and ping. It returns JSON responses and supports notifications. It does not provide SSE streams or an arbitrary Lua evaluation tool.
 
-Terminal discovery lives in `USERDIR/control/terminals/<session-id>.json`. Credentials follow Terminal ownership and are revoked on detach or close. They are not printed in model instructions or logs.
+Each Pi gets a Terminal credential in `USERDIR/machine/agents/<session-id>.json`. With it, Pi registers Anvil's MCP server, and its calls use its Terminal's Project by default. Credentials follow Terminal ownership and are revoked on detach or close. They are not printed in model instructions or logs.
+
+Each Project process also has a private endpoint, with discovery in `USERDIR/control/<pid>.json` and `USERDIR/control/terminals/<session-id>.json`. Anvil's MCP server sends editor operations to it, and Pi reports its state to it for the Project's Panes and for `pi_start`. It answers only the editor operations of its own Project. It refuses agent operations and other Projects, and names Anvil's MCP server instead.
 
 ## External Agents
 
@@ -216,13 +220,22 @@ Each message to the agent has a `request` ID. The agent answers with `action: "s
 
 A Pi sends to an External Agent with `agent_send` and `agent` set to its name. The result has a `task`: the message's request ID. When the agent answers with `reply_to` set to it, Pi receives the answer as an Anvil reply, as from another Pi. An External Agent sends to a Pi with `agent_send`, a `terminal`, and `from_agent` set to its own name. Pi sees the message from "External Agent agy", and its `anvil_reply` goes into the agent's thread with `reply_to` set to the task. Anvil follows such a reply for one hour.
 
-Run `project:open_chat` to see new Pi final answers and External Agent messages in the current Project. The Machine keeps the latest 200 messages. It does not import earlier transcripts, tool output, or thinking. A remote Project needs Full control to read this feed and reply from it.
+Run `project:open_chat` to open Project Chat for the current Project. It shows four kinds of messages:
+
+- **User Message:** text that you type in a Pi Terminal, including a steering message, or send from Project Chat.
+- **Agent Output:** text that Pi writes between its tool calls.
+- **Answer:** the text that ends a Pi turn, or an External Agent's message to you.
+- **Agent Message:** a task, steering message or reply from one agent to another.
+
+Project Chat does not show tool calls, tool output or thinking. An Answer folds the Agent Output of its turn. Click **Show updates** above the Answer to see that output. Agent Output that has no Answer yet stays visible, so you can follow the work. Each agent's avatar has its own color: a Pi keeps its color for its Terminal Session, and an External Agent for its name.
+
+Each message has one author that posts it. Pi posts the messages of its own conversation: what you type, its Agent Output and Answers, the Agent Messages that it receives, and its `anvil_reply`. The External Agent service posts each message of an External Agent's thread. Project Chat posts what you send from it. So a reply to an External Agent comes from its thread, and a reply from an External Agent comes from its `say`. The Machine keeps the latest 200 messages. It does not import earlier transcripts. A remote Project needs Full control to read Project Chat and reply from it.
 
 Use **To** next to the message box to select a recipient. From the message box, press Tab and Enter to open the selector with the keyboard. The list includes connected Pi conversations and registered External Agents, even if they have not sent a message. Press Enter in the message box to send to the selected recipient. The selection stays in effect until you change it, and the Workspace saves it with the draft.
 
 Click an agent's avatar or name in the feed to select it without clearing the draft. The selected agent's name uses the information color. A Pi selection names one conversation. If Pi replaces that conversation, select the new one before you send. A remote device with View access cannot send or read the Project feed. Use **External Agents** in that case to read an External Agent's thread.
 
-Choose **Reply** on a result or in its context menu to send one reply to its author. The composer shows the reply recipient and the start of the result. Enter sends the reply. Escape cancels the reply without deleting the draft. In both cases, **To** returns to the previous selection. A message to Pi goes into the same Terminal and conversation as user input. If Pi is busy, the message steers that turn. An External Agent receives the message in its own thread. Neither action broadcasts a message to other agents.
+Choose **Reply** on an agent's message or in its context menu to send one reply to its author. The author is a Pi in this Project or an External Agent. The composer shows the reply recipient and the start of the message. Enter sends the reply. Escape cancels the reply without deleting the draft. In both cases, **To** returns to the previous selection. A message to Pi goes into the same Terminal and conversation as user input. If Pi is busy, the message steers that turn. An External Agent receives the message in its own thread. Neither action broadcasts a message to other agents.
 
 Project Chat shows messages in time order. Replies appear under their question. A late reply starts a new card and quotes the question.
 
@@ -242,17 +255,17 @@ The server binds only to `127.0.0.1`. It rejects browser origins, incorrect Host
 
 This is trusted local automation, not a sandbox. A credential permits file access, program launch, and editor operations under the user's account. Treat it like a local shell credential. Do not publish discovery files or forward this port.
 
-Set `ANVIL_CONTROL=0` before starting Anvil to disable its server. Set `ANVIL_PI_CONTROL=0` to disable automatic Pi integration. Pi's `--no-extensions` also prevents automatic injection.
+Set `ANVIL_CONTROL=0` before starting Anvil to disable its servers. Set `ANVIL_PI_CONTROL=0` to disable automatic Pi integration. Pi's `--no-extensions` also prevents automatic injection.
 
 ## Checks
 
-`ui/agent_control.lua` tests editor operations and retry behavior. `ui/control_transport.lua` tests MCP authorization, Project routing, and messages between Pi and External Agents. `runtime/net_server.lua` tests socket lifecycle and private credential directories.
+`ui/agent_control.lua` tests editor operations and retry behavior. `ui/control_transport.lua` tests MCP authorization, Project routing through Anvil's MCP server, and messages between Pi and External Agents. `runtime/net_server.lua` tests socket lifecycle and private credential directories.
 
 `runtime/machine_external.lua` tests External Agent threads on a real Machine server. `ui/external_agent_view.lua` tests the View against a Machine with its own user folder. `node --test tests/anvil-mcp.test.cjs` tests the stdio bridge.
 
 `node --test tests/pi-control.test.cjs` tests delivery, steering, interruption, settlement, reload receipts, conversation pages, and live activity.
 
-`ui/control_pi.lua` runs real Pi TUI processes inside real Terminal Sessions. A parent Pi uses MCP to launch a child, send work, and retrieve its answer and conversation. The test checks that the user's Pane keeps focus.
+`ui/control_pi.lua` runs real Pi TUI processes inside real Terminal Sessions, with a real Machine server. A parent Pi uses Anvil's MCP server to launch a child, send work, and retrieve its answer and conversation. The test checks that the user's Pane keeps focus.
 
 The `terminal-focus` shell probe checks agent Snooze requests through the real shell and Sidebar, including persistence and removal.
 

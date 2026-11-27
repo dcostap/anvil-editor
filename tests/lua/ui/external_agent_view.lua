@@ -142,6 +142,63 @@ test.describe("External Agent View on a Machine", function()
     test.equal(cards[4].quote, "brave-otter: Which fixture?")
   end)
 
+  test.it("folds a Pi's output into its answer, and shows it again on a click", function(context)
+    local chat = external_agents.View("Project Chat")
+    context.view = chat
+    chat.closed = true
+    chat.position.x, chat.position.y, chat.size.x, chat.size.y = 0, 0, 900, 2000
+    local now = os.time()
+    local pi = { kind = "agent", name = "brave-otter", terminal = "t1", instance = "i1" }
+    local other = { kind = "agent", name = "calm-heron", terminal = "t2", instance = "i2" }
+    chat:receive({ cursor = 5, seq = 5, messages = {
+      { seq = 1, time = now, kind = "user", from = { kind = "user" }, request = "q", text = "Fix the build" },
+      { seq = 2, time = now, kind = "output", pi = true, from = pi, reply_to = "q", request = "o1", text = "Reading the log" },
+      { seq = 3, time = now, kind = "output", pi = true, from = other, request = "o2", text = "Other work" },
+      { seq = 4, time = now, kind = "output", pi = true, from = pi, reply_to = "q", request = "o3", text = "Running the tests" },
+    } })
+    chat:update()
+    test.ok(chat.messages[2].y and chat.messages[4].y, "Output without an answer must show")
+    chat:receive({ cursor = 6, seq = 6, messages = {
+      { seq = 6, time = now, kind = "answer", pi = true, from = pi, reply_to = "q", request = "a", text = "Fixed" },
+    } })
+    chat:update()
+    local answer = chat.messages[5]
+    test.is_nil(chat.messages[2].y, "The answer must fold its output")
+    test.is_nil(chat.messages[4].y)
+    test.ok(chat.messages[3].y, "Another Pi's output must stay")
+    test.equal(answer.toggle, "Show 2 updates")
+    local x = chat:column() + require("core.ui").metrics().pad_x + answer.x + 1
+    local y = chat:thread_top() + answer.toggle_y + 1
+    test.ok(chat:on_mouse_pressed("left", x, y, 1))
+    chat:on_mouse_released("left", x, y)
+    chat:update()
+    test.ok(chat.messages[2].y and chat.messages[4].y, "A click must show the folded output")
+    test.equal(answer.toggle, "Hide 2 updates")
+    test.ok(chat.messages[4].y < answer.y, "Output must keep its time order")
+  end)
+
+  test.it("gives each agent its own avatar color and the user none", function(context)
+    local chat = external_agents.View("Project Chat")
+    context.view = chat
+    chat.closed = true
+    local function color(from, external) return chat:author_color({ from = from, external = external }) end
+    local colors = {}
+    for i = 1, 16 do
+      local value = color({ kind = "agent", terminal = "terminal-" .. i })
+      colors[table.concat(value, ",")] = true
+    end
+    local count = 0
+    for _ in pairs(colors) do count = count + 1 end
+    test.ok(count > 1, "Agents must not share one color")
+    test.equal(color({ kind = "agent", terminal = "t1", name = "brave-otter" }), color({ kind = "agent", terminal = "t1" }),
+      "A Pi must keep its color")
+    local thread = external_agents.View("agy")
+    thread.closed = true
+    test.equal(color({ kind = "agent", name = "agy" }, "agy"), thread:author_color({ from = { kind = "self" } }),
+      "An External Agent must have one color in each View")
+    test.is_nil(color({ kind = "user" }))
+  end)
+
   test.it("keeps the final line of a wrapped Markdown answer inside its card", function(context)
     local sections = {}
     for i = 1, 12 do
@@ -328,6 +385,15 @@ test.describe("External Agent View on a Machine", function()
     wait_until(function() return #project_view.messages == 3 end, "The next message did not send")
     test.equal(project_view.messages[3].to.name, "reviewer")
     test.is_nil(project_view.messages[3].reply_to)
+    test.equal(answer.kind, "answer")
+    test.equal(project_view.messages[2].kind, "user")
+    -- An External Agent's answer to a Pi is a message between agents, and names the Pi.
+    local asked = request(context, "external.post", { agent = "agy", text = "Status?",
+      from = { kind = "agent", name = "brave-otter", terminal = "t1" } })
+    request(context, "external.post", { agent = "agy", text = "Green", reply_to = asked.request, from = { kind = "self" } })
+    wait_until(function() return #project_view.messages == 5 end, "Missing messages between agents")
+    test.same({ project_view.messages[4].kind, project_view.messages[4].to.name }, { "agent", "agy" })
+    test.same({ project_view.messages[5].kind, project_view.messages[5].to.name }, { "agent", "brave-otter" })
   end)
 
   test.it("keeps its Pane when the user opens another View there", function(context)

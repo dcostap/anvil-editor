@@ -284,6 +284,8 @@ A later `not_found` attach means the session ended on the Machine. The attach RO
 
 In a Project on a Machine (`fs.machine`), each Terminal View runs its shell on the Machine. The View keeps no session record on this PC and uses no prepared shell. Workspace restore attaches the saved session ID.
 
+When the View has no layout yet, `terminal.attach` requests `preserve_grid`. The host sends the live screen at its current size. A placeholder size does not resize the running program.
+
 When the Machine no longer has it, a new shell starts in the saved folder, as a local restore does. Reopen Closed Pane does the same, because the Machine keeps no closed sessions. A shell that ended while this PC was away closes its View, as after an exit.
 
 A failed start shows its error in the View. These Terminals cannot move to another Project. Programs in them reach the Machine's Anvil, so the View publishes no control endpoint.
@@ -291,6 +293,12 @@ A failed start shows its error in the View. These Terminals cannot move to anoth
 The shell's scan reads only this PC's records. So the Project process lists its Machine's sessions (`machine_terminal.sessions`), and its Pane report sends them as `terminals`. Each list waits on the Machine until a change, and the Client sends at most one list each 2 seconds. A server without `terminal.list.wait` answers at once, so it gets a list each 2 seconds. The Sidebar model adds them to the Project's Terminal Sessions, so they show agent status, age groups and attention as local sessions do.
 
 A Dormant Project on a Machine lists none. A visible Terminal Tab takes the place of its session row. A session in Pane history keeps its session row, so selecting another session does not hide it. A Sidebar click restores the existing View or attaches to the listed session.
+
+Shared layout leaves carry a Pane ID as well as the file path or Terminal Session ID. Workspace save and Reopen Closed Pane keep this ID. Two Panes that show the same file keep their own Views when their order changes. Applying a layout detaches removed Terminal copies. It does not issue another user Close.
+
+A layout change matches the Pane ID before the file or Terminal Session. Navigation changes its current View and keeps its previous View in history. For a legacy write without IDs, the Machine reuses IDs for matching leaves and assigns the missing ones. Clients that read an ID-free layout from an older Machine wait for an authoritative ID.
+
+A remote reopen reuses the matching Snoozed Pane. If the Sidebar still has a future deadline, the Project asks it to remove the Snooze. The Project waits for the saved deadline to clear before applying the layout.
 
 Run `runtime/machine_terminal.lua`, `ui/machine_terminal.lua` and `ui/project_sidebar.lua` after changes. The runtime test uses a real host and a real server that shares the test's user folder. The UI test gives the server its own user folder.
 

@@ -149,7 +149,9 @@ typedef struct {
   bool viewer, take_pending, focus_can_take;
   uint32_t control_generation;
   char controller_name[ANVIL_TERMINAL_NAME_LENGTH];
-  uint32_t clients;
+  uint32_t clients, views;
+  char bound_pane[33];
+  bool pane_attach;
   GhosttyColorScheme color_scheme;
   bool color_scheme_known;
   TerminalContrast contrast;
@@ -348,9 +350,10 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
       wake_for_terminal_output(session);
       continue;
     }
-    if (header.type == ANVIL_TERMINAL_ROLE && header.size == sizeof(AnvilTerminalRole)) {
-      AnvilTerminalRole role; memcpy(&role, buffer, sizeof(role));
-      if (role.controller > 1 || !role.clients || role.clients > 64 ||
+    if (header.type == ANVIL_TERMINAL_ROLE &&
+        (header.size == sizeof(AnvilTerminalRole) || header.size == ANVIL_TERMINAL_BASE_ROLE_SIZE)) {
+      AnvilTerminalRole role = {0}; memcpy(&role, buffer, header.size);
+      if (role.controller > 1 || !role.clients || role.clients > 64 || role.views > role.clients ||
           !memchr(role.controller_name, 0, sizeof(role.controller_name))) {
         session->read_error = ERROR_INVALID_DATA; InterlockedExchange(&session->read_failed, 1); break;
       }
@@ -670,7 +673,7 @@ static bool write_all(TerminalSession *session, const uint8_t *data, size_t leng
 }
 
 static AnvilTerminalSize wanted_size(const TerminalSession *session) {
-  if (session->wanted.cols && session->wanted.rows) return session->wanted;
+  if (!session->preserve_grid && session->wanted.cols && session->wanted.rows) return session->wanted;
   return (AnvilTerminalSize){ session->cols, session->rows, session->cell_width, session->cell_height };
 }
 
@@ -986,7 +989,9 @@ struct ReconnectJob {
   AnvilIPCPipe pipe;
   HANDLE process;
   DWORD host_pid, shell_pid, error;
-  uint32_t client_id;
+  uint32_t client_id, previous_client_id;
+  char pane[33];
+  bool pane_attach;
   AnvilTerminalSize size;
   char id[ANVIL_TERMINAL_ID_LENGTH + 1];
   bool connected, prepared, wait_for_exit;
@@ -1006,6 +1011,22 @@ static void release_reconnect(ReconnectJob *job) {
   free(job);
 }
 
+/* This pipe has no UI writer. Order the final command after its Pane binding. */
+static DWORD WINAPI finish_reconnect(void *userdata) {
+  ReconnectJob *job = userdata;
+  uint16_t type = job->final_type;
+  if (job->connected) {
+    job->pipe.timeout_ms = 5000;
+    anvil_ipc_pipe_write(&job->pipe, type, NULL, 0, NULL, 0);
+  } else {
+    anvil_ipc_pipe_close(&job->pipe);
+    anvil_terminal_host_control(job->process, job->host_pid, job->id, type, job->previous_client_id, &job->error);
+  }
+  if (ends_host(type)) InterlockedDecrement(&pending_close_commands);
+  release_reconnect(job);
+  return 0;
+}
+
 static DWORD WINAPI reconnect_main(void *userdata) {
   ReconnectJob *job = userdata;
   uint64_t replay_bytes = 0;
@@ -1022,28 +1043,27 @@ static DWORD WINAPI reconnect_main(void *userdata) {
         job->revive_from, job->environment, job->prepared, &job->size,
         job->has_scrollback_lines ? &job->scrollback_lines : NULL, NULL, &job->client_id, &job->error)
     : anvil_terminal_host_connect(&job->pipe, job->process, job->host_pid,
-        &job->shell_pid, job->id, &job->size, &job->client_id, &job->error);
+        &job->shell_pid, job->id, &job->size, job->pane_attach ? job->pane : NULL, &job->client_id, &job->error);
   if (!connected && job->userdir && job->process) {
     TerminateProcess(job->process, 1);
     /* A new host can write its record before it answers. Nothing can revive its shell. */
     if (!job->revive_from && WaitForSingleObject(job->process, 5000) == WAIT_OBJECT_0)
       anvil_terminal_host_discard(job->userdir, job->id);
   }
+  if (connected && job->pane[0] && !job->pane_attach) {
+    job->pipe.timeout_ms = 5000;
+    connected = anvil_ipc_pipe_write(&job->pipe, ANVIL_TERMINAL_PANE, job->pane, 32, NULL, 0);
+    if (!connected) job->error = GetLastError();
+    job->pipe.timeout_ms = INFINITE;
+  }
   EnterCriticalSection(&job->lock);
   job->connected = connected;
   uint16_t final_type = job->final_type;
   if (!final_type) InterlockedExchange(&job->done, 1);
   LeaveCriticalSection(&job->lock);
-  if (final_type && job->connected) {
-    job->pipe.timeout_ms = 5000;
-    anvil_ipc_pipe_write(&job->pipe, final_type, NULL, 0, NULL, 0);
-  } else if (final_type) {
-    anvil_ipc_pipe_close(&job->pipe);
-    anvil_terminal_host_control(job->process, job->host_pid, job->id, final_type, job->client_id, &job->error);
-  }
+  if (final_type) return finish_reconnect(job);
   /* Reconnecting views request updates while this job runs. Do not access SDL:
      a cancelled job can outlive the editor's window and Lua state. */
-  if (ends_host(final_type)) InterlockedDecrement(&pending_close_commands);
   release_reconnect(job);
   return 0;
 }
@@ -1054,6 +1074,9 @@ static bool start_reconnect(TerminalSession *session, bool wait_for_exit) {
   InitializeCriticalSection(&job->lock);
   job->references = 2;
   job->host_pid = session->host_pid;
+  job->previous_client_id = session->client_id;
+  job->pane_attach = session->pane_attach;
+  memcpy(job->pane, session->bound_pane, sizeof(job->pane));
   job->wait_for_exit = wait_for_exit;
   job->size = wanted_size(session);
   if (session->preserve_grid) job->size.cols = job->size.rows = 0;
@@ -1156,14 +1179,15 @@ static bool cancel_reconnect(TerminalSession *session, uint16_t type) {
     if (session->initial_restore && !job->connected && !job->userdir) type = ANVIL_TERMINAL_DETACH;
     job->final_type = type;
     if (ends_host(type)) InterlockedIncrement(&pending_close_commands);
-  } else if (job->connected) {
-    session->attach_count = session->attach_count ? session->attach_count : 1;
-    if (job->userdir) {
-      session->host_pid = job->host_pid;
-      session->client_id = job->client_id;
-      memcpy(session->id, job->id, sizeof(session->id));
-      send_final_command(session, retain_handle(job->process), type);
-      owns_command = true;
+  } else if (job->connected && (job->userdir || session->attach_count)) {
+    job->final_type = type;
+    InterlockedIncrement(&job->references);
+    if (ends_host(type)) InterlockedIncrement(&pending_close_commands);
+    HANDLE thread = CreateThread(NULL, 0, finish_reconnect, job, 0, NULL);
+    if (thread) { CloseHandle(thread); owns_command = true; }
+    else {
+      if (ends_host(type)) InterlockedDecrement(&pending_close_commands);
+      release_reconnect(job);
     }
   }
   LeaveCriticalSection(&job->lock);
@@ -1575,9 +1599,17 @@ static int f_terminal_new(lua_State *L) {
   lua_getfield(L, 1, "remote");
   session->remote = lua_toboolean(L, -1);
   lua_pop(L, 1);
+  lua_getfield(L, 1, "pane_attach");
+  session->pane_attach = !id || lua_toboolean(L, -1);
+  lua_pop(L, 1);
+  lua_getfield(L, 1, "shared_id");
+  const char *pane = lua_tostring(L, -1);
+  if (id && anvil_terminal_id_valid(pane)) memcpy(session->bound_pane, pane, sizeof(session->bound_pane));
+  lua_pop(L, 1);
   bool started = false;
   if (session->remote) {
     /* Lua attaches it through its Machine. */
+    session->preserve_grid = !has_size;
     started = true;
     session->transport_released = true;
   } else if (revive_from) {
@@ -1702,6 +1734,8 @@ static void push_status(lua_State *L, TerminalSession *session) {
   set_integer_field(L, "attach_count", session->attach_count);
   /* Attached Clients of the host, this one included, or 0 before the first ROLE. */
   set_integer_field(L, "clients", session->state == TERMINAL_STATE_RUNNING ? session->clients : 0);
+  if (session->state == TERMINAL_STATE_RUNNING && session->views != session->clients)
+    set_integer_field(L, "views", session->views);
   set_boolean_field(L, "render_pending", session->render_pending ||
     session->state == TERMINAL_STATE_RECONNECTING ||
     (session->state == TERMINAL_STATE_RUNNING && !session->replay_finished));
@@ -1760,6 +1794,8 @@ static bool start_attached(TerminalSession *session, HANDLE handle) {
   session->write_queue_head = session->write_queue_count = 0;
   /* The new connection's ROLE says who controls. An older host sends none, and this Client controls. */
   session->role_ready = session->take_pending = false;
+  if (session->remote) session->bound_pane[0] = 0;
+  session->views = session->clients = 0;
   if (session->viewer) { session->viewer = false; session->state_revision++; }
   session->read_error = session->write_error = 0;
   InterlockedExchange(&session->read_failed, 0); InterlockedExchange(&session->write_failed, 0);
@@ -1769,7 +1805,7 @@ static bool start_attached(TerminalSession *session, HANDLE handle) {
   if (!anvil_ipc_pipe_init(&session->pipe, handle, ANVIL_TERMINAL_PROTOCOL_VERSION,
                           ANVIL_TERMINAL_MAX_PAYLOAD) || !start_terminal_io(session)) return false;
   session->attached_at = GetTickCount64(); session->attach_count++;
-  session->initial_restore = session->preserve_grid = false;
+  session->initial_restore = false;
   set_terminal_state(session, TERMINAL_STATE_RUNNING);
   return true;
 }
@@ -1885,6 +1921,7 @@ static void apply_role(TerminalSession *session, const AnvilTerminalRole *role) 
   if (role->generation != session->control_generation) session->take_pending = false;
   session->control_generation = role->generation;
   session->clients = role->clients;
+  session->views = role->views ? role->views : role->clients;
   bool name_changed = strcmp(session->controller_name, role->controller_name) != 0;
   memcpy(session->controller_name, role->controller_name, sizeof(session->controller_name));
   if (was_viewer != session->viewer || (session->viewer && name_changed)) session->state_revision++;
@@ -2329,6 +2366,7 @@ static int f_terminal_resize(lua_State *L) {
 
   AnvilTerminalSize size = { cols, rows, cell_width, cell_height };
   session->wanted = size;
+  session->preserve_grid = false;
   /* A Viewer keeps the Controller's grid. Its size goes with its request for control. */
   if (session->viewer) {
     lua_pushboolean(L, true);
@@ -2405,10 +2443,22 @@ static int f_terminal_wanted_size(lua_State *L) {
   AnvilTerminalSize size = wanted_size(session);
   lua_pushinteger(L, size.cols); lua_pushinteger(L, size.rows);
   lua_pushinteger(L, size.cell_width); lua_pushinteger(L, size.cell_height);
-  return 4;
+  lua_pushboolean(L, session->preserve_grid);
+  return 5;
 }
 
 /* Takes control without input. Returns false for a Controller or a closed session. */
+static int f_terminal_bind_pane(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  size_t length;
+  const char *id = luaL_checklstring(L, 2, &length);
+  luaL_argcheck(L, length == 32 && strspn(id, "0123456789abcdef") == length, 2, "invalid shared Pane ID");
+  if (session->state == TERMINAL_STATE_RUNNING && strcmp(id, session->bound_pane) &&
+      enqueue_record(session, ANVIL_TERMINAL_PANE, (const uint8_t *)id, length))
+    memcpy(session->bound_pane, id, length + 1);
+  return 0;
+}
+
 static int f_terminal_take_control(lua_State *L) {
   TerminalSession *session = check_session(L, 1);
   lua_pushboolean(L, request_control(session));
@@ -4454,6 +4504,7 @@ static const luaL_Reg terminal_methods[] = {
   { "paste", f_terminal_paste },
   { "resize", f_terminal_resize },
   { "take_control", f_terminal_take_control },
+  { "bind_pane", f_terminal_bind_pane },
   { "attach_remote", f_terminal_attach_remote },
   { "wanted_size", f_terminal_wanted_size },
   { "clear", f_terminal_clear },

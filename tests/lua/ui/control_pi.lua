@@ -7,7 +7,8 @@ local json = require "core.json"
 local test = require "core.test"
 local terminal = require "plugins.terminal"
 
--- Seam: real Pi TUI -> native MCP client -> real editor -> another real Pi TUI.
+-- Seam: real Pi TUI -> native MCP client -> Anvil's MCP server in a real Machine server -> real editor -> another
+-- real Pi TUI.
 -- Only the external model is scripted. The test never calls a provider.
 test.describe("Pi controls Anvil", function()
   test.it("starts a visible child and reads its answer and conversation without moving user focus", function()
@@ -31,6 +32,8 @@ test.describe("Pi controls Anvil", function()
     system.setenv("PATH", common.dirname(common.normalize_path(pi)) .. ";" .. saved.path)
     local stream = assert(require("core.process_stream").start({node, system.getcwd() .. "/tests/fixtures/control-model.cjs", root}, {stderr = true}))
     local runtime = require "core.control_runtime"
+    local machine_server = dofile("tests/fixtures/machine_server.lua")
+    local machine
     local function wait(check, seconds)
       local deadline = system.get_time() + (seconds or 90)
       repeat
@@ -41,7 +44,9 @@ test.describe("Pi controls Anvil", function()
       return false
     end
     local endpoint
+    -- The test calls Anvil's MCP server as an External Agent does, so each call names the Project.
     local function call(name, args)
+      args.project = core.root_project().path
       local done, result, failure
       http.post(endpoint.url .. "/mcp", "application/json", {jsonrpc = "2.0", id = 1,
         method = "tools/call", params = {name = name, arguments = args}}, {
@@ -67,11 +72,11 @@ test.describe("Pi controls Anvil", function()
           cost = {input = 0, output = 0, cacheRead = 0, cacheWrite = 0}}}}}}
       local file = assert(io.open(root .. "/agent/models.json", "wb")); file:write(json.encode(models)); file:close()
       runtime.start()
-      test.ok(wait(function()
-        local file = io.open(USERDIR .. "/control/" .. system.get_process_id() .. ".json", "rb")
-        if file then endpoint = json.decode(file:read("*a")); file:close() end
-        return endpoint
-      end, 10), "Editor control did not start")
+      test.ok(wait(function() return system.get_file_info(USERDIR .. "/control/" .. system.get_process_id() .. ".json") end, 10),
+        "Editor control did not start")
+      -- Each Pi registers Anvil's MCP server, which the Machine server opens.
+      machine = machine_server.start(USERDIR, {core.root_project().path})
+      endpoint = machine_server.wait_mcp(USERDIR, machine)
       local launched = call("pi_start", {cwd = root, provider = "anvil-test", model = "scripted", thinking = "off",
         task = "ANVIL_PARENT_TASK", request_id = "test-parent"})
       local ready
@@ -105,6 +110,7 @@ test.describe("Pi controls Anvil", function()
       test.equal(count, 2, "The parent and child each need one visible Pane")
     end)
     runtime.stop()
+    machine_server.stop(machine)
     -- Retain exact process handles before closing the Views. Pane Close is asynchronous;
     -- these disposable hosts must not outlive the test or keep its working folder locked.
     local ffi = require "ffi"

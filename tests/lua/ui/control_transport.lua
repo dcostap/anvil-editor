@@ -5,24 +5,32 @@ local http = require "core.http"
 local json = require "core.json"
 local test = require "core.test"
 
+-- Seam: the dialog reads the discovery file of the Machine server's MCP server. This process stands for the server.
 test.describe("Anvil MCP Server Dialog", function()
-  local runtime = require "core.control_runtime"
+  local mcp = USERDIR .. PATHSEP .. "machine" .. PATHSEP .. "mcp.json"
 
   test.before_each(function(context)
     context.clipboard = system.get_clipboard()
     context.enabled = os.getenv("ANVIL_CONTROL")
-    context.create_server = require("net").create_server
     system.setenv("ANVIL_CONTROL", "1")
+    os.remove(mcp)
   end)
 
   test.after_each(function(context)
     local open = dialog.current()
     if open then open:close() end
-    runtime.stop()
-    require("net").create_server = context.create_server
+    os.remove(mcp)
     system.setenv("ANVIL_CONTROL", context.enabled or "")
     system.set_clipboard(context.clipboard or "")
   end)
+
+  local function publish()
+    require("core.common").mkdirp(USERDIR .. PATHSEP .. "machine")
+    local file = assert(io.open(mcp, "wb"))
+    file:write(json.encode {version = 1, url = "http://127.0.0.1:49999", token = string.rep("f", 64),
+      pid = system.get_process_id(), created = system.get_process_creation_time()})
+    file:close()
+  end
 
   local function open_dialog()
     test.ok(command.perform("anvil:mcp_server"))
@@ -41,48 +49,36 @@ test.describe("Anvil MCP Server Dialog", function()
     test.equal(open.status.label, label)
   end
 
-  test.it("shows the live endpoint and copies setup instructions without the token", function()
-    runtime.start()
+  test.it("shows the live endpoint and copies setup instructions for all Projects without the token", function()
     local open = open_dialog()
-    test.equal(open.status.label, "Starting")
+    wait_for(open, "Unavailable")
+    test.contains(open.reason.text, "Machine server is not running")
     test.not_ok(open.copy.enabled)
+    publish()
     wait_for(open, "Ready")
 
-    local file = assert(io.open(open.discovery.text, "rb"))
-    local record = file:read("*a")
-    file:close()
-    local endpoint = json.decode(record)
-    test.equal(open.project.text, endpoint.project)
-    test.equal(open.url.text, endpoint.url .. "/mcp")
+    test.equal(open.discovery.text, mcp)
+    test.equal(open.url.text, "http://127.0.0.1:49999/mcp")
     test.ok(open.copy:activate())
     local text = system.get_clipboard()
     local config = json.decode(text:match("\n(%b{})\n"))
     local args = config.mcpServers.anvil.args
     test.ok(system.get_file_info(args[1]), "The setup must name the installed MCP bridge")
-    test.equal(args[3], system.absolute_path(USERDIR))
-    test.equal(args[5], endpoint.project)
+    test.same({args[2], args[3], args[4]}, {"--userdir", system.absolute_path(USERDIR), nil},
+      "One entry serves all Projects, so it names none")
     test.contains(text, "external_agent")
-    test.not_ok(text:find(endpoint.token, 1, true), "The clipboard must not contain the token")
+    test.contains(text, core.root_project().path)
+    test.not_ok(text:find(string.rep("f", 64), 1, true), "The clipboard must not contain the token")
 
-    runtime.stop()
-    dialog.update()
-    test.equal(open.status.label, "Unavailable")
+    os.remove(mcp)
+    wait_for(open, "Unavailable")
     test.not_ok(open.copy:activate())
     test.equal(system.get_clipboard(), text)
   end)
 
-  test.it("shows why setup is unavailable when the listener cannot open", function()
-    require("net").create_server = function() return nil, "Bind denied by test policy" end
-    runtime.start()
-    local open = open_dialog()
-    wait_for(open, "Unavailable")
-    test.contains(open.reason.text, "Bind denied by test policy")
-    test.not_ok(open.copy.enabled)
-  end)
-
   test.it("shows when the server is disabled", function()
     system.setenv("ANVIL_CONTROL", "0")
-    runtime.start()
+    publish()
     local open = open_dialog()
     test.equal(open.status.label, "Disabled")
     test.not_ok(open.copy.enabled)
@@ -119,10 +115,21 @@ test.describe("Anvil control listener", function()
   end)
 end)
 
+-- Anvil's MCP server for one Project of this process, as the Machine server opens it for its Projects.
+local function open_hub()
+  local control = require("core.control").new()
+  local server = require("core.control_server").open(nil, {
+    control = function(project) return require("core.common").path_equals(project, control.project) and control or nil end,
+    project_of = function(caller) return caller ~= "local" and control.project or nil end,
+    tick = function() control:tick() end,
+  })
+  return server, control
+end
+
 -- Seam: authenticated MCP over a real loopback connection.
 test.describe("Anvil MCP", function()
   test.it("reads conversation pages through Pi without creating agent tasks or changing focus", function()
-    local server = require("core.control_server").open()
+    local server, control = open_hub()
     local endpoint = server:add_client("reader-target")
     local headers = {Authorization = "Bearer " .. server.token}
     local agent_headers = {Authorization = "Bearer " .. endpoint.token}
@@ -145,6 +152,7 @@ test.describe("Anvil MCP", function()
       return wait(begin("/agent", report, agent_headers))
     end
     local function read(args)
+      args.project = control.project
       return begin("/mcp", {jsonrpc = "2.0", id = 1, method = "tools/call",
         params = {name = "agent_transcript", arguments = args}}, headers)
     end
@@ -200,7 +208,7 @@ test.describe("Anvil MCP", function()
       exchange {instance = "pi-two"}
       test.ok(wait(pending).result.isError, "A replacement conversation must end the pending read")
       server:remove_client(endpoint.token)
-      local status = server.control:call("agent_read", {terminal = "reader-target", instance = "pi-two"})
+      local status = control:call("agent_read", {terminal = "reader-target", instance = "pi-two"})
       test.equal(status.connected, false)
       test.equal(status.activity_stale, true)
       test.ok(wait(read {terminal = "reader-target", instance = "pi-two"}).result.isError)
@@ -253,22 +261,31 @@ test.describe("Anvil MCP", function()
       server:remove_client(endpoint.token)
       success = post("/agent", {instance = "test-instance", receipts = {}, tasks = {}}, agent_headers)
       test.equal(success, false)
+      test.equal(server.control:call("agent_read", {terminal = "test-terminal", instance = "test-instance"}).connected, false,
+        "A revoked agent must not appear connected")
+      -- This private endpoint answers only editor operations. Anvil's MCP server answers agent operations.
       success, result = post("/mcp", {jsonrpc = "2.0", id = 6, method = "tools/call",
-        params = {name = "agent_read", arguments = {terminal = "test-terminal", instance = "test-instance"}}}, headers)
+        params = {name = "agent_read", arguments = {terminal = "test-terminal"}}}, headers)
       test.ok(success)
-      test.equal(result.result.structuredContent.connected, false, "A revoked agent must not appear connected")
+      test.ok(result.result.isError)
+      test.contains(result.result.content[1].text, "MCP server")
     end)
     server:close()
     assert(ok, err)
   end)
 end)
 
+-- Seam: Anvil's MCP server routes editor operations to the private endpoint of the named Project process.
 test.describe("Anvil Project routing", function()
-  test.it("routes an explicit Project past records of ended processes, and removes them", function()
+  test.it("sends editor operations to the named Project past records of ended processes, and removes them", function()
     local Control = require "core.control"
     local Server = require "core.control_server"
-    local remote = Server.open(Control.new(USERDIR .. "/other-project"))
-    local source = Server.open()
+    local other = USERDIR .. "/other-project"
+    local remote = Server.open(Control.new(other))
+    local terminals = {["pi-terminal"] = other}
+    local hub = Server.open(nil, {control = function() end, project_of = function(caller) return terminals[caller] end,
+      tick = function() end})
+    local own = Server.open()
     local common = require "core.common"
     common.mkdirp(USERDIR .. PATHSEP .. "control" .. PATHSEP .. "terminals")
     local function record(name, value)
@@ -277,8 +294,7 @@ test.describe("Anvil Project routing", function()
       return USERDIR .. "/control/" .. name
     end
     local function endpoint(url, token, pid, created)
-      return {version = 1, url = url, token = token, project = USERDIR .. "/other-project",
-        executable = EXEFILE, pid = pid, created = created}
+      return {version = 1, url = url, token = token, project = other, executable = EXEFILE, pid = pid, created = created}
     end
     local pid, created = system.get_process_id(), system.get_process_creation_time()
     local stale_url, stale_token = "http://127.0.0.1:9", string.rep("a", 64)
@@ -288,76 +304,47 @@ test.describe("Anvil Project routing", function()
     local reused = record("987654328.json", endpoint(stale_url, stale_token, pid, "01d0000000000000"))
     local stale_terminal = record("terminals/" .. string.rep("5", 32) .. ".json", {version = 1, url = stale_url, token = stale_token})
     local live_terminal = record("terminals/" .. string.rep("6", 32) .. ".json", {version = 1, url = remote.url, token = stale_token})
-    local ok, err = pcall(function()
+    local pi = hub:add_client("pi-terminal")
+    local function call(server, name, args, token)
       local done, result, failure
-      http.post(source.url .. "/mcp", "application/json", {jsonrpc = "2.0", id = 7, method = "tools/call",
-        params = {name = "workspace_state", arguments = {project = USERDIR .. "/other-project"}}}, {
-        headers = {Authorization = "Bearer " .. source.token},
+      http.post(server.url .. "/mcp", "application/json", {jsonrpc = "2.0", id = 7, method = "tools/call",
+        params = {name = name, arguments = args}}, {headers = {Authorization = "Bearer " .. (token or server.token)},
         on_done = function(success, error, body) done, result, failure = true, body, not success and error end})
       local deadline = system.get_time() + 20
-      repeat source:poll(); remote:poll(); coroutine.yield() until done or system.get_time() > deadline
+      repeat hub:poll(); remote:poll(); own:poll(); coroutine.yield() until done or system.get_time() > deadline
       test.ok(done and not failure, failure or "Project request timed out")
-      test.equal(result.result.isError, false, result.result.content and result.result.content[1].text)
-      test.equal(result.result.structuredContent.project, USERDIR .. "/other-project")
-      test.not_equal(core.root_project().path, USERDIR .. "/other-project")
+      return result.result
+    end
+    local ok, err = pcall(function()
+      local result = call(hub, "workspace_state", {project = other})
+      test.equal(result.isError, false, result.content and result.content[1].text)
+      test.equal(result.structuredContent.project, other)
+      test.not_equal(core.root_project().path, other)
       test.not_ok(system.get_file_info(ended), "The record of an ended process must be removed")
       test.not_ok(system.get_file_info(reused), "The record of a reused process ID must be removed")
       test.not_ok(system.get_file_info(stale_terminal), "Terminal records of an ended endpoint must be removed")
       test.ok(system.get_file_info(path), "The live record must stay")
       test.ok(system.get_file_info(live_terminal), "Terminal records of a live endpoint must stay")
-      -- Empty arrays must survive both the target response and Project forwarding.
-      remote.control:exchange("remote-pi", {instance = "pi-one", receipts = {}, tasks = {}, capabilities = {transcript = true}})
-      done, result, failure = nil, nil, nil
-      http.post(source.url .. "/mcp", "application/json", {jsonrpc = "2.0", id = 8, method = "tools/call",
-        params = {name = "agent_transcript", arguments = {project = USERDIR .. "/other-project", terminal = "remote-pi", instance = "pi-one"}}}, {
-        headers = {Authorization = "Bearer " .. source.token}, decode_json = false,
-        on_done = function(success, error, body) done, result, failure = true, body, not success and error end})
-      deadline = system.get_time() + 20
-      local protocol_json = require "core.lsp.json"
-      repeat
-        source:poll(); remote:poll()
-        local queries = remote.control:exchange("remote-pi", {instance = "pi-one", receipts = {}, tasks = {},
-          capabilities = {transcript = true}}).transcript_requests
-        if #queries > 0 then
-          remote.control:exchange("remote-pi", {instance = "pi-one", receipts = {}, tasks = {},
-            transcripts = {{id = queries[1].id, result = {messages = protocol_json.array(), active_turn = false, truncated = false}}}})
-        end
-        coroutine.yield()
-      until done or system.get_time() > deadline
-      test.ok(done and not failure, failure or "Cross-Project conversation read timed out")
-      result = assert(protocol_json.decode(result))
-      test.not_ok(result.result.isError, result.result.content[1].text)
-      test.ok(protocol_json.is_array(result.result.structuredContent.messages), "An empty history must remain a JSON array")
 
-      local author = source:add_client("source-pi")
-      local source_report = {instance = "source-one", receipts = {}, tasks = {}}
-      local remote_report = {instance = "pi-one", receipts = {}, tasks = {}}
-      source.control:exchange("source-pi", source_report)
-      done, result, failure = nil, nil, nil
-      http.post(source.url .. "/mcp", "application/json", {jsonrpc = "2.0", id = 9, method = "tools/call",
-        params = {name = "agent_send", arguments = {project = USERDIR .. "/other-project", terminal = "remote-pi",
-          instance = "pi-one", request_id = "cross-project-question", text = "Any update?"}}}, {
-        headers = {Authorization = "Bearer " .. author.token},
-        on_done = function(success, error, body) done, result, failure = true, body, not success and error end})
-      deadline = system.get_time() + 15
-      repeat source:poll(); remote:poll(); coroutine.yield() until done or system.get_time() > deadline
-      test.ok(done and not failure, failure or "Cross-Project send timed out")
-      test.not_ok(result.result.isError, result.result.content[1].text)
-      local task = result.result.structuredContent.task
-      test.equal(remote.control:exchange("remote-pi", remote_report).commands[1].id, task)
-      remote_report.receipts = {{id = task, status = "completed", result = "Yes"}}
-      remote.control:exchange("remote-pi", remote_report)
-      local answer
-      repeat
-        source:poll(); remote:poll()
-        answer = source.control:exchange("source-pi", source_report).commands[1]
-        if not answer then coroutine.yield() end
-      until answer or system.get_time() > deadline
-      test.not_nil(answer, "A cross-Project reply must reach the source Project")
-      test.equal(answer.reply_to, task)
-      test.equal(answer.text, "Yes")
+      -- A Pi's call goes to its own Project, and the Project process learns which Terminal called.
+      result = call(hub, "workspace_state", {}, pi.token)
+      test.equal(result.structuredContent.project, other)
+      test.equal(result.structuredContent.caller_terminal, "pi-terminal")
+
+      -- A client without a Terminal names the Project. Without one, it learns the loaded Projects.
+      result = call(hub, "workspace_state", {})
+      test.not_nil(result.structuredContent.projects[other], "The loaded Projects must include the other Project")
+      test.is_nil(result.structuredContent.panes)
+      result = call(hub, "agent_read", {terminal = "pi-terminal"})
+      test.ok(result.isError)
+      test.contains(result.content[1].text, "Name the Project")
+
+      -- A Project process answers only for itself. Anvil's MCP server reaches the other Projects.
+      result = call(own, "workspace_state", {project = other})
+      test.ok(result.isError)
+      test.contains(result.content[1].text, "MCP server")
     end)
-    source:close(); remote:close()
+    hub:close(); remote:close(); own:close()
     for _, name in ipairs {path, ended, reused, stale_terminal, live_terminal} do os.remove(name) end
     assert(ok, err)
   end)
@@ -373,7 +360,13 @@ test.describe("External Agents through MCP", function()
     context.project = USERDIR .. PATHSEP .. "external-agents-" .. math.floor(system.get_time() * 1000000)
     test.ok(common.mkdirp(context.project))
     context.machine = machine_server.start(USERDIR, {context.project})
-    context.server = require("core.control_server").open(require("core.control").new(context.project))
+    -- This process stands for the Machine server: its Anvil MCP server knows one Project with one Pi.
+    context.control = require("core.control").new(context.project)
+    context.server = require("core.control_server").open(nil, {
+      control = function(project) return common.path_equals(project, context.project) and context.control or nil end,
+      project_of = function(caller) return caller == "pi-terminal" and context.project or nil end,
+      tick = function() context.control:tick() end,
+    })
     context.pi = context.server:add_client("pi-terminal")
     core.add_thread(function()
       while context.server.listener do context.server:poll(); coroutine.yield(.01) end
@@ -395,7 +388,9 @@ test.describe("External Agents through MCP", function()
     test.fail(message)
   end
 
+  -- A client without a Terminal names the Project. A Pi's calls use its own Project.
   local function begin(context, name, args, token)
+    if not token then args.project = args.project or context.project end
     local request = {}
     http.post(context.server.url .. "/mcp", "application/json", {jsonrpc = "2.0", id = 1, method = "tools/call",
       params = {name = name, arguments = args}}, {headers = {Authorization = "Bearer " .. (token or context.server.token)},
@@ -416,7 +411,7 @@ test.describe("External Agents through MCP", function()
   local function pi_commands(context, report)
     report = report or {}
     report.instance, report.receipts, report.tasks = "pi-one", report.receipts or {}, {}
-    return context.server.control:exchange("pi-terminal", report).commands
+    return context.control:exchange("pi-terminal", report).commands
   end
 
   test.it("carries a Pi's message to a waiting External Agent and its answer back", function(context)
@@ -447,6 +442,36 @@ test.describe("External Agents through MCP", function()
     local listed = tool(context, "external_agent", {action = "list"})
     test.equal(listed.agents[1].name, "agy")
     test.ok(listed.agents[1].listening)
+  end)
+
+  test.it("lets an External Agent wait and answer through Anvil's MCP server in a named Project", function(context)
+    test.skip_if(PLATFORM ~= "Windows", "The Machine server runs Anvil's MCP server with its Terminal service")
+    local mcp = machine_server.wait_mcp(USERDIR, context.machine)
+    local function hub(args)
+      local request = {}
+      http.post(mcp.url .. "/mcp", "application/json", {jsonrpc = "2.0", id = 1, method = "tools/call",
+        params = {name = "external_agent", arguments = args}}, {headers = {Authorization = "Bearer " .. mcp.token},
+        on_done = function(ok, err, body) request.done, request.ok, request.body, request.error = true, ok, body, err end})
+      wait_until(function() return request.done end, "Anvil's MCP server did not answer")
+      test.ok(request.ok, request.error)
+      return request.body.result
+    end
+    local unnamed = hub({action = "wait", agent = "agy", timeout_ms = 0})
+    test.ok(unnamed.isError, "One server serves all Projects, so a call names its Project")
+    test.contains(unnamed.content[1].text, "Name the Project")
+    pi_commands(context)
+    local first = hub({action = "wait", agent = "agy", timeout_ms = 0, project = context.project}).structuredContent
+    local sent = tool(context, "agent_send", {agent = "agy", text = "Check the tests"}, context.pi.token)
+    local page = hub({action = "wait", agent = "agy", after = first.cursor, project = context.project}).structuredContent
+    test.equal(page.messages[1].request, sent.task)
+    test.not_ok(hub({action = "say", agent = "agy", text = "All green", reply_to = sent.task,
+      project = context.project}).isError)
+    local reply
+    wait_until(function()
+      reply = pi_commands(context)[1]
+      return reply ~= nil
+    end, "The Pi did not receive the External Agent's answer")
+    test.equal(reply.text, "All green")
   end)
 
   test.it("names an External Agent's message to a Pi and puts the Pi's reply in its thread", function(context)

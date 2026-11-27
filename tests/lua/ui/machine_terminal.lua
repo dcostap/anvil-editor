@@ -120,13 +120,26 @@ test.describe("Terminal on a Machine", function()
       end,"Client did not publish the split")
       test.equal(published.layout.groups[1].axis,"x")
       test.equal(published.layout.active,2)
+      local split = published.layout.groups[1]
+      local second = panes.active().current_view
+      split.a, split.b = split.b, split.a
+      test.equal(request("layout.set", {base=2,layout=published.layout}).revision,3)
+      wait_until({},function() return panes.active().current_view == original end,
+        "Swapping two Panes of the same file lost their View identities")
+      test.ok(panes.pane_for_view(second))
       buffer:insert(1,1,"unsaved")
-      test.equal(request("layout.set",{base=2,layout={groups={},active=0}}).revision,3)
+      test.equal(request("layout.set",{base=3,layout={groups={},active=0}}).revision,4)
       test.not_ok(sync.apply(context.project,{groups={},active=0}))
       test.ok(panes.pane_for_view(original))
       test.ok(buffer.lines[1]:find("unsaved",1,true))
       buffer:undo()
       wait_until({},function() return #sync.capture(context.project).groups == 0 end,"Close did not reach this PC")
+      -- Another PC reopened both Panes before this PC ran Reopen Closed Pane.
+      test.ok(sync.apply(context.project,published.layout))
+      local count = panes.count()
+      test.ok(panes.reopen_last_closed())
+      test.equal(panes.count(),count,"Reopen duplicated a shared Pane")
+      test.ok(sync.apply(context.project,{groups={},active=0}))
       -- Open a live Terminal from the host layout, then close its Pane without replacing the shell.
       local host = open(context,{})
       wait_text(host,"ANVIL_ECHO_READY:project")
@@ -136,13 +149,13 @@ test.describe("Terminal on a Machine", function()
         sessions.sessions(fs.machine,context.project)
         return sessions.listed(session)
       end,"The host did not list its Terminal")
-      test.equal(request("layout.set",{base=3, layout={groups={{terminal=session}},active=1}}).revision,4)
+      test.equal(request("layout.set",{base=4, layout={groups={{terminal=session}},active=1}}).revision,5)
       wait_until(host,function() return panes.active() and panes.active().current_view.session_id == session end,
         "Shared Terminal was not opened")
       local mirror = panes.active().current_view
       context.views[#context.views+1] = mirror
       wait_text(mirror,"ANVIL_ECHO_READY:project")
-      test.equal(request("layout.set",{base=4,layout={groups={},active=0}}).revision,5)
+      test.equal(request("layout.set",{base=5,layout={groups={},active=0}}).revision,6)
       wait_until(host,function() return not panes.pane_for_view(mirror) end,"Remote Terminal close did not remove its Pane")
       test.ok(host:write_input("still-running\r"))
       wait_text(host,"ECHO:still-running")
@@ -177,6 +190,145 @@ test.describe("Terminal on a Machine", function()
     wait_until(view, function()
       return not require("terminal_link").host_alive(record.host_pid, record.host_creation_time)
     end, "The Machine kept the closed shell")
+  end)
+
+  test.it("adopts host IDs without replacing a dirty editor from an older Workspace", function(context)
+    local sync = require "core.shared_layout"
+    local path = context.project .. PATHSEP .. "old.txt"
+    test.is_nil(fs.wait(fs.write,path,"old\n",nil,nil))
+    local view = require("core.editor")(core.open_buffer(path))
+    local pane = panes.create {factory=function() return view end}
+    wait_until({},function() return view.buffer.lines[1] == "old\n" end,"File did not load")
+    test.ok(sync.apply(context.project,{groups={{file="old.txt"}},active=1}))
+    test.is_nil(sync.capture(context.project).groups[1].pane,"The client minted an ID for a legacy server layout")
+    view.buffer:insert(1,1,"edit")
+    local id = require("net").random_token():sub(1,32)
+    test.ok(sync.apply(context.project,{groups={{pane=id,file="old.txt"}},active=1}))
+    test.equal(panes.active(),pane)
+    test.equal(pane.current_view,view)
+    test.equal(sync.capture(context.project).groups[1].pane,id)
+    test.is_nil(fs.wait(fs.write,context.project .. PATHSEP .. "next.txt","next\n",nil,nil))
+    test.ok(sync.apply(context.project,{groups={{pane=id,file="next.txt"}},active=1}))
+    test.equal(panes.active(),pane)
+    test.equal(panes.back(pane),view)
+    test.ok(view.buffer:is_dirty())
+    view.buffer:undo()
+  end)
+
+  test.it("reuses a Snoozed Pane when its mirror reopens", function(context)
+    local sync = require "core.shared_layout"
+    local id = require("net").random_token():sub(1,32)
+    local state = {groups={{pane=id,file="wake.txt"}},active=1}
+    test.is_nil(fs.wait(fs.write,context.project .. PATHSEP .. "wake.txt","ok\n",nil,nil))
+    test.ok(sync.apply(context.project,state))
+    local pane = panes.active()
+    panes.snooze(pane)
+    test.is_nil(fs.wait(fs.write,context.project .. PATHSEP .. "awake.txt","changed\n",nil,nil))
+    state.groups[1].file = "awake.txt"
+    test.ok(sync.apply(context.project,state))
+    test.equal(panes.active(),pane,"Reopen created another copy of the Snoozed Pane")
+    test.not_ok(panes.is_snoozed(pane))
+  end)
+
+  test.it("ends a Terminal shown by two copies of one shared Pane", function(context)
+    local first = open(context,{})
+    wait_text(first,"ANVIL_ECHO_READY:project")
+    local pane = require("net").random_token():sub(1,32)
+    first:bind_shared_pane(pane)
+    local sessions = require "core.machine_terminal"
+    wait_until(first,function()
+      sessions.sessions(fs.machine,context.project)
+      return sessions.listed(first.session_id)
+    end,"Missing session in host layout")
+    test.ok(require("core.shared_layout").apply(context.project,{groups={{pane=pane,terminal=first.session_id}},active=1}))
+    local mirror = panes.active().current_view
+    context.views[#context.views+1] = mirror
+    wait_text(mirror,"ANVIL_ECHO_READY:project")
+    wait_until(first,function() return first:close_status().clients == 2 end,"Missing mirror")
+    test.equal(first:close_status().views,1,"Attach counted a known mirror as a separate View")
+    local independent = open(context,{session_id=first.session_id})
+    wait_text(independent,"ANVIL_ECHO_READY:project")
+    wait_until(first,function()
+      local status = first:close_status()
+      return status.clients == 3 and status.views == 2
+    end,"The host lost the separate View")
+    independent:detach_session()
+    wait_until(first,function()
+      local status = first:close_status()
+      return status.clients == 2 and status.views == 1
+    end,"The host counted a mirror as another View")
+    local record = machine_record(context,first.session_id)
+    first:on_close(true)
+    wait_until(mirror,function()
+      return not require("terminal_link").host_alive(record.host_pid,record.host_creation_time)
+    end,"Closing the shared Pane kept the shell running")
+  end)
+
+  test.it("waits for the Sidebar to clear the saved Snooze on shared reopen", function(context)
+    local storage, snoozed = require "core.storage", require "core.snoozed_panes"
+    local sync = require "core.shared_layout"
+    local view = open(context,{})
+    wait_text(view,"ANVIL_ECHO_READY:project")
+    local pane = panes.create {factory=function() return view end}
+    local state = sync.capture(context.project)
+    test.ok(storage.save("sidebar","snoozes",{[view.session_id]=os.time()+600}))
+    panes.snooze(pane)
+    local old, requested = system.pane_request
+    system.pane_request = function(route,path,text)
+      local r = require("core.json").decode(text)
+      requested = route == "sidebar" and path == require("core.machine_project").root_key(context.project) and
+        r.path == path and r.action == "snooze" and r.until_time == nil and r.session == view.session_id
+      return true
+    end
+    local ok, applied = pcall(sync.apply,context.project,state)
+    system.pane_request = old
+    storage.clear("sidebar","snoozes")
+    test.ok(ok,applied)
+    test.ok(requested,"Reopen left a saved Snooze behind")
+    test.not_ok(applied,"Reopen did not wait for the saved Snooze removal")
+    test.ok(sync.apply(context.project,state))
+    snoozed.check()
+    test.not_ok(panes.is_snoozed(pane))
+  end)
+
+  test.it("keeps the live grid when a remote View attaches before layout", function(context)
+    local first = open(context,{})
+    wait_text(first,"ANVIL_ECHO_READY:project")
+    test.ok(first.session:resize(117,31,8,16))
+    test.ok(first:write_input("sized\r"))
+    wait_text(first,"ECHO:sized")
+    local id = first.session_id
+    first:detach_session()
+    wait_until({},function()
+      local record = machine_record(context,id)
+      return record and record.attached == false
+    end,"The original View did not detach")
+    local restored = open(context,{session_id=id})
+    wait_text(restored,"ECHO:sized")
+    local grid = restored.session:snapshot(nil,false)
+    test.equal(grid.cols,117,"Attach replaced the live grid with the placeholder width")
+    test.equal(grid.row_count,31)
+    local controller = open(context,{session_id=id})
+    wait_text(controller,"ECHO:sized")
+    test.ok(controller.session:take_control())
+    wait_until(restored,function() return restored:close_status().viewer end,"Controller did not take control")
+    wait_until(controller,function() return not controller:close_status().viewer end,"Controller did not receive control")
+    test.ok(controller.session:resize(103,29,8,16))
+    wait_until(restored,function() return restored.session:snapshot(nil,false).cols == 103 end,"Missing host resize")
+    controller:detach_session()
+    wait_until(restored,function() return restored:close_status().clients == 1 end,"Controller did not detach")
+    require("terminal_native")._break_transport_for_tests(restored.session)
+    wait_until(restored,function() local s=restored:close_status(); return s.attach_count == 2 and not s.replaying end,"Reconnect failed")
+    test.equal(restored.session:snapshot(nil,false).cols,103,"Reconnect before layout replaced the host grid")
+    -- The first real layout happens to match the View's original placeholder.
+    restored.size.x, restored.size.y = restored.cols * restored.cell_width, restored.rows * restored.cell_height
+    while select(1,restored:cell_geometry()) < restored.cols do restored.size.x = restored.size.x + 1 end
+    while select(2,restored:cell_geometry()) < restored.rows do restored.size.y = restored.size.y + 1 end
+    restored:sync_geometry()
+    wait_until(restored,function()
+      grid = restored.session:snapshot(nil,false)
+      return grid.cols == restored.cols and grid.row_count == restored.rows
+    end,"The first real layout did not resize the restored screen")
   end)
 
   test.it("types the path of a copy on the Machine for a dropped file", function(context)
@@ -222,6 +374,11 @@ test.describe("Terminal on a Machine", function()
     local approved = false
     first:can_close(function() approved = true end)
     test.ok(approved, "The close asked a question")
+    -- Layout sync identifies the second connection while another View's close decision is pending.
+    local pane = require("net").random_token():sub(1,32)
+    first:bind_shared_pane(pane)
+    second:bind_shared_pane(pane)
+    wait_until(second,function() return first:close_status().views == 1 end,"The mirror did not bind")
     first:on_close()
     table.remove(context.views, 1)
     wait_until(second, function() return clients(second) == 1 end, "The other device lost the shell")

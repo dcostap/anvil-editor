@@ -366,6 +366,7 @@ function TerminalView:new(options)
     shell = options.shell or terminal_config.shell,
   }
   self.session_id = options.session_id
+  self.shared_id = options.shared_id
   self.minimum_contrast = style.terminal_minimum_contrast
   self.color_vividness = style.terminal_color_vividness
   next_log_id = next_log_id + 1
@@ -416,6 +417,8 @@ function TerminalView:start_session(options)
       self.record_project = record.movable and record.project_path or nil
       native_options.cols, native_options.rows = nil, nil
       native_options.session_id = record.session_id
+      native_options.pane_attach = record.pane_attach
+      if record.pane_identity then native_options.shared_id = self.shared_id end
       native_options.host_pid = record.host_pid
       native_options.host_creation_time = record.host_creation_time
       native_options.pipe_name = record.pipe_name
@@ -424,10 +427,10 @@ function TerminalView:start_session(options)
     end
   end
   local session, pi_command_sent
+  self.pane_identity = not record or record.pane_identity
   if not options.session_id and not fs.machine then
     session, pi_command_sent = take_prepared_session(native_options, options.pi)
   end
-  local used_spare = session ~= nil
   if pi_command_sent then self.start_pi = nil end
   local start_error, transport_error
   if fs.machine then
@@ -471,9 +474,6 @@ function TerminalView:start_session(options)
   self.activity = record and tonumber(record.activity) or os.time()
   local attaching = session:stats().attach_count == 0
   if not attaching then self:log_session_attach() end
-  -- A starting spare can have captured older font metrics. Apply this View's size after attachment.
-  self.session_cell_width = used_spare and 0 or self.native_cell_width
-  self.session_cell_height = used_spare and 0 or self.cell_height
   self.snapshot = session:snapshot()
   self.theme_generation = core.color_theme_generation or 0
   self.state = attaching and "reconnecting" or "running"
@@ -806,11 +806,11 @@ function TerminalTextCaptureView:get_state()
   return { kind = "text_capture", capture = capture }
 end
 
-function TerminalView.from_state(state, snooze_until, source)
+function TerminalView.from_state(state, snooze_until, source, shared_id)
   if type(state) ~= "table" then return nil end
   if state.kind == "text_capture" then return TerminalTextCaptureView(nil, state.capture) end
   local view = TerminalView { cwd = state.cwd, shell = state.shell, session_id = state.session_id, restore = source or true,
-    snooze_until = type(snooze_until) == "number" and snooze_until or nil }
+    shared_id = shared_id, snooze_until = type(snooze_until) == "number" and snooze_until or nil }
   view.input_used = true
   return view
 end
@@ -860,11 +860,12 @@ function TerminalView:new_remote_session(options, id, restore)
   local start = (not id or restore) and {project = options.project_path, cwd = options.cwd,
     shell = options.shell or "", scrollback_lines = options.scrollback_lines} or nil
   -- The paths name the Machine's folders. Only the Machine uses them.
+  if id then options.cols, options.rows = nil, nil end
   options.remote, options.project_path, options.cwd, options.shell = true, nil, nil, nil
   local session, err = terminal_native().new(options)
   if not session then return nil, err end
   self.machine = true
-  self.remote = require("core.machine_terminal").connect(fs.machine, session, id, start, restore == "workspace")
+  self.remote = require("core.machine_terminal").connect(fs.machine, session, id, start, restore == "workspace", self.shared_id)
   core.log_quiet("Terminal session %d connects through its Machine: id=%s", self.log_id, tostring(id))
   return session
 end
@@ -890,6 +891,8 @@ end
 
 function TerminalView:log_session_attach()
   local stats = self.session:stats()
+  -- WELCOME reports the host grid. This View has not sent its layout on the new connection yet.
+  self.session_cell_width = nil
   self.session_id = stats.session_id
   self.attach_count = stats.attach_count
   if core.request_workspace_save then core.request_workspace_save("terminal attach") end
@@ -917,8 +920,6 @@ function TerminalView:adopt_session(session)
   self.activity = self.activity or os.time()
   local attaching = session:stats().attach_count == 0
   if not attaching then self:log_session_attach() end
-  self.session_cell_width = self.native_cell_width
-  self.session_cell_height = self.cell_height
   self.snapshot = session:snapshot()
   self.theme_generation = core.color_theme_generation or 0
   self.minimum_contrast = style.terminal_minimum_contrast
@@ -2845,28 +2846,41 @@ end
 function TerminalView:close_status()
   if not self.session then return { kind = self.state, error = self.launch_error } end
   local _, status = self.session:update()
-  if not self.existing_host and status.busy == nil
-      and (status.kind == "reconnecting" or status.kind == "running") then
+  local attachments = status.attach_count or 0
+  if not self.existing_host and status.busy == nil and
+      (status.kind == "reconnecting" and attachments == 0 or status.kind == "running" and attachments <= 1) then
     return { kind = "starting" }
   end
   return status
 end
 
+function TerminalView:bind_shared_pane(id)
+  self.shared_id = id
+  if self.remote then self.remote.pane = id end
+  if self.session and self.session.bind_pane and
+      (self.remote and self.remote.pane_identity or not self.remote and self.pane_identity) then
+    self.session:bind_pane(id)
+  end
+end
+
 local function needs_close_confirmation(status, self_close)
   local idle_pi = status.agent_app == "pi"
     and (status.agent_state == "idle" or status.agent_state == "done")
-  -- Another device shows the session, so the close only detaches this View. The shell keeps running.
-  local shared = (status.clients or 0) > 1
   return status.kind == "reconnecting"
-    or (status.kind == "running" and status.busy ~= false and not idle_pi and not shared and not self_close)
+    or (status.kind == "running" and status.busy ~= false and not idle_pi and not self_close)
 end
 
 function TerminalView:can_close(approve, caller)
+  self.detach_on_close = nil
   if not self.session then approve(); return end
   local status = self:close_status()
   -- The control server supplies this identity, not the tool's arguments. Approve only this session's busy check.
   local self_close = caller ~= nil and caller ~= "local" and caller == self.session_id
-  if not needs_close_confirmation(status, self_close) then
+  local needs_end = needs_close_confirmation(status, self_close)
+  if needs_end and status.kind == "running" and (status.views or status.clients or 0) > 1 then
+    self.detach_on_close = self.session
+  end
+  if not needs_end or self.detach_on_close then
     core.log_quiet("Terminal session %d closed without confirmation: busy=%s app=%s agent=%s self_close=%s",
       self.log_id, tostring(status.busy), tostring(status.agent_app), tostring(status.agent_state), tostring(self_close))
     approve()
@@ -2926,6 +2940,8 @@ function TerminalView:reattach_session()
     options.scrollback_lines = terminal_config.scrollback_lines
     options.project_path = project_path("project")
     options.session_id, options.host_pid = record.session_id, record.host_pid
+    options.pane_attach = record.pane_attach
+    if record.pane_identity then options.shared_id = self.shared_id end
     options.host_creation_time, options.pipe_name = record.host_creation_time, record.pipe_name
     session, start_error = native.new(options)
   end
@@ -2961,15 +2977,18 @@ end
 
 function TerminalView:on_close(reopen)
   require("core.control_runtime").release(self)
+  -- Approval to leave a shared shell is not approval to end it if the count changes.
+  if self.session and self.detach_on_close == self.session then self:detach_session() end
+  self.detach_on_close = nil
   local retained = false
   -- A detached session belongs to its host or another Workspace. Only a live session ends for Reopen.
   -- The Machine keeps no closed sessions. Reopen starts a new shell there in the same folder.
-  -- A session that another device shows keeps running. Reopen attaches it again without a closed record.
-  local clients = self.session and select(2, self.session:update()).clients
-  local shared = (clients or 0) > 1
+  -- An independent View keeps the shell running. Reopen attaches it again without a closed record.
+  local status = self.session and select(2, self.session:update()) or {}
+  local shared = (status.views or status.clients or 0) > 1
   if self.remote and self.session then
-    core.log_quiet("Closing Machine Terminal View: id=%s clients=%s access=%s", tostring(self.remote.id),
-      tostring(clients), tostring(self.remote.client.level))
+    core.log_quiet("Closing Machine Terminal View: id=%s clients=%s views=%s access=%s", tostring(self.remote.id),
+      tostring(status.clients), tostring(status.views), tostring(self.remote.client.level))
   end
   if reopen and (self.session or self.state == "deferred") and self.session_id and not self.machine and not shared then
     local file, err = io.open(closed_session_path(self.session_id), "wb")
@@ -3459,13 +3478,16 @@ keymap.add({
 -- An ended session revives on the next start.
 function M.quit_decision(statuses, answer, scope)
   local live = {}
+  local detach = {}
   local count = 0
   local ask = false
   for i, status in ipairs(statuses) do
     live[i] = status.kind == "reconnecting" or status.kind == "running" or status.kind == "starting"
     if live[i] then
       count = count + 1
-      ask = ask or scope ~= "project" or needs_close_confirmation(status)
+      -- Project unload releases this PC's connection. It does not close the shared Pane.
+      detach[i] = scope == "project" and status.kind == "running" and (status.clients or 0) > 1
+      ask = ask or scope ~= "project" or (not detach[i] and needs_close_confirmation(status))
     end
   end
   if count > 0 then
@@ -3473,7 +3495,9 @@ function M.quit_decision(statuses, answer, scope)
     if ask and answer ~= "keep" and answer ~= "end" then return nil, "ask", count end
   end
   local actions = {}
-  for i in ipairs(statuses) do actions[i] = live[i] and answer == "keep" and "detach" or "end" end
+  for i in ipairs(statuses) do
+    actions[i] = (live[i] and answer == "keep" or detach[i] and answer ~= "end") and "detach" or "end"
+  end
   return actions, nil, count
 end
 
@@ -3481,7 +3505,7 @@ end
 local function idle_history_shell(pane, view)
   if view == pane.current_view then return false end
   local status = view:close_status()
-  return status.kind == "running" and status.busy == false
+  return status.kind == "running" and status.busy == false and (status.clients or 0) <= 1
 end
 
 local pending_quit

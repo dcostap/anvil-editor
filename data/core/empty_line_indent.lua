@@ -88,6 +88,8 @@ local function indent_before(buffer, line)
     if has_content(buffer.lines[previous]) then
       return newline_indent(buffer, previous), previous
     end
+    -- A blank Markdown line separates paragraphs. Do not inherit indentation across it.
+    if previous == line - 1 and is_markdown(buffer) then break end
   end
   return ""
 end
@@ -323,16 +325,15 @@ local function indent_width(view, indent)
   return visual_width(view.buffer, indent) * view:get_font():get_width(" ")
 end
 
-local function offset_for_indent(view, line, indent, reference)
+local function offset_for_indent(view, indent, reference)
   if indent == "" then return 0 end
   local lead = reference and view.buffer.lines[reference]:match("^[\t ]*")
   if lead and lead ~= "" then
     local columns = visual_width(view.buffer, indent)
     local lead_columns = visual_width(view.buffer, lead)
-    -- Live Preview can compress indentation. Use the same scale for positions
-    -- inside that indentation, so Left and pointer placement agree with drawing.
+    -- Measure only the whitespace. A list continuation can have a separate left margin.
     local width = math.max(0, view:get_col_x_offset(reference, #lead + 1)
-      - view:get_col_x_offset(line, 1))
+      - view:get_col_x_offset(reference, 1))
     return width * math.min(columns / lead_columns, 1)
       + math.max(0, columns - lead_columns) * view:get_font():get_width(" ")
   end
@@ -364,8 +365,8 @@ function empty_line_indent.place(view, line, col, x)
   local low, high = 0, #extent
   while low < high do
     local middle = math.floor((low + high) / 2)
-    local left = offset_for_indent(view, line, extent:sub(1, middle), found.reference)
-    local right = offset_for_indent(view, line, extent:sub(1, middle + 1), found.reference)
+    local left = offset_for_indent(view, extent:sub(1, middle), found.reference)
+    local right = offset_for_indent(view, extent:sub(1, middle + 1), found.reference)
     if target < (left + right) / 2 then high = middle else low = middle + 1 end
   end
   set_level(view, line, extent:sub(1, low))
@@ -387,7 +388,7 @@ function empty_line_indent.caret_offset(view, line, col)
   end
   local found = entry(view.buffer, line)
   if not found then return 0 end
-  return offset_for_indent(view, line, empty_line_indent.get(view, line), found.reference)
+  return offset_for_indent(view, empty_line_indent.get(view, line), found.reference)
 end
 
 -- Collapsed carets on empty lines that show an indentation, one per line.

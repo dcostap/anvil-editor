@@ -162,6 +162,7 @@ test.describe("Machine server", function()
     test.ok(call(host, "layout.set", request).result, "Host could not publish layout")
     local reply = call(laptop, "layout.get", {project = context.project}).result
     test.equal(reply.layout.groups[1].file, "notes.md")
+    test.ok(reply.layout.groups[1].pane,"The Machine did not give the legacy layout an authoritative Pane ID")
     test.equal(call(laptop,"layout.set",{base=reply.revision,project=context.project,
       layout={groups={{file=".." .. PATHSEP .. "secret.txt"}},active=1}}).error.code,"invalid_layout")
     test.equal(call(laptop, "layout.set", request).error.code, "conflict")
@@ -173,6 +174,12 @@ test.describe("Machine server", function()
     test.ok(call(laptop, "hello", {protocol = 1, token = context.discovery.token}).result)
     test.equal(call(laptop,"layout.get",{project=context.project}).result.revision, 2)
     test.equal(call(laptop,"layout.set",request).error.code,"conflict")
+    local legacy = {project=context.project,base=2,layout={groups={{file="notes.md"}},active=1}}
+    test.ok(call(host,"layout.set",legacy).result)
+    local assigned = call(laptop,"layout.get",{project=context.project}).result.layout.groups[1].pane
+    legacy.base = 3
+    test.ok(call(host,"layout.set",legacy).result)
+    test.equal(call(laptop,"layout.get",{project=context.project}).result.layout.groups[1].pane,assigned)
     host.socket:close(); laptop.socket:close()
   end)
 

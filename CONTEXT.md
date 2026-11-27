@@ -691,9 +691,33 @@ Successful input ends this state, even if the user then deletes that input. Rest
 **Anvil Agent**:
 An Anvil Agent is an agent running inside Anvil.
 
+**Anvil's MCP server**:
+The one MCP endpoint of a user folder, opened by the Machine server. Anvil Agents and External Agents use it for all Projects of the Machine.
+_Avoid_: control server, Project endpoint, MCP hub
+
 **External Agent**:
 An agent that runs outside Anvil's Terminal Sessions, such as Antigravity's agent, and talks with the user and Anvil Agents through Anvil's MCP server. It has a name that it chooses, unique in its Project, and one thread of messages on the Project's Machine.
 _Avoid_: outside agent, remote agent, agy session
+
+**Project Chat**:
+The readable record of what the user and the agents of one Project said to each other, kept on the Project's Machine. It holds User Messages, Agent Output, Answers and Agent Messages, but no tool calls, tool output or thinking.
+_Avoid_: Project feed, chat feed, agent feed
+
+**User Message**:
+A message from the user to one agent: typed in its Terminal, including a steering message, or sent from Project Chat.
+_Avoid_: prompt, human message
+
+**Agent Output**:
+Text that an agent writes on the way to an Answer, between its tool calls. Project Chat folds it into the Answer that follows.
+_Avoid_: progress message, interim text, update
+
+**Answer**:
+The text with which an agent ends its turn.
+_Avoid_: result, final answer, chat result
+
+**Agent Message**:
+A message from one agent to another: a task, a steering message or a reply.
+_Avoid_: agent task, inter-agent message
 
 **Agent Session**:
 A coding agent's saved conversation, such as a Pi session. When a Terminal Session revives after its shell ended, it resumes the Agent Session that its agent had open.

@@ -37,6 +37,11 @@ test.describe("Terminal quit decision", function()
     test.equal(decision, nil)
     test.equal(reason, "ask")
   end)
+
+  test.it("unloads a Project without ending a Pane that another PC still shows", function()
+    local statuses = {{kind="running", busy=true, clients=2, views=1}}
+    test.same(terminal.quit_decision(statuses, "project", "project"), {"detach"})
+  end)
 end)
 
 test.describe("Terminal quit confirmation", function()

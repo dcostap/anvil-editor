@@ -170,10 +170,16 @@ test.describe("Remote Terminal Session", function()
     local own = projects.own_id
     context.restore = function() projects.own_id = own end
     projects.own_id = function() return string.rep("0", 32) end
-    context.source = require("core.control_server").open(require("core.control").new(context.project))
+    -- Anvil's MCP server of the Client: it knows its own Pi and a local agent with the host Terminal's ID.
+    local control = require("core.control").new(context.project)
+    context.source = require("core.control_server").open(nil, {
+      control = function(project) return require("core.common").path_equals(project, context.project) and control or nil end,
+      project_of = function(caller) return caller ~= "local" and context.project or nil end,
+      tick = function() control:tick() end,
+    })
     local source = context.source:add_client("source-terminal")
-    context.source.control:exchange("source-terminal", {instance = "source-pi", receipts = {}, tasks = {}})
-    context.source.control:exchange(context.id, {instance = "wrong-local-agent", receipts = {}, tasks = {}})
+    control:exchange("source-terminal", {instance = "source-pi", receipts = {}, tasks = {}})
+    control:exchange(context.id, {instance = "wrong-local-agent", receipts = {}, tasks = {}})
     require("core").add_thread(function()
       while context.source.listener do context.source:poll(); coroutine.yield(.01) end
     end)
@@ -273,6 +279,35 @@ test.describe("Remote Terminal Session", function()
     local _, direct_feed = call(context.owner, "chat.read", {project = context.project, after = updated.cursor})
     test.equal(direct_feed.messages[1].to.terminal, context.id)
     test.is_nil(direct_feed.messages[1].reply_to)
+    -- Pi posts each readable message of its conversation, with its kind. The Machine names this Pi in each one.
+    report.receipts = {}
+    report.chat = {
+      {id = "typed", kind = "user", text = "Fix the build", request = "typed-request"},
+      {id = "progress", kind = "output", text = "Checking the log", reply_to = "typed-request"},
+      {id = "done", kind = "answer", text = "Fixed", reply_to = "typed-request"},
+      {id = "task", kind = "agent", text = "Review this", request = "task-a",
+        from = {terminal = "other", instance = "other-pi", name = "calm-heron"}},
+      {id = "notice", kind = "agent", text = "Status?", request = "notice-a", from = {name = "agy", external = "agy"}},
+      {id = "reply", kind = "agent", text = "Looks right", reply_to = "task-a", to = {name = "calm-heron", terminal = "other"}},
+    }
+    test.equal(post("/agent", report).chat_ack, "reply")
+    post("/agent", report)
+    report.chat = nil
+    local posted, cursor = {}, direct_feed.cursor
+    repeat
+      local _, page = call(context.owner, "chat.read", {project = context.project, after = cursor})
+      for _, message in ipairs(page.messages) do posted[#posted + 1] = message end
+      cursor = page.cursor
+    until #page.messages == 0
+    test.equal(#posted, 6, "A lost acknowledgement must not copy the messages")
+    local typed, progress, done, task, notice, reply = table.unpack(posted)
+    test.same({typed.kind, typed.from.kind, typed.to.terminal, typed.request}, {"user", "user", context.id, "typed-request"})
+    test.is_nil(typed.pi, "Reply goes to the author of a message, and the user wrote this one")
+    test.same({progress.kind, progress.pi, progress.from.terminal, progress.reply_to}, {"output", true, context.id, "typed-request"})
+    test.same({done.kind, done.from.instance}, {"answer", report.instance})
+    test.same({task.kind, task.from.name, task.to.terminal, task.request, task.pi}, {"agent", "calm-heron", context.id, "task-a", true})
+    test.same({notice.from.name, notice.external}, {"agy", "agy"})
+    test.same({reply.kind, reply.from.terminal, reply.to.name, reply.reply_to}, {"agent", context.id, "calm-heron", "task-a"})
     report.instance, report.chat_result = "replacement", nil
     post("/agent", report)
     test.equal(call(context.owner, "chat.reply", args).code, "not_connected")

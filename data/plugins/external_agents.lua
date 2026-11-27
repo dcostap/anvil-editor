@@ -593,6 +593,7 @@ function ExternalAgentView:receive(result)
       end
       self.messages[#self.messages + 1] = message
       if message.request then self.requests[message.request] = message end
+      if message.kind == "answer" and message.pi then self:fold_output(message) end
     end
   end
   while #self.messages > MAX_SHOWN do
@@ -611,6 +612,29 @@ function ExternalAgentView:receive(result)
   self.status, self.error = self.project_chat and "connected" or result.listening and "listening" or "idle", nil
   self.laid_out = nil
   self:status_changed()
+end
+
+-- An answer folds the output that its Pi wrote on the way to it: the output since the Pi's previous message, for
+-- the same request. Output without an answer yet shows, so the user can follow the work.
+function ExternalAgentView:fold_output(answer)
+  local from = answer.from or EMPTY
+  local updates = {}
+  for i = #self.messages - 1, 1, -1 do
+    local message = self.messages[i]
+    local author = message.from or EMPTY
+    if message.pi and author.terminal == from.terminal and author.instance == from.instance then
+      if message.kind ~= "output" or message.folded or message.reply_to ~= answer.reply_to then break end
+      message.folded = answer
+      table.insert(updates, 1, message)
+    end
+  end
+  if #updates > 0 then answer.updates = updates end
+end
+
+function ExternalAgentView:toggle_updates(answer)
+  answer.expanded = not answer.expanded
+  self.laid_out = nil
+  core.redraw = true
 end
 
 -- A message to the agent that its waits have not given it yet.
@@ -686,6 +710,8 @@ local function avatar_size() return ui.font():get_height() + 2 * ui.metrics().te
 local function name_top() return math.floor((avatar_size() - ui.role_font("strong"):get_height()) / 2) end
 -- An answer sits this far right of its question.
 local function indent() return avatar_size() + ui.metrics().gap end
+-- The line above an answer that shows or hides its folded output.
+local function toggle_h() return ui.role_font("meta"):get_height() + ui.metrics().text_gap end
 -- Each message keeps room on its right for its copy button.
 local function copy_size() return ui.metrics().control_xs_h end
 local function send_size() return ui.metrics().control_xs_h end
@@ -748,6 +774,9 @@ function ExternalAgentView:layout(width)
   local name_h = name_top() + ui.role_font("strong"):get_height()
   local cards, card, previous, y = {}, nil, nil, 0
   for _, message in ipairs(self.messages) do
+    -- Folded output has no place, so the pointer cannot find it.
+    message.y = nil
+    if message.folded and not message.folded.expanded then goto folded end
     local from = message.from or EMPTY
     local to = message.to or EMPTY
     message.author = message.author or table.concat({ from.kind or "", from.name or "", from.machine or "",
@@ -781,6 +810,12 @@ function ExternalAgentView:layout(width)
     message.x = message.depth * step + step
     message.y = y
     local body = self:text_of(message):measure(text_width(message, inner))
+    if message.updates then
+      local count = #message.updates
+      message.toggle = (message.expanded and "Hide " or "Show ") .. count .. (count == 1 and " update" or " updates")
+      message.toggle_y = y + (message.header and name_h + m.text_gap or 0)
+      body = body + toggle_h()
+    end
     message.h = message.header and math.max(avatar, name_h + m.text_gap + body) or body
     -- The thread line runs from the question's avatar to each answer's avatar.
     if message.header and message.depth == 1 then
@@ -790,6 +825,7 @@ function ExternalAgentView:layout(width)
     card.messages[#card.messages + 1] = message
     y = y + message.h
     previous = message
+    ::folded::
   end
   if card then
     card.h = y + m.pad_x - card.y
@@ -828,8 +864,8 @@ function ExternalAgentView:update()
   self:layout(width)
   local top, bottom = self:thread_top(), self.position.y + self.size.y
   for _, message in ipairs(self.messages) do
-    local y = top + message.y
-    if message.text_view and y + message.h > self.position.y and y < bottom then message.text_view:update() end
+    local y = message.y and top + message.y
+    if y and message.text_view and y + message.h > self.position.y and y < bottom then message.text_view:update() end
   end
   self.last_max = self:max_scroll()
   if self.stick then self.scroll.to.y = self.last_max end
@@ -897,6 +933,14 @@ function ExternalAgentView:reply_to(message)
   self:focus_text(nil)
 end
 
+-- The line of an answer that shows or hides its output, from the top of the thread.
+function ExternalAgentView:over_toggle(message, x, y)
+  if not (message and message.updates and message.toggle_y) then return false end
+  local top = self:thread_top() + message.toggle_y
+  local left = self:column() + ui.metrics().pad_x + message.x
+  return y >= top and y < top + toggle_h() and x >= left and x < left + ui.role_font("meta"):get_width(message.toggle)
+end
+
 -- A profile is the avatar and name in a message header.
 function ExternalAgentView:over_profile(message, x, y)
   if not (message and message.header and message.profile) then return false end
@@ -930,6 +974,10 @@ function ExternalAgentView:on_mouse_pressed(button, x, y, clicks)
     return true
   end
   local hit = self:message_at(x, y)
+  if self:over_toggle(hit, x, y) then
+    self:toggle_updates(hit)
+    return true
+  end
   if self.project_chat and hit and (hit.pi or hit.external) then
     local cx, cy, size = self:copy_rect(hit)
     if x < cx and x >= cx - ui.font():get_width("Reply") - ui.metrics().gap and y >= cy and y < cy + size then
@@ -998,7 +1046,8 @@ function ExternalAgentView:on_mouse_moved(x, y, dx, dy)
   local over_copy = self:over_copy(x, y) ~= nil
   if over_copy ~= self.copy_hovered then core.redraw = true end
   self.copy_hovered = over_copy
-  self.cursor = (over_agents and agents.enabled or over_send or over_copy or self:over_profile(message, x, y)) and "hand"
+  self.cursor = (over_agents and agents.enabled or over_send or over_copy or self:over_profile(message, x, y)
+    or self:over_toggle(message, x, y)) and "hand"
     or in_field and "ibeam" or text and text.cursor or "arrow"
 end
 
@@ -1130,14 +1179,26 @@ end
 ------------------------------------------------------------------------------------------------------------------
 -- Drawing
 
--- The tone of each kind of author: the agent, a Pi, or the user.
-local AUTHOR_TONES = { self = "info", agent = "success" }
+-- The avatar color of an agent: a Pi by its Terminal Session, an External Agent by its name. The user has none.
+local function agent_color(key)
+  if type(key) ~= "string" then return nil end
+  local colors, hash = style.agent_avatar_colors, 0
+  for i = 1, #key do hash = (hash * 31 + key:byte(i)) % 2147483647 end
+  return colors[hash % #colors + 1]
+end
+
+function ExternalAgentView:author_color(message)
+  local from = message.from or EMPTY
+  if from.kind == "self" then return agent_color(self.agent) end
+  if from.kind ~= "agent" then return nil end
+  return agent_color(message.external or from.terminal or from.name)
+end
 
 -- A round avatar with an icon or the first letter of `name`, in the colors of a Badge.
-local function draw_avatar(name, tone, x, y, glyph)
+local function draw_avatar(name, color, x, y, glyph)
   local size = avatar_size()
-  local color = tone and ui.tone_color(tone) or style.dialog_text
-  local fill = tone and ui.tint(color, 0.16) or ui.tint(style.dialog_text_strong, 0.1)
+  local fill = color and ui.tint(color, 0.16) or ui.tint(style.dialog_text_strong, 0.1)
+  color = color or style.dialog_text
   renderer.draw_rounded_rect(x, y, size, size, size / 2, fill)
   local font = glyph and ui.icon_font() or ui.role_font("strong")
   glyph = glyph or (name:match("^[%z\1-\127\194-\244][\128-\191]*") or "?"):upper()
@@ -1156,8 +1217,7 @@ function ExternalAgentView:draw_message(message, left, top, width)
   end
   local x = left + message.x
   if message.header then
-    local from = message.from or EMPTY
-    draw_avatar(message.label, AUTHOR_TONES[from.kind], left + message.depth * indent(), y)
+    draw_avatar(message.label, self:author_color(message), left + message.depth * indent(), y)
     local strong, meta = ui.role_font("strong"), ui.role_font("meta")
     local profile, recipient = message.profile, self.recipient
     local selected = profile and recipient and profile.external == recipient.external
@@ -1172,9 +1232,16 @@ function ExternalAgentView:draw_message(message, left, top, width)
     end
     y = y + strong:get_height() + m.text_gap
   end
+  if message.updates then
+    renderer.draw_text(ui.role_font("meta"), message.toggle, x, y, style.dialog_text_muted)
+    y = y + toggle_h()
+  end
   local text = self:text_of(message)
   text:place(x, y, text_width(message, width))
+  -- Output on the way to an answer is quieter than the answer.
+  local pushed = message.kind == "output" and ui.push_look(x, y, width, message.h, 1, 0.65)
   text:draw()
+  ui.pop_look(pushed)
   if self.project_chat and (message.pi or message.external) and (message.header or message == self.hovered) then
     local cx, cy = self:copy_rect(message)
     local font = ui.font()
@@ -1242,8 +1309,8 @@ function ExternalAgentView:draw_header()
   local strong = ui.role_font("strong")
   local nx = x + avatar + m.gap
   if nx >= right then return end
-  draw_avatar(self.agent, AUTHOR_TONES.self, x, y + math.floor((h - avatar) / 2),
-    self.project_chat and CHAT_ICON.glyph or nil)
+  draw_avatar(self.agent, self.project_chat and ui.tone_color("info") or agent_color(self.agent), x,
+    y + math.floor((h - avatar) / 2), self.project_chat and CHAT_ICON.glyph or nil)
   local name = ui.fit_text(strong, self.agent, right - nx)
   local dot_x = renderer.draw_text(strong, name, nx, y + math.floor((h - strong:get_height()) / 2),
     style.dialog_text_strong) + m.section_gap

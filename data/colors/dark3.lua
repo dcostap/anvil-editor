@@ -135,6 +135,8 @@ style.dialog_line = { 255, 240, 210, 20 }
 style.dialog_danger = c("e07a70")
 -- The colors of Badges and Status Dots, for each tone other than neutral.
 style.dialog_tones = { success = c("8fbf6a"), warning = c("e0b45a"), danger = c("e07a70"), info = c("8fa8d8") }
+-- Avatar colors of agents in Project Chat. Each agent keeps one color.
+style.agent_avatar_colors = { c("e5735f"), c("e0a347"), c("a3c35a"), c("4fbf8f"), c("4fb3d9"), c("7f9cf5"), c("b385f0"), c("e070b0") }
 -- A surface has a fill and a 1 px rim, each a gradient from `top` to `bottom`, and a text color.
 -- `shadow` falls `shadow_y` pixels below the surface and fades over `shadow_blur` pixels, at scale 1.
 style.dialog_surfaces = {

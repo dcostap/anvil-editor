@@ -89,17 +89,19 @@ local TRANSPORT = {offline = true, disconnected = true}
 -- With `start` ({project, cwd, shell, scrollback_lines}), a nil `id`, or an `id` that the Machine no longer has
 -- at the first attach, starts a new shell. Returns an object whose `id` names the session once the Machine
 -- answers, and whose `error` names why the session ended or did not start.
-function machine_terminal.connect(client, session, id, start, workspace_restore)
-  local remote = {client = client, session = session, id = id}
+function machine_terminal.connect(client, session, id, start, workspace_restore, pane)
+  local remote = {client = client, session = session, id = id, pane = pane}
   core.add_thread(function()
     local attached = false
     while session:wanted_size() and client.state ~= "closed" do
       if client.state ~= "ready" then
         coroutine.yield(0.1)
       else
-        local cols, rows, cell_width, cell_height = session:wanted_size()
+        local cols, rows, cell_width, cell_height, preserve_grid = session:wanted_size()
         local starting = remote.id == nil
         local params = {id = remote.id, cols = cols, rows = rows, cell_width = cell_width, cell_height = cell_height}
+        if not starting then params.pane = remote.pane end
+        if not starting and preserve_grid then params.preserve_grid = true end
         if starting then
           for key, value in pairs(start) do params[key] = value end
         end
@@ -119,6 +121,7 @@ function machine_terminal.connect(client, session, id, start, workspace_restore)
         else
           local link = not err and session:wanted_size() and session:attach_remote(result)
           if link then
+            remote.pane_identity = result.pane_identity
             remote.id, attached = result.session_id, true
             core.log_quiet("Remote Terminal Session %s attached: link=%s", remote.id, tostring(result.link))
             remote.carrying = true

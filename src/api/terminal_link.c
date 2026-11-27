@@ -40,6 +40,7 @@ struct AnvilTerminalLink {
   char id[ANVIL_TERMINAL_ID_LENGTH + 1];
   AnvilTerminalSize size;
   AnvilTerminalClientInfo info;
+  char pane[33];
   /* One bit for each record type that Lua may write, unless `pair`. */
   uint64_t allowed;
   uint16_t final_type;
@@ -180,7 +181,7 @@ static DWORD WINAPI link_reader(void *userdata) {
     } else {
       memcpy(id, link->id, sizeof(id));
       ok = anvil_terminal_host_connect_as(&pipe, link->process, link->host_pid, &shell_pid, id, &size, &link->info,
-        &error);
+        link->pane, &error);
     }
     EnterCriticalSection(&link->lock);
     /* No Client takes a new shell that Lua closed during its start. */
@@ -319,6 +320,7 @@ static AnvilTerminalLink *options_link(lua_State *L) {
   lua_pop(L, 2);
   link->info.flags = full ? 0 : ANVIL_TERMINAL_VIEW_ONLY;
   allow(link, ANVIL_TERMINAL_DETACH);
+  allow(link, ANVIL_TERMINAL_PANE);
   if (full) {
     allow(link, ANVIL_TERMINAL_INPUT); allow(link, ANVIL_TERMINAL_RESIZE); allow(link, ANVIL_TERMINAL_TAKE);
     allow(link, ANVIL_TERMINAL_CLEAR); allow(link, ANVIL_TERMINAL_CLOSE); allow(link, ANVIL_TERMINAL_END);
@@ -347,8 +349,15 @@ static int f_link_connect(lua_State *L) {
   lua_getfield(L, 1, "host_creation_time");
   const char *created = luaL_checkstring(L, -1);
   DWORD pid = (DWORD)field_integer(L, "host_pid", 1, UINT32_MAX);
+  lua_getfield(L, 1, "pane");
+  const char *pane = luaL_optstring(L, -1, NULL);
+  if (pane && !anvil_terminal_id_valid(pane)) return luaL_argerror(L, 1, "invalid Pane ID");
   if (!anvil_terminal_id_valid(id)) luaL_argerror(L, 1, "invalid Terminal Session ID");
   AnvilTerminalLink *link = options_link(L);
+  if (pane) memcpy(link->pane, pane, sizeof(link->pane));
+  lua_getfield(L, 1, "preserve_grid");
+  if (lua_toboolean(L, -1)) link->size.cols = link->size.rows = 0;
+  lua_pop(L, 1);
   HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
   if (!anvil_process_identity(process, pid, created)) {
     if (process) CloseHandle(process);

@@ -1,7 +1,8 @@
-// A stdio MCP server for agents outside Anvil's Terminals, such as Antigravity. It sends each request to the
-// Project's Anvil MCP endpoint. It reads the discovery files again for each request, so the agent's MCP config
-// stays the same when Anvil restarts with a new port and token.
-// Usage: node anvil-mcp.cjs --userdir <Anvil user folder> [--project <Project path>]
+// A stdio MCP server for agents outside Anvil's Terminals, such as Antigravity. It sends each request to Anvil's
+// MCP server, which serves all Projects of this user folder. It reads the discovery file again for each request, so
+// the agent's MCP config stays the same when Anvil restarts with a new port and token.
+// Usage: node anvil-mcp.cjs --userdir <Anvil user folder> [--project <default Project path>]
+// A tool call without `project` uses the default Project.
 "use strict";
 const fs = require("node:fs");
 const path = require("node:path");
@@ -14,34 +15,16 @@ function option(name) {
 const userdir = option("--userdir") || process.env.ANVIL_USERDIR;
 const project = option("--project");
 
-function key(value) {
-  if (typeof value !== "string") return "";
-  if (/^anvil-machine:\/\//.test(value)) return value;
-  const resolved = path.resolve(value).replace(/[\\/]+$/, "");
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
 function alive(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
 }
 
-// The live endpoint of the Project, or of the newest Project without --project.
+// The live endpoint of the Machine server.
 function endpoint() {
-  const directory = path.join(userdir, "control");
-  let names;
-  try { names = fs.readdirSync(directory); } catch { return undefined; }
-  let newest;
-  for (const name of names) {
-    if (!/^\d+\.json$/.test(name)) continue;
-    let record;
-    try { record = JSON.parse(fs.readFileSync(path.join(directory, name), "utf8")); } catch { continue; }
-    if (record?.version !== 1 || !/^http:\/\/127\.0\.0\.1:\d+$/.test(record.url) || typeof record.token !== "string") continue;
-    if (!Number.isInteger(record.pid) || !alive(record.pid)) continue;
-    if (project) {
-      if (key(record.project) === key(project)) return record;
-    } else if (!newest || String(record.created) > String(newest.created)) newest = record;
-  }
-  return newest;
+  let record;
+  try { record = JSON.parse(fs.readFileSync(path.join(userdir, "machine", "mcp.json"), "utf8")); } catch { return undefined; }
+  if (record?.version !== 1 || !/^http:\/\/127\.0\.0\.1:\d+$/.test(record.url) || typeof record.token !== "string") return undefined;
+  return Number.isInteger(record.pid) && alive(record.pid) ? record : undefined;
 }
 
 function send(message) {
@@ -60,7 +43,7 @@ async function handle(line) {
   const answers = message?.id !== undefined && message?.id !== null;
   const target = endpoint();
   if (!target) {
-    const missing = project ? `Anvil has not loaded the Project ${project}` : "Anvil is not running";
+    const missing = "Anvil is not running";
     // The client starts without Anvil. Its tool calls fail until Anvil runs.
     if (message.method === "initialize") {
       return send({jsonrpc: "2.0", id: message.id, result: {protocolVersion: message.params?.protocolVersion || "2025-06-18",
@@ -68,6 +51,11 @@ async function handle(line) {
     }
     if (answers) failure(message.id, missing);
     return;
+  }
+  const args = message.method === "tools/call" && message.params?.arguments;
+  if (project && args && typeof args === "object" && args.project === undefined) {
+    args.project = project;
+    line = JSON.stringify(message);
   }
   try {
     const response = await fetch(target.url + "/mcp", {method: "POST", body: line, redirect: "error",
