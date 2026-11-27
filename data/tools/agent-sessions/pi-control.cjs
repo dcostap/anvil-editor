@@ -140,8 +140,9 @@ module.exports = function (pi) {
     const key = next.url + "/" + next.token;
     if (register && connection !== key) {
       if (connection) pi.unregisterMcpServer("anvil");
+      // An External Agent wait can take 3 minutes, and Anvil answers it within 191 seconds.
       pi.registerMcpServer("anvil", { url: next.url + "/mcp",
-        headers: { Authorization: "Bearer " + next.token }, exposure: "direct", timeout: 45,
+        headers: { Authorization: "Bearer " + next.token }, exposure: "direct", timeout: 210,
         description: "Inspect and control Anvil Panes, files, terminals and Pi conversations." });
       connection = key;
     }
