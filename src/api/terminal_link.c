@@ -319,6 +319,7 @@ static AnvilTerminalLink *options_link(lua_State *L) {
   lua_pop(L, 2);
   link->info.flags = full ? 0 : ANVIL_TERMINAL_VIEW_ONLY;
   allow(link, ANVIL_TERMINAL_DETACH);
+  allow(link, ANVIL_TERMINAL_PANE);
   if (full) {
     allow(link, ANVIL_TERMINAL_INPUT); allow(link, ANVIL_TERMINAL_RESIZE); allow(link, ANVIL_TERMINAL_TAKE);
     allow(link, ANVIL_TERMINAL_CLEAR); allow(link, ANVIL_TERMINAL_CLOSE); allow(link, ANVIL_TERMINAL_END);

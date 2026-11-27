@@ -149,7 +149,8 @@ typedef struct {
   bool viewer, take_pending, focus_can_take;
   uint32_t control_generation;
   char controller_name[ANVIL_TERMINAL_NAME_LENGTH];
-  uint32_t clients;
+  uint32_t clients, views;
+  char bound_pane[33];
   GhosttyColorScheme color_scheme;
   bool color_scheme_known;
   TerminalContrast contrast;
@@ -348,9 +349,10 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
       wake_for_terminal_output(session);
       continue;
     }
-    if (header.type == ANVIL_TERMINAL_ROLE && header.size == sizeof(AnvilTerminalRole)) {
-      AnvilTerminalRole role; memcpy(&role, buffer, sizeof(role));
-      if (role.controller > 1 || !role.clients || role.clients > 64 ||
+    if (header.type == ANVIL_TERMINAL_ROLE &&
+        (header.size == sizeof(AnvilTerminalRole) || header.size == ANVIL_TERMINAL_BASE_ROLE_SIZE)) {
+      AnvilTerminalRole role = {0}; memcpy(&role, buffer, header.size);
+      if (role.controller > 1 || !role.clients || role.clients > 64 || role.views > role.clients ||
           !memchr(role.controller_name, 0, sizeof(role.controller_name))) {
         session->read_error = ERROR_INVALID_DATA; InterlockedExchange(&session->read_failed, 1); break;
       }
@@ -1702,6 +1704,8 @@ static void push_status(lua_State *L, TerminalSession *session) {
   set_integer_field(L, "attach_count", session->attach_count);
   /* Attached Clients of the host, this one included, or 0 before the first ROLE. */
   set_integer_field(L, "clients", session->state == TERMINAL_STATE_RUNNING ? session->clients : 0);
+  if (session->state == TERMINAL_STATE_RUNNING && session->views != session->clients)
+    set_integer_field(L, "views", session->views);
   set_boolean_field(L, "render_pending", session->render_pending ||
     session->state == TERMINAL_STATE_RECONNECTING ||
     (session->state == TERMINAL_STATE_RUNNING && !session->replay_finished));
@@ -1760,6 +1764,8 @@ static bool start_attached(TerminalSession *session, HANDLE handle) {
   session->write_queue_head = session->write_queue_count = 0;
   /* The new connection's ROLE says who controls. An older host sends none, and this Client controls. */
   session->role_ready = session->take_pending = false;
+  session->bound_pane[0] = 0;
+  session->views = session->clients = 0;
   if (session->viewer) { session->viewer = false; session->state_revision++; }
   session->read_error = session->write_error = 0;
   InterlockedExchange(&session->read_failed, 0); InterlockedExchange(&session->write_failed, 0);
@@ -1885,6 +1891,7 @@ static void apply_role(TerminalSession *session, const AnvilTerminalRole *role) 
   if (role->generation != session->control_generation) session->take_pending = false;
   session->control_generation = role->generation;
   session->clients = role->clients;
+  session->views = role->views ? role->views : role->clients;
   bool name_changed = strcmp(session->controller_name, role->controller_name) != 0;
   memcpy(session->controller_name, role->controller_name, sizeof(session->controller_name));
   if (was_viewer != session->viewer || (session->viewer && name_changed)) session->state_revision++;
@@ -2409,6 +2416,17 @@ static int f_terminal_wanted_size(lua_State *L) {
 }
 
 /* Takes control without input. Returns false for a Controller or a closed session. */
+static int f_terminal_bind_pane(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  size_t length;
+  const char *id = luaL_checklstring(L, 2, &length);
+  luaL_argcheck(L, length == 32 && strspn(id, "0123456789abcdef") == length, 2, "invalid shared Pane ID");
+  if (session->state == TERMINAL_STATE_RUNNING && strcmp(id, session->bound_pane) &&
+      enqueue_record(session, ANVIL_TERMINAL_PANE, (const uint8_t *)id, length))
+    memcpy(session->bound_pane, id, length + 1);
+  return 0;
+}
+
 static int f_terminal_take_control(lua_State *L) {
   TerminalSession *session = check_session(L, 1);
   lua_pushboolean(L, request_control(session));
@@ -4454,6 +4472,7 @@ static const luaL_Reg terminal_methods[] = {
   { "paste", f_terminal_paste },
   { "resize", f_terminal_resize },
   { "take_control", f_terminal_take_control },
+  { "bind_pane", f_terminal_bind_pane },
   { "attach_remote", f_terminal_attach_remote },
   { "wanted_size", f_terminal_wanted_size },
   { "clear", f_terminal_clear },

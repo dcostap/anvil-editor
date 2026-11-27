@@ -175,6 +175,28 @@ test.describe("Terminal Session restoration", function()
     test.equal(#terminal.open_views(), before)
   end)
 
+  test.it("closes the shared Pane from the host PC", function(context)
+    local view = open(context)
+    local record = read_record(view)
+    local mirror = assert(require("terminal_native").new {
+      session_id=record.session_id, host_pid=record.host_pid, host_creation_time=record.host_creation_time,
+      pipe_name=record.pipe_name,
+    })
+    context.other = mirror
+    local id = require("net").random_token():sub(1,32)
+    test.ok(wait_for(view,function()
+      view:bind_shared_pane(id)
+      mirror:update()
+      mirror:bind_pane(id)
+      local status = view:close_status()
+      return status.clients == 2 and status.views == 1
+    end),"The host did not recognize the mirror")
+    view:on_close(true)
+    test.ok(wait_for(view,function()
+      return context.kernel.WaitForSingleObject(context.processes[1][1],0) == 0
+    end),"The local close left the mirrored shell running")
+  end)
+
   test.it("shares the shell and takes control on typing or focus", function(context)
     context.window_has_focus = system.window_has_focus
     local focused = false

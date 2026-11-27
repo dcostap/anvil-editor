@@ -119,6 +119,7 @@ function machine_terminal.connect(client, session, id, start, workspace_restore)
         else
           local link = not err and session:wanted_size() and session:attach_remote(result)
           if link then
+            remote.pane_identity = result.pane_identity
             remote.id, attached = result.session_id, true
             core.log_quiet("Remote Terminal Session %s attached: link=%s", remote.id, tostring(result.link))
             remote.carrying = true

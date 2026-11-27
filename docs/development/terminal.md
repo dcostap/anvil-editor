@@ -98,15 +98,17 @@ The client sends `TAKE` with the control generation that it saw last, then the i
 
 Each Client resizes its own screen there. A handoff sends no snapshot. A `ROLE` also counts the attached Clients.
 
-The host sends one to the others when a Client attaches or leaves. The session status reports the count as `clients`. A CLOSE or END from one Client only detaches that Client while another Client is attached.
+The host sends one to the others when a Client attaches or leaves. The session status reports the count as `clients`. A CLOSE or END detaches its Client if another independent View remains.
 
-The last Client's close ends the shell. A control connection without a Client ID cannot end a shell while a Client is attached. New Clients request a connection ID in WELCOME.
+Closing the last independent View ends the shell. A control connection without a Client ID cannot end a shell while a Client is attached. New Clients request a connection ID in WELCOME.
 
-Their final control CLOSE or END names that exact Client and its process, so a delayed disconnect cannot hide the last Close. Another Client in the same process stays attached. Older hosts reject the request flag; the Client then repeats the old handshake without an ID.
+Their final control CLOSE or END names that exact Client and its process. Older hosts reject the request flag; the Client then repeats the old handshake without an ID.
+
+A shared layout gives each Pane an ID. Each copy of a Terminal in that Pane sends its ID to a host that advertises `pane_identity`. The host counts those connections as one View for Close and End. A separate View still protects its shell. A disconnect only detaches, even for the last View. Controller selection, input and screen size still use individual connections. The status field `clients` counts connections. `views` gives the logical count when it differs. Hosts without `pane_identity` keep the connection-based close rule.
 
 A saved host uses both its process ID and creation time. If Windows reuses the ID, revival keeps the saved Session and screen. For a process that denies access, the native system process list can prove that the creation time differs.
 
-An identity that cannot be verified stays blocked. A failed Terminal without a native session still appears in agent workspace inspection. So Pane Close asks no question for a session that another device shows, and keeps no Reopen record for it.
+An identity that cannot be verified stays blocked. A failed Terminal without a native session still appears in agent workspace inspection. Pane Close asks no question for a session with another independent View. It keeps no Reopen record for that session.
 
 When the Controller leaves, no other Client gets control until it asks. A Client on the host's own PC takes control when it attaches, if the Controller is also on this PC. A Pane move attaches before the old View's detach arrives, so the target still controls.
 

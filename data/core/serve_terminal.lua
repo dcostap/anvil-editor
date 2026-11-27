@@ -101,7 +101,7 @@ function terminal.new(server)
         end
         info.link = state.id
         local record = live_record(info.session_id)
-        if record then observe(record) end
+        if record then info.pane_identity = record.pane_identity; observe(record) end
         server.reply(state.client, waiter, {result = info})
       end
       if state.waiter then

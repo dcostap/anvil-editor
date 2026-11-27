@@ -424,6 +424,7 @@ function TerminalView:start_session(options)
     end
   end
   local session, pi_command_sent
+  self.pane_identity = not record or record.pane_identity
   if not options.session_id and not fs.machine then
     session, pi_command_sent = take_prepared_session(native_options, options.pi)
   end
@@ -2852,11 +2853,18 @@ function TerminalView:close_status()
   return status
 end
 
+function TerminalView:bind_shared_pane(id)
+  if self.session and self.session.bind_pane and
+      (self.remote and self.remote.pane_identity or not self.remote and self.pane_identity) then
+    self.session:bind_pane(id)
+  end
+end
+
 local function needs_close_confirmation(status, self_close)
   local idle_pi = status.agent_app == "pi"
     and (status.agent_state == "idle" or status.agent_state == "done")
-  -- Another device shows the session, so the close only detaches this View. The shell keeps running.
-  local shared = (status.clients or 0) > 1
+  -- A separate View protects the shell. A mirror of this Pane does not.
+  local shared = (status.views or status.clients or 0) > 1
   return status.kind == "reconnecting"
     or (status.kind == "running" and status.busy ~= false and not idle_pi and not shared and not self_close)
 end
@@ -2964,12 +2972,12 @@ function TerminalView:on_close(reopen)
   local retained = false
   -- A detached session belongs to its host or another Workspace. Only a live session ends for Reopen.
   -- The Machine keeps no closed sessions. Reopen starts a new shell there in the same folder.
-  -- A session that another device shows keeps running. Reopen attaches it again without a closed record.
-  local clients = self.session and select(2, self.session:update()).clients
-  local shared = (clients or 0) > 1
+  -- An independent View keeps the shell running. Reopen attaches it again without a closed record.
+  local status = self.session and select(2, self.session:update()) or {}
+  local shared = (status.views or status.clients or 0) > 1
   if self.remote and self.session then
-    core.log_quiet("Closing Machine Terminal View: id=%s clients=%s access=%s", tostring(self.remote.id),
-      tostring(clients), tostring(self.remote.client.level))
+    core.log_quiet("Closing Machine Terminal View: id=%s clients=%s views=%s access=%s", tostring(self.remote.id),
+      tostring(status.clients), tostring(status.views), tostring(self.remote.client.level))
   end
   if reopen and (self.session or self.state == "deferred") and self.session_id and not self.machine and not shared then
     local file, err = io.open(closed_session_path(self.session_id), "wb")
@@ -3459,13 +3467,16 @@ keymap.add({
 -- An ended session revives on the next start.
 function M.quit_decision(statuses, answer, scope)
   local live = {}
+  local detach = {}
   local count = 0
   local ask = false
   for i, status in ipairs(statuses) do
     live[i] = status.kind == "reconnecting" or status.kind == "running" or status.kind == "starting"
     if live[i] then
       count = count + 1
-      ask = ask or scope ~= "project" or needs_close_confirmation(status)
+      -- Project unload releases this PC's connection. It does not close the shared Pane.
+      detach[i] = scope == "project" and status.kind == "running" and (status.clients or 0) > 1
+      ask = ask or scope ~= "project" or (not detach[i] and needs_close_confirmation(status))
     end
   end
   if count > 0 then
@@ -3473,7 +3484,9 @@ function M.quit_decision(statuses, answer, scope)
     if ask and answer ~= "keep" and answer ~= "end" then return nil, "ask", count end
   end
   local actions = {}
-  for i in ipairs(statuses) do actions[i] = live[i] and answer == "keep" and "detach" or "end" end
+  for i in ipairs(statuses) do
+    actions[i] = (live[i] and answer == "keep" or detach[i] and answer ~= "end") and "detach" or "end"
+  end
   return actions, nil, count
 end
 
@@ -3481,7 +3494,7 @@ end
 local function idle_history_shell(pane, view)
   if view == pane.current_view then return false end
   local status = view:close_status()
-  return status.kind == "running" and status.busy == false
+  return status.kind == "running" and status.busy == false and (status.clients or 0) <= 1
 end
 
 local pending_quit

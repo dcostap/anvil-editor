@@ -18,6 +18,7 @@ local function describe(pane, root)
   if item then
     pane.shared_id = pane.shared_id or require("net").random_token():sub(1,32)
     item.pane = pane.shared_id
+    if v.terminal_view then v:bind_shared_pane(item.pane) end
     return item
   end
 end
@@ -45,7 +46,7 @@ local function key(item)
   return item.file and "file:" .. common.path_compare_key(item.file) or "terminal:" .. item.terminal
 end
 
-function M.apply(root, state, reconnecting)
+function M.apply(root, state)
   -- Changing the active Pane does not replace groups or change any View's local navigation state.
   local current = M.capture(root)
   if fingerprint(current.groups) == fingerprint(state.groups) then
@@ -109,7 +110,7 @@ function M.apply(root, state, reconnecting)
   end
   for _, p in ipairs(obsolete) do
     for _, v in ipairs(panes.views(p)) do
-      if v.terminal_view and (reconnecting or v ~= p.current_view or v:close_status().busy ~= false) then
+      if v.terminal_view then
         v:detach_session()
       end
     end
@@ -172,7 +173,7 @@ function M.start(root)
           local now = fingerprint(state)
           if incoming and incoming.layout and (not revision or incoming.revision > revision) then
             local ok,why = true,nil
-            if fingerprint(incoming.layout) ~= now then ok,why = M.apply(root,incoming.layout,baseline == nil) end
+            if fingerprint(incoming.layout) ~= now then ok,why = M.apply(root,incoming.layout) end
             if ok then revision,baseline,blocked=incoming.revision,fingerprint(M.capture(root)),nil
             elseif why ~= blocked then
               blocked=why

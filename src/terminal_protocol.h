@@ -23,6 +23,8 @@ enum {
   ANVIL_TERMINAL_TAKE,
   /* Shell input for an automatic agent resume. Empty input declines agent resume after revival. */
   ANVIL_TERMINAL_RESUME_AGENT,
+  /* The 32 hex digits of the shared Pane. Only hosts advertising pane_identity accept this. */
+  ANVIL_TERMINAL_PANE,
   ANVIL_TERMINAL_WELCOME = 64, ANVIL_TERMINAL_REPLAY, ANVIL_TERMINAL_REPLAY_END,
   ANVIL_TERMINAL_OUTPUT, ANVIL_TERMINAL_EXITED, ANVIL_TERMINAL_STATUS,
   /* The request token. This reply also reports that the shell is idle. */
@@ -44,7 +46,8 @@ typedef struct { char name[ANVIL_TERMINAL_NAME_LENGTH]; uint32_t flags; } AnvilT
 typedef struct { uint32_t generation; AnvilTerminalSize size; } AnvilTerminalTake;
 /* `clients` counts the attached Clients, this one included. */
 typedef struct { uint32_t generation, controller, clients; AnvilTerminalSize size;
-  char controller_name[ANVIL_TERMINAL_NAME_LENGTH]; } AnvilTerminalRole;
+  char controller_name[ANVIL_TERMINAL_NAME_LENGTH]; uint32_t views; } AnvilTerminalRole;
+#define ANVIL_TERMINAL_BASE_ROLE_SIZE offsetof(AnvilTerminalRole, views)
 typedef struct { uint32_t host_pid, shell_pid, state; AnvilTerminalSize size; } AnvilTerminalWelcome;
 typedef struct { AnvilTerminalWelcome welcome; uint32_t client_id; } AnvilTerminalWelcomeClient;
 typedef struct { uint32_t busy; char agent_app[32], agent_model[257]; char agent_state[16]; } AnvilTerminalStatus;

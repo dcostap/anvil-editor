@@ -186,6 +186,33 @@ test.describe("Terminal on a Machine", function()
     end, "The Machine kept the closed shell")
   end)
 
+  test.it("ends a Terminal shown by two copies of one shared Pane", function(context)
+    local first = open(context,{})
+    wait_text(first,"ANVIL_ECHO_READY:project")
+    panes.create {factory=function() return first end}
+    local layout = require("core.shared_layout").capture(context.project)
+    local pane = layout.groups[#layout.groups].pane
+    local mirror = open(context,{session_id=first.session_id})
+    wait_text(mirror,"ANVIL_ECHO_READY:project")
+    mirror:bind_shared_pane(pane)
+    local independent = open(context,{session_id=first.session_id})
+    wait_text(independent,"ANVIL_ECHO_READY:project")
+    wait_until(first,function()
+      local status = first:close_status()
+      return status.clients == 3 and status.views == 2
+    end,"The host lost the separate View")
+    independent:detach_session()
+    wait_until(first,function()
+      local status = first:close_status()
+      return status.clients == 2 and status.views == 1
+    end,"The host counted a mirror as another View")
+    local record = machine_record(context,first.session_id)
+    first:on_close(true)
+    wait_until(mirror,function()
+      return not require("terminal_link").host_alive(record.host_pid,record.host_creation_time)
+    end,"Closing the shared Pane kept the shell running")
+  end)
+
   test.it("types the path of a copy on the Machine for a dropped file", function(context)
     local view = open(context, {})
     wait_text(view, "ANVIL_ECHO_READY:project")

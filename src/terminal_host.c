@@ -60,6 +60,7 @@ typedef struct {
   /* Changes with each connection in this slot, so late output and replies skip a new Client. */
   uint32_t epoch;
   uint32_t id, pid;
+  char pane[33];
   HANDLE reader, writer;
   char name[ANVIL_TERMINAL_NAME_LENGTH];
 } HostClient;
@@ -73,6 +74,8 @@ struct TerminalHost {
   CRITICAL_SECTION lock, input_lock;
   CONDITION_VARIABLE ready, space;
   HostClient clients[MAX_CLIENTS];
+  /* A final local control connection can reuse the slot of the connection it just closed. */
+  struct { uint32_t id, pid; char pane[33]; } departed[MAX_CLIENTS];
   /* The controlling slot or -1, and the control generation. Each grant makes a new generation. */
   int controller;
   uint32_t generation;
@@ -253,7 +256,7 @@ static bool write_registry(TerminalHost *host) {
     registry_string(file, "host_creation_time", created);
     registry_string(file, "pipe_name", host->pipe_name);
     registry_string(file, "project_path", host->project);
-    fputs("  movable = true,\n  shared = true,\n", file);
+    fputs("  movable = true,\n  shared = true,\n  pane_identity = true,\n", file);
     registry_string(file, "shell", host->shell);
     registry_string(file, "cwd", host->last_cwd);
     registry_string(file, "title", host->title);
@@ -344,6 +347,12 @@ static int client_index(HostClient *client) { return (int)(client - client->host
 static void stop_client(HostClient *client) {
   TerminalHost *host = client->host;
   EnterCriticalSection(&host->lock);
+  if (client->attached && client->local && client->pane[0]) {
+    unsigned i = client->id % MAX_CLIENTS;
+    host->departed[i].id = client->id;
+    host->departed[i].pid = client->pid;
+    memcpy(host->departed[i].pane, client->pane, sizeof(client->pane));
+  }
   client->attached = client->controller = false;
   if (host->controller == client_index(client)) host->controller = -1;
   InterlockedExchange(&client->stop, 1);
@@ -427,12 +436,31 @@ static void broadcast_output(TerminalHost *host, const uint8_t *bytes, uint32_t 
   }
 }
 
+/* Unbound attachments each represent an independent View. The caller holds the host lock. */
+static bool same_view(const HostClient *a, const HostClient *b) {
+  return a == b || (a && b && a->pane[0] && !strcmp(a->pane, b->pane));
+}
+
+static bool another_view(TerminalHost *host, const char *pane, HostClient *origin) {
+  for (int i = 0; i < MAX_CLIENTS; i++)
+    if (host->clients[i].attached && origin != &host->clients[i] &&
+        (!pane || !*pane || strcmp(pane, host->clients[i].pane))) return true;
+  return false;
+}
+
 static void fill_role(TerminalHost *host, HostClient *client, AnvilTerminalRole *role) {
   memset(role, 0, sizeof(*role));
   role->generation = host->generation;
   role->controller = client->controller;
   role->size = host->size;
-  for (int i = 0; i < MAX_CLIENTS; i++) role->clients += host->clients[i].attached;
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    if (!host->clients[i].attached) continue;
+    role->clients++;
+    bool seen = false;
+    for (int j = 0; j < i; j++)
+      if (host->clients[j].attached && same_view(&host->clients[i], &host->clients[j])) seen = true;
+    if (!seen) role->views++;
+  }
   if (host->controller >= 0)
     memcpy(role->controller_name, host->clients[host->controller].name, sizeof(role->controller_name));
 }
@@ -743,7 +771,7 @@ static void send_roles(TerminalHost *host, HostClient *except) {
     HostClient *other = &host->clients[i];
     if (!other->attached || other == except) continue;
     AnvilTerminalRole role; fill_role(host, other, &role);
-    queue_record(other, ANVIL_TERMINAL_ROLE, &role, sizeof(role));
+    queue_record(other, ANVIL_TERMINAL_ROLE, &role, other->pane[0] ? sizeof(role) : ANVIL_TERMINAL_BASE_ROLE_SIZE);
   }
 }
 
@@ -832,15 +860,21 @@ static DWORD WINAPI host_client(void *userdata) {
       host->next_project[header.size] = 0;
       LeaveCriticalSection(&host->lock);
       InterlockedExchange(&host->project_requested, 1);
-    } else if ((header.type == ANVIL_TERMINAL_CLOSE || header.type == ANVIL_TERMINAL_END) && !header.size) {
-      /* A Pane Close on one device must not take the shell from another device that shows it. */
+    } else if (header.type == ANVIL_TERMINAL_PANE && header.size == 32) {
+      bytes[32] = 0;
+      if (strspn((char *)bytes, "0123456789abcdef") != 32) break;
       EnterCriticalSection(&host->lock);
-      int others = 0;
-      for (int i = 0; i < MAX_CLIENTS; i++) others += host->clients[i].attached && &host->clients[i] != client;
+      memcpy(client->pane, bytes, sizeof(client->pane));
+      send_roles(host, NULL);
+      LeaveCriticalSection(&host->lock);
+    } else if ((header.type == ANVIL_TERMINAL_CLOSE || header.type == ANVIL_TERMINAL_END) && !header.size) {
+      /* A Pane Close ends its mirrors, not another independent View's shell. */
+      EnterCriticalSection(&host->lock);
+      bool others = another_view(host, client->pane, client);
       LeaveCriticalSection(&host->lock);
       if (others) {
-        host_log(host, "%s requested; %d other Clients remain, so detach this Client",
-          header.type == ANVIL_TERMINAL_CLOSE ? "close" : "end", others);
+        host_log(host, "%s requested; another View remains, so detach this Client",
+          header.type == ANVIL_TERMINAL_CLOSE ? "close" : "end");
         break;
       }
       if (header.type == ANVIL_TERMINAL_CLOSE) {
@@ -930,13 +964,20 @@ static bool attach_client(HostClient *client) {
       EnterCriticalSection(&host->lock);
       /* The old pipe can close before its reader observes the disconnect. Name that exact Client,
          not every Client in the process: another Pane in this process can still show the shell. */
+      HostClient *closing = NULL;
       if (origin && (header.type == ANVIL_TERMINAL_CLOSE || header.type == ANVIL_TERMINAL_END)) {
         for (int i = 0; i < MAX_CLIENTS; i++) {
           HostClient *old = &host->clients[i];
-          if (old->attached && old->local && old->id == origin && old->pid == actual_pid) stop_client(old);
+          if (old->local && old->id == origin && old->pid == actual_pid) {
+            closing = old;
+            if (old->attached) stop_client(old);
+          }
         }
       }
-      bool shown = any_attached(host);
+      unsigned slot = origin % MAX_CLIENTS;
+      const char *pane = closing ? closing->pane : origin && host->departed[slot].id == origin &&
+        host->departed[slot].pid == actual_pid ? host->departed[slot].pane : NULL;
+      bool shown = another_view(host, pane, closing);
       LeaveCriticalSection(&host->lock);
       if ((header.type == ANVIL_TERMINAL_CLOSE || header.type == ANVIL_TERMINAL_END) && shown) {
         /* Another device shows the session. The closing View was not attached, so nothing changes. */
@@ -997,7 +1038,7 @@ static bool attach_client(HostClient *client) {
     ok = queue_record(client, ANVIL_TERMINAL_WELCOME, &welcome,
       hello->replay & ANVIL_TERMINAL_REPLAY_CLIENT_ID ? sizeof(welcome) : sizeof(welcome.welcome));
     AnvilTerminalRole role; fill_role(host, client, &role);
-    ok = ok && queue_record(client, ANVIL_TERMINAL_ROLE, &role, sizeof(role));
+    ok = ok && queue_record(client, ANVIL_TERMINAL_ROLE, &role, ANVIL_TERMINAL_BASE_ROLE_SIZE);
     for (size_t offset = 0; ok && offset < length;) {
       size_t count = length - offset;
       if (count > ANVIL_TERMINAL_MAX_PAYLOAD) count = ANVIL_TERMINAL_MAX_PAYLOAD;
