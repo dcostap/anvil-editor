@@ -116,7 +116,7 @@ The cleanup undoes with the edit before it. It waits while redo is available. Un
 
 Whitespace-only lines that no edit touches stay. `config.keep_newline_whitespace` turns the cleanup off. Caches use `buffer.text_revision`.
 
-`get_change_id()` is the undo position, which repeats after an undo and a new edit. In Markdown, a blank line after a list item or a quote shows at the margin. Keep `newline_indent` in step with `core:newline`.
+`get_change_id()` is the undo position, which repeats after an undo and a new edit. In Markdown, a blank line after a list item or a quote shows at the margin. Markdown does not inherit indentation across a blank line. Enter still carries an indentation the user chose. Keep `newline_indent` in step with `core:newline`.
 
 Run `ui/empty_line_indent.lua` and `ui/smart_indent.lua` after changes.
 

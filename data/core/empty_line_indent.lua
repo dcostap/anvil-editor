@@ -88,6 +88,8 @@ local function indent_before(buffer, line)
     if has_content(buffer.lines[previous]) then
       return newline_indent(buffer, previous), previous
     end
+    -- A blank Markdown line separates paragraphs. Do not inherit indentation across it.
+    if previous == line - 1 and is_markdown(buffer) then break end
   end
   return ""
 end

@@ -341,6 +341,17 @@ test.describe("empty line indentation", function()
     test.equal(text(buffer), "  - a\nx\n- b\n")
   end)
 
+  test.it("Enter on a blank Markdown line starts a paragraph at the margin", function(context)
+    local buffer, view = new_editor(context, " - item\n   continued\n", "paragraph.md", Editor)
+    buffer:set_selection(3, 1)
+    test.ok(command.perform("core:newline"))
+    near(caret_dx(view, 4, 1), 0)
+    test.ok(view:on_text_input("x"))
+    test.equal(buffer.lines[4], "x\n")
+    test.ok(command.perform("core:backspace"))
+    near(caret_dx(view, 4, 1), 0)
+  end)
+
   test.it("moving to an empty line's start places its caret at the margin before typing", function(context)
     for _, filename in ipairs { "notes.md", "notes.txt" } do
       for _, wrapped in ipairs { false, true } do
