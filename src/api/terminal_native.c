@@ -151,6 +151,7 @@ typedef struct {
   char controller_name[ANVIL_TERMINAL_NAME_LENGTH];
   uint32_t clients, views;
   char bound_pane[33];
+  bool pane_attach;
   GhosttyColorScheme color_scheme;
   bool color_scheme_known;
   TerminalContrast contrast;
@@ -672,7 +673,7 @@ static bool write_all(TerminalSession *session, const uint8_t *data, size_t leng
 }
 
 static AnvilTerminalSize wanted_size(const TerminalSession *session) {
-  if (session->wanted.cols && session->wanted.rows) return session->wanted;
+  if (!session->preserve_grid && session->wanted.cols && session->wanted.rows) return session->wanted;
   return (AnvilTerminalSize){ session->cols, session->rows, session->cell_width, session->cell_height };
 }
 
@@ -990,6 +991,7 @@ struct ReconnectJob {
   DWORD host_pid, shell_pid, error;
   uint32_t client_id, previous_client_id;
   char pane[33];
+  bool pane_attach;
   AnvilTerminalSize size;
   char id[ANVIL_TERMINAL_ID_LENGTH + 1];
   bool connected, prepared, wait_for_exit;
@@ -1041,14 +1043,14 @@ static DWORD WINAPI reconnect_main(void *userdata) {
         job->revive_from, job->environment, job->prepared, &job->size,
         job->has_scrollback_lines ? &job->scrollback_lines : NULL, NULL, &job->client_id, &job->error)
     : anvil_terminal_host_connect(&job->pipe, job->process, job->host_pid,
-        &job->shell_pid, job->id, &job->size, &job->client_id, &job->error);
+        &job->shell_pid, job->id, &job->size, job->pane_attach ? job->pane : NULL, &job->client_id, &job->error);
   if (!connected && job->userdir && job->process) {
     TerminateProcess(job->process, 1);
     /* A new host can write its record before it answers. Nothing can revive its shell. */
     if (!job->revive_from && WaitForSingleObject(job->process, 5000) == WAIT_OBJECT_0)
       anvil_terminal_host_discard(job->userdir, job->id);
   }
-  if (connected && job->pane[0]) {
+  if (connected && job->pane[0] && !job->pane_attach) {
     job->pipe.timeout_ms = 5000;
     connected = anvil_ipc_pipe_write(&job->pipe, ANVIL_TERMINAL_PANE, job->pane, 32, NULL, 0);
     if (!connected) job->error = GetLastError();
@@ -1073,6 +1075,7 @@ static bool start_reconnect(TerminalSession *session, bool wait_for_exit) {
   job->references = 2;
   job->host_pid = session->host_pid;
   job->previous_client_id = session->client_id;
+  job->pane_attach = session->pane_attach;
   memcpy(job->pane, session->bound_pane, sizeof(job->pane));
   job->wait_for_exit = wait_for_exit;
   job->size = wanted_size(session);
@@ -1596,6 +1599,13 @@ static int f_terminal_new(lua_State *L) {
   lua_getfield(L, 1, "remote");
   session->remote = lua_toboolean(L, -1);
   lua_pop(L, 1);
+  lua_getfield(L, 1, "pane_attach");
+  session->pane_attach = !id || lua_toboolean(L, -1);
+  lua_pop(L, 1);
+  lua_getfield(L, 1, "shared_id");
+  const char *pane = lua_tostring(L, -1);
+  if (id && anvil_terminal_id_valid(pane)) memcpy(session->bound_pane, pane, sizeof(session->bound_pane));
+  lua_pop(L, 1);
   bool started = false;
   if (session->remote) {
     /* Lua attaches it through its Machine. */
@@ -1795,7 +1805,7 @@ static bool start_attached(TerminalSession *session, HANDLE handle) {
   if (!anvil_ipc_pipe_init(&session->pipe, handle, ANVIL_TERMINAL_PROTOCOL_VERSION,
                           ANVIL_TERMINAL_MAX_PAYLOAD) || !start_terminal_io(session)) return false;
   session->attached_at = GetTickCount64(); session->attach_count++;
-  session->initial_restore = session->preserve_grid = false;
+  session->initial_restore = false;
   set_terminal_state(session, TERMINAL_STATE_RUNNING);
   return true;
 }
@@ -2356,6 +2366,7 @@ static int f_terminal_resize(lua_State *L) {
 
   AnvilTerminalSize size = { cols, rows, cell_width, cell_height };
   session->wanted = size;
+  session->preserve_grid = false;
   /* A Viewer keeps the Controller's grid. Its size goes with its request for control. */
   if (session->viewer) {
     lua_pushboolean(L, true);
@@ -2416,8 +2427,6 @@ static int f_terminal_attach_remote(lua_State *L) {
   session->shell_pid = (DWORD)values[0];
   session->cols = (uint16_t)values[1]; session->rows = (uint16_t)values[2];
   session->cell_width = (uint32_t)values[3]; session->cell_height = (uint32_t)values[4];
-  if (session->preserve_grid) session->wanted = (AnvilTerminalSize){session->cols, session->rows,
-    session->cell_width, session->cell_height};
   if (!start_attached(session, handle)) {
     fail_transport(session, ERROR_NOT_ENOUGH_MEMORY);
     lua_pushnil(L); lua_pushliteral(L, "Could not connect the Terminal Session"); return 2;

@@ -256,7 +256,7 @@ static bool write_registry(TerminalHost *host) {
     registry_string(file, "host_creation_time", created);
     registry_string(file, "pipe_name", host->pipe_name);
     registry_string(file, "project_path", host->project);
-    fputs("  movable = true,\n  shared = true,\n  pane_identity = true,\n", file);
+    fputs("  movable = true,\n  shared = true,\n  pane_identity = true,\n  pane_attach = true,\n", file);
     registry_string(file, "shell", host->shell);
     registry_string(file, "cwd", host->last_cwd);
     registry_string(file, "title", host->title);
@@ -940,19 +940,24 @@ static bool attach_client(HostClient *client) {
   TerminalHost *host = client->host;
   ULONG actual_pid = 0;
   AnvilIPCHeader header;
-  struct { AnvilTerminalHello hello; AnvilTerminalClientInfo info; } message;
+  struct { AnvilTerminalHello hello; AnvilTerminalClientInfo info; char pane[32]; } message;
   AnvilTerminalHello *hello = &message.hello;
   memset(&message, 0, sizeof(message));
   client->pipe.timeout_ms = 5000;
   if (!GetNamedPipeClientProcessId(client->pipe.handle, &actual_pid) ||
       !anvil_ipc_pipe_read(&client->pipe, &header, &message, sizeof(message)) ||
       header.type != ANVIL_TERMINAL_HELLO ||
-      (header.size != sizeof(*hello) && header.size != sizeof(message)) ||
+      (header.size != sizeof(*hello) && header.size != sizeof(*hello) + 32 &&
+       header.size != sizeof(*hello) + sizeof(message.info) && header.size != sizeof(message)) ||
       memcmp(hello->id, host->id, ANVIL_TERMINAL_ID_LENGTH + 1) != 0 || hello->client_pid != actual_pid ||
       (hello->replay != 0 && hello->replay != 1 && hello->replay != (1 | ANVIL_TERMINAL_REPLAY_CLIENT_ID))) {
     host_log(host, "rejected client: HELLO identity or protocol mismatch"); return false;
   }
-  bool has_info = header.size == sizeof(message);
+  bool has_info = header.size >= sizeof(*hello) + sizeof(message.info);
+  if (header.size == sizeof(*hello) + 32 || header.size == sizeof(message)) {
+    memcpy(client->pane, (const char *)&message + header.size - 32, 32);
+    if (!anvil_terminal_id_valid(client->pane)) return false;
+  }
   client->pid = actual_pid;
   if (!hello->replay) {
     /* A close must work even when snapshot encoding is unavailable. */
@@ -1038,7 +1043,7 @@ static bool attach_client(HostClient *client) {
     ok = queue_record(client, ANVIL_TERMINAL_WELCOME, &welcome,
       hello->replay & ANVIL_TERMINAL_REPLAY_CLIENT_ID ? sizeof(welcome) : sizeof(welcome.welcome));
     AnvilTerminalRole role; fill_role(host, client, &role);
-    ok = ok && queue_record(client, ANVIL_TERMINAL_ROLE, &role, ANVIL_TERMINAL_BASE_ROLE_SIZE);
+    ok = ok && queue_record(client, ANVIL_TERMINAL_ROLE, &role, client->pane[0] ? sizeof(role) : ANVIL_TERMINAL_BASE_ROLE_SIZE);
     for (size_t offset = 0; ok && offset < length;) {
       size_t count = length - offset;
       if (count > ANVIL_TERMINAL_MAX_PAYLOAD) count = ANVIL_TERMINAL_MAX_PAYLOAD;
@@ -1750,7 +1755,7 @@ static size_t quote_arg(wchar_t *out, const wchar_t *arg) {
 
 static bool host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
                          DWORD *shell_pid, const char *id, AnvilTerminalSize *size,
-                         const AnvilTerminalClientInfo *info, bool replay, uint32_t *client_id,
+                         const AnvilTerminalClientInfo *info, const char *pane, bool replay, uint32_t *client_id,
                          DWORD timeout_ms, DWORD *error) {
   if (client_id) *client_id = 0;
   if (!anvil_terminal_id_valid(id)) { *error = ERROR_INVALID_DATA; return false; }
@@ -1779,8 +1784,11 @@ static bool host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
   AnvilTerminalHello hello = { .size = *size, .client_pid = GetCurrentProcessId(), .replay = replay };
   if (replay && client_id) hello.replay |= ANVIL_TERMINAL_REPLAY_CLIENT_ID;
   memcpy(hello.id, id, sizeof(hello.id));
-  if (!anvil_ipc_pipe_write(pipe, ANVIL_TERMINAL_HELLO, &hello, sizeof(hello), info,
-        info ? (uint32_t)sizeof(*info) : 0)) {
+  char extra[sizeof(AnvilTerminalClientInfo) + 32];
+  uint32_t length = 0;
+  if (info) { memcpy(extra, info, sizeof(*info)); length += sizeof(*info); }
+  if (pane && *pane) { memcpy(extra + length, pane, 32); length += 32; }
+  if (!anvil_ipc_pipe_write(pipe, ANVIL_TERMINAL_HELLO, &hello, sizeof(hello), extra, length)) {
     *error = GetLastError(); return false;
   }
   AnvilIPCHeader header; AnvilTerminalWelcomeClient response = {0};
@@ -1790,7 +1798,7 @@ static bool host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
     /* Detached hosts keep their old executable. They reject the optional HELLO flag. */
     if (replay && client_id && (*error == ERROR_BROKEN_PIPE || *error == ERROR_PIPE_NOT_CONNECTED || *error == ERROR_NO_DATA)) {
       anvil_ipc_pipe_close(pipe);
-      return host_connect(pipe, process, host_pid, shell_pid, id, size, info, replay, NULL, timeout_ms, error);
+      return host_connect(pipe, process, host_pid, shell_pid, id, size, info, pane, replay, NULL, timeout_ms, error);
     }
     return false;
   }
@@ -1809,20 +1817,20 @@ static bool host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
 }
 
 bool anvil_terminal_host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
-                                 DWORD *shell_pid, const char *id, AnvilTerminalSize *size, uint32_t *client_id, DWORD *error) {
-  return host_connect(pipe, process, host_pid, shell_pid, id, size, NULL, true, client_id, CONNECT_TIMEOUT_MS, error);
+                                 DWORD *shell_pid, const char *id, AnvilTerminalSize *size, const char *pane, uint32_t *client_id, DWORD *error) {
+  return host_connect(pipe, process, host_pid, shell_pid, id, size, NULL, pane, true, client_id, CONNECT_TIMEOUT_MS, error);
 }
 
 bool anvil_terminal_host_connect_as(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid, DWORD *shell_pid,
                                     const char *id, AnvilTerminalSize *size, const AnvilTerminalClientInfo *info,
-                                    DWORD *error) {
-  return host_connect(pipe, process, host_pid, shell_pid, id, size, info, true, NULL, CONNECT_TIMEOUT_MS, error);
+                                    const char *pane, DWORD *error) {
+  return host_connect(pipe, process, host_pid, shell_pid, id, size, info, pane, true, NULL, CONNECT_TIMEOUT_MS, error);
 }
 
 bool anvil_terminal_host_control(HANDLE process, DWORD host_pid, const char *id,
                                  uint16_t type, uint32_t client_id, DWORD *error) {
   AnvilIPCPipe pipe = {0}; DWORD shell_pid; AnvilTerminalSize size = {0};
-  bool ok = host_connect(&pipe, process, host_pid, &shell_pid, id, &size, NULL, false, NULL, CONNECT_TIMEOUT_MS, error);
+  bool ok = host_connect(&pipe, process, host_pid, &shell_pid, id, &size, NULL, NULL, false, NULL, CONNECT_TIMEOUT_MS, error);
   if (ok) {
     pipe.timeout_ms = 5000;
     ok = anvil_ipc_pipe_write(&pipe, type, client_id ? &client_id : NULL, client_id ? sizeof(client_id) : 0, NULL, 0);
@@ -1880,7 +1888,7 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
   CloseHandle(info.hThread); *process = info.hProcess; *host_pid = info.dwProcessId;
   *replay_bytes = 0;
   if (revive_from) { size->cols = 0; size->rows = 0; }
-  return host_connect(pipe, *process, *host_pid, shell_pid, id, size, client, true, client_id, LAUNCH_TIMEOUT_MS, error);
+  return host_connect(pipe, *process, *host_pid, shell_pid, id, size, client, NULL, true, client_id, LAUNCH_TIMEOUT_MS, error);
 }
 
 void anvil_terminal_host_discard(const char *userdir, const char *id) {

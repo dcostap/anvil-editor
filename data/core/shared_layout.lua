@@ -7,27 +7,33 @@ local fs = require "core.fs"
 local M = {}
 local function fingerprint(state) return common.serialize(state, {sort = true}) end
 
-local function describe(pane, root, assign)
-  local v = pane.current_view
+local function contents(v, root)
   local item
   if v.terminal_view and v.session_id then item = {terminal=v.session_id}
   elseif v:is(Editor) and v.buffer.abs_filename and common.path_belongs_to(v.buffer.abs_filename, root) then
     item = {file=common.relative_path(root,v.buffer.abs_filename)}
   end
+  return item
+end
+
+local function describe(pane, root, assign)
+  local v = pane.current_view
+  local item = contents(v,root)
   if item then
-    if assign and not pane.shared_id then pane.shared_id = require("net").random_token():sub(1,32) end
+    if assign and not pane.shared_id and not pane.legacy_layout then pane.shared_id = require("net").random_token():sub(1,32) end
     item.pane = pane.shared_id
-    if assign and v.terminal_view then v:bind_shared_pane(item.pane) end
+    if assign and item.pane and v.terminal_view then v:bind_shared_pane(item.pane) end
     return item
   end
 end
 
 local function capture(root, assign)
-  local result, index = {groups={}, active=0}, 0
+  local result, index, identified = {groups={}, active=0}, 0, true
   local function tree(node)
     if node.pane then
       local leaf = describe(node.pane, root, assign)
       if leaf then
+        if not leaf.pane then identified = false end
         index = index+1
         if node.pane == panes.active() then result.active = index end
       end
@@ -40,10 +46,10 @@ local function capture(root, assign)
   for _, g in ipairs(panes.groups) do
     if not g.snoozed then result.groups[#result.groups+1] = tree(g.root) end
   end
-  return result
+  return result, identified
 end
 
-function M.capture(root) return capture(root,true) end
+function M.capture(root) return (capture(root,true)) end
 
 local function key(item)
   return item.file and "file:" .. common.path_compare_key(item.file) or "terminal:" .. item.terminal
@@ -51,8 +57,8 @@ end
 
 function M.apply(root, state)
   -- Changing the active Pane does not replace groups or change any View's local navigation state.
-  local current = capture(root,false)
-  if fingerprint(current.groups) == fingerprint(state.groups) then
+  local current, identified = capture(root,false)
+  if identified and fingerprint(current.groups) == fingerprint(state.groups) then
     if state.active ~= 0 and current.active ~= state.active then
       local index = 0
       for _, p in ipairs(panes.ordered()) do
@@ -65,12 +71,11 @@ function M.apply(root, state)
     return true
   end
   local available, used, leaves, obsolete = {}, {}, {}, {}
-  local hidden = {}
+  local by_id = {}
   for _, p in ipairs(panes.ordered()) do
     local item = describe(p,root)
-    if p.group.snoozed or not item then
-      if p.shared_id then hidden[p.shared_id] = p end
-    else
+    if p.shared_id then by_id[p.shared_id] = p end
+    if item and not p.group.snoozed then
       local k = key(item)
       available[k] = available[k] or {}
       table.insert(available[k],p)
@@ -86,20 +91,33 @@ function M.apply(root, state)
     if n.file and (type(n.file) ~= "string" or n.file:find("[%c:]") or common.is_absolute_path(n.file)
         or not common.path_belongs_to(common.normalize_path(root .. PATHSEP .. n.file),root)) then return false,"invalid file" end
     local q = available[key(n)]
-    local p = hidden[n.pane]
-    if p then
-      local item = describe(p,root)
-      if not item or key(item) ~= key(n) then return false,"local Pane has a different View" end
-    elseif q then
-      local unbound
-      for i, candidate in ipairs(q) do
-        if not n.pane or n.pane == candidate.shared_id then p = table.remove(q,i); break end
-        if not candidate.shared_id and not unbound then unbound = i end
+    local p = by_id[n.pane]
+    if not p and q then
+      for _, candidate in ipairs(q) do
+        if not used[candidate] and (not n.pane or not candidate.shared_id) then
+          p = candidate; break
+        end
       end
-      if not p and unbound then p = table.remove(q,unbound) end
     end
-    if not p and n.terminal and not terminal.session_available(n.terminal,root) then return false,"Terminal unavailable" end
-    leaves[#leaves+1] = {item=n, pane=p}
+    local view
+    if p then
+      if used[p] then return false,"duplicate Pane" end
+      used[p] = true
+      local current_item = describe(p,root)
+      if current_item and key(current_item) == key(n) then view = p.current_view
+      else
+        if not current_item or panes.constraint(p) then return false,"local View owns the Pane" end
+        for _,v in ipairs(panes.views(p)) do
+          local item = contents(v,root)
+          if item and key(item) == key(n) then view = v; break end
+        end
+        if p.current_view.can_open_view and not p.current_view:can_open_view(view or {}) then
+          return false,"local View owns the Pane"
+        end
+      end
+    end
+    if not view and n.terminal and not terminal.session_available(n.terminal,root) then return false,"Terminal unavailable" end
+    leaves[#leaves+1] = {item=n, pane=p, view=view}
     return true
   end
   for _, tree in ipairs(state.groups) do
@@ -108,23 +126,33 @@ function M.apply(root, state)
   end
   for _, q in pairs(available) do
     for _, p in ipairs(q) do
-      for _, v in ipairs(panes.views(p)) do
-        if v.buffer and v.buffer.is_dirty and v.buffer:is_dirty() then return false,"unsaved edits" end
-        if not v:is(Editor) and not v.terminal_view and v.can_close then return false,"local View in Pane history" end
+      if not used[p] then
+        for _, v in ipairs(panes.views(p)) do
+          if v.buffer and v.buffer.is_dirty and v.buffer:is_dirty() then return false,"unsaved edits" end
+          if not v:is(Editor) and not v.terminal_view and v.can_close then return false,"local View in Pane history" end
+        end
+        obsolete[#obsolete+1] = p
       end
-      obsolete[#obsolete+1] = p
     end
   end
   -- Keep surviving Views intact. Removing a mirrored Terminal releases this View, not another user's shell.
-  for _, leaf in ipairs(leaves) do
-    if not leaf.pane then
-      local item = leaf.item
-      leaf.pane = assert(panes.create {focus=false, factory=function()
-        if item.terminal then return terminal.TerminalView {session_id=item.terminal} end
-        return Editor(core.open_buffer(root .. PATHSEP .. item.file))
-      end})
+  for _,leaf in ipairs(leaves) do
+    if leaf.pane and leaf.pane.group.snoozed and not require("core.snoozed_panes").allow_shared_wake(leaf.pane,root) then
+      return false,"waiting for Sidebar Snooze removal"
     end
-    leaf.pane.shared_id = leaf.item.pane or leaf.pane.shared_id
+  end
+  for _, leaf in ipairs(leaves) do
+    local item, view = leaf.item, leaf.view
+    if not view then
+      view = item.terminal and terminal.TerminalView {session_id=item.terminal,shared_id=item.pane}
+        or Editor(core.open_buffer(root .. PATHSEP .. item.file))
+    end
+    if not leaf.pane then leaf.pane = assert(panes.create {focus=false,factory=function() return view end})
+    elseif leaf.pane.current_view ~= view then
+      assert(panes.present(view,{pane=leaf.pane,focus=false,reuse=true,keep_history=true}) == leaf.pane)
+    end
+    leaf.pane.legacy_layout = not item.pane
+    leaf.pane.shared_id = item.pane
     used[leaf.pane] = true
   end
   for _, p in ipairs(obsolete) do
@@ -188,23 +216,23 @@ function M.start(root)
         end
         if observed == false then break end
         if observed ~= nil then
-          local applying = incoming and incoming.layout and (not revision or incoming.revision > revision)
-          local state = capture(root,not applying and (owner or revision ~= nil))
-          local now = fingerprint(state)
-          if applying then
-            local ok,why = true,nil
-            if fingerprint(incoming.layout) ~= now then ok,why = M.apply(root,incoming.layout) end
+          if incoming and incoming.layout and (not revision or incoming.revision > revision) then
+            local ok,why = M.apply(root,incoming.layout)
             if ok then revision,baseline,blocked=incoming.revision,fingerprint(M.capture(root)),nil
             elseif why ~= blocked then
               blocked=why
               if why == "unsaved edits" then core.log("Layout sync paused. Save your edits before applying a remote close.") end
             end
-          elseif (owner and observed == 0 and not revision or baseline and baseline ~= now) and client.level == "full" then
-            local e,r=request("layout.set",{base=revision or 0,layout=state})
-            if not e then revision,baseline=r.revision,now
-            elseif e.code ~= "conflict" and blocked ~= e.code then
-              blocked=e.code
-              core.log_quiet("Layout update refused: %s", tostring(e.message or e.code))
+          elseif owner or revision then
+            local state = M.capture(root)
+            local now = fingerprint(state)
+            if (owner and observed == 0 and not revision or baseline and baseline ~= now) and client.level == "full" then
+              local e,r=request("layout.set",{base=revision or 0,layout=state})
+              if not e then revision,baseline=r.revision,now
+              elseif e.code ~= "conflict" and blocked ~= e.code then
+                blocked=e.code
+                core.log_quiet("Layout update refused: %s", tostring(e.message or e.code))
+              end
             end
           end
         end

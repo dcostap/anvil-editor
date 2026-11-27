@@ -165,7 +165,7 @@ local function save_view(view)
 end
 
 
-local function load_view(t, times)
+local function load_view(t, times, shared_id)
   t.module = t.module or (t.type == "buffer" and "core.editor")
   if t.module then
     local View = require(t.module)
@@ -184,7 +184,7 @@ local function load_view(t, times)
       return nil
     end
     local deadline = times and t.module == "plugins.terminal" and t.state and times[t.state.session_id] or nil
-    local view = View and View.from_state(t.state, deadline, t.module == "plugins.terminal" and "workspace" or nil)
+    local view = View and View.from_state(t.state, deadline, t.module == "plugins.terminal" and "workspace" or nil, shared_id)
     if view_has_invalid_named_file(view) then
       if core.log_quiet then core.log_quiet("Workspace: dropped invalid named file restored from saved state %q", view.buffer.filename or view.buffer.abs_filename) end
       close_unattached_view_buffer(view)
@@ -421,7 +421,7 @@ local function load_workspace()
           end
         end
         local times = system.is_hosted_surface() and require("core.snoozed_panes").read_times()
-        panes.restore_workspace_state(workspace.pane_state, function(t) return load_view(t, times) end)
+        panes.restore_workspace_state(workspace.pane_state, function(t,id) return load_view(t, times, id) end)
       end
       untitled_recovery.restore_project(machine_project.root_key(core.root_project().path))
     end

@@ -2,7 +2,7 @@ local common = require "core.common"
 local M = {}
 
 -- Keep only layout fields. Never accept serialized Views, shell commands or Buffer contents.
-local function checked(server, root, value)
+local function checked(server, root, value, previous)
   if type(value) ~= "table" or type(value.groups) ~= "table" then return end
   local count = 0
   local ids = {}
@@ -36,6 +36,20 @@ local function checked(server, root, value)
   end
   local active = value.active
   if type(active) ~= "number" or active%1 ~= 0 or active < 0 or active > count then return end
+  -- Only the Machine assigns missing IDs. Reuse the previous IDs for legacy leaves with the same contents.
+  local known = {}
+  local function visit(n, assign)
+    if n.axis then visit(n.a,assign); visit(n.b,assign); return end
+    local k = n.file and "file:" .. common.path_compare_key(n.file) or "terminal:" .. n.terminal
+    if not assign and not ids[n.pane] then
+      known[k] = known[k] or {}
+      table.insert(known[k],n.pane)
+    elseif assign and not n.pane then
+      n.pane = known[k] and table.remove(known[k],1) or require("net").random_token():sub(1,32)
+    end
+  end
+  for _,g in ipairs(previous and previous.groups or {}) do visit(g,false) end
+  for _,g in ipairs(groups) do visit(g,true) end
   return {groups=groups, active=active}
 end
 
@@ -49,7 +63,7 @@ function M.new(server)
     if write then
       if p.base ~= state.revision then return server.fail(client,id,"conflict","Layout has changed") end
       if state.revision == 0 and client.device then return server.fail(client,id,"not_ready","Open the Project on its host first") end
-      local layout = checked(server,root,p.layout)
+      local layout = checked(server,root,p.layout,state.layout)
       if not layout then return server.fail(client,id,"invalid_layout","Invalid Machine layout") end
       state = {revision=state.revision+1, layout=layout}
       states[root] = state

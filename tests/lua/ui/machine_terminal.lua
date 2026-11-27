@@ -199,12 +199,19 @@ test.describe("Terminal on a Machine", function()
     local view = require("core.editor")(core.open_buffer(path))
     local pane = panes.create {factory=function() return view end}
     wait_until({},function() return view.buffer.lines[1] == "old\n" end,"File did not load")
+    test.ok(sync.apply(context.project,{groups={{file="old.txt"}},active=1}))
+    test.is_nil(sync.capture(context.project).groups[1].pane,"The client minted an ID for a legacy server layout")
     view.buffer:insert(1,1,"edit")
     local id = require("net").random_token():sub(1,32)
     test.ok(sync.apply(context.project,{groups={{pane=id,file="old.txt"}},active=1}))
     test.equal(panes.active(),pane)
     test.equal(pane.current_view,view)
     test.equal(sync.capture(context.project).groups[1].pane,id)
+    test.is_nil(fs.wait(fs.write,context.project .. PATHSEP .. "next.txt","next\n",nil,nil))
+    test.ok(sync.apply(context.project,{groups={{pane=id,file="next.txt"}},active=1}))
+    test.equal(panes.active(),pane)
+    test.equal(panes.back(pane),view)
+    test.ok(view.buffer:is_dirty())
     view.buffer:undo()
   end)
 
@@ -216,6 +223,8 @@ test.describe("Terminal on a Machine", function()
     test.ok(sync.apply(context.project,state))
     local pane = panes.active()
     panes.snooze(pane)
+    test.is_nil(fs.wait(fs.write,context.project .. PATHSEP .. "awake.txt","changed\n",nil,nil))
+    state.groups[1].file = "awake.txt"
     test.ok(sync.apply(context.project,state))
     test.equal(panes.active(),pane,"Reopen created another copy of the Snoozed Pane")
     test.not_ok(panes.is_snoozed(pane))
@@ -224,12 +233,19 @@ test.describe("Terminal on a Machine", function()
   test.it("ends a Terminal shown by two copies of one shared Pane", function(context)
     local first = open(context,{})
     wait_text(first,"ANVIL_ECHO_READY:project")
-    panes.create {factory=function() return first end}
-    local layout = require("core.shared_layout").capture(context.project)
-    local pane = layout.groups[#layout.groups].pane
-    local mirror = open(context,{session_id=first.session_id})
+    local pane = require("net").random_token():sub(1,32)
+    first:bind_shared_pane(pane)
+    local sessions = require "core.machine_terminal"
+    wait_until(first,function()
+      sessions.sessions(fs.machine,context.project)
+      return sessions.listed(first.session_id)
+    end,"Missing session in host layout")
+    test.ok(require("core.shared_layout").apply(context.project,{groups={{pane=pane,terminal=first.session_id}},active=1}))
+    local mirror = panes.active().current_view
+    context.views[#context.views+1] = mirror
     wait_text(mirror,"ANVIL_ECHO_READY:project")
-    mirror:bind_shared_pane(pane)
+    wait_until(first,function() return first:close_status().clients == 2 end,"Missing mirror")
+    test.equal(first:close_status().views,1,"Attach counted a known mirror as a separate View")
     local independent = open(context,{session_id=first.session_id})
     wait_text(independent,"ANVIL_ECHO_READY:project")
     wait_until(first,function()
@@ -246,6 +262,33 @@ test.describe("Terminal on a Machine", function()
     wait_until(mirror,function()
       return not require("terminal_link").host_alive(record.host_pid,record.host_creation_time)
     end,"Closing the shared Pane kept the shell running")
+  end)
+
+  test.it("waits for the Sidebar to clear the saved Snooze on shared reopen", function(context)
+    local storage, snoozed = require "core.storage", require "core.snoozed_panes"
+    local sync = require "core.shared_layout"
+    local view = open(context,{})
+    wait_text(view,"ANVIL_ECHO_READY:project")
+    local pane = panes.create {factory=function() return view end}
+    local state = sync.capture(context.project)
+    test.ok(storage.save("sidebar","snoozes",{[view.session_id]=os.time()+600}))
+    panes.snooze(pane)
+    local old, requested = system.pane_request
+    system.pane_request = function(route,path,text)
+      local r = require("core.json").decode(text)
+      requested = route == "sidebar" and path == require("core.machine_project").root_key(context.project) and
+        r.path == path and r.action == "snooze" and r.until_time == nil and r.session == view.session_id
+      return true
+    end
+    local ok, applied = pcall(sync.apply,context.project,state)
+    system.pane_request = old
+    storage.clear("sidebar","snoozes")
+    test.ok(ok,applied)
+    test.ok(requested,"Reopen left a saved Snooze behind")
+    test.not_ok(applied,"Reopen did not wait for the saved Snooze removal")
+    test.ok(sync.apply(context.project,state))
+    snoozed.check()
+    test.not_ok(panes.is_snoozed(pane))
   end)
 
   test.it("keeps the live grid when a remote View attaches before layout", function(context)
@@ -265,6 +308,18 @@ test.describe("Terminal on a Machine", function()
     local grid = restored.session:snapshot(nil,false)
     test.equal(grid.cols,117,"Attach replaced the live grid with the placeholder width")
     test.equal(grid.row_count,31)
+    local controller = open(context,{session_id=id})
+    wait_text(controller,"ECHO:sized")
+    test.ok(controller.session:take_control())
+    wait_until(restored,function() return restored:close_status().viewer end,"Controller did not take control")
+    wait_until(controller,function() return not controller:close_status().viewer end,"Controller did not receive control")
+    test.ok(controller.session:resize(103,29,8,16))
+    wait_until(restored,function() return restored.session:snapshot(nil,false).cols == 103 end,"Missing host resize")
+    controller:detach_session()
+    wait_until(restored,function() return restored:close_status().clients == 1 end,"Controller did not detach")
+    require("terminal_native")._break_transport_for_tests(restored.session)
+    wait_until(restored,function() local s=restored:close_status(); return s.attach_count == 2 and not s.replaying end,"Reconnect failed")
+    test.equal(restored.session:snapshot(nil,false).cols,103,"Reconnect before layout replaced the host grid")
     -- The first real layout happens to match the View's original placeholder.
     restored.size.x, restored.size.y = restored.cols * restored.cell_width, restored.rows * restored.cell_height
     while select(1,restored:cell_geometry()) < restored.cols do restored.size.x = restored.size.x + 1 end

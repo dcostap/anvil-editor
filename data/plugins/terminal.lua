@@ -366,6 +366,7 @@ function TerminalView:new(options)
     shell = options.shell or terminal_config.shell,
   }
   self.session_id = options.session_id
+  self.shared_id = options.shared_id
   self.minimum_contrast = style.terminal_minimum_contrast
   self.color_vividness = style.terminal_color_vividness
   next_log_id = next_log_id + 1
@@ -416,6 +417,8 @@ function TerminalView:start_session(options)
       self.record_project = record.movable and record.project_path or nil
       native_options.cols, native_options.rows = nil, nil
       native_options.session_id = record.session_id
+      native_options.pane_attach = record.pane_attach
+      if record.pane_identity then native_options.shared_id = self.shared_id end
       native_options.host_pid = record.host_pid
       native_options.host_creation_time = record.host_creation_time
       native_options.pipe_name = record.pipe_name
@@ -803,11 +806,11 @@ function TerminalTextCaptureView:get_state()
   return { kind = "text_capture", capture = capture }
 end
 
-function TerminalView.from_state(state, snooze_until, source)
+function TerminalView.from_state(state, snooze_until, source, shared_id)
   if type(state) ~= "table" then return nil end
   if state.kind == "text_capture" then return TerminalTextCaptureView(nil, state.capture) end
   local view = TerminalView { cwd = state.cwd, shell = state.shell, session_id = state.session_id, restore = source or true,
-    snooze_until = type(snooze_until) == "number" and snooze_until or nil }
+    shared_id = shared_id, snooze_until = type(snooze_until) == "number" and snooze_until or nil }
   view.input_used = true
   return view
 end
@@ -862,7 +865,7 @@ function TerminalView:new_remote_session(options, id, restore)
   local session, err = terminal_native().new(options)
   if not session then return nil, err end
   self.machine = true
-  self.remote = require("core.machine_terminal").connect(fs.machine, session, id, start, restore == "workspace")
+  self.remote = require("core.machine_terminal").connect(fs.machine, session, id, start, restore == "workspace", self.shared_id)
   core.log_quiet("Terminal session %d connects through its Machine: id=%s", self.log_id, tostring(id))
   return session
 end
@@ -2852,6 +2855,8 @@ function TerminalView:close_status()
 end
 
 function TerminalView:bind_shared_pane(id)
+  self.shared_id = id
+  if self.remote then self.remote.pane = id end
   if self.session and self.session.bind_pane and
       (self.remote and self.remote.pane_identity or not self.remote and self.pane_identity) then
     self.session:bind_pane(id)
@@ -2935,6 +2940,8 @@ function TerminalView:reattach_session()
     options.scrollback_lines = terminal_config.scrollback_lines
     options.project_path = project_path("project")
     options.session_id, options.host_pid = record.session_id, record.host_pid
+    options.pane_attach = record.pane_attach
+    if record.pane_identity then options.shared_id = self.shared_id end
     options.host_creation_time, options.pipe_name = record.host_creation_time, record.pipe_name
     session, start_error = native.new(options)
   end

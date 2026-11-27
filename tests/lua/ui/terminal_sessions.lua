@@ -178,16 +178,15 @@ test.describe("Terminal Session restoration", function()
   local function close_shared(context,reconnect)
     local view = open(context)
     local record = read_record(view)
+    local id = require("net").random_token():sub(1,32)
+    view:bind_shared_pane(id)
     local mirror = assert(require("terminal_native").new {
       session_id=record.session_id, host_pid=record.host_pid, host_creation_time=record.host_creation_time,
-      pipe_name=record.pipe_name,
+      pipe_name=record.pipe_name, shared_id=id, pane_attach=record.pane_attach,
     })
     context.other = mirror
-    local id = require("net").random_token():sub(1,32)
     test.ok(wait_for(view,function()
-      view:bind_shared_pane(id)
       mirror:update()
-      mirror:bind_pane(id)
       local status = view:close_status()
       return status.clients == 2 and status.views == 1
     end),"The host did not recognize the mirror")

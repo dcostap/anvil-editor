@@ -108,6 +108,8 @@ A shared layout gives each Pane an ID. Each copy of a Terminal in that Pane send
 
 When another View makes a close safe without confirmation, that approval permits only Detach. A later count change cannot turn it into End. On local reconnect, the client sends the previous Pane ID before it sends a pending End. After attach, the View sends its first real layout even when its dimensions match the initial placeholder.
 
+Hosts with `pane_attach` accept a known Pane ID in HELLO and use it for the first View count. Older hosts with `pane_identity` bind after attach. A View without a real layout keeps the host grid across reconnects. Its first layout resize ends that behavior.
+
 A saved host uses both its process ID and creation time. If Windows reuses the ID, revival keeps the saved Session and screen. For a process that denies access, the native system process list can prove that the creation time differs.
 
 An identity that cannot be verified stays blocked. A failed Terminal without a native session still appears in agent workspace inspection. Pane Close asks no question for a session with another independent View. It keeps no Reopen record for that session.

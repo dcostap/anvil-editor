@@ -62,6 +62,22 @@ function snoozed_panes.read_times()
   return times
 end
 
+-- The Sidebar owns the saved deadline. Do not publish a wake until it removes that deadline.
+local wake_requests = setmetatable({}, {__mode="k"})
+function snoozed_panes.allow_shared_wake(pane,root)
+  local session = snoozed_panes.session(pane)
+  if not session then return true end
+  local times = snoozed_panes.read_times()
+  if not times then return false end
+  if (times[session] or 0) <= os.time() then wake_requests[pane] = nil; return true end
+  if (wake_requests[pane] or 0) <= system.get_time() then
+    local path = require("core.machine_project").root_key(root)
+    system.pane_request("sidebar",path,require("core.json").encode({action="snooze",path=path,pane=pane.id,session=session}))
+    wake_requests[pane] = system.get_time() + INTERVAL
+  end
+  return false
+end
+
 -- Wakes the Snoozed Panes whose time has come, oldest Snooze first. An unreadable file wakes nothing.
 function snoozed_panes.check()
   local times = snoozed_panes.read_times()
