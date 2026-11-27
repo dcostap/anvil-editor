@@ -234,6 +234,7 @@ function terminal.new(server)
     local record = find_record(client, id, params)
     if not record or not room(client, id) then return end
     local link, err = terminal_link.connect {session_id = record.session_id, host_pid = record.host_pid,
+      preserve_grid = params.preserve_grid == true,
       host_creation_time = record.host_creation_time, cols = params.cols, rows = params.rows,
       cell_width = params.cell_width, cell_height = params.cell_height, name = device_name(client.name),
       full = client.level == "full"}

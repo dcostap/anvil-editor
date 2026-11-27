@@ -97,9 +97,10 @@ function machine_terminal.connect(client, session, id, start, workspace_restore)
       if client.state ~= "ready" then
         coroutine.yield(0.1)
       else
-        local cols, rows, cell_width, cell_height = session:wanted_size()
+        local cols, rows, cell_width, cell_height, preserve_grid = session:wanted_size()
         local starting = remote.id == nil
         local params = {id = remote.id, cols = cols, rows = rows, cell_width = cell_width, cell_height = cell_height}
+        if not starting and preserve_grid then params.preserve_grid = true end
         if starting then
           for key, value in pairs(start) do params[key] = value end
         end

@@ -350,6 +350,9 @@ static int f_link_connect(lua_State *L) {
   DWORD pid = (DWORD)field_integer(L, "host_pid", 1, UINT32_MAX);
   if (!anvil_terminal_id_valid(id)) luaL_argerror(L, 1, "invalid Terminal Session ID");
   AnvilTerminalLink *link = options_link(L);
+  lua_getfield(L, 1, "preserve_grid");
+  if (lua_toboolean(L, -1)) link->size.cols = link->size.rows = 0;
+  lua_pop(L, 1);
   HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
   if (!anvil_process_identity(process, pid, created)) {
     if (process) CloseHandle(process);

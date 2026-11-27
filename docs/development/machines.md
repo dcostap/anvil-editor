@@ -284,6 +284,8 @@ A later `not_found` attach means the session ended on the Machine. The attach RO
 
 In a Project on a Machine (`fs.machine`), each Terminal View runs its shell on the Machine. The View keeps no session record on this PC and uses no prepared shell. Workspace restore attaches the saved session ID.
 
+When the View has no layout yet, `terminal.attach` requests `preserve_grid`. The host sends the live screen at its current size. A placeholder size does not resize the running program.
+
 When the Machine no longer has it, a new shell starts in the saved folder, as a local restore does. Reopen Closed Pane does the same, because the Machine keeps no closed sessions. A shell that ended while this PC was away closes its View, as after an exit.
 
 A failed start shows its error in the View. These Terminals cannot move to another Project. Programs in them reach the Machine's Anvil, so the View publishes no control endpoint.

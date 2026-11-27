@@ -861,6 +861,7 @@ function TerminalView:new_remote_session(options, id, restore)
   local start = (not id or restore) and {project = options.project_path, cwd = options.cwd,
     shell = options.shell or "", scrollback_lines = options.scrollback_lines} or nil
   -- The paths name the Machine's folders. Only the Machine uses them.
+  if id then options.cols, options.rows = nil, nil end
   options.remote, options.project_path, options.cwd, options.shell = true, nil, nil, nil
   local session, err = terminal_native().new(options)
   if not session then return nil, err end

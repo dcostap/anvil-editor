@@ -1580,6 +1580,7 @@ static int f_terminal_new(lua_State *L) {
   bool started = false;
   if (session->remote) {
     /* Lua attaches it through its Machine. */
+    session->preserve_grid = !has_size;
     started = true;
     session->transport_released = true;
   } else if (revive_from) {
@@ -2396,6 +2397,8 @@ static int f_terminal_attach_remote(lua_State *L) {
   session->shell_pid = (DWORD)values[0];
   session->cols = (uint16_t)values[1]; session->rows = (uint16_t)values[2];
   session->cell_width = (uint32_t)values[3]; session->cell_height = (uint32_t)values[4];
+  if (session->preserve_grid) session->wanted = (AnvilTerminalSize){session->cols, session->rows,
+    session->cell_width, session->cell_height};
   if (!start_attached(session, handle)) {
     fail_transport(session, ERROR_NOT_ENOUGH_MEMORY);
     lua_pushnil(L); lua_pushliteral(L, "Could not connect the Terminal Session"); return 2;
@@ -2412,7 +2415,8 @@ static int f_terminal_wanted_size(lua_State *L) {
   AnvilTerminalSize size = wanted_size(session);
   lua_pushinteger(L, size.cols); lua_pushinteger(L, size.rows);
   lua_pushinteger(L, size.cell_width); lua_pushinteger(L, size.cell_height);
-  return 4;
+  lua_pushboolean(L, session->preserve_grid);
+  return 5;
 }
 
 /* Takes control without input. Returns false for a Controller or a closed session. */
