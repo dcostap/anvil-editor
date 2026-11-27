@@ -120,8 +120,15 @@ test.describe("Terminal on a Machine", function()
       end,"Client did not publish the split")
       test.equal(published.layout.groups[1].axis,"x")
       test.equal(published.layout.active,2)
+      local split = published.layout.groups[1]
+      local second = panes.active().current_view
+      split.a, split.b = split.b, split.a
+      test.equal(request("layout.set", {base=2,layout=published.layout}).revision,3)
+      wait_until({},function() return panes.active().current_view == original end,
+        "Swapping two Panes of the same file lost their View identities")
+      test.ok(panes.pane_for_view(second))
       buffer:insert(1,1,"unsaved")
-      test.equal(request("layout.set",{base=2,layout={groups={},active=0}}).revision,3)
+      test.equal(request("layout.set",{base=3,layout={groups={},active=0}}).revision,4)
       test.not_ok(sync.apply(context.project,{groups={},active=0}))
       test.ok(panes.pane_for_view(original))
       test.ok(buffer.lines[1]:find("unsaved",1,true))
@@ -136,13 +143,13 @@ test.describe("Terminal on a Machine", function()
         sessions.sessions(fs.machine,context.project)
         return sessions.listed(session)
       end,"The host did not list its Terminal")
-      test.equal(request("layout.set",{base=3, layout={groups={{terminal=session}},active=1}}).revision,4)
+      test.equal(request("layout.set",{base=4, layout={groups={{terminal=session}},active=1}}).revision,5)
       wait_until(host,function() return panes.active() and panes.active().current_view.session_id == session end,
         "Shared Terminal was not opened")
       local mirror = panes.active().current_view
       context.views[#context.views+1] = mirror
       wait_text(mirror,"ANVIL_ECHO_READY:project")
-      test.equal(request("layout.set",{base=4,layout={groups={},active=0}}).revision,5)
+      test.equal(request("layout.set",{base=5,layout={groups={},active=0}}).revision,6)
       wait_until(host,function() return not panes.pane_for_view(mirror) end,"Remote Terminal close did not remove its Pane")
       test.ok(host:write_input("still-running\r"))
       wait_text(host,"ECHO:still-running")

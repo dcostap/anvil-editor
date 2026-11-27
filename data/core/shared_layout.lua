@@ -10,9 +10,15 @@ local function fingerprint(state) return common.serialize(state, {sort = true}) 
 local function describe(pane, root)
   local v = pane.current_view
   if pane.group.snoozed then return end
-  if v.terminal_view and v.session_id then return {terminal=v.session_id} end
-  if v:is(Editor) and v.buffer.abs_filename and common.path_belongs_to(v.buffer.abs_filename, root) then
-    return {file=common.relative_path(root,v.buffer.abs_filename)}
+  local item
+  if v.terminal_view and v.session_id then item = {terminal=v.session_id}
+  elseif v:is(Editor) and v.buffer.abs_filename and common.path_belongs_to(v.buffer.abs_filename, root) then
+    item = {file=common.relative_path(root,v.buffer.abs_filename)}
+  end
+  if item then
+    pane.shared_id = pane.shared_id or require("net").random_token():sub(1,32)
+    item.pane = pane.shared_id
+    return item
   end
 end
 
@@ -69,7 +75,12 @@ function M.apply(root, state, reconnecting)
     if n.file and (type(n.file) ~= "string" or n.file:find("[%c:]") or common.is_absolute_path(n.file)
         or not common.path_belongs_to(common.normalize_path(root .. PATHSEP .. n.file),root)) then return false end
     local q = available[key(n)]
-    local p = q and table.remove(q,1)
+    local p
+    if q then
+      for i, candidate in ipairs(q) do
+        if not n.pane or n.pane == candidate.shared_id then p = table.remove(q,i); break end
+      end
+    end
     if not p and n.terminal and not terminal.session_available(n.terminal,root) then return false end
     leaves[#leaves+1] = {item=n, pane=p}
     return true
@@ -93,6 +104,7 @@ function M.apply(root, state, reconnecting)
         return Editor(core.open_buffer(root .. PATHSEP .. item.file))
       end})
     end
+    leaf.pane.shared_id = leaf.item.pane or leaf.pane.shared_id
     used[leaf.pane] = true
   end
   for _, p in ipairs(obsolete) do

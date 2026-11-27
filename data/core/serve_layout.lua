@@ -5,19 +5,24 @@ local M = {}
 local function checked(server, root, value)
   if type(value) ~= "table" or type(value.groups) ~= "table" then return end
   local count = 0
+  local ids = {}
   local function node(n, depth)
     if type(n) ~= "table" or depth > 32 or count >= 128 then return end
+    if n.pane ~= nil then
+      if type(n.pane) ~= "string" or #n.pane ~= 32 or not n.pane:match("^[a-f0-9]+$") or ids[n.pane] then return end
+      ids[n.pane] = true
+    end
     if n.file then
       if type(n.file) ~= "string" or common.is_absolute_path(n.file) then return end
       local path = server.check_path(root .. PATHSEP .. n.file)
       if not path or not common.path_belongs_to(path, root) then return end
       count = count + 1
-      return {file = common.relative_path(root, path)}
+      return {pane = n.pane, file = common.relative_path(root, path)}
     elseif n.terminal then
       if type(n.terminal) ~= "string" or #n.terminal ~= 32 or not n.terminal:match("^%x+$") then return end
       if PLATFORM ~= "Windows" or not require("core.serve_terminal").belongs_to(n.terminal, root) then return end
       count = count + 1
-      return {terminal = n.terminal}
+      return {pane = n.pane, terminal = n.terminal}
     elseif (n.axis == "x" or n.axis == "y") and type(n.ratio) == "number" and n.ratio > 0 and n.ratio < 1 then
       local a, b = node(n.a, depth+1), node(n.b, depth+1)
       if a and b then return {axis=n.axis, ratio=n.ratio, a=a, b=b} end

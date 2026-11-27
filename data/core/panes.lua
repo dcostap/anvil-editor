@@ -1731,7 +1731,7 @@ function M.wake(list)
 end
 
 local function save_closed_pane(pane)
-  local snapshot = { views = {}, history = {}, index = pane.history.index,
+  local snapshot = { views = {}, history = {}, index = pane.history.index, shared_id = pane.shared_id,
     constrained = M.constraint(pane) ~= nil, limit = pane.history.limit }
   local indices = {}
   for _, view in ipairs(collect_owned_views(pane)) do
@@ -1780,6 +1780,7 @@ function M.restore(snapshot, opts)
     local pane, err = M.create { factory = function() return current end,
       history_limit = snapshot.limit, focus = false }
     assert(pane, err)
+    pane.shared_id = snapshot.shared_id
     pane.history.entries = {}
     pane.history.index = snapshot.index
     local referenced = {}
@@ -1933,7 +1934,7 @@ function M.save_workspace_state(save_view)
     local ok, saved = pcall(save_view, pane.current_view)
     if ok and saved then
       valid[pane] = true
-      local record = { id = pane.id, view = saved, history_limit = pane.history.limit }
+      local record = { id = pane.id, shared_id = pane.shared_id, view = saved, history_limit = pane.history.limit }
       local current_state = capture_navigation_state(pane.current_view)
       if M.constraint(pane) then
         -- Keep the owner when a related capture is current at shutdown.
@@ -2074,6 +2075,7 @@ function M.restore_workspace_state(state, load_view)
       if not view then ok, view = pcall(load_view, record.view) end
       if ok and view then
         local pane = create_restored_identity(view, record.id)
+        pane.shared_id = record.shared_id
         if selected and selected_view then
           pane.history.entries = {}
           local referenced = {}
