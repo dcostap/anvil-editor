@@ -106,6 +106,8 @@ Their final control CLOSE or END names that exact Client and its process. Older 
 
 A shared layout gives each Pane an ID. Each copy of a Terminal in that Pane sends its ID to a host that advertises `pane_identity`. The host counts those connections as one View for Close and End. A separate View still protects its shell. A disconnect only detaches, even for the last View. Controller selection, input and screen size still use individual connections. The status field `clients` counts connections. `views` gives the logical count when it differs. Hosts without `pane_identity` keep the connection-based close rule.
 
+When another View makes a close safe without confirmation, that approval permits only Detach. A later count change cannot turn it into End. On local reconnect, the client sends the previous Pane ID before it sends a pending End. After attach, the View sends its first real layout even when its dimensions match the initial placeholder.
+
 A saved host uses both its process ID and creation time. If Windows reuses the ID, revival keeps the saved Session and screen. For a process that denies access, the native system process list can prove that the creation time differs.
 
 An identity that cannot be verified stays blocked. A failed Terminal without a native session still appears in agent workspace inspection. Pane Close asks no question for a session with another independent View. It keeps no Reopen record for that session.

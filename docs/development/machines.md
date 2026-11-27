@@ -296,6 +296,8 @@ A Dormant Project on a Machine lists none. A visible Terminal Tab takes the plac
 
 Shared layout leaves carry a Pane ID as well as the file path or Terminal Session ID. Workspace save and Reopen Closed Pane keep this ID. Two Panes that show the same file keep their own Views when their order changes. Applying a layout detaches removed Terminal copies. It does not issue another user Close.
 
+A restored Pane without an ID can adopt the incoming ID for the same file or Terminal Session. A remote reopen reuses the matching Snoozed Pane instead of creating a second local copy.
+
 Run `runtime/machine_terminal.lua`, `ui/machine_terminal.lua` and `ui/project_sidebar.lua` after changes. The runtime test uses a real host and a real server that shares the test's user folder. The UI test gives the server its own user folder.
 
 Run `runtime/machine_serve.lua`, `runtime/machine_client.lua`, `runtime/machine_buffer.lua`, `anvil:machine-frame` and `anvil:launch-mode` after changes. Tests that need a fixed port must try ports until one opens: Windows reserves whole port ranges, and `get_port()` returns the requested port. Pass one file to each `--test-args`: the runner reads only the first path.

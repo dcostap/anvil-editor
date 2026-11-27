@@ -175,7 +175,7 @@ test.describe("Terminal Session restoration", function()
     test.equal(#terminal.open_views(), before)
   end)
 
-  test.it("closes the shared Pane from the host PC", function(context)
+  local function close_shared(context,reconnect)
     local view = open(context)
     local record = read_record(view)
     local mirror = assert(require("terminal_native").new {
@@ -191,11 +191,30 @@ test.describe("Terminal Session restoration", function()
       local status = view:close_status()
       return status.clients == 2 and status.views == 1
     end),"The host did not recognize the mirror")
-    view:on_close(true)
+    if reconnect then
+      -- Hold the host handshake until after Close. Do not depend on worker scheduling.
+      local ffi = require "ffi"
+      ffi.cdef [[long __stdcall NtSuspendProcess(void *); long __stdcall NtResumeProcess(void *);]]
+      local nt = ffi.load("ntdll")
+      local handle = context.kernel.OpenProcess(0x100801,0,record.host_pid)
+      test.ok(handle ~= nil)
+      local ok,err = pcall(function()
+        test.equal(nt.NtSuspendProcess(handle),0)
+        require("terminal_native")._break_transport_for_tests(view.session)
+        test.ok(wait_for(view,function() return view.state == "reconnecting" end),"The connection did not drop")
+        view:on_close(true)
+      end)
+      nt.NtResumeProcess(handle)
+      context.kernel.CloseHandle(handle)
+      assert(ok,err)
+    else view:on_close(true) end
     test.ok(wait_for(view,function()
       return context.kernel.WaitForSingleObject(context.processes[1][1],0) == 0
     end),"The local close left the mirrored shell running")
-  end)
+  end
+
+  test.it("closes the shared Pane from the host PC", function(context) close_shared(context,false) end)
+  test.it("ends a mirrored shell during host reconnect", function(context) close_shared(context,true) end)
 
   test.it("shares the shell and takes control on typing or focus", function(context)
     context.window_has_focus = system.window_has_focus

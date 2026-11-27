@@ -428,7 +428,6 @@ function TerminalView:start_session(options)
   if not options.session_id and not fs.machine then
     session, pi_command_sent = take_prepared_session(native_options, options.pi)
   end
-  local used_spare = session ~= nil
   if pi_command_sent then self.start_pi = nil end
   local start_error, transport_error
   if fs.machine then
@@ -472,9 +471,6 @@ function TerminalView:start_session(options)
   self.activity = record and tonumber(record.activity) or os.time()
   local attaching = session:stats().attach_count == 0
   if not attaching then self:log_session_attach() end
-  -- A starting spare can have captured older font metrics. Apply this View's size after attachment.
-  self.session_cell_width = used_spare and 0 or self.native_cell_width
-  self.session_cell_height = used_spare and 0 or self.cell_height
   self.snapshot = session:snapshot()
   self.theme_generation = core.color_theme_generation or 0
   self.state = attaching and "reconnecting" or "running"
@@ -892,6 +888,8 @@ end
 
 function TerminalView:log_session_attach()
   local stats = self.session:stats()
+  -- WELCOME reports the host grid. This View has not sent its layout on the new connection yet.
+  self.session_cell_width = nil
   self.session_id = stats.session_id
   self.attach_count = stats.attach_count
   if core.request_workspace_save then core.request_workspace_save("terminal attach") end
@@ -919,8 +917,6 @@ function TerminalView:adopt_session(session)
   self.activity = self.activity or os.time()
   local attaching = session:stats().attach_count == 0
   if not attaching then self:log_session_attach() end
-  self.session_cell_width = self.native_cell_width
-  self.session_cell_height = self.cell_height
   self.snapshot = session:snapshot()
   self.theme_generation = core.color_theme_generation or 0
   self.minimum_contrast = style.terminal_minimum_contrast
@@ -2847,8 +2843,9 @@ end
 function TerminalView:close_status()
   if not self.session then return { kind = self.state, error = self.launch_error } end
   local _, status = self.session:update()
-  if not self.existing_host and status.busy == nil
-      and (status.kind == "reconnecting" or status.kind == "running") then
+  local attachments = status.attach_count or 0
+  if not self.existing_host and status.busy == nil and
+      (status.kind == "reconnecting" and attachments == 0 or status.kind == "running" and attachments <= 1) then
     return { kind = "starting" }
   end
   return status
@@ -2864,18 +2861,21 @@ end
 local function needs_close_confirmation(status, self_close)
   local idle_pi = status.agent_app == "pi"
     and (status.agent_state == "idle" or status.agent_state == "done")
-  -- A separate View protects the shell. A mirror of this Pane does not.
-  local shared = (status.views or status.clients or 0) > 1
   return status.kind == "reconnecting"
-    or (status.kind == "running" and status.busy ~= false and not idle_pi and not shared and not self_close)
+    or (status.kind == "running" and status.busy ~= false and not idle_pi and not self_close)
 end
 
 function TerminalView:can_close(approve, caller)
+  self.detach_on_close = nil
   if not self.session then approve(); return end
   local status = self:close_status()
   -- The control server supplies this identity, not the tool's arguments. Approve only this session's busy check.
   local self_close = caller ~= nil and caller ~= "local" and caller == self.session_id
-  if not needs_close_confirmation(status, self_close) then
+  local needs_end = needs_close_confirmation(status, self_close)
+  if needs_end and status.kind == "running" and (status.views or status.clients or 0) > 1 then
+    self.detach_on_close = self.session
+  end
+  if not needs_end or self.detach_on_close then
     core.log_quiet("Terminal session %d closed without confirmation: busy=%s app=%s agent=%s self_close=%s",
       self.log_id, tostring(status.busy), tostring(status.agent_app), tostring(status.agent_state), tostring(self_close))
     approve()
@@ -2970,6 +2970,9 @@ end
 
 function TerminalView:on_close(reopen)
   require("core.control_runtime").release(self)
+  -- Approval to leave a shared shell is not approval to end it if the count changes.
+  if self.session and self.detach_on_close == self.session then self:detach_session() end
+  self.detach_on_close = nil
   local retained = false
   -- A detached session belongs to its host or another Workspace. Only a live session ends for Reopen.
   -- The Machine keeps no closed sessions. Reopen starts a new shell there in the same folder.

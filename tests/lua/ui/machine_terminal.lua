@@ -192,6 +192,35 @@ test.describe("Terminal on a Machine", function()
     end, "The Machine kept the closed shell")
   end)
 
+  test.it("adopts host IDs without replacing a dirty editor from an older Workspace", function(context)
+    local sync = require "core.shared_layout"
+    local path = context.project .. PATHSEP .. "old.txt"
+    test.is_nil(fs.wait(fs.write,path,"old\n",nil,nil))
+    local view = require("core.editor")(core.open_buffer(path))
+    local pane = panes.create {factory=function() return view end}
+    wait_until({},function() return view.buffer.lines[1] == "old\n" end,"File did not load")
+    view.buffer:insert(1,1,"edit")
+    local id = require("net").random_token():sub(1,32)
+    test.ok(sync.apply(context.project,{groups={{pane=id,file="old.txt"}},active=1}))
+    test.equal(panes.active(),pane)
+    test.equal(pane.current_view,view)
+    test.equal(sync.capture(context.project).groups[1].pane,id)
+    view.buffer:undo()
+  end)
+
+  test.it("reuses a Snoozed Pane when its mirror reopens", function(context)
+    local sync = require "core.shared_layout"
+    local id = require("net").random_token():sub(1,32)
+    local state = {groups={{pane=id,file="wake.txt"}},active=1}
+    test.is_nil(fs.wait(fs.write,context.project .. PATHSEP .. "wake.txt","ok\n",nil,nil))
+    test.ok(sync.apply(context.project,state))
+    local pane = panes.active()
+    panes.snooze(pane)
+    test.ok(sync.apply(context.project,state))
+    test.equal(panes.active(),pane,"Reopen created another copy of the Snoozed Pane")
+    test.not_ok(panes.is_snoozed(pane))
+  end)
+
   test.it("ends a Terminal shown by two copies of one shared Pane", function(context)
     local first = open(context,{})
     wait_text(first,"ANVIL_ECHO_READY:project")
@@ -236,6 +265,15 @@ test.describe("Terminal on a Machine", function()
     local grid = restored.session:snapshot(nil,false)
     test.equal(grid.cols,117,"Attach replaced the live grid with the placeholder width")
     test.equal(grid.row_count,31)
+    -- The first real layout happens to match the View's original placeholder.
+    restored.size.x, restored.size.y = restored.cols * restored.cell_width, restored.rows * restored.cell_height
+    while select(1,restored:cell_geometry()) < restored.cols do restored.size.x = restored.size.x + 1 end
+    while select(2,restored:cell_geometry()) < restored.rows do restored.size.y = restored.size.y + 1 end
+    restored:sync_geometry()
+    wait_until(restored,function()
+      grid = restored.session:snapshot(nil,false)
+      return grid.cols == restored.cols and grid.row_count == restored.rows
+    end,"The first real layout did not resize the restored screen")
   end)
 
   test.it("types the path of a copy on the Machine for a dropped file", function(context)
@@ -281,6 +319,11 @@ test.describe("Terminal on a Machine", function()
     local approved = false
     first:can_close(function() approved = true end)
     test.ok(approved, "The close asked a question")
+    -- Layout sync identifies the second connection while another View's close decision is pending.
+    local pane = require("net").random_token():sub(1,32)
+    first:bind_shared_pane(pane)
+    second:bind_shared_pane(pane)
+    wait_until(second,function() return first:close_status().views == 1 end,"The mirror did not bind")
     first:on_close()
     table.remove(context.views, 1)
     wait_until(second, function() return clients(second) == 1 end, "The other device lost the shell")
