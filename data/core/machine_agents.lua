@@ -4,8 +4,9 @@ local json = require "core.lsp.json"
 local M = { methods = { agent_read = true, agent_send = true, agent_wait = true, agent_transcript = true, agent_interrupt = true } }
 
 -- Sends one request to Machine `id`. One connection per call bounds its lifetime and never replays a request after
--- a disconnect. `done(ok, value)` gets the decoded reply bytes, or else the result.
-function M.request(id, method, params, done, cancelled)
+-- a disconnect. `done(ok, value)` gets the decoded reply bytes, or else the result. The reply can take `timeout`
+-- seconds, 36 by default.
+function M.request(id, method, params, done, cancelled, timeout)
   if type(id) ~= "string" or #id ~= 32 or not id:match("^%x+$") then return done(false, "Invalid Machine ID") end
   local project = require "core.machine_project"
   local client = require("core.machine_client").new(project.machine_file(id))
@@ -28,7 +29,7 @@ function M.request(id, method, params, done, cancelled)
       elseif bytes and #bytes > 0 then done(true, json.decode(bytes))
       else done(true, result) end
     end)
-    deadline = system.get_time() + 36
+    deadline = system.get_time() + (timeout or 36)
     while not finished and not cancelled() and system.get_time() < deadline do coroutine.yield(.02) end
     if not finished then finished = true; done(false, "Machine agent did not answer; the task may still be running") end
     client:close()

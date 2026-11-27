@@ -88,10 +88,10 @@ tool("agent_interrupt", "Interrupt Pi's active work. Keep its Terminal Session o
 tool("agent_wait", "Wait up to 30 seconds for a task. Timeout does not cancel it. A question or disconnect ends the wait.",
   {terminal = id, instance = id, task = id, timeout_ms = {type = "integer", minimum = 1, maximum = 30000}},
   {"terminal", "task"}, true)
-tool("external_agent", "Talk with External Agents: agents outside Anvil Terminals, such as Antigravity. As an External Agent, call action=wait with your name. It returns new messages from the user and other agents, or none after timeout_ms (at most 25000). Then call wait again with after=cursor. Keep waiting while you work and when you are idle; otherwise messages wait unread. Answer with action=say; set reply_to to the message's request. To message a Pi, use agent_send with from_agent set to your name; its reply arrives through wait. list shows this Project's External Agents; read returns a page of a thread.",
+tool("external_agent", "Talk with External Agents: agents outside Anvil Terminals, such as Antigravity. As an External Agent, call action=wait with your name. It returns new messages from the user and other agents, or none after timeout_ms (default 25000, at most 180000). Then call wait again with after=cursor. Keep waiting while you work and when you are idle; otherwise messages wait unread. Answer with action=say; set reply_to to the message's request. To message a Pi, use agent_send with from_agent set to your name; its reply arrives through wait. list shows this Project's External Agents; read returns a page of a thread.",
   {action = choice("wait", "say", "list", "read"), agent = string_schema(64),
     after = {type = "integer", minimum = 0, maximum = 1000000000}, text = string_schema(32768), reply_to = id,
-    timeout_ms = {type = "integer", minimum = 0, maximum = 25000}},
+    timeout_ms = {type = "integer", minimum = 0, maximum = 180000}},
   {"action"}, false)
 local function placement(extra)
   local fields = {pane = id, placement = choice("new", "split"), direction = choice("left", "right", "up", "down"),

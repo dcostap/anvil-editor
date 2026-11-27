@@ -10,8 +10,9 @@ local net = require "net"
 local M = {}
 
 local MAX_AGENTS, MAX_MESSAGES, MAX_TEXT, MAX_PAGE, MAX_WAITS = 16, 200, 32768, 100, 8
--- A read waits at most MAX_WAIT seconds. An agent listens while it waits, and for LISTEN_SECONDS after a read.
-local MAX_WAIT, LISTEN_SECONDS = 25, 60
+-- A read waits DEFAULT_WAIT seconds, or its timeout_ms up to MAX_WAIT seconds. An agent listens while it waits, and
+-- for LISTEN_SECONDS after a read.
+local DEFAULT_WAIT, MAX_WAIT, LISTEN_SECONDS = 25, 180, 60
 local FROM_KINDS = {user = true, agent = true, self = true}
 local FROM_FIELDS = {"name", "terminal", "instance", "project", "machine"}
 
@@ -159,7 +160,7 @@ function M.new(server, directory)
     local count = 0
     for _, item in ipairs(waits) do if item.client == client then count = count + 1 end end
     if count >= MAX_WAITS then return server.fail(client, id, "busy", "Too many waiting reads") end
-    local seconds = type(params.timeout_ms) == "number" and params.timeout_ms / 1000 or MAX_WAIT
+    local seconds = type(params.timeout_ms) == "number" and params.timeout_ms / 1000 or DEFAULT_WAIT
     wait.deadline = system.get_time() + math.max(0, math.min(MAX_WAIT, seconds))
     if wait.listen then agent.listeners = (agent.listeners or 0) + 1 end
     waits[#waits + 1] = wait

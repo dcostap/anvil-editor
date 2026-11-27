@@ -184,7 +184,9 @@ function M:external(client, name, args, source, tool_result)
     end
   end
   params.project = path
-  client.forwarding, client.deadline = true, system.get_time() + 48
+  -- A wait holds the reply for its timeout_ms, 25 seconds by default.
+  local timeout = 11 + math.max(25, params.wait and (params.timeout_ms or 0) / 1000 or 0)
+  client.forwarding, client.deadline = true, system.get_time() + timeout + 12
   agents.request(machine, method, params, function(success, value)
     if not success or type(value) ~= "table" then return tool_result(false, value or "The Machine did not answer") end
     if name == "agent_send" then
@@ -198,7 +200,7 @@ function M:external(client, name, args, source, tool_result)
     if value.messages then value.messages = json.array(value.messages) end
     if value.agents then value.agents = json.array(value.agents) end
     tool_result(true, value)
-  end, function() return client.dead end)
+  end, function() return client.dead end, timeout)
 end
 
 function M:discover(client, callback)
