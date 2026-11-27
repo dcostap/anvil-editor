@@ -134,6 +134,12 @@ test.describe("Terminal on a Machine", function()
       test.ok(buffer.lines[1]:find("unsaved",1,true))
       buffer:undo()
       wait_until({},function() return #sync.capture(context.project).groups == 0 end,"Close did not reach this PC")
+      -- Another PC reopened both Panes before this PC ran Reopen Closed Pane.
+      test.ok(sync.apply(context.project,published.layout))
+      local count = panes.count()
+      test.ok(panes.reopen_last_closed())
+      test.equal(panes.count(),count,"Reopen duplicated a shared Pane")
+      test.ok(sync.apply(context.project,{groups={},active=0}))
       -- Open a live Terminal from the host layout, then close its Pane without replacing the shell.
       local host = open(context,{})
       wait_text(host,"ANVIL_ECHO_READY:project")

@@ -1816,6 +1816,11 @@ end
 function M.reopen_last_closed()
   local snapshot = table.remove(closed_panes)
   if not snapshot then return nil, "No closed Pane is available" end
+  if snapshot.shared_id then
+    for _, pane in pairs(M.panes_by_id) do
+      if pane.shared_id == snapshot.shared_id then M.focus(pane); return pane end
+    end
+  end
   return M.restore(snapshot)
 end
 
