@@ -122,8 +122,9 @@ Use the BAT files in the repo root
   - use after C/C++, build-system, asset, or other non-Lua source/default-data changes so the dev portable app is refreshed consistently
   - skip for edits under junctioned data directories; reload or restart Anvil instead
   - rebuilds and updates the dev portable app
-  - restores the source-data junctions
-  - builds first, then asks the running editor to save its Workspaces and detach Terminal Sessions
+  - builds and strips the app in a staging folder before closing the editor
+  - asks the running editor to save its Workspaces and detach Terminal Sessions
+  - copies the staged files without writing through the source-data junctions
   - Terminal Session hosts and their shells keep running; the restarted editor reconnects to them
   - restarts through Windows Explorer, outside the updating Terminal's process group
   - uses the desktop environment for the restarted app; closing the updating Terminal cannot kill that app

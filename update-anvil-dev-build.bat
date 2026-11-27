@@ -6,6 +6,7 @@ if errorlevel 1 exit /b 1
 rem The dev portable app lives beside the repository.
 for %%I in ("%REPO%\..\anvil-portable") do set "DEST=%%~fI"
 set "APP=%DEST%\anvil.exe"
+set "STAGE=%REPO%\build-windows-x86_64\dev-install"
 
 cd /d "%REPO%" || exit /b 1
 
@@ -37,27 +38,25 @@ echo === Building Anvil incrementally ===
 if errorlevel 1 exit /b 1
 
 echo.
+echo === Staging stripped portable Anvil ===
+rem A failed install or strip must leave the running app and its junctions alone.
+if exist "%STAGE%" rmdir /S /Q "%STAGE%"
+if exist "%STAGE%" exit /b 1
+"%BASH%" -lc "meson install -C build-windows-x86_64 --no-rebuild --destdir \"%STAGE%\" --strip"
+if errorlevel 1 exit /b 1
+
+echo.
 echo === Saving Anvil and keeping Terminal Sessions running ===
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%REPO%\scripts\prepare-dev-update.ps1" -AppRoot "%DEST%"
 if errorlevel 1 exit /b 1
 
 echo.
-echo === Temporarily removing source-data junctions ===
-call :RemoveLink "%DEST%\data\core"
-if errorlevel 1 exit /b 1
-call :RemoveLink "%DEST%\data\plugins"
-if errorlevel 1 exit /b 1
-call :RemoveLink "%DEST%\data\colors"
-if errorlevel 1 exit /b 1
-call :RemoveLink "%DEST%\data\widget"
-if errorlevel 1 exit /b 1
-call :RemoveLink "%DEST%\data\treesitter"
-if errorlevel 1 exit /b 1
-
-echo.
 echo === Updating stripped portable Anvil at %DEST% ===
-"%BASH%" -lc "meson install -C build-windows-x86_64 --destdir \"%DEST%\" --strip"
-if errorlevel 1 exit /b 1
+rem Do not copy into the source junctions. Keep the source start.lua unconfigured.
+robocopy "%STAGE%" "%DEST%" /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP /XD ^
+  "%STAGE%\data\core" "%STAGE%\data\plugins" "%STAGE%\data\colors" "%STAGE%\data\widget" "%STAGE%\data\treesitter"
+if errorlevel 8 exit /b 1
+rmdir /S /Q "%STAGE%"
 
 echo.
 echo === Restoring editable source-data junctions ===
@@ -81,21 +80,6 @@ echo === Restarting Anvil ===
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%REPO%\scripts\start-dev-anvil.ps1" -AppRoot "%DEST%"
 exit /b %ERRORLEVEL%
 
-
-:RemoveLink
-set "LINK=%~1"
-if exist "%LINK%" (
-  rem Plain rmdir removes junctions safely. If setup previously failed and this
-  rem is a real copied directory, remove its contents too.
-  rmdir "%LINK%" 2>nul
-  if exist "%LINK%" rmdir /S /Q "%LINK%" 2>nul
-  if exist "%LINK%" (
-    echo Could not remove %LINK%.
-    echo Close Anvil and check that this folder is not in use.
-    exit /b 1
-  )
-)
-exit /b 0
 
 :LinkDir
 set "LINK=%~1"
