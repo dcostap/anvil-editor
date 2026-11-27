@@ -45,6 +45,22 @@ function M.start(user, args)
   return server, M.wait_discovery(user, server)
 end
 
+-- Returns the record of Anvil's MCP server in `server`, when it publishes it.
+function M.wait_mcp(user, server)
+  local path = user .. PATHSEP .. "machine" .. PATHSEP .. "mcp.json"
+  local deadline = system.get_time() + 30
+  repeat
+    local file = io.open(path, "rb")
+    if file then
+      local found = json.decode(file:read("*a") or "")
+      file:close()
+      if type(found) == "table" and found.pid == server:pid() then return found end
+    end
+    coroutine.yield(0.05)
+  until system.get_time() >= deadline or not server:running()
+  error("The Machine server did not publish Anvil's MCP server")
+end
+
 function M.stop(server)
   if server and server:running() then
     server:kill()

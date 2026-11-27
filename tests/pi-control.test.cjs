@@ -50,8 +50,9 @@ test("interactive Pi connects, receives each task once, and reports completion o
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   try {
-    await fs.mkdir(path.join(dir, "control", "terminals"), { recursive: true });
-    await fs.writeFile(path.join(dir, "control", "terminals", "terminal.json"), JSON.stringify({
+    // Pi registers Anvil's MCP server from the Machine server's record of this Terminal.
+    await fs.mkdir(path.join(dir, "machine", "agents"), { recursive: true });
+    await fs.writeFile(path.join(dir, "machine", "agents", "terminal.json"), JSON.stringify({
       version: 1, url: `http://127.0.0.1:${server.address().port}`, token: "test-secret",
     }));
     require("../data/tools/agent-sessions/pi-control.cjs")(pi);
@@ -68,9 +69,6 @@ test("interactive Pi connects, receives each task once, and reports completion o
     }
     assert.ok(prompt.systemPromptOptions.sections.anvil.includes("An Anvil Agent is an agent running inside Anvil."));
     assert.ok(prompt.systemPromptOptions.sections.anvil.includes("Your Agent Name is brave-otter."));
-    // Removing the View leaves the host endpoint available to this running Pi.
-    await fs.mkdir(path.join(dir, "machine", "agents"), {recursive: true});
-    await fs.rename(path.join(dir, "control", "terminals", "terminal.json"), path.join(dir, "machine", "agents", "terminal.json"));
     commands = [{ id: "task-a", action: "send", text: "Review this change", from: "other-terminal",
       sender: {terminal: "other-terminal", name: "calm-heron", project: "C:\\Projects\\Alpha"} }];
     await until(() => latest.receipts?.some(r => r.id === "task-a"));

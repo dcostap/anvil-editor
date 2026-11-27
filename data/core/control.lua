@@ -346,7 +346,7 @@ function M:tick()
   end
   for operation, job in pairs(self.starting) do
     local view, result = job.view, job.result
-    if view and result.status == "starting" then
+    if view and result.status == "starting" and not job.sending then
       if view.state == "failed" or view.state == "closed" or view.state == "exited" or system.get_time() > job.deadline then
         result.status, result.error = "failed", view.launch_error or "Terminal or Pi startup did not finish"
       elseif view.state == "running" and view.session_id then
@@ -356,16 +356,26 @@ function M:tick()
           job.command = nil
         end
         local peer = self.peers[view.session_id]
-        if result.status == "starting" and (not job.pi or peer and system.get_time() - peer.seen < 10) then
+        -- A started Pi is ready when it has Anvil's tools, so its first task can use them.
+        if result.status == "starting" and (not job.pi or peer and peer.mcp and system.get_time() - peer.seen < 10) then
           local matches = not job.pi or peer.model and peer.model.provider == job.provider
             and peer.model.id == job.model and peer.thinking == job.thinking
           result.status = matches and "ready" or "failed"
           if not matches then result.error = "Pi selected a different model or thinking level" end
           if peer then result.instance = peer.instance end
+          -- The Machine server keeps each Pi's tasks, so the first task goes through it, as an agent_send does.
           if job.task and matches then
-            local ok, sent = pcall(self.agent_send, self, {terminal = view.session_id, instance = peer.instance,
-              text = job.task}, job.caller)
-            if ok then result.task = sent.task else result.status, result.error = "failed", tostring(sent) end
+            result.status, job.sending = "starting", true
+            local agents = require "core.machine_agents"
+            local machine, path = agents.machine_of(self.project_key, self.project)
+            agents.route(machine, path, "agent_send", {terminal = view.session_id, instance = peer.instance, text = job.task},
+              job.caller or "local", function(ok, sent)
+                if ok and type(sent) == "table" and sent.task then result.status, result.task = "ready", sent.task
+                else result.status, result.error = "failed", tostring(sent) end
+                core.log_quiet("Control: launch %s status=%s Pane=%s", result.operation, result.status, result.pane)
+                job.view, job.task = nil, nil
+                self.starting[operation] = nil
+              end, function() return false end, self:sender(job.caller))
           end
         end
       end
@@ -434,6 +444,8 @@ function M:exchange(terminal, report)
   peer.seen, peer.busy = system.get_time(), report.busy == true
   peer.session, peer.model, peer.thinking = report.session, report.model, report.thinking
   peer.activity, peer.capabilities = report.activity, report.capabilities
+  -- False until Pi has registered Anvil's MCP server. A Pi before this report does not send it.
+  peer.mcp = report.mcp ~= false
   peer.capacity = type(report.capacity) == "number" and math.max(0, math.min(256, report.capacity)) or 256
   for _, receipt in ipairs(report.receipts) do
     check(id, receipt.id, "receipt ID")

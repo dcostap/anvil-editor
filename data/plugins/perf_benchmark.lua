@@ -1168,9 +1168,10 @@ local function scenario_is_ready()
   end
   if benchmark.scenario == "mcp-server-dialog" then
     if require("core.ui.dialog").current() then return true end
-    local state, _, _, reason = require("core.control_runtime").status()
-    if state == "starting" then return false end
-    assert(state == "ready", reason or state)
+    -- The Machine server publishes Anvil's MCP server soon after Anvil starts.
+    local state = require("core.control_runtime").status()
+    if state == "unavailable" then return false end
+    assert(state == "ready", state)
     config.transitions = false
     assert(command.perform("anvil:mcp_server"))
     return false

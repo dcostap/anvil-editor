@@ -93,7 +93,7 @@ On a Machine, split `core.control` into two parts:
 - **Machine operations:** start a Terminal or Pi, read its state, send, wait and interrupt. `anvil serve` answers these, so they work with no Client.
 - **Editor operations:** `open_file`, `pane` and `workspace_state`. A request that names a Client goes to that Client. Other requests go to the Client that the user used last, as an external launch opens in the Anvil Window that the user activated last. With no Client, they fail with a clear message.
 
-`anvil serve` publishes Pi's discovery files on the Machine, so their owner does not depend on a View.
+`anvil serve` publishes Pi's discovery files on the Machine, so their owner does not depend on a View. It also opens Anvil's MCP server, the one MCP endpoint for all local Projects: it answers agent operations itself and sends editor operations to the Project process that has the Project loaded. Routing to a named Client or the last-used Client is not built yet.
 
 `agent_read` gives status, live tool activity, and bounded task results. `agent_transcript` reads paged conversation text through a connected Pi. A chat view that needs offline history reads Pi's session file through the Files service.
 

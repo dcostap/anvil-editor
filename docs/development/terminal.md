@@ -264,13 +264,13 @@ See [inline terminal images](../../tools/TERMINAL_IMAGES.md) for supported featu
 
 ## Agent control
 
-`core.control` owns editor operations. `core.control_server` exposes them through authenticated loopback MCP. `core.control_runtime` publishes private discovery files and follows Terminal ownership.
+`core.control` owns editor and agent operations. `core.control_server` exposes them through authenticated loopback MCP. `core.serve_agents` opens Anvil's MCP server in the Machine server: a `control_server` with a hub that holds one headless Control for each Project with a running Pi. The hub answers agent operations and sends editor operations to the private endpoint of the Project process. `core.control_runtime` opens that private endpoint, publishes its discovery files and follows Terminal ownership.
 
 Cross-Project discovery runs in a worker. It uses a Project's discovery file only while its process runs with the file's `pid` and `created` time (`system.process_state`). It deletes the files of ended processes, which a crash or a Windows shutdown leaves.
 
 `src/process_identity.c` owns that check for Terminal hosts too. Do not move editor behavior into the transport or Pi extension.
 
-Interactive Pi gets `data/tools/agent-sessions/pi-control.cjs` through the existing preload. It registers Anvil's MCP server and handles attributed messages, steering, interruption, and settled results. Pi remains a TUI.
+Interactive Pi gets `data/tools/agent-sessions/pi-control.cjs` through the existing preload. It registers Anvil's MCP server from its Machine credential and handles attributed messages, steering, interruption, and settled results. It also reports to the Project process, without registering it, so `pi_start` sees the Pi there. A Pi reports `mcp: true` after it registers the server; `pi_start` is ready only then, and sends its first task through the Machine server. Pi remains a TUI.
 
 Pi launches require explicit provider, model, and thinking choices.
 
@@ -292,7 +292,7 @@ Keep focus by default. A `pane` or `terminal` close request approves only the ca
 
 Self-close can stop the agent before the reply arrives. Use stable Pane, Terminal, and conversation IDs, not navigation numbers. A wait timeout never cancels a task.
 
-Retry keys last for the Project process; Pi persists accepted delivery receipts separately.
+Retry keys last for the process that runs the operation; Pi persists accepted delivery receipts separately. Commands to Pi hold only plain data: a live Control in a command makes each later exchange fail.
 
 The `snooze` control tool sets or removes a Terminal's Snooze. Without a target, it uses the calling agent's Terminal Session. The Sidebar owns the saved times.
 

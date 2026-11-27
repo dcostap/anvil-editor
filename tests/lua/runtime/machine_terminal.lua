@@ -170,10 +170,16 @@ test.describe("Remote Terminal Session", function()
     local own = projects.own_id
     context.restore = function() projects.own_id = own end
     projects.own_id = function() return string.rep("0", 32) end
-    context.source = require("core.control_server").open(require("core.control").new(context.project))
+    -- Anvil's MCP server of the Client: it knows its own Pi and a local agent with the host Terminal's ID.
+    local control = require("core.control").new(context.project)
+    context.source = require("core.control_server").open(nil, {
+      control = function(project) return require("core.common").path_equals(project, context.project) and control or nil end,
+      project_of = function(caller) return caller ~= "local" and context.project or nil end,
+      tick = function() control:tick() end,
+    })
     local source = context.source:add_client("source-terminal")
-    context.source.control:exchange("source-terminal", {instance = "source-pi", receipts = {}, tasks = {}})
-    context.source.control:exchange(context.id, {instance = "wrong-local-agent", receipts = {}, tasks = {}})
+    control:exchange("source-terminal", {instance = "source-pi", receipts = {}, tasks = {}})
+    control:exchange(context.id, {instance = "wrong-local-agent", receipts = {}, tasks = {}})
     require("core").add_thread(function()
       while context.source.listener do context.source:poll(); coroutine.yield(.01) end
     end)

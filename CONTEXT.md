@@ -691,6 +691,10 @@ Successful input ends this state, even if the user then deletes that input. Rest
 **Anvil Agent**:
 An Anvil Agent is an agent running inside Anvil.
 
+**Anvil's MCP server**:
+The one MCP endpoint of a user folder, opened by the Machine server. Anvil Agents and External Agents use it for all Projects of the Machine.
+_Avoid_: control server, Project endpoint, MCP hub
+
 **External Agent**:
 An agent that runs outside Anvil's Terminal Sessions, such as Antigravity's agent, and talks with the user and Anvil Agents through Anvil's MCP server. It has a name that it chooses, unique in its Project, and one thread of messages on the Project's Machine.
 _Avoid_: outside agent, remote agent, agy session

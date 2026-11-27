@@ -132,13 +132,13 @@ module.exports = function (pi) {
       return {content: [{type: "text", text: "Reply recorded as the task result."}], details: {request}};
     }});
 
-  async function exchangeAt(file, primary) {
+  async function exchangeAt(file, register) {
     const next = JSON.parse(await fs.readFile(file, "utf8"));
     if (next.version !== 1 || !/^http:\/\/127\.0\.0\.1:\d+$/.test(next.url)
         || typeof next.token !== "string" || !next.token) throw new Error("Invalid Anvil endpoint");
     if (stopped) return;
     const key = next.url + "/" + next.token;
-    if (primary && connection !== key) {
+    if (register && connection !== key) {
       if (connection) pi.unregisterMcpServer("anvil");
       pi.registerMcpServer("anvil", { url: next.url + "/mcp",
         headers: { Authorization: "Bearer " + next.token }, exposure: "direct", timeout: 45,
@@ -171,7 +171,7 @@ module.exports = function (pi) {
         headers: { Authorization: "Bearer " + next.token, "Content-Type": "application/json" },
         body: JSON.stringify({ instance, session: ctx.sessionManager.getSessionFile(), chat: posts?.slice(0, 16),
           model: ctx.model && { provider: ctx.model.provider, id: ctx.model.id },
-          thinking: pi.getThinkingLevel(), busy: !ctx.isIdle(),
+          thinking: pi.getThinkingLevel(), busy: !ctx.isIdle(), mcp: Boolean(connection),
           capabilities: {transcript: true, activity: true}, activity: inspect.activity(ctx),
           transcripts: [...transcripts.values()].slice(0, 1).map(({created, ...reply}) => reply),
           capacity: LIMIT - receipts.size, receipts: changed("receipt", [...receipts.values()].filter(r => !r.endpoint || r.endpoint === file)
@@ -208,10 +208,10 @@ module.exports = function (pi) {
   async function exchange() {
     if (stopped || !ctx) return;
     try {
-      // The editor owns Pane tools. The host keeps Machine deliveries across View detach and reattach.
-      let editor = false;
-      try { await exchangeAt(discovery, true); editor = true; } catch {}
-      if (!stopped) try { await exchangeAt(hostDiscovery, !editor); } catch {}
+      // Anvil's MCP server runs in the Machine server, so Pi registers it there. The Project process that shows this
+      // Terminal also reports on it, for its Panes and for pi_start.
+      try { await exchangeAt(discovery, false); } catch {}
+      if (!stopped) try { await exchangeAt(hostDiscovery, true); } catch {}
     } finally {
       if (!stopped) { timer = setTimeout(tick, 500); timer.unref?.(); }
     }
